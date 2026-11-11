@@ -1,0 +1,49 @@
+# LiveKit SFU configuration for the pilot's video calls (service `livekit`).
+#
+# This is a TEMPLATE. gremion-render writes docker/livekit/livekit.yaml from it
+# (gitignored, bound read-only into the container) before every deploy. The three
+# values LIVEKIT_RTC_PORT_END, LIVEKIT_TURN_ENABLED and LIVEKIT_TURN_DOMAIN are
+# derived by gremion-render from PILOT_TENANT_HOST in state.env.
+#
+# Non-secret settings only. The API key and secret reach the server through the
+# LIVEKIT_KEYS environment variable ("key: secret"), set in docker-compose.yml
+# from the host's env file: no `keys:` block, and no key file, in the tree. The
+# advertised node address is the --node-ip flag of the same service.
+#
+# Media path: UDP 45000-45100 on the edge addresses, with TCP 7881 as the fallback
+# for a network that blocks UDP. Both are published by docker-compose.yml on the
+# edge IPs only. The signalling socket (7880) is not published: Traefik routes
+# /livekit-sfu on the platform host to it.
+#
+# Relay (TURN over TLS on 443), for a network that blocks UDP and every port
+# but 443. With a customer host the relay is on: Traefik terminates TLS for
+# turn.<customer host> on 443 and hands the plain stream to tls_port (5349) on
+# this container (external_tls). The relay's own ports are the top of the
+# published UDP block, 45051-45100 (50 ports, so about 25 relayed participants
+# at once), and the media range gives them up: it ends at 45050. udp_port (3478)
+# is not published. Without a customer host the relay is off and the media
+# range is the whole block, as before; the domain is then a reserved
+# placeholder that is never served.
+port: 7880
+rtc:
+  tcp_port: 7881
+  port_range_start: 45000
+  port_range_end: ${LIVEKIT_RTC_PORT_END}
+  use_external_ip: false
+turn:
+  enabled: ${LIVEKIT_TURN_ENABLED}
+  domain: ${LIVEKIT_TURN_DOMAIN}
+  tls_port: 5349
+  udp_port: 3478
+  external_tls: true
+  relay_range_start: 45051
+  relay_range_end: 45100
+# warn, not info: with the relay on, v1.7.2 logs every participant's TURN username and
+# password at info ("created TURN password"), from the global logger that no
+# component_levels entry reaches. Warnings and errors still log. test/host/render.bats pins it.
+logging:
+  level: warn
+room:
+  auto_create: true
+  # close a room 5 minutes after the last participant leaves
+  empty_timeout: 300

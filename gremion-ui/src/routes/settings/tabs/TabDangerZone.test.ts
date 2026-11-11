@@ -51,4 +51,47 @@ describe('TabDangerZone.svelte (K2#9)', () => {
     expect(await screen.findByText('Zurücksetzen fehlgeschlagen.')).toBeTruthy()
     expect(screen.queryByText('Konfiguration zurückgesetzt.')).toBeNull()
   })
+
+  // StuRaOS#581: the server leaves a council-switched-off module off and says so in `heldBack`.
+  async function resetWith(payload: unknown) {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(payload), { status: 200 })))
+    render(TabDangerZone)
+    await fireEvent.click(screen.getByRole('button', { name: 'Konfiguration zurücksetzen' }))
+    await fireEvent.input(screen.getByLabelText(/Bestätigung/), { target: { value: 'ZURÜCKSETZEN' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Zurücksetzen' }))
+    return await screen.findByText('Konfiguration zurückgesetzt.')
+  }
+
+  it('names the modules that stay off after the reset, inside the announced status region', async () => {
+    const success = await resetWith({ success: true, data: {}, heldBack: ['calendar'] })
+    const region = success.closest('[role="status"]') as HTMLElement
+    expect(region).not.toBeNull()
+    const notice = region.querySelector('[data-testid="reset-heldback-notice"]') as HTMLElement
+    expect(notice).not.toBeNull()
+    expect(notice.textContent).toContain('calendar')
+    expect(notice.textContent).toMatch(/bleibt ausgeschaltet/)
+    expect(notice.textContent).toMatch(/Modulschalter/)
+  })
+
+  it('shows no held-back notice when heldBack is empty or missing', async () => {
+    const success = await resetWith({ success: true, data: {}, heldBack: [] })
+    expect(success.closest('[role="status"]')?.querySelector('[data-testid="reset-heldback-notice"]')).toBeNull()
+  })
+
+  it('shows no held-back notice when heldBack is missing', async () => {
+    const success = await resetWith({ success: true, data: {} })
+    expect(success.closest('[role="status"]')?.querySelector('[data-testid="reset-heldback-notice"]')).toBeNull()
+  })
+
+  it('ignores a heldBack value that is not an array of strings, without throwing', async () => {
+    const success = await resetWith({ success: true, data: {}, heldBack: { calendar: true } })
+    expect(success.closest('[role="status"]')?.querySelector('[data-testid="reset-heldback-notice"]')).toBeNull()
+  })
+
+  it('keeps only the string entries of a mixed heldBack array', async () => {
+    const success = await resetWith({ success: true, data: {}, heldBack: ['calendar', 7, null, { x: 1 }, ''] })
+    const notice = success.closest('[role="status"]')?.querySelector('[data-testid="reset-heldback-notice"]') as HTMLElement
+    expect(notice.textContent).toContain('calendar')
+    expect(notice.textContent).not.toMatch(/\[object|null|undefined|7/)
+  })
 })

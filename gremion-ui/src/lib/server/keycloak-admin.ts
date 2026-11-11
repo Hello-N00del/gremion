@@ -20,6 +20,8 @@ export interface KcGroup {
   readonly name: string
   readonly path: string
   readonly attributes?: Readonly<Record<string, readonly string[]>>
+  /** Present on KC 23+: 0 means a leaf, so its children need no request. */
+  readonly subGroupCount?: number
 }
 
 export interface KcRole {
@@ -147,6 +149,13 @@ async function kcFetch(timeoutMs: number, url: string, init: RequestInit): Promi
 /** Page size and hard ceiling for `listRealmRoleMembers` (a runaway-loop guard, far above any council). */
 const ROLE_MEMBER_PAGE = 200
 const ROLE_MEMBER_MAX = 100_000
+const SUBGROUP_PAGE = 100
+const SUBGROUP_MAX = 10_000
+
+/** Error class name for a log line; never the message (it can carry response bodies). */
+function errClass(err: unknown): string {
+  return err instanceof Error ? err.name : typeof err
+}
 
 export class KeycloakAdminClient {
   private readonly adminUrl: string
@@ -372,10 +381,77 @@ export class KeycloakAdminClient {
     return this.request<KcGroup[]>('GET', '/groups')
   }
 
-  /** Direct children of a group (one level). Used to adopt an existing same-name
-   *  subgroup so re-provisioning is idempotent against leftover Keycloak state. */
+  /**
+   * Every group of the realm at every depth, as one flat list ordered by path
+   * (the recipient picker needs bodies, which are subgroups). A failure on the
+   * top-level read throws; a definite answer from Keycloak (an HTTP error) on
+   * one group's children skips that branch only (logged with the group id and
+   * the error class, never silently). Any other failure (a timeout, a refused
+   * connection) stops the walk and returns what was read, because every further
+   * call would cost a full timeout. Bounded by depth and total size (a cut is
+   * logged once), and each id is visited once.
+   */
+  async listGroupTree(): Promise<readonly KcGroup[]> {
+    const MAX_DEPTH = 6
+    const MAX_GROUPS = 500
+    const out = new Map<string, KcGroup>()
+    let truncated = false
+    let halted = false
+    const visit = async (level: readonly KcGroup[], parentPath: string, depth: number): Promise<void> => {
+      for (const g of level) {
+        if (out.size >= MAX_GROUPS) {
+          truncated = true
+          return
+        }
+        if (out.has(g.id)) continue
+        const path = g.path || `${parentPath}/${g.name}`
+        out.set(g.id, { ...g, path })
+        if (g.subGroupCount === 0) continue
+        if (depth >= MAX_DEPTH) {
+          if (g.subGroupCount === undefined || g.subGroupCount > 0) truncated = true
+          continue
+        }
+        if (halted) continue // keep the groups already listed, read no more children
+        try {
+          await visit(await this.listSubGroups(g.id), path, depth + 1)
+        } catch (err) {
+          // best-effort: keep this group, skip its branch, leave a trace
+          const definite = err instanceof KcAdminError || err instanceof KcInvalidIdError
+          if (!definite) {
+            halted = true
+            truncated = true
+          }
+          const status = err instanceof KcAdminError ? ` status=${err.status}` : ''
+          console.warn(
+            `[keycloak-admin] group tree: children of ${g.id} not read (${errClass(err)}${status})`,
+          )
+        }
+      }
+    }
+    await visit(await this.listGroups(), '', 1)
+    if (truncated) {
+      console.warn(
+        `[keycloak-admin] group tree truncated at ${MAX_GROUPS} groups / depth ${MAX_DEPTH}; some groups are missing from the list`,
+      )
+    }
+    return [...out.values()].sort((a, b) => a.path.localeCompare(b.path))
+  }
+
+  /**
+   * Direct children of a group (one level). Used to adopt an existing same-name
+   * subgroup so re-provisioning is idempotent against leftover Keycloak state.
+   * Keycloak pages this endpoint at 10 by default, so it is read in pages of
+   * SUBGROUP_PAGE until a short page; a failing page rejects the whole call.
+   */
   async listSubGroups(parentId: string): Promise<readonly KcGroup[]> {
-    return this.request<KcGroup[]>('GET', `/groups/${seg(parentId)}/children`)
+    const base = `/groups/${seg(parentId)}/children`
+    const all: KcGroup[] = []
+    for (let first = 0; first < SUBGROUP_MAX; first += SUBGROUP_PAGE) {
+      const page = await this.request<KcGroup[]>('GET', `${base}?first=${first}&max=${SUBGROUP_PAGE}`)
+      all.push(...page)
+      if (page.length < SUBGROUP_PAGE) return all
+    }
+    throw new Error(`Keycloak group ${parentId} has more than ${SUBGROUP_MAX} subgroups`)
   }
 
   async getGroup(id: string): Promise<KcGroup> {

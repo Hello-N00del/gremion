@@ -16,6 +16,11 @@ import { requireContentAuthor } from '$lib/server/content/route-auth'
 import { resolveContentBackendOr503 } from '$lib/server/content/backend/resolve'
 import { getKeycloakAdminClientForCurrentTenant } from '$lib/server/keycloak-admin'
 
+const MAX_RECIPIENT_ENTRIES = 200
+
+// Log the error class only: a Keycloak error body can echo what was asked for.
+const errName = (err: unknown): string => (err instanceof Error ? err.name : typeof err)
+
 export const GET: RequestHandler = async (event) => {
   requireContentAuthor(event.locals.user)
 
@@ -36,7 +41,8 @@ export const GET: RequestHandler = async (event) => {
   let groups: { id: string; name: string; path: string }[] = []
   try {
     const kc = getKeycloakAdminClientForCurrentTenant()
-    const raw = await kc.listGroups()
+    // The whole tree: bodies (Vorstand, Referate) are subgroups.
+    const raw = await kc.listGroupTree()
     groups = raw.map((g) => ({ id: g.id, name: g.name, path: g.path }))
   } catch (err) {
     console.error('[content:recipients] KC group list failed', err)
@@ -66,6 +72,10 @@ export const PUT: RequestHandler = async (event) => {
     recipients?: { mailing_list_id?: string; keycloak_group_id?: string }[]
   }
   if (!Array.isArray(recipients)) throw error(400, 'recipients must be an array')
+  if (recipients.length > MAX_RECIPIENT_ENTRIES) {
+    // The editor shows this text to the author.
+    throw error(400, `Empfänger: höchstens ${MAX_RECIPIENT_ENTRIES} Einträge`)
+  }
 
   // Validate each entry targets EXACTLY one of a list OR a group (mirror the DB
   // CHECK so we 400 early rather than surfacing a constraint violation).
@@ -74,6 +84,38 @@ export const PUT: RequestHandler = async (event) => {
     const hasGroup = typeof r?.keycloak_group_id === 'string' && r.keycloak_group_id.length > 0
     if (hasList === hasGroup)
       throw error(400, 'each recipient targets EXACTLY one of mailing_list_id OR keycloak_group_id')
+  }
+
+  // A group id that Keycloak does not know would later make the whole send
+  // fail, mailing lists included. Refuse it now, naming the id. Only a definite
+  // miss refuses: a Keycloak outage must not block saving mailing lists.
+  // Status/name checks, not instanceof: the admin module is mocked in tests.
+  // Each distinct id is checked once, and the checks stop at the first failure
+  // that is not a definite miss (an outage would otherwise cost one full
+  // timeout per id).
+  const groupIds = [
+    ...new Set(recipients.map((r) => r.keycloak_group_id).filter((id): id is string => !!id)),
+  ]
+  if (groupIds.length > 0) {
+    let kc: { getGroup(id: string): Promise<unknown> } | null = null
+    try {
+      kc = getKeycloakAdminClientForCurrentTenant()
+    } catch (err) {
+      console.error('[content:recipients] KC client unavailable, group ids not checked', errName(err))
+    }
+    for (const id of groupIds) {
+      if (!kc) break
+      try {
+        await kc.getGroup(id)
+      } catch (err) {
+        const e = err as { status?: unknown; name?: unknown }
+        if (e?.status === 404 || e?.name === 'KcInvalidIdError') {
+          throw error(400, `Gruppe nicht gefunden: ${id}`)
+        }
+        console.error('[content:recipients] KC group check failed, remaining ids accepted unchecked', errName(err))
+        break
+      }
+    }
   }
 
   await backend.setPostRecipients(

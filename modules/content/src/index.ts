@@ -120,6 +120,14 @@ async function main(): Promise<void> {
     console.warn('[content] INTERNAL_CONTENT_SECRET is unset — all guarded routes will 403')
   }
 
+  // The kernel's mail callbacks (group resolve, send) check this secret. When it
+  // is unset the client falls back to the content secret, which they refuse.
+  if (!process.env.INTERNAL_NEWSLETTER_SECRET) {
+    console.warn(
+      '[content] INTERNAL_NEWSLETTER_SECRET is unset — the mail callbacks (resolve group, send mail) will 403',
+    )
+  }
+
   const kernelBaseUrl = process.env.KERNEL_BASE_URL ?? ''
   if (!kernelBaseUrl) {
     console.warn('[content] KERNEL_BASE_URL is unset — dispatch will fail at publish step')

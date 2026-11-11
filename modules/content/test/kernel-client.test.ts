@@ -431,3 +431,67 @@ describe('createKernelClient — portalPublish two-sided contract', () => {
     expect(JSON.parse(calls[0]!.body!)).toEqual(PORTAL_PUBLISH_CONTRACT.request)
   })
 })
+
+// ── per-endpoint credential ───────────────────────────────────────────────────
+// The kernel's mail callbacks (resolve-group, send-mail) check the NEWSLETTER
+// secret; the portal callback checks the CONTENT secret. Swapping them, or
+// falling back to the wrong one, makes every callback answer 403.
+describe('createKernelClient — x-internal-auth per endpoint', () => {
+  const ok = (url: string) =>
+    url.endsWith('/resolve-group')
+      ? { ok: true, status: 200, body: { members: [] } }
+      : url.endsWith('/send-mail')
+        ? { ok: true, status: 200, body: { messageId: 'm' } }
+        : { ok: true, status: 200, body: { id: 1 } }
+
+  it('sends the newsletter secret to resolve-group and send-mail, and the content secret to portal-publish', async () => {
+    const { fetchImpl, calls } = makeFetch(ok)
+    const client = createKernelClient({
+      baseUrl: 'http://k', secret: 'content-secret', mailSecret: 'newsletter-secret',
+      tenant: TENANT, correlationId: '1', fetchImpl,
+    })
+    await client.resolveGroup('g1')
+    await client.sendMail({ to: 'r@example.org', subject: 'S', html: 'h' })
+    await client.portalPublish('p1', 'T', '<p>b</p>')
+    const auth = (suffix: string) => calls.find((c) => c.url.endsWith(suffix))!.headers['x-internal-auth']
+    expect(auth('/api/internal/newsletter/resolve-group')).toBe('newsletter-secret')
+    expect(auth('/api/internal/newsletter/send-mail')).toBe('newsletter-secret')
+    expect(auth('/api/internal/content/portal-publish')).toBe('content-secret')
+  })
+
+  it('falls back to the content secret for the mail callbacks when no newsletter secret is given', async () => {
+    const { fetchImpl, calls } = makeFetch(ok)
+    const client = createKernelClient({
+      baseUrl: 'http://k', secret: 'content-secret', tenant: TENANT, correlationId: '1', fetchImpl,
+    })
+    await client.sendMail({ to: 'r@example.org', subject: 'S', html: 'h' })
+    expect(calls[0]!.headers['x-internal-auth']).toBe('content-secret')
+  })
+})
+
+// ── the failure code travels to the leaf ──────────────────────────────────────
+describe('createKernelClient — a failed send carries its cause, never the address', () => {
+  it('exposes code, responseCode and command from the kernel body on the thrown error', async () => {
+    const { fetchImpl } = makeFetch(() => ({
+      ok: false, status: 500,
+      body: { success: false, error: 'Send failed', code: 'EAUTH', responseCode: 535, command: 'AUTH LOGIN' },
+    }))
+    const client = createKernelClient({
+      baseUrl: 'http://k', secret: 's', tenant: TENANT, correlationId: '1', fetchImpl,
+    })
+    const err = await client.sendMail({ to: 'r@example.org', subject: 'S', html: 'h' }).catch((e) => e)
+    expect(err).toBeInstanceOf(Error)
+    expect(err).toMatchObject({ name: 'MailSendError', code: 'EAUTH', responseCode: 535, command: 'AUTH LOGIN', httpStatus: 500 })
+    expect(String(err.message)).not.toContain('r@example.org')
+  })
+
+  it('ignores a malformed body: still a generic retryable error, no code', async () => {
+    const { fetchImpl } = makeFetch(() => ({ ok: false, status: 500, body: 'not json' }))
+    const client = createKernelClient({
+      baseUrl: 'http://k', secret: 's', tenant: TENANT, correlationId: '1', fetchImpl,
+    })
+    const err = await client.sendMail({ to: 'r@example.org', subject: 'S', html: 'h' }).catch((e) => e)
+    expect(err.message).toMatch(/kernel send-mail failed: 500/)
+    expect(err.code).toBeUndefined()
+  })
+})

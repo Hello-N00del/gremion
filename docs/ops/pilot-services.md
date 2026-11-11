@@ -154,7 +154,8 @@ and the member import.
    shared account, named by the `CALDAV_CALENDAR_TEMPLATE` the running leaf
    carries (`gremion-{slug}`), and reads it back; the leaf has no way to create
    the collection, and without a per-tenant target its CalDAV drain refuses
-   every customer;
+   every customer; under `MAIL_TRANSPORT=relay` it also wires the customer's
+   mail login (step 6c below);
 7. recreates `gremion-ui` and reads the bot token back from the running
    container.
 
@@ -169,14 +170,91 @@ only through files and shell variables. The one named exception is `occ`'s own
 argument vector inside the `nextcloud` container, which carries the client
 secret for the length of the call because `occ` has no other input.
 
-## Video: TURN
+### Step 6c: the customer's mail login (relay transport only)
 
-TURN is off. Media reaches LiveKit on `45000-45100/udp` or, from a network that
-blocks UDP, on `7881/tcp`. A client that can reach neither (a network that
-allows only 443) cannot join a call. TURN over TLS on 443 would need an L4
-route on a public entrypoint, which the edge verification refuses by design
-(`gremion-verify` rejects a TCP or UDP router on `web` or `websecure`), so it is
-not offered for the pilot.
+With `MAIL_TRANSPORT=relay` (`etc/env/mail.env`) every mail of the app, the
+invitations and the newsletter included, goes through the one relay login.
+`wire` sets it up after the calendar collection and before the `gremion-ui`
+recreate, so no separate restart and no hand step remain. Under any other
+transport it does nothing and says so.
+
+Preconditions, checked with the other facts before anything is written: the
+password file named by `RELAY_SMTP_PASSWORD_REF` (default
+`etc/secrets/mail/relay-password`) exists, is not empty, belongs to the owner of
+`etc/secrets` and is mode `0600`; `RELAY_SMTP_HOST`, `RELAY_SMTP_PORT`,
+`RELAY_SMTP_USER` and `RELAY_FROM_DOMAIN` (the domain the relay signs; it
+defaults to `PLATFORM_DOMAIN`) are read from `mail.env`, none is hardcoded. An
+empty `RELAY_SMTP_USER` is a relay that allows the host by address: no password
+is copied and the entry carries no login.
+
+1. copies the password file to `<TENANT_SECRETS_DIR>/relay-smtp-password`
+   (`0600`, the directory's owner), on every run, so a rotated password
+   propagates. It goes through a pipe: it is in no variable, no argv and no
+   output;
+2. merges `smtp` into `tenant.domain_profile` of the control database
+   (`domain_profile || jsonb_build_object('smtp', ...)`, so `residencyZone` and
+   every other key stay): `host`, `port`, `from` (`"Gremion"
+   <no-reply@<from domain>>`), `user` and `passwordRef`
+   (`file:/run/secrets/tenants/relay-smtp-password`). The values are psql
+   variables, never part of the SQL text; the row is read back and every other
+   key must be unchanged;
+3. writes `smtp.configured: true`, `host`, `port` and `from_address` into the
+   tenant's `config.json` from inside the `gremion-ui` container that owns the
+   volume (a temporary file, then a rename, owner and mode of the old file
+   kept) and reads the file back. Without `configured` every app mail throws
+   `SmtpUnconfiguredError`, even though the registry entry is set. This replaces
+   the hand edit of the Settings page's mail step;
+4. reads from the running container, before and after the recreate, that
+   `/run/secrets/tenants/relay-smtp-password` is readable and not empty.
+
+A restored copy of the instance does not keep this login: `gremion-neuter`
+points the row's `smtp` entry (`host`, `port`) at the sink, removes its `user`
+and `passwordRef`, and empties `<TENANT_SECRETS_DIR>/relay-smtp-password`,
+beside the env files, the `config.json` files and the realms.
+
+Not done by `wire`: one test mail to the operator's address (named residual
+below), and the first Settings save, which is not needed any more.
+
+## Video: relay over TLS on 443
+
+Media reaches LiveKit on `45000-45100/udp` or, from a network that blocks UDP, on
+`7881/tcp`. A client behind a network that allows only 443 uses LiveKit's TURN
+relay over TLS instead: it connects to `turn.<PILOT_TENANT_HOST>` on 443,
+Traefik terminates TLS there (an ACME certificate from the same resolver as the
+HTTP routers) and hands the plain stream to LiveKit's TURN port `5349`. LiveKit
+gives its ICE servers to the client, so no client change is involved.
+
+- **Where it is configured.** `PILOT_TENANT_HOST` in `state.env` reaches both
+  halves. `gremion-render` renders `docker/livekit/livekit.yaml` from
+  `docker/livekit/livekit.yaml.tmpl` (gitignored, bound read-only; a config that
+  was not rendered refuses `up`) with `turn.enabled: true` and
+  `domain: turn.<PILOT_TENANT_HOST>`. `docker compose --env-file state.env` reads
+  the same key for the Traefik labels of the `livekit` service in
+  `docker-compose.prod.yml`: one TCP router `livekit-turn`, rule
+  ``HostSNI(`turn.<PILOT_TENANT_HOST>`)`` on `websecure`, `tls=true`, the
+  `TRAEFIK_CERT_RESOLVER` resolver, never passthrough, to port `5349`.
+- **Port split.** The published block is unchanged: `45000-45100/udp`. Media
+  takes `45000-45050`, the relay's allocations `45051-45100`. `3478/udp` is not
+  published. `7881/tcp` stays the media fallback. Nothing in the firewall
+  template or the edge guard changes.
+- **Capacity.** The relay has 50 ports, about 25 relayed participants at once (a
+  relayed participant uses a port to send and one to receive). A call between
+  clients that reach the media ports directly does not use them. LiveKit has one
+  CPU core (and 512 MiB) for the relay's crypto and the media it forwards.
+- **Install prerequisite.** A DNS record `turn.<customer host>` pointing at the
+  host's edge address, in place before the first `up` of the video profile:
+  without it the certificate cannot be issued and relayed clients cannot connect
+  (direct media is unaffected).
+- **Without `PILOT_TENANT_HOST`** the relay is off exactly as before: no TCP
+  router label is read by Traefik, no certificate is ordered, and LiveKit keeps
+  the whole `45000-45100` block for media. `gremion-render` refuses a value that
+  is not a lower-case host name.
+- **Verification.** `gremion-verify` still refuses every TCP or UDP router on
+  `web` or `websecure`, with one exception: the TCP router named exactly
+  `livekit-turn@docker` on `websecure` alone, rule exactly
+  ``HostSNI(`turn.<PILOT_TENANT_HOST>`)``, a non-empty `tls.certResolver`, not
+  passthrough. A second TCP router next to it, a UDP router, and any router when
+  `PILOT_TENANT_HOST` is unset stay failures.
 
 ## Named residuals
 
@@ -188,8 +266,8 @@ not offered for the pilot.
   Do not disable calendar, content or publishing until the two are reconciled.
   The council switch refuses a calendar switch-off while `CALENDAR_BACKEND` names the
   leaf (a switch-off guard); content and publishing are not council-switchable at all.
-  An operator `disable_module` request is not refused by code, so it stays an
-  operator rule.
+  The panel refuses `disable_module` for these three (`DISABLE_LOCKED`); only the
+  host break-glass request is not refused by code, so that stays an operator rule.
 - **Isolation evidence.** The case table behind the enable gate covers the
   backends this install runs; board runs in-process and has no evidence row, so
   a second customer needs it first. Votes, files and messaging are proven at the
@@ -199,6 +277,15 @@ not offered for the pilot.
   as not enabled, and `gremion-verify` reports it as not live. Making it
   conditional on the collabora profile is one follow-up (the router input),
   owed with the post-deploy verification.
+- **Mail login proof.** Step 6c reads its writes back (row, config file, the
+  password file inside the container) but sends no message: whether the relay
+  accepts the login is proven by one real mail from the running app (owed after
+  deploy, below). A reset removes the copied password file and the control
+  database, so `wire` is part of every install that follows one.
+- **Install checklist for the mail login.** The control panel's install steps
+  do not yet list step 6c, and no verify yet fails when the tenant row has no
+  `smtp` entry or the tenant's `config.json` is not `smtp.configured`. Both live
+  outside this repository's host tooling and are a named follow-up.
 - **Platform pins.** Only the apex host pin is declared on the `traefik`
   service; the `www`, `control` and `sales` pins belong to the static routers
   that are not part of this install.
@@ -212,4 +299,7 @@ event, one content post and one newsletter draft saved and read back through
 the leaves, and that event listed in the customer's CalDAV collection of
 Nextcloud (the collection step of `wire` reads `occ dav:list-calendars`, whose
 table layout is not yet seen against a running Nextcloud); a video call between two accounts, with the TCP fallback checked
-from a network that blocks UDP.
+from a network that blocks UDP. With the relay transport: after `wire`, one
+invitation or newsletter test mail sent from the running app arrives (the relay
+accepts the login and signs the From domain), and the Settings page's mail step
+shows the relay as configured without a hand edit.

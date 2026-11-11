@@ -69,6 +69,9 @@ export const MATRIX_ENV = (domain) => ({
   SYNAPSE_ADMIN_BOT_USER_ID: `@gremion-admin-bot:${domain}`,
   BOOTSTRAP_MODE: null,
   SYNAPSE_KC_MAX: null,
+  // Pinned (any value): without them the render default locks the 6th user out of chat behind one app address.
+  SYNAPSE_RC_LOGIN_ADDRESS_PER_SECOND: null,
+  SYNAPSE_RC_LOGIN_ADDRESS_BURST: null,
 })
 /** Keys the profile-on render sets (fixture values; documentation-only). */
 export const PROFILE_ON_ENV = {

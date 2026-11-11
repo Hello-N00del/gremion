@@ -32,12 +32,15 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # A newer push replaces a pull request's scan. On main and develop a scan that
+  # has started finishes; the scan is whole-tree, so the newest one covers the rest.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   semgrep:
     name: Semgrep static analysis
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     # Run inside the official semgrep image. Avoids the supply-chain risk of
     # a remote setup-action; the image itself is the action surface, so it is
     # pinned by immutable digest (matching the repo's G-037/G-038 digest-pin
@@ -54,6 +57,8 @@ jobs:
       image: semgrep/semgrep:1.97.0@sha256:a265d09a9ca712e6624aca09056304ce4314a695b7028d65c041dd53fd44c700
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Semgrep scan (security + secrets)
         run: |
@@ -62,9 +67,52 @@ jobs:
             --config p/secrets \
             --error \
             --metrics=off \
+            --json-output=semgrep-report.json \
             --exclude '**/node_modules/**' \
             --exclude '**/.dart_tool/**' \
             --exclude '**/build/**' \
             --exclude '**/.next/**' \
             --exclude 'docs/**' \
             --exclude 'mobile/**'
+
+      # A wrong path or exclude finds nothing and exits 0. The floor is far below
+      # the real count on purpose: it catches an empty scan, not a small change.
+      - name: The scan must have covered the tree
+        run: |
+          python3 - <<'EOF'
+          import json
+          import sys
+          with open('semgrep-report.json', encoding='utf-8') as report:
+              scanned = len(json.load(report)['paths']['scanned'])
+          print(f'semgrep scanned {scanned} files')
+          if scanned < 500:
+              sys.exit(f'::error::semgrep scanned only {scanned} files; expected at least 500')
+          EOF
+
+  # A red weekly run has no pull request to show it on, so it opens an issue.
+  # No checkout and no action: the write token shares a runner with nothing else.
+  report:
+    name: Open or update the tracking issue
+    needs: semgrep
+    if: ${{ failure() && github.event_name == 'schedule' && needs.semgrep.result == 'failure' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Open or comment on the Semgrep issue
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title='Semgrep: the weekly scan failed'
+          body="The weekly Semgrep scan failed: new findings, a rule update, or a scan that covered too few files. Run: ${RUN_URL}"
+          num=$(gh issue list --state open --search "\"$title\" in:title" --json number,title --jq ".[] | select(.title == \"$title\") | .number" | head -n1)
+          if [ -n "$num" ]; then
+            gh issue comment "$num" --body "$body"
+          else
+            gh issue create --title "$title" --label ci --body "$body"
+          fi

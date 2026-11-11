@@ -88,6 +88,8 @@ export const CARVE_LINT_TARGETS = [
   // The CI verify legs cover every required suite once, and the gate cannot be
   // softened (scripts/check-ci-verify-coverage.mjs reads .github/workflows/ci.yml).
   { name: 'lint-ci-verify-coverage', kind: 'make', target: 'lint-ci-verify-coverage' },
+  // The other workflows keep ci.yml's runner hygiene (scripts/check-workflow-hygiene.mjs).
+  { name: 'lint-workflow-hygiene', kind: 'make', target: 'lint-workflow-hygiene' },
   {
     name: 'lockfile-frozen',
     kind: 'cmd',

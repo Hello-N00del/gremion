@@ -152,6 +152,15 @@ groups:
           label_replace(max by (ctx) (gremion_outbox_dead_lettered) > bool 0, "component", "$1", "ctx", "(.*)")
           or label_replace(vector(0), "component", "events-outbox", "", "")
 
+      # A stalled outbox relay: the age of the oldest row still waiting for the relay is over 900 s [A]. A relay
+      # that can never succeed (no NATS seed, broker unreachable) burns no attempt and dead-letters nothing, so
+      # this is the only gauge that moves. 900 is the ONE threshold; the README rule table names it, alerting.test.mjs
+      # reads it back out of this line. NO absent() arm (same reason as above); a ctx without the gauge reads 0.
+      - record: gremion:cond:outbox_stalled
+        expr: |
+          label_replace(max by (ctx) (gremion_outbox_oldest_pending_seconds) > bool 900, "component", "$1", "ctx", "(.*)")
+          or label_replace(vector(0), "component", "events-outbox-stalled", "", "")
+
       # A consumer's message that reached MaxDeliver and went to the DLQ stream (inbox dead_lettered).
       - record: gremion:cond:inbox_dead_lettered
         expr: |

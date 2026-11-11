@@ -287,4 +287,69 @@ describe('POST /api/internal/newsletter/send-mail', () => {
     const res = await sendMailModule.POST(makeEvent(VALID_BODY, TEST_SECRET) as never)
     expect(res.status).toBe(500)
   })
+
+  // A failed send must be diagnosable (auth refused, relay refused, timeout all
+  // look alike by class name) without the recipient address reaching a log.
+  describe('a failed send names its cause and never its recipient', () => {
+    const smtpError = (extra: Record<string, unknown>) =>
+      Object.assign(new Error(`Can't send mail: 550 <${VALID_BODY.to}> relay denied`), {
+        response: `550 <${VALID_BODY.to}> relay denied`,
+        ...extra,
+      })
+
+    it('logs name, code, responseCode and command, and no address', async () => {
+      const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+      try {
+        mockSendMailForTenant.mockRejectedValue(
+          smtpError({ code: 'EENVELOPE', responseCode: 550, command: 'RCPT TO' }),
+        )
+        await sendMailModule.POST(makeEvent(VALID_BODY, TEST_SECRET) as never)
+        const logged = JSON.stringify(spy.mock.calls)
+        expect(logged).toContain('EENVELOPE')
+        expect(logged).toContain('550')
+        expect(logged).toContain('RCPT TO')
+        expect(logged).not.toContain('alice@example.org')
+        expect(logged).not.toContain('relay denied')
+      } finally {
+        spy.mockRestore()
+      }
+    })
+
+    it('returns the code to the leaf, and no address', async () => {
+      const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+      try {
+        mockSendMailForTenant.mockRejectedValue(
+          smtpError({ code: 'EAUTH', responseCode: 535, command: 'AUTH LOGIN' }),
+        )
+        const res = await sendMailModule.POST(makeEvent(VALID_BODY, TEST_SECRET) as never)
+        expect(res.status).toBe(500)
+        const text = await res.text()
+        expect(JSON.parse(text)).toMatchObject({
+          success: false,
+          error: 'Send failed',
+          code: 'EAUTH',
+          responseCode: 535,
+          command: 'AUTH LOGIN',
+        })
+        expect(text).not.toContain('alice@example.org')
+      } finally {
+        spy.mockRestore()
+      }
+    })
+
+    it('drops a code, response code or command that is not a plain token', async () => {
+      const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+      try {
+        mockSendMailForTenant.mockRejectedValue(
+          smtpError({ code: 'alice@example.org', responseCode: 'alice@example.org', command: 'RCPT TO:<alice@example.org>' }),
+        )
+        const res = await sendMailModule.POST(makeEvent(VALID_BODY, TEST_SECRET) as never)
+        const text = await res.text()
+        expect(text).not.toContain('alice@example.org')
+        expect(JSON.stringify(spy.mock.calls)).not.toContain('alice@example.org')
+      } finally {
+        spy.mockRestore()
+      }
+    })
+  })
 })

@@ -253,8 +253,8 @@ describe('tenantResolveHandle readiness gate (D-READY seam)', () => {
     const failing = makeEvent('beta.example.org')
     const failRes = (await tenantResolveHandle({ event: failing as never, resolve: resolveSpy } as never)) as Response
     expect(failRes.status).toBe(503)
-    expect(failRes.headers.get('Retry-After')).toBe('5')
-    expect(await failRes.text()).toBe('Service Unavailable: tenant not ready')
+    expect(Number(failRes.headers.get('Retry-After'))).toBeGreaterThanOrEqual(60)
+    expect(await failRes.text()).toContain('Ihr Bereich ist gerade nicht verfügbar')
     // Downstream NEVER ran for the failed tenant; no context leaked onto locals.
     expect(resolveSpy).toHaveBeenCalledTimes(1)
     expect(failing.locals.tenant).toBeUndefined()
