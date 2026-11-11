@@ -275,9 +275,6 @@
     color: var(--ink-2);
     margin-top: 6px;
   }
-  .sys-side-eyebrow {
-    margin-top: 12px;
-  }
 
   /* Plane label divider */
   .sys-plane-label {

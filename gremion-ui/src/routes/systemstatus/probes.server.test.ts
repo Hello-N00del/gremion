@@ -98,6 +98,68 @@ describe('probeServices', () => {
     expect(rows.map((r) => r.key)).toEqual(['db', 'keycloak', 'matrix'])
   })
 
+  // The in-tree files and messaging modules register their probe WITHOUT a moduleId
+  // ({ service: 'nextcloud' } / { service: 'synapse' }). Matching by moduleId alone
+  // dropped both rows and reported a dead Nextcloud or Synapse as "all reachable".
+  describe('probes registered in the real shape (service only, no moduleId)', () => {
+    const real = (nc: () => Promise<boolean>, sy: () => Promise<boolean>) => [
+      { service: 'nextcloud', validate: nc },
+      { service: 'synapse', validate: sy },
+    ]
+
+    it('are matched by service name', async () => {
+      expect(byKey(await probeServices(deps({ moduleProbes: real(up, up) })))).toEqual({
+        db: 'ok',
+        keycloak: 'ok',
+        nextcloud: 'ok',
+        matrix: 'ok',
+      })
+    })
+
+    it('a dead Nextcloud or Synapse is reported unreachable, not left out', async () => {
+      const rows = await probeServices(deps({ moduleProbes: real(down, down) }))
+      expect(byKey(rows)).toMatchObject({ nextcloud: 'unreachable', matrix: 'unreachable' })
+    })
+
+    it('a switched-off module is off and its probe is not called', async () => {
+      const validate = vi.fn(up)
+      const rows = await probeServices(
+        deps({ modules: { files: false, messages: true }, moduleProbes: real(validate, up) }),
+      )
+      expect(byKey(rows).nextcloud).toBe('off')
+      expect(validate).not.toHaveBeenCalled()
+    })
+  })
+
+  it('an unreadable module config (null switches) lists no module row and probes no module', async () => {
+    const validate = vi.fn(up)
+    const rows = await probeServices(
+      deps({ modules: null, moduleProbes: [{ service: 'nextcloud', validate }, { service: 'synapse', validate }] }),
+    )
+    expect(rows.map((r) => r.key)).toEqual(['db', 'keycloak'])
+    expect(validate).not.toHaveBeenCalled()
+  })
+
+  it('logs each failed probe with its key and a reason, never the error message', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await probeServices(
+        deps({
+          db: async () => {
+            throw new TypeError('password=hunter2')
+          },
+          keycloak: down,
+        }),
+      )
+      const lines = warn.mock.calls.map((c) => c.join(' '))
+      expect(lines.some((l) => l.includes('db') && l.includes('TypeError'))).toBe(true)
+      expect(lines.some((l) => l.includes('keycloak'))).toBe(true)
+      expect(lines.join(' ')).not.toContain('hunter2')
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
   it('ignores probes that belong to no module', async () => {
     const validate = vi.fn(up)
     const rows = await probeServices(deps({ moduleProbes: [{ service: 'something', validate }] }))

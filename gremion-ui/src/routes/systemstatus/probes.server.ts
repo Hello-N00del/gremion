@@ -11,6 +11,7 @@
 //   * keycloak   - the realm's OIDC discovery document answers.
 //   * nextcloud  - the files module's liveness probe, while the module is switched on.
 //   * matrix     - the messaging module's liveness probe, while the module is switched on.
+// A module probe is matched by its module id, or by its service name when it sets none.
 // A module service whose module registers no probe in this deployment gets no row:
 // the page does not name a component that is not there. A module that is switched
 // off is "off", not a fault. A probe that throws, answers false or exceeds the
@@ -30,33 +31,50 @@ export interface ProbeDeps {
   db: () => Promise<unknown>
   /** True when the realm's discovery document answers. */
   keycloak: () => Promise<boolean>
-  /** The tenant's module switches (a missing key counts as off, like the module gate). */
-  modules: Record<string, boolean>
-  /** The liveness probes the modules registered. Probes without a module id are ignored. */
+  /** The tenant's module switches (a missing key counts as off, like the module gate).
+   *  `null` means the config could not be read: the module switches are unknown, so no
+   *  module row is listed and no module probe runs (a module is neither "off" nor probed). */
+  modules: Record<string, boolean> | null
+  /** The liveness probes the modules registered. A probe is matched to its module by
+   *  `moduleId` when it sets one, else by its `service` name (the files and messaging
+   *  modules register `{ service, validate }` only). Probes that match neither are ignored. */
   moduleProbes: readonly Pick<SetupHealthProbe, 'moduleId' | 'service' | 'validate'>[]
   /** Per-probe time limit; default 3000 ms. */
   timeoutMs?: number
 }
 
 /** The module services shown on the page, and the module id that owns each. */
-const MODULE_SERVICES: readonly { key: 'nextcloud' | 'matrix'; moduleId: string }[] = [
-  { key: 'nextcloud', moduleId: 'files' },
-  { key: 'matrix', moduleId: 'messages' },
+const MODULE_SERVICES: readonly { key: 'nextcloud' | 'matrix'; moduleId: string; service: string }[] = [
+  { key: 'nextcloud', moduleId: 'files', service: 'nextcloud' },
+  { key: 'matrix', moduleId: 'messages', service: 'synapse' },
 ]
 
-async function reachable(run: () => Promise<unknown>, timeoutMs: number): Promise<boolean> {
+// A failed probe is logged with the row key and a reason class only: the error
+// message of a driver or HTTP client can carry connection details.
+function logFailure(key: ProbedKey, reason: string): void {
+  console.warn(`[systemstatus] probe ${key} failed: ${reason}`)
+}
+
+async function reachable(key: ProbedKey, run: () => Promise<unknown>, timeoutMs: number): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined
+  let timedOut = false
   try {
     const result = await Promise.race([
       Promise.resolve()
         .then(run)
         .then((v) => v !== false),
       new Promise<boolean>((resolve) => {
-        timer = setTimeout(() => resolve(false), timeoutMs)
+        timer = setTimeout(() => {
+          timedOut = true
+          logFailure(key, 'timeout')
+          resolve(false)
+        }, timeoutMs)
       }),
     ])
+    if (!result && !timedOut) logFailure(key, 'answered not ok')
     return result
-  } catch {
+  } catch (err) {
+    logFailure(key, err instanceof Error ? err.name : 'non-error rejection')
     return false
   } finally {
     if (timer) clearTimeout(timer)
@@ -67,17 +85,19 @@ export async function probeServices(deps: ProbeDeps): Promise<ProbedService[]> {
   const timeoutMs = deps.timeoutMs ?? 3000
   const status = (ok: boolean): ProbeStatus => (ok ? 'ok' : 'unreachable')
 
+  const switches = deps.modules
   const modulePlan = MODULE_SERVICES.flatMap((m) => {
-    const probe = deps.moduleProbes.find((p) => p.moduleId === m.moduleId)
+    if (!switches) return []
+    const probe = deps.moduleProbes.find((p) => (p.moduleId ? p.moduleId === m.moduleId : p.service === m.service))
     return probe ? [{ key: m.key, moduleId: m.moduleId, probe }] : []
   })
 
   const [db, keycloak, ...modules] = await Promise.all([
-    reachable(deps.db, timeoutMs),
-    reachable(deps.keycloak, timeoutMs),
+    reachable('db', deps.db, timeoutMs),
+    reachable('keycloak', deps.keycloak, timeoutMs),
     ...modulePlan.map(async (m): Promise<ProbedService> => {
-      if (!deps.modules[m.moduleId]) return { key: m.key, status: 'off' }
-      return { key: m.key, status: status(await reachable(m.probe.validate, timeoutMs)) }
+      if (!switches?.[m.moduleId]) return { key: m.key, status: 'off' }
+      return { key: m.key, status: status(await reachable(m.key, m.probe.validate, timeoutMs)) }
     }),
   ])
 

@@ -12,11 +12,12 @@ import { probeServices, type ProbedService } from './probes.server'
 export const load: PageServerLoad = async (event) => {
   const tenant = event.locals.tenant
 
-  let modules: Record<string, boolean> = {}
+  // null = config unreadable: the module switches are unknown, which is not "all off".
+  let modules: Record<string, boolean> | null = null
   try {
     modules = readConfig().modules
-  } catch {
-    modules = {}
+  } catch (err) {
+    console.warn(`[systemstatus] module config unreadable: ${err instanceof Error ? err.name : 'non-error'}`)
   }
 
   let services: ProbedService[] = []
@@ -24,7 +25,8 @@ export const load: PageServerLoad = async (event) => {
     let moduleProbes: ReturnType<typeof getSetupHealthProbes> = []
     try {
       moduleProbes = getSetupHealthProbes()
-    } catch {
+    } catch (err) {
+      console.warn(`[systemstatus] module probe registry unavailable: ${err instanceof Error ? err.name : 'non-error'}`)
       moduleProbes = []
     }
     const kcBase = tenant.kcInternal.replace(/\/$/, '')
@@ -32,7 +34,10 @@ export const load: PageServerLoad = async (event) => {
       db: () => tenant.db`SELECT 1`,
       keycloak: async () => {
         const res = await fetch(`${kcBase}/.well-known/openid-configuration`, { method: 'GET', signal: AbortSignal.timeout(3000) })
-        if (!res.ok) return false
+        if (!res.ok) {
+          await res.body?.cancel()
+          return false
+        }
         const doc = (await res.json()) as { issuer?: string }
         return typeof doc.issuer === 'string' && doc.issuer.length > 0
       },
@@ -44,5 +49,5 @@ export const load: PageServerLoad = async (event) => {
   // TASK-042: no tenant resolved means no realm, never a made-up 'default'. A
   // resolved tenant is active by construction (the resolver refuses any other
   // status), which is the only tenant-status signal this page needs.
-  return { services, modules, realm: tenant?.slug ?? null, tenantActive: Boolean(tenant) }
+  return { services, modules: modules ?? {}, realm: tenant?.slug ?? null, tenantActive: Boolean(tenant) }
 }
