@@ -28,6 +28,13 @@ describe('fallbackSenderName', () => {
   })
 })
 
+describe('fallbackSenderName with plain underscores', () => {
+  it('keeps a localpart whose underscore is not an encoded byte', () => {
+    expect(fallbackSenderName('@hans_dampf:matrix.example.org')).toBe('Hans Dampf')
+    expect(fallbackSenderName('@test_dead:matrix.example.org')).toBe('Test Dead')
+  })
+})
+
 describe('senderLabel', () => {
   it('uses the display name when there is a real one', () => {
     expect(senderLabel(RAW, 'Erika Muster')).toBe('Erika Muster')

@@ -6,7 +6,9 @@
 // never one Matrix call per message. Only the first and last name are used, never the address.
 //
 // Everything here degrades to a readable name derived from the id itself (sender-label.ts) and
-// NEVER throws: a failed lookup must not take the message list or the live sync down.
+// NEVER throws: a failed lookup must not take the message list or the live sync down. A failure
+// is still logged (tenant id and error kind only, never the member), because the fallback reads
+// like a real name and would otherwise hide a broken identity lookup.
 
 import { currentTenantId } from '$lib/server/tenant/context'
 import { getKeycloakAdminClientForCurrentTenant } from '$lib/server/keycloak-admin'
@@ -31,6 +33,7 @@ export interface SenderNameResolver {
 const TTL_MS = 5 * 60_000 // names change rarely; keeps the identity service load tiny
 const NEGATIVE_TTL_MS = 30_000 // an unknown member or a failed lookup is retried sooner
 const CONCURRENCY = 5 // a room with many distinct senders must not fire them all at once
+const BUDGET_MS = 2_000 // a slow identity service must not hold a message snapshot back for long
 
 interface Entry {
   /** The member's name, or null when there is no usable one (fallback applies). */
@@ -46,10 +49,18 @@ function nameOf(parts: NameParts | null): string | null {
 
 export function createSenderNameResolver(
   lookup: UsernameLookup,
-  opts: { ttlMs?: number; negativeTtlMs?: number; now?: () => number } = {},
+  opts: {
+    ttlMs?: number
+    negativeTtlMs?: number
+    budgetMs?: number
+    now?: () => number
+    /** Called once per failed lookup (a failure is cached for the negative TTL, so this is rate-limited). */
+    onError?: (error: unknown) => void
+  } = {},
 ): SenderNameResolver {
   const ttl = opts.ttlMs ?? TTL_MS
   const negTtl = opts.negativeTtlMs ?? NEGATIVE_TTL_MS
+  const budget = opts.budgetMs ?? BUDGET_MS
   const now = opts.now ?? (() => Date.now())
   const cache = new Map<string, Entry>()
   const inflight = new Map<string, Promise<string | null>>()
@@ -64,8 +75,13 @@ export function createSenderNameResolver(
         const name = nameOf(await lookup(username))
         cache.set(username, { name, expiresAt: now() + (name ? ttl : negTtl) })
         return name
-      } catch {
+      } catch (e) {
         cache.set(username, { name: null, expiresAt: now() + negTtl })
+        try {
+          opts.onError?.(e)
+        } catch {
+          // a logging problem must not turn into a lookup failure
+        }
         return null
       } finally {
         inflight.delete(username)
@@ -78,12 +94,30 @@ export function createSenderNameResolver(
   return {
     async resolveMany(senders) {
       const unique = [...new Set(senders)]
-      const out = new Map<string, string>()
-      for (let i = 0; i < unique.length; i += CONCURRENCY) {
-        const chunk = unique.slice(i, i + CONCURRENCY)
-        const names = await Promise.all(chunk.map((id) => fetchName(localpartOf(id))))
-        chunk.forEach((id, j) => out.set(id, names[j] ?? fallbackSenderName(id)))
+      const resolved = new Map<string, string>()
+      const work = (async () => {
+        for (let i = 0; i < unique.length; i += CONCURRENCY) {
+          const chunk = unique.slice(i, i + CONCURRENCY)
+          const names = await Promise.all(chunk.map((id) => fetchName(localpartOf(id))))
+          chunk.forEach((id, j) => {
+            if (names[j] != null) resolved.set(id, names[j]!)
+          })
+        }
+      })()
+      // Past the budget the caller gets the fallback for whatever is still open; the lookups keep
+      // running and fill the cache for the next call.
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const timeout = new Promise<void>((res) => {
+        timer = setTimeout(res, budget)
+      })
+      try {
+        await Promise.race([work, timeout])
+      } finally {
+        clearTimeout(timer)
       }
+      work.catch(() => {})
+      const out = new Map<string, string>()
+      for (const id of unique) out.set(id, resolved.get(id) ?? fallbackSenderName(id))
       return out
     },
     clear: () => {
@@ -98,16 +132,38 @@ export function createSenderNameResolver(
 const REGISTRY_MAX = 32
 const registry = new Map<string, SenderNameResolver>()
 
+function errorKind(e: unknown): string {
+  const name = e instanceof Error ? e.name : typeof e
+  const status = (e as { status?: unknown } | null)?.status
+  return typeof status === 'number' ? `${name} (HTTP ${status})` : name
+}
+
+function warnLookupFailed(tenantId: string, e: unknown): void {
+  console.warn('[messages] sender name lookup failed; showing names derived from the ids', {
+    tenant: tenantId,
+    error: errorKind(e),
+  })
+}
+
+/** Drop a tenant's resolver (and its cached names, and the admin client it holds). Tenant evict seam. */
+export function evictSenderNameResolver(tenantId: string): void {
+  registry.get(tenantId)?.clear()
+  registry.delete(tenantId)
+}
+
 /** The calling tenant's resolver. Reads the tenant from the request context and THROWS without one. */
 export function getSenderNameResolver(): SenderNameResolver {
   const tenantId = currentTenantId()
   let resolver = registry.get(tenantId)
   if (!resolver) {
     const admin = getKeycloakAdminClientForCurrentTenant()
-    resolver = createSenderNameResolver(async (username) => {
-      const [user] = await admin.listUsers({ username, exact: true, max: 1 })
-      return user ?? null
-    })
+    resolver = createSenderNameResolver(
+      async (username) => {
+        const [user] = await admin.listUsers({ username, exact: true, max: 1 })
+        return user ?? null
+      },
+      { onError: (e) => warnLookupFailed(tenantId, e) },
+    )
     if (registry.size >= REGISTRY_MAX) {
       const oldest = registry.keys().next().value
       if (oldest !== undefined) {
@@ -122,9 +178,17 @@ export function getSenderNameResolver(): SenderNameResolver {
 
 /** The resolver, or null when there is no tenant context (callers then use the id-derived fallback). */
 export function tryGetSenderNameResolver(): SenderNameResolver | null {
+  let tenantId: string
+  try {
+    tenantId = currentTenantId()
+  } catch {
+    return null // no tenant context: nothing to look up, and nothing worth logging
+  }
   try {
     return getSenderNameResolver()
-  } catch {
+  } catch (e) {
+    // The tenant exists but its identity client cannot be built (missing or unreadable secret, ...).
+    warnLookupFailed(tenantId, e)
     return null
   }
 }
@@ -150,7 +214,10 @@ export async function withSenderNames<T extends object>(
   if (resolver && senders.length > 0) {
     try {
       names = await resolver.resolveMany(senders)
-    } catch {
+    } catch (e) {
+      console.warn('[messages] sender name resolution failed; showing names derived from the ids', {
+        error: errorKind(e),
+      })
       names = new Map()
     }
   }

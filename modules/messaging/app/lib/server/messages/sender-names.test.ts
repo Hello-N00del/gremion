@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const m = vi.hoisted(() => ({
   tenantId: 'tenant-a' as string | null,
   listUsers: vi.fn(),
+  clientBuilds: 0,
+  clientError: null as Error | null,
 }))
 
 vi.mock('$lib/server/tenant/context', () => ({
@@ -12,13 +14,19 @@ vi.mock('$lib/server/tenant/context', () => ({
   },
 }))
 vi.mock('$lib/server/keycloak-admin', () => ({
-  getKeycloakAdminClientForCurrentTenant: () => ({ listUsers: m.listUsers }),
+  getKeycloakAdminClientForCurrentTenant: () => {
+    m.clientBuilds++
+    if (m.clientError) throw m.clientError
+    return { listUsers: m.listUsers }
+  },
 }))
 
 import {
   __resetSenderNamesForTests,
   createSenderNameResolver,
+  evictSenderNameResolver,
   getSenderNameResolver,
+  tryGetSenderNameResolver,
   nameSyncResponse,
   withSenderNames,
 } from './sender-names'
@@ -32,6 +40,8 @@ function msg(sender: string, id = sender) {
 
 beforeEach(() => {
   m.tenantId = 'tenant-a'
+  m.clientBuilds = 0
+  m.clientError = null
   m.listUsers.mockReset().mockImplementation(async ({ username }: { username: string }) => {
     if (username === 'erika_40example.org') {
       return [{ id: 'u1', username, email: 'erika@example.org', firstName: 'Erika', lastName: 'Muster' }]
@@ -109,6 +119,92 @@ describe('getSenderNameResolver', () => {
     const names = await getSenderNameResolver().resolveMany([ERIKA])
     expect(names.get(ERIKA)).toBe('Erika Muster')
     expect(m.listUsers).toHaveBeenCalledWith({ username: 'erika_40example.org', exact: true, max: 1 })
+  })
+})
+
+describe('evictSenderNameResolver', () => {
+  it('drops the tenant resolver, so the next request builds a fresh admin client', () => {
+    const first = getSenderNameResolver()
+    expect(m.clientBuilds).toBe(1)
+    evictSenderNameResolver('tenant-a')
+    const second = getSenderNameResolver()
+    expect(second).not.toBe(first)
+    expect(m.clientBuilds).toBe(2)
+  })
+
+  it('leaves the other tenants alone', () => {
+    const a = getSenderNameResolver()
+    m.tenantId = 'tenant-b'
+    const b = getSenderNameResolver()
+    evictSenderNameResolver('tenant-a')
+    expect(getSenderNameResolver()).toBe(b)
+    m.tenantId = 'tenant-a'
+    expect(getSenderNameResolver()).not.toBe(a)
+  })
+
+  it('forgets the cached names of the evicted resolver', async () => {
+    const r = getSenderNameResolver()
+    await r.resolveMany([ERIKA])
+    evictSenderNameResolver('tenant-a')
+    await getSenderNameResolver().resolveMany([ERIKA])
+    expect(m.listUsers).toHaveBeenCalledTimes(2)
+  })
+
+  it('is a no-op for an unknown tenant', () => {
+    expect(() => evictSenderNameResolver('nobody')).not.toThrow()
+  })
+})
+
+describe('failures are logged, not silent', () => {
+  it('warns once per failed lookup without naming the member', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    m.listUsers.mockRejectedValue(Object.assign(new Error('403 for erika_40example.org'), { name: 'KeycloakError' }))
+    const names = await getSenderNameResolver().resolveMany([ERIKA])
+    expect(names.get(ERIKA)).toBe('Erika')
+    expect(warn).toHaveBeenCalledTimes(1)
+    const logged = JSON.stringify(warn.mock.calls[0])
+    expect(logged).toContain('tenant-a')
+    expect(logged).toContain('KeycloakError')
+    expect(logged).not.toContain('erika')
+    warn.mockRestore()
+  })
+
+  it('does not log an unknown member (that is not a failure)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await getSenderNameResolver().resolveMany([MAX])
+    expect(warn).not.toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
+  it('returns null silently without a tenant context', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    m.tenantId = null
+    expect(tryGetSenderNameResolver()).toBeNull()
+    expect(warn).not.toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
+  it('warns when the resolver cannot be built for a tenant that exists', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    m.clientError = new Error('secret unreadable')
+    expect(tryGetSenderNameResolver()).toBeNull()
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(JSON.stringify(warn.mock.calls[0])).toContain('tenant-a')
+    warn.mockRestore()
+  })
+})
+
+describe('time budget', () => {
+  it('answers with fallbacks when the identity service hangs, and still fills the cache', async () => {
+    let release: (v: { firstName: string; lastName: string }) => void = () => {}
+    const lookup = vi.fn(() => new Promise<{ firstName: string; lastName: string }>((res) => { release = res }))
+    const r = createSenderNameResolver(lookup, { budgetMs: 20 })
+    const names = await r.resolveMany([ERIKA])
+    expect(names.get(ERIKA)).toBe('Erika')
+    release({ firstName: 'Erika', lastName: 'Muster' })
+    await new Promise((res) => setTimeout(res, 5))
+    expect((await r.resolveMany([ERIKA])).get(ERIKA)).toBe('Erika Muster')
+    expect(lookup).toHaveBeenCalledTimes(1)
   })
 })
 

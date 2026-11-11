@@ -19,7 +19,12 @@ export function localpartOf(userId: string): string {
 export function decodeUsername(localpart: string): string {
   return localpart.replace(/(?:_[0-9a-f]{2})+/g, (run) => {
     const bytes = Uint8Array.from(run.match(/[0-9a-f]{2}/g) ?? [], (h) => parseInt(h, 16))
-    return new TextDecoder('utf-8').decode(bytes)
+    try {
+      return new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+    } catch {
+      // Not valid UTF-8, so this was never an encoded run (a plain name such as hans_dampf): keep it.
+      return run
+    }
   })
 }
 
@@ -51,7 +56,7 @@ export function senderLabel(sender: string, displayName: string | null | undefin
 }
 
 export function senderInitials(label: string): string {
-  const words = label.split(/[\s._\-]+/).filter(Boolean)
+  const words = label.split(/[\s._-]+/).filter(Boolean)
   if (words.length >= 2) return (words[0]![0]! + words[1]![0]!).toUpperCase()
   return label.slice(0, 2).toUpperCase()
 }
