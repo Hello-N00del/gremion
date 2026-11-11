@@ -37,7 +37,7 @@ beforeEach(() => {
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/calendar/events' && init?.method === 'POST') {
-        posted = JSON.parse(String(init.body)) as Posted
+        posted = JSON.parse(init.body as string) as Posted
         return jsonResponse({ id: 'e1' })
       }
       if (url === '/api/calendar/event-types') {

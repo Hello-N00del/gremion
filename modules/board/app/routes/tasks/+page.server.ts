@@ -19,7 +19,7 @@ import type { CardView, StackView, BoardView, MemberOption } from '$lib/componen
 function dayOf(v: unknown): string | null {
   if (!v) return null
   if (v instanceof Date) return Number.isNaN(v.getTime()) ? null : v.toISOString().slice(0, 10)
-  return String(v).slice(0, 10)
+  return typeof v === 'string' || typeof v === 'number' ? String(v).slice(0, 10) : null
 }
 
 export const load: PageServerLoad = async ({ locals, url }) => {
