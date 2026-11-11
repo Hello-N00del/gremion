@@ -180,7 +180,7 @@ describe('TabEmail.svelte — test uses the stored login (E4)', () => {
     render(TabEmail, { props: { smtp: SMTP } })
     await fireEvent.click(testButton())
     await screen.findByText(/erfolgreich gesendet/)
-    const sent = JSON.parse(String(fetchMock.mock.calls[0][1]?.body))
+    const sent = JSON.parse(fetchMock.mock.calls[0][1]?.body as string)
     expect(sent).not.toHaveProperty('to_address')
     expect(sent).toMatchObject({ host: 'mailpit', port: 1025, user: '', password: '' })
   })
@@ -193,7 +193,7 @@ describe('TabEmail.svelte — test uses the stored login (E4)', () => {
     await fireEvent.input(screen.getByLabelText(/Passwort \(/), { target: { value: 'typed-pass' } })
     await fireEvent.click(testButton())
     await screen.findByText(/erfolgreich gesendet/)
-    const sent = JSON.parse(String(fetchMock.mock.calls[0][1]?.body))
+    const sent = JSON.parse(fetchMock.mock.calls[0][1]?.body as string)
     expect(sent).toMatchObject({ user: 'typed-user', password: 'typed-pass' })
   })
 

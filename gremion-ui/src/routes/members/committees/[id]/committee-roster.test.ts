@@ -24,7 +24,7 @@ function stubFetch() {
       const call: Call = {
         url: String(url),
         method: init?.method ?? 'GET',
-        body: init?.body ? JSON.parse(String(init.body)) : null,
+        body: init?.body ? JSON.parse(init.body as string) : null,
       }
       calls.push(call)
       const r = responder(call)
