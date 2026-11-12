@@ -331,8 +331,8 @@ takes Impressum/contact metadata for TMG §5 compliance:
 
 The app-tier compose file (`docker-compose.app.yml`) derives the portal's own
 origin, its database and its link back to the main app from three optional
-keys of `app-<colour>.env`. An absent or empty key keeps the default, which is
-the value the service had before the key existed:
+keys of `app-<colour>.env`. An absent or empty key keeps the default. For the host and the database that is
+the value the service had before the key existed; the main-app link now defaults to the pilot tenant host when one is set:
 
 | Variable | Default | Notes |
 |----------|---------|-------|
