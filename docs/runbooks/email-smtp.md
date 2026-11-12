@@ -62,7 +62,7 @@ loudly while a realm still carries the other mode's stamp).
 
 Out of the box the dev stack does **not** relay mail to the internet. A
 `mailpit` service (`axllent/mailpit`, pinned by tag and digest) runs on the state
-network (`${STACK}_state`) and **captures** every message instead. It carries
+network (`${STACK}_state`) and **captures** every message sent to it. It carries
 `profiles: [dev]`: `.env.example` sets `COMPOSE_PROFILES=dev`, while a host
 renders with `COMPOSE_PROFILES=production`, so no catcher exists there:
 
@@ -74,8 +74,10 @@ renders with `COMPOSE_PROFILES=production`, so no catcher exists there:
 - **Web UI** is mapped to `http://localhost:8026` by
   `docker-compose.override.yml` (bound to `127.0.0.1` / `[::1]` only).
 
-Nothing sends to the catcher by default: a tenant's SMTP settings start out
-unconfigured, and no compose default names a mail host. A tenant whose SMTP
+Nothing sends to the catcher by default: on the local stack a tenant's SMTP
+settings start out unconfigured, and no compose default names a mail host. (On
+a host with `MAIL_TRANSPORT=relay`, `gremion-services wire` writes the tenant's
+SMTP settings for the relay, see [ops/pilot-services.md](../ops/pilot-services.md).) A tenant whose SMTP
 config points at `host=mailpit port=1025` with no auth
 sends to the catcher with **zero** real credentials. Captured mail persists
 across restarts in the `mailpit-data` named volume (project-scoped, so
@@ -93,8 +95,8 @@ transport.
 ## Reading trapped mail
 
 1. Open `http://localhost:8026` in a browser on the dev/staging host.
-2. Every message any tenant sent appears in the inbox — subject, sender,
-   recipients, raw source, and an HTML preview.
+2. Every message a tenant sent to the catcher appears in the inbox — subject,
+   sender, recipients, raw source, and an HTML preview.
 3. Nothing is delivered to real mailboxes, so it is safe to trigger password
    resets, committee/protocol notifications, etc.
 
@@ -211,8 +213,8 @@ An optional per-tenant credential lives in the control-DB registry row:
 ## Switching a tenant to a real outbound relay (production)
 
 Real SMTP credentials are an **operator action** (a long-lead external
-dependency). Until they exist, the stack keeps using Mailpit — nothing here
-blocks on them. When you have a relay (host, port, user, password) for a
+dependency). Until they exist, a tenant sends no mail to the outside (on the
+local stack it can use the catcher above) — nothing here blocks on them. When you have a relay (host, port, user, password) for a
 tenant:
 
 1. **Write the tenant's SMTP password** to the per-tenant secrets directory on

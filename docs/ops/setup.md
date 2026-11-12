@@ -75,7 +75,10 @@ and runs these steps:
    `internal-ca.pem`, so the file has to exist in dev too.
 8. **Renders `docker/pgbouncer/userlist.txt`**
    (`scripts/render-pgbouncer-userlist.sh`; only the prod overlay mounts it) and
-   runs the bind-mount preflight (`scripts/check-bind-sources.sh --all`).
+   runs the bind-mount preflight (`scripts/check-bind-sources.sh --all`). It
+   does not create `secrets/ipcrypt_key.txt`, the secret file the `vector`
+   service reads
+   ([`../DEVELOPMENT.md`](../DEVELOPMENT.md#generated-bind-mount-sources-and-the-preflight)).
 9. **Prepares no realm.** Keycloak comes up with `master` only; the
    per-tenant realm is composed from
    `docker/keycloak/realm-export.base.json` by `buildTenantRealmDoc` and

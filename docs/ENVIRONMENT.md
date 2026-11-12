@@ -433,8 +433,9 @@ Where the portal is mounted, and an optional link to a site above it:
 (`mailpit:1025`, no auth, TLS off; web UI at `http://localhost:8026`), and what it
 receives never leaves the host. No compose default points the app at it:
 `gremion-ui`'s SMTP host/port/from come from the in-app **Settings → E-Mail**
-form (stored in the tenant's config), **not** from env, and a tenant starts with
-SMTP unconfigured. Activation steps: [runbooks/email-smtp.md](runbooks/email-smtp.md).
+form (stored in the tenant's config), **not** from env, and on the local stack
+a tenant starts with SMTP unconfigured (on a host with `MAIL_TRANSPORT=relay`,
+`gremion-services wire` writes the tenant's settings for the relay). Activation steps: [runbooks/email-smtp.md](runbooks/email-smtp.md).
 
 | Variable | Default | Notes |
 |----------|---------|-------|
@@ -506,7 +507,9 @@ Keycloak's event store already obey the ceiling
 ([log-retention-policy.md](log-retention-policy.md), "Upper bound").
 
 The IP-pseudonymisation key is supplied to Vector as a Docker secret file
-(`./secrets/ipcrypt_key.txt`), not via env.
+(`./secrets/ipcrypt_key.txt`), not via env. The file is not in the checkout and
+`setup.sh` does not create it
+([DEVELOPMENT.md](DEVELOPMENT.md#generated-bind-mount-sources-and-the-preflight)).
 
 ---
 

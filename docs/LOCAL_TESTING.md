@@ -154,7 +154,9 @@ first-run setup wizard.
 4. Makes the helper scripts executable.
 5. Mints the internal TLS CA + Keycloak server cert (the app project bind-mounts
    `internal-ca.pem`, so dev needs it too), renders the PgBouncer userlist, and
-   runs the bind-mount preflight (`scripts/check-bind-sources.sh --all`).
+   runs the bind-mount preflight (`scripts/check-bind-sources.sh --all`). It does
+   not create `secrets/ipcrypt_key.txt`, the secret file the `vector` service
+   reads ([DEVELOPMENT.md](DEVELOPMENT.md#generated-bind-mount-sources-and-the-preflight)).
 6. B-01: prepares no realm. Keycloak starts with `master` only; a tenant's
    realm is composed from `docker/keycloak/realm-export.base.json` (five
    clients: `gremion-ui`, `gremion-admin`, `synapse`, `nextcloud` and
