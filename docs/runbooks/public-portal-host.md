@@ -68,7 +68,7 @@ add them. Declare each key once. The env reader refuses a file that declares a
 key twice. Edit as `gremion`, the owner of the files; they hold secrets.
 
 **The database name contains the tenant id, so it exists only after the tenant
-was created.** Set `PUBLIC_PORTAL_DB_NAME` after `gremion-tenant create`, and
+was created.** Set `PUBLIC_PORTAL_DB_NAME` after the customer is created, and
 set it **again after any re-create** of the tenant: a new tenant has a new id
 and therefore a new database name, and the portal would keep reading a
 database that no longer exists. Read the name from the running server:

@@ -285,8 +285,10 @@ services:
     environment:
       COLOUR: ${COLOUR:?COLOUR required}
       # The portal on a customer's own host (docs/runbooks/public-portal-host.md).
-      # Three keys of app-<colour>.env, each falling back to the value this block
-      # had before the key existed (scripts/check-portal-public-host.test.mjs):
+      # Three keys of app-<colour>.env (scripts/check-portal-public-host.test.mjs).
+      # Unset, the host and the database keep the values this block had before
+      # the keys existed; the main-app link then follows PILOT_TENANT_HOST when
+      # that is set, and was the platform domain before:
       #   PUBLIC_PORTAL_HOST     the one extra host name the edge serves the
       #                          portal under; unset: public.<platform domain>.
       #   PUBLIC_PORTAL_DB_NAME  the database the read-only role reads. On a
