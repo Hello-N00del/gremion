@@ -619,9 +619,9 @@ async function findArchivedRooms(): Promise<FoundArchivedRoom[]> {
 }
 
 /** The own names (m.room.name) of the given rooms, read as the admin bot like every other state
- *  read here, at most ARCHIVE_MARKER_CONCURRENCY at a time. Read as room state and not taken from
- *  the admin room listing: that listing is fed from the homeserver's room statistics, which trail
- *  a state change, and the overview is reloaded right after a rename. A failed read is logged and
+ *  read here, at most ARCHIVE_MARKER_CONCURRENCY at a time. Read as room state, the authoritative
+ *  source of a room's name, and not taken from the admin room listing: the overview is reloaded
+ *  right after a rename and must show the name that was just set. A failed read is logged and
  *  leaves the name out; it never fails the overview. */
 async function readRoomNames(roomIds: readonly string[]): Promise<Map<string, string>> {
   const names = new Map<string, string>()
