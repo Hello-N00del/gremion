@@ -81,6 +81,7 @@ Task-specific operator runbooks live under [`docs/runbooks/`](runbooks/) and
 | [runbooks/tenant-lifecycle.md](runbooks/tenant-lifecycle.md) | Provisioning, suspending, and deleting tenants |
 | [runbooks/pgbouncer.md](runbooks/pgbouncer.md) | PgBouncer transaction-pooling front (production overlay) — deploy / verify / rollback |
 | [runbooks/dead-letter.md](runbooks/dead-letter.md) | Dead letters: find, replay, requeue, rebuild after a JetStream loss |
+| [runbooks/public-portal-host.md](runbooks/public-portal-host.md) | The public portal under a customer's own host: DNS, the three env keys, the hand-placed router file, live checks |
 | [ops/runbook/README.md](ops/runbook/README.md) | The four-procedure operations runbook: install, upgrade, backup and restore (supersedes ops/restore-runbook.md) |
 | [ops/host-tooling.md](ops/host-tooling.md) | The `gremion-*` host programs and the `/opt/gremion` layout |
 | [ops/setup.md](ops/setup.md) | First-time setup |

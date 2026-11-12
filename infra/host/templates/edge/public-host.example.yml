@@ -1,0 +1,51 @@
+# public-host.yml — the public portal on ONE extra host name. PLACED BY HAND.
+# Runbook: docs/runbooks/public-portal-host.md.
+#
+# Copy this file to etc/edge/public-host.yml under the Gremion root (exactly that
+# name, mode 0644), replace the placeholder host with the customer's portal host
+# in BOTH places it stands (the rule and the pin; this comment does not spell
+# it, so a count of the host in the placed file is exactly 2), and change
+# nothing else. No program writes, rewrites or prunes it: it has to be placed
+# again after a re-install.
+#
+# The host carries the read-only portal and nothing else. The app, Keycloak and
+# the platform stay on their own hosts, so this host must never become a
+# tenant_domain row: that would route the APP here.
+#
+#   1. the one router targets the COLOUR-BOUND service public@file, which lives
+#      in active.yml and is rewritten by gremion-switch — so a colour switch
+#      never rewrites this file;
+#   2. the chain is the router's own host pin FIRST, then edge-hsts-custom and
+#      edge-ratelimit-portal (declared on the Traefik container's labels,
+#      @docker). The pin SETS X-Forwarded-Host to the router's own literal host,
+#      so a client-supplied value never reaches the portal. The app's
+#      proxy-trust stamp is NOT chained: the portal must never receive it;
+#   3. the only middleware declared here is that pin. Its name carries a dot,
+#      which no tenant slug can spell, so no tenant file (edge-hostpin-<slug>)
+#      can ever declare the same name. No service, no secret and no platform
+#      middleware is declared in this file;
+#   4. the router carries a certResolver (the install's TRAEFIK_CERT_RESOLVER;
+#      le-http unless the install changed it): gremion-verify fails any public
+#      router without one, and a bare `tls: {}` silently serves the default
+#      certificate.
+#
+# gremion-verify holds the placed file to this shape and to being live: one
+# router named public-host, the rule Traefik serves equal to the rule below, the
+# service public@file, exactly this chain, and no other name.
+http:
+  routers:
+    public-host:
+      entryPoints: ["websecure"]
+      rule: "Host(`portal.customer.example`)"
+      service: "public@file"
+      middlewares:
+        - "edge-hostpin-public.portal@file"
+        - "edge-hsts-custom@docker"
+        - "edge-ratelimit-portal@docker"
+      tls:
+        certResolver: "le-http"
+  middlewares:
+    edge-hostpin-public.portal:
+      headers:
+        customRequestHeaders:
+          X-Forwarded-Host: "portal.customer.example"

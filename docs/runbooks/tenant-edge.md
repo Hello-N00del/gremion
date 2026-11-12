@@ -21,12 +21,14 @@ browser ──TLS──> traefik:443 (the host's edge address) ──> routers
                                                            └─ keycloak   (/auth path routers on the apex; the realm paths on a customer host)
 ```
 
-- **The public portal has no public router in this tree today.** `active.yml`
+- **The public portal has no public router by default.** `active.yml`
   defines the `public` and `public-next` services for `gremion-public`, and the
-  only router that uses one of them is the loopback-only `test-public` router of
-  the inactive colour (`infra/host/templates/edge/active.yml.tmpl`). Neither the
-  compose labels nor the per-tenant router files route a public host to the
-  portal.
+  only router of the rendered files that uses one of them is the loopback-only
+  `test-public` router of the inactive colour
+  (`infra/host/templates/edge/active.yml.tmpl`). Neither the compose labels nor
+  the per-tenant router files route a public host to the portal. A customer's
+  own portal host gets its router from one hand-placed file,
+  `etc/edge/public-host.yml` ([public-portal-host.md](public-portal-host.md)).
 
 - **Traefik is the sole ingress** and runs only in the `production` profile
   (`docker-compose.yml`, `profiles: [production]`). In local dev there is no

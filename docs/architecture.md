@@ -73,8 +73,10 @@ Internet
 ```
 
 The third arrow is the portal's configured origin (`gremion-public` sets `ORIGIN`
-to `https://public.<domain>`), not a route that exists: no router in this tree
-sends a public host to the portal today
+to `https://public.<domain>` unless `PUBLIC_PORTAL_HOST` names another host), not
+a route that exists by default: a public host reaches the portal only through the
+hand-placed router file of
+[runbooks/public-portal-host.md](runbooks/public-portal-host.md)
 ([runbooks/tenant-edge.md](runbooks/tenant-edge.md#topology)).
 
 State project, started without a profile: `postgres`, `governance-postgres`,
@@ -97,7 +99,7 @@ State project, started without a profile: `postgres`, `governance-postgres`,
 | Service (app tier) | Role |
 |---|---|
 | `gremion-ui` | The authenticated SvelteKit app shell — dashboard, settings, system status, and the governance surface (committees, members, protocols, resolutions, portal admin), plus the overlaid module halves |
-| `gremion-public` | The read-only public portal (configured origin `public.<domain>`; no public router for it in this tree today) — no auth, no sessions, connects to the governance DB through a read-only role |
+| `gremion-public` | The read-only public portal (configured origin `public.<domain>`, or one host of the customer's own with a hand-placed router file, [runbook](runbooks/public-portal-host.md)) — no auth, no sessions, connects to the governance DB through a read-only role |
 | `control-panel` | The operator shell ([`apps/control-panel`](../apps/control-panel)): lists the customers and submits provisioning requests; it mutates nothing itself |
 | `kernel-api` | The kernel API ([`services/kernel-api`](../services/kernel-api)): tenancy resolution and the module registry, spec-first. `kernel-api-migrate` is its migration one-shot (profile `kernel-api-migrate`) |
 | `migrate`, `tenant-create` | One-shots (profiles `migrate` and `tenant-create`): the fleet migration and the customer provisioning run |
