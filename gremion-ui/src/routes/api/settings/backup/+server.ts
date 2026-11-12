@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { dirname } from 'node:path'
 import { env } from '$env/dynamic/private'
 import { getTenant } from '$lib/server/tenant/context'
-import { backupTimeoutMs, hostdSocketPath } from '$lib/server/backup/hostd-client'
+import { backupTimeoutMs, hostdConfigured, hostdSocketPath } from '$lib/server/backup/hostd-client'
 import {
   BackupTriggerError,
   getBackupStatus,
@@ -92,6 +92,8 @@ export const GET: RequestHandler = async ({ locals }) => {
     // F1-FIX-10-K: whether the button can work at all (with the reason when not),
     // the real state of the latest triggered run, and the only trustworthy
     // "last backup" timestamp (written solely from a finished run).
+    // trigger.state tells "backups are not managed from the app on this
+    // installation" (not_configured) apart from a daemon that is down (unreachable).
     trigger: triggerAvailability(deps),
     run: status.run,
     runs_state: status.runs,
@@ -103,6 +105,7 @@ function backupDeps(): BackupDeps {
   const tenant = getTenant()
   return {
     socketPath: hostdSocketPath(env),
+    hostdConfigured: hostdConfigured(env),
     runsDir: env.BACKUP_RUNS_DIR ?? `${getConfigDir()}/backup/runs`,
     timeoutMs: backupTimeoutMs(env),
     stampLastBackup: (iso) => {
@@ -127,6 +130,12 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   }
 
   if (body.action === 'check') {
+    // Where backups are not managed from the app there is no run that could pick
+    // the request up: refuse it instead of recording a request nothing reads.
+    const availability = triggerAvailability(backupDeps())
+    if (availability.state === 'not_configured') {
+      return json({ success: false, error: availability.reason, code: 'not_configured' }, { status: 503 })
+    }
     try {
       const triggerPath = getCheckTriggerPath()
       mkdirSync(dirname(triggerPath), { recursive: true })

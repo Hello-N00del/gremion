@@ -31,7 +31,7 @@ export interface BackupRunRecord {
 
 export class BackupTriggerError extends Error {
   constructor(
-    public readonly code: 'unavailable' | 'busy',
+    public readonly code: 'unavailable' | 'busy' | 'not_configured',
     message: string,
   ) {
     super(message)
@@ -41,6 +41,11 @@ export class BackupTriggerError extends Error {
 
 export interface BackupDeps {
   socketPath: string
+  /**
+   * False when the installation names no host daemon. A missing socket then means
+   * "backups are not managed from the app", not "the daemon is down". Default true.
+   */
+  hostdConfigured?: boolean
   runsDir: string
   timeoutMs: number
   /** Stamps config.backups.last_backup_at for the request's tenant. */
@@ -118,23 +123,26 @@ export function decideOutcome(
   return { state: 'finished', exitCode: 0, finishedAt }
 }
 
-export function triggerAvailability(deps: Pick<BackupDeps, 'socketPath'>): TriggerAvailability {
-  return hostdAvailability(deps.socketPath)
+export function triggerAvailability(deps: Pick<BackupDeps, 'socketPath' | 'hostdConfigured'>): TriggerAvailability {
+  return hostdAvailability(deps.socketPath, deps.hostdConfigured ?? true)
 }
 
 /**
  * Connect to hostd, send `backup`, record `started`, and finish the record in the
- * background. Throws BackupTriggerError (never records a run) when hostd cannot
- * be reached or a run is already in flight.
+ * background. Throws BackupTriggerError (never records a run) when no host daemon
+ * is configured, when hostd cannot be reached, or when a run is already in flight.
  */
 export async function startBackup(deps: BackupDeps, opts: { requestedBy: string | null }): Promise<BackupRunRecord> {
   const now = deps.now ?? (() => new Date())
   if (active.has(deps.runsDir)) {
     throw new BackupTriggerError('busy', 'Es läuft bereits ein Backup.')
   }
-  const availability = hostdAvailability(deps.socketPath)
+  const availability = triggerAvailability(deps)
   if (!availability.available) {
-    throw new BackupTriggerError('unavailable', availability.reason ?? 'Der Host-Dienst (hostd) ist nicht erreichbar.')
+    throw new BackupTriggerError(
+      availability.state === 'not_configured' ? 'not_configured' : 'unavailable',
+      availability.reason ?? 'Der Host-Dienst (hostd) ist nicht erreichbar.',
+    )
   }
   let sock: net.Socket
   try {

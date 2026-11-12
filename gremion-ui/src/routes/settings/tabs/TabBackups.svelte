@@ -24,8 +24,12 @@
     exitCode?: number | null
     error?: string
   }
+  // The host daemon is optional. `not_configured` means backups are not managed
+  // from the app on this installation (the operator runs them outside it): a
+  // normal state, shown as a plain notice. `unreachable` is a fault.
+  type TriggerState = 'available' | 'not_configured' | 'unreachable'
   let triggerLoaded = false
-  let triggerAvailable = false
+  let triggerState: TriggerState = 'unreachable'
   let triggerReason = ''
   let run: RunState | null = null
   let lastBackupAt: string | null = backups.last_backup_at
@@ -56,6 +60,12 @@
   let logLoading = false
   let expandedRun: string | null = null
 
+  function readTriggerState(trigger: { available?: unknown; state?: unknown } | null | undefined): TriggerState {
+    const state = trigger?.state
+    if (state === 'available' || state === 'not_configured' || state === 'unreachable') return state
+    return trigger?.available === true ? 'available' : 'unreachable'
+  }
+
   async function loadLog() {
     logLoading = true
     try {
@@ -63,7 +73,7 @@
       if (res.ok) {
         const body = await res.json()
         backupRuns = (body.data as BackupRun[] ?? []).slice().reverse()
-        triggerAvailable = body.trigger?.available === true
+        triggerState = readTriggerState(body.trigger)
         triggerReason = body.trigger?.reason ?? ''
         run = (body.run as RunState | null) ?? null
         lastBackupAt = body.last_backup_at ?? null
@@ -103,7 +113,7 @@
         const body = await res.json()
         backupError = body.error ?? 'Fehler beim Starten des Backups.'
         if (res.status === 503) {
-          triggerAvailable = false
+          triggerState = body.code === 'not_configured' ? 'not_configured' : 'unreachable'
           triggerReason = backupError
           backupError = ''
         }
@@ -129,7 +139,12 @@
         checkMessage = 'Integritätsprüfung angefragt — wird beim nächsten Backup-Lauf ausgeführt.'
       } else {
         const body = await res.json()
-        checkError = body.error ?? 'Fehler beim Anfordern der Prüfung.'
+        if (body.code === 'not_configured') {
+          triggerState = 'not_configured'
+          triggerLoaded = true
+        } else {
+          checkError = body.error ?? 'Fehler beim Anfordern der Prüfung.'
+        }
       }
     } catch {
       checkError = 'Verbindungsfehler.'
@@ -189,7 +204,11 @@
   }
 
   $: running = run?.state === 'started'
-  $: buttonDisabled = !triggerLoaded || !triggerAvailable || triggeringBackup || running
+  $: notManaged = triggerLoaded && triggerState === 'not_configured'
+  $: unreachable = triggerLoaded && triggerState === 'unreachable'
+  $: actionsUsable = triggerLoaded && triggerState === 'available'
+  $: buttonDisabled = !actionsUsable || triggeringBackup || running
+  $: checkDisabled = !actionsUsable || requestingCheck
 
   onMount(() => {
     loadLog()
@@ -220,15 +239,40 @@
     </div>
   </form>
 
+  {#if notManaged}
+    <!-- No host daemon on this installation: nothing here can start or inspect a
+         backup, so say who runs them instead of offering actions that do nothing. -->
+    <div class="space-y-1 max-w-prose rounded-lg border border-border px-3 py-2" data-testid="backup-not-managed">
+      <p class="text-sm">
+        Auf dieser Installation werden Backups nicht aus der App gesteuert. Der Betreiber führt sie außerhalb der App aus.
+      </p>
+      <p class="text-sm text-ink-muted">
+        Deshalb lässt sich hier weder ein Backup noch eine Integritätsprüfung auslösen.
+        {#if backupRuns.length === 0}
+          Die App hat keine Aufzeichnungen über diese Läufe; Auskunft gibt der Betreiber.
+        {/if}
+      </p>
+      {#if lastBackupAt}
+        <p class="text-xs text-ink-muted" data-testid="backup-last-at">
+          Letztes erfolgreiches Backup, das aus der App gestartet wurde: {formatDate(lastBackupAt)}
+        </p>
+      {/if}
+    </div>
+  {:else}
+  {#if unreachable}
+    <div class="space-y-1" role="alert" data-testid="backup-trigger-reason">
+      <p class="text-sm text-rust">{triggerReason || 'Der Host-Dienst für Backups ist nicht erreichbar.'}</p>
+      <p class="text-sm text-ink-muted">
+        Solange dieser Fehler besteht, lassen sich Backup und Integritätsprüfung hier nicht auslösen.
+      </p>
+    </div>
+  {/if}
   <!-- Actions -->
   <div class="flex flex-wrap gap-3 items-start">
     <div class="space-y-1">
       <Button variant="outline" onclick={triggerBackup} disabled={buttonDisabled}>
         {running ? 'Backup läuft…' : triggeringBackup ? 'Starte Backup…' : 'Backup jetzt erstellen'}
       </Button>
-      {#if triggerLoaded && !triggerAvailable && triggerReason}
-        <p class="text-sm text-ink-muted" data-testid="backup-trigger-reason">{triggerReason}</p>
-      {/if}
       {#if run}
         {#if run.state === 'started'}
           <p class="text-sm text-ink-muted" role="status" data-testid="backup-run-state">
@@ -253,7 +297,7 @@
     </div>
 
     <div class="space-y-1">
-      <Button variant="outline" onclick={requestIntegrityCheck} disabled={requestingCheck}>
+      <Button variant="outline" onclick={requestIntegrityCheck} disabled={checkDisabled}>
         {requestingCheck ? 'Anfrage läuft…' : 'Integritätsprüfung anfragen'}
       </Button>
       {#if checkMessage}
@@ -264,8 +308,11 @@
       {/if}
     </div>
   </div>
+  {/if}
 
-  <!-- Backup run log -->
+  <!-- Backup run log. Where backups are not managed from the app, an empty list
+       would read as "no backups exist", so it is only shown when it has entries. -->
+  {#if !notManaged || backupRuns.length > 0}
   <div class="space-y-2">
     <h3 class="text-sm font-semibold">Backup-Protokoll</h3>
     {#if logLoading}
@@ -331,4 +378,5 @@
       </div>
     {/if}
   </div>
+  {/if}
 </div>

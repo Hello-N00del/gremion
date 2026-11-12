@@ -9,7 +9,7 @@
 //
 // Trigger contract: R29-F1-WAVE2/addendum.md ("D-4 trigger contract", KERNEL).
 import net from 'node:net'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -85,13 +85,23 @@ async function post(route: Awaited<ReturnType<typeof loadRoute>>) {
   return route.POST({ request, locals: makeLocals() })
 }
 
+async function postCheck(route: Awaited<ReturnType<typeof loadRoute>>) {
+  const request = new Request('http://localhost/api/settings/backup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'check' }),
+  })
+  // @ts-expect-error partial event
+  return route.POST({ request, locals: makeLocals() })
+}
+
 async function get(route: Awaited<ReturnType<typeof loadRoute>>) {
   // @ts-expect-error partial event
   const res = await route.GET({ locals: makeLocals() })
   return (await res.json()) as {
     success: boolean
     data: unknown[]
-    trigger: { available: boolean; reason?: string }
+    trigger: { available: boolean; state?: string; reason?: string }
     run: null | { id: string; state: string; startedAt: string; finishedAt?: string; exitCode?: number | null }
     last_backup_at: string | null
   }
@@ -269,18 +279,40 @@ describe('POST /api/settings/backup (D-4: real trigger)', () => {
 })
 
 describe('GET /api/settings/backup trigger availability', () => {
-  it('reports available:false with a reason when the hostd socket is absent', async () => {
-    h.env.GREMION_HOSTD_SOCKET = socketPath()
+  it('configured but absent socket: unreachable, with a reason that names no path', async () => {
+    const path = socketPath()
+    h.env.GREMION_HOSTD_SOCKET = path
     const route = await loadRoute()
     const status = await get(route)
     expect(status.trigger.available).toBe(false)
+    expect(status.trigger.state).toBe('unreachable')
     expect(status.trigger.reason).toMatch(/hostd/i)
+    expect(status.trigger.reason).not.toContain(path)
+    expect(status.trigger.reason).not.toMatch(/socket|\/run\/|\.sock/i)
+  })
+
+  it('no host daemon configured: not_configured, and the reason names neither daemon nor socket', async () => {
+    // GREMION_HOSTD_SOCKET is unset and nothing listens at the built-in default.
+    const route = await loadRoute()
+    const status = await get(route)
+    expect(status.trigger.available).toBe(false)
+    expect(status.trigger.state).toBe('not_configured')
+    expect(status.trigger.reason).toMatch(/außerhalb der App/)
+    expect(status.trigger.reason).not.toMatch(/hostd|socket|erreichbar|\/run\//i)
+  })
+
+  it('a blank GREMION_HOSTD_SOCKET counts as not configured', async () => {
+    h.env.GREMION_HOSTD_SOCKET = '   '
+    const route = await loadRoute()
+    expect((await get(route)).trigger.state).toBe('not_configured')
   })
 
   it('reports available:true when the socket exists', async () => {
     h.env.GREMION_HOSTD_SOCKET = await startFakeHostd((sock) => sock.end())
     const route = await loadRoute()
-    expect((await get(route)).trigger.available).toBe(true)
+    const status = await get(route)
+    expect(status.trigger.available).toBe(true)
+    expect(status.trigger.state).toBe('available')
   })
 
   it('exposes last_backup_at from the config (only a finished run ever writes it)', async () => {
@@ -288,5 +320,67 @@ describe('GET /api/settings/backup trigger availability', () => {
     h.readConfig.mockReturnValue({ backups: { retention_days: 30, last_backup_at: '2026-09-30T02:00:00.000Z', encryption_key_path: '' } })
     const route = await loadRoute()
     expect((await get(route)).last_backup_at).toBe('2026-09-30T02:00:00.000Z')
+  })
+})
+
+describe('POST /api/settings/backup without a configured host daemon', () => {
+  it('refuses the backup with code not_configured and no daemon wording; nothing is recorded', async () => {
+    const route = await loadRoute()
+    const res = await post(route)
+    const body = await res.json()
+    expect(res.status).toBe(503)
+    expect(body.success).toBe(false)
+    expect(body.code).toBe('not_configured')
+    expect(typeof body.error).toBe('string')
+    expect(body.error).not.toMatch(/hostd|socket|\/run\//i)
+    expect(h.writeConfig).not.toHaveBeenCalled()
+    expect((await get(route)).run).toBeNull()
+  })
+
+  it('refuses the integrity check and writes no request file', async () => {
+    const trigger = join(tmpRoot, `check-${Math.random().toString(36).slice(2)}`)
+    h.env.BACKUP_CHECK_TRIGGER = trigger
+    const route = await loadRoute()
+    const res = await postCheck(route)
+    const body = await res.json()
+    expect(res.status).toBe(503)
+    expect(body.success).toBe(false)
+    expect(body.code).toBe('not_configured')
+    expect(body.data?.check_requested).not.toBe(true)
+    expect(existsSync(trigger)).toBe(false)
+  })
+
+  it('still records the integrity check request when the host daemon is available', async () => {
+    const trigger = join(tmpRoot, `check-${Math.random().toString(36).slice(2)}`)
+    h.env.BACKUP_CHECK_TRIGGER = trigger
+    h.env.GREMION_HOSTD_SOCKET = await startFakeHostd((sock) => sock.end())
+    const route = await loadRoute()
+    const res = await postCheck(route)
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.check_requested).toBe(true)
+    expect(existsSync(trigger)).toBe(true)
+  })
+})
+
+describe('hostdAvailability: the three states', () => {
+  it('a present socket is available whether or not the installation names one', async () => {
+    const { hostdAvailability } = await import('$lib/server/backup/hostd-client')
+    const present = join(tmpRoot, `present-${Math.random().toString(36).slice(2)}`)
+    writeFileSync(present, '')
+    expect(hostdAvailability(present, true)).toEqual({ available: true, state: 'available' })
+    // the documented default path keeps working without the variable
+    expect(hostdAvailability(present, false)).toEqual({ available: true, state: 'available' })
+  })
+
+  it('an absent socket is a fault only where a host daemon is configured', async () => {
+    const { hostdAvailability } = await import('$lib/server/backup/hostd-client')
+    const absent = join(tmpRoot, `absent-${Math.random().toString(36).slice(2)}`)
+    const named = hostdAvailability(absent, true)
+    expect(named.state).toBe('unreachable')
+    expect(named.reason).not.toContain(absent)
+    const unnamed = hostdAvailability(absent, false)
+    expect(unnamed.state).toBe('not_configured')
+    expect(unnamed.reason).not.toMatch(/hostd|socket/i)
+    expect(unnamed.reason).not.toContain(absent)
   })
 })

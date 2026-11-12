@@ -18,11 +18,14 @@ interface RunRec {
   error?: string
 }
 
-function statusBody(opts: { available?: boolean; reason?: string; run?: RunRec | null; last?: string | null }) {
+type TriggerState = 'available' | 'not_configured' | 'unreachable'
+
+function statusBody(opts: { available?: boolean; state?: TriggerState; reason?: string; run?: RunRec | null; last?: string | null }) {
+  const state: TriggerState = opts.state ?? ((opts.available ?? true) ? 'available' : 'unreachable')
   return {
     success: true,
     data: [],
-    trigger: { available: opts.available ?? true, reason: opts.reason },
+    trigger: { available: state === 'available', state, reason: opts.reason },
     run: opts.run ?? null,
     runs_state: opts.run ? [opts.run] : [],
     last_backup_at: opts.last ?? null,
@@ -37,20 +40,37 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-const startButton = () => screen.getByRole('button', { name: /Backup jetzt erstellen|Starte Backup|Backup läuft/ })
+const START_NAME = /Backup jetzt erstellen|Starte Backup|Backup läuft/
+const CHECK_NAME = /Integritätsprüfung anfragen|Anfrage läuft/
+const startButton = () => screen.getByRole('button', { name: START_NAME })
+const checkButton = () => screen.getByRole('button', { name: CHECK_NAME })
 
 describe('TabBackups.svelte: real backup outcome', () => {
-  it('disables the button and shows the reason when hostd cannot take the trigger', async () => {
-    const reason = 'Der Host-Dienst (hostd) ist nicht erreichbar: sein Socket fehlt.'
-    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => json(statusBody({ available: false, reason })))
+  it('configured but unreachable: an error is shown and neither action can be started', async () => {
+    const reason = 'Der Host-Dienst (hostd) ist nicht erreichbar. Aus der App kann derzeit kein Backup ausgelöst werden.'
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => json(statusBody({ state: 'unreachable', reason })))
     vi.stubGlobal('fetch', fetchMock)
 
     render(TabBackups, { props: { backups: BACKUPS, pollMs: 5 } })
 
-    expect(await screen.findByText(reason)).toBeTruthy()
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain(reason)
     expect((startButton() as HTMLButtonElement).disabled).toBe(true)
+    expect((checkButton() as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.queryByTestId('backup-not-managed')).toBeNull()
     // no POST was ever sent
     expect(fetchMock.mock.calls.every(([, init]) => (init as RequestInit | undefined)?.method !== 'POST')).toBe(true)
+  })
+
+  it('an answer without a state field is read from `available` (older server shape)', async () => {
+    const reason = 'Der Host-Dienst (hostd) antwortet nicht.'
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => json({ success: true, data: [], trigger: { available: false, reason }, run: null, runs_state: [], last_backup_at: null })),
+    )
+    render(TabBackups, { props: { backups: BACKUPS, pollMs: 5 } })
+    expect((await screen.findByRole('alert')).textContent).toContain(reason)
+    expect((startButton() as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('shows started, then finished with the time, and never "erfolgreich gestartet"', async () => {
@@ -140,5 +160,91 @@ describe('TabBackups.svelte: real backup outcome', () => {
     )
     render(TabBackups, { props: { backups: BACKUPS, pollMs: 5 } })
     await vi.waitFor(() => expect(screen.getByTestId('backup-run-state').textContent).toMatch(/abgeschlossen/))
+  })
+})
+
+// The host daemon is optional. Where an installation has none configured, the
+// operator runs backups outside the app, and the tab has to say exactly that:
+// no daemon or socket wording, no action that cannot do anything, and no line
+// claiming that no backup exists.
+describe('TabBackups.svelte: backups not managed from the app', () => {
+  const RAW = 'Der Host-Dienst (hostd) ist nicht erreichbar: sein Socket fehlt.'
+
+  it('says who runs backups and offers neither action', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => json(statusBody({ state: 'not_configured', reason: RAW })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { container } = render(TabBackups, { props: { backups: BACKUPS, pollMs: 5 } })
+
+    const notice = await screen.findByTestId('backup-not-managed')
+    expect(notice.textContent).toMatch(/nicht aus der App gesteuert/)
+    expect(notice.textContent).toMatch(/Betreiber/)
+    expect(notice.textContent).toMatch(/außerhalb der App/)
+    // why the actions are missing
+    expect(notice.textContent).toMatch(/weder ein Backup noch eine Integritätsprüfung/)
+
+    const text = container.textContent ?? ''
+    expect(text).not.toMatch(/hostd/i)
+    expect(text).not.toMatch(/socket/i)
+    expect(text).not.toMatch(/nächsten Backup-Lauf/)
+    expect(text).not.toMatch(/Noch kein erfolgreiches Backup/)
+    expect(text).not.toMatch(/Keine Backups vorhanden/)
+    expect(screen.queryByRole('alert')).toBeNull()
+
+    expect(screen.queryByRole('button', { name: START_NAME })).toBeNull()
+    expect(screen.queryByRole('button', { name: CHECK_NAME })).toBeNull()
+    expect(fetchMock.mock.calls.every(([, init]) => (init as RequestInit | undefined)?.method !== 'POST')).toBe(true)
+  })
+
+  it('still shows a recorded last successful backup, without claiming there is none', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => json(statusBody({ state: 'not_configured', last: '2026-10-01T10:05:00.000Z' }))),
+    )
+    render(TabBackups, { props: { backups: BACKUPS, pollMs: 5 } })
+    await screen.findByTestId('backup-not-managed')
+    expect(screen.getByTestId('backup-last-at').textContent).toMatch(/Letztes erfolgreiches Backup/)
+  })
+
+  it('a refusal with code not_configured switches to the notice instead of showing an error', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        if (init?.method === 'POST') return json({ success: false, error: RAW, code: 'not_configured' }, 503)
+        return json(statusBody({}))
+      }),
+    )
+    const { container } = render(TabBackups, { props: { backups: BACKUPS, pollMs: 5 } })
+    await screen.findByText('Keine Backups vorhanden.')
+    await fireEvent.click(startButton())
+
+    expect(await screen.findByTestId('backup-not-managed')).toBeTruthy()
+    expect(container.textContent ?? '').not.toMatch(/hostd|socket/i)
+    expect(screen.queryByRole('button', { name: START_NAME })).toBeNull()
+  })
+})
+
+describe('TabBackups.svelte: integrity check', () => {
+  it('is offered while the host daemon is available', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json(statusBody({}))))
+    render(TabBackups, { props: { backups: BACKUPS, pollMs: 5 } })
+    await screen.findByText('Keine Backups vorhanden.')
+    expect((checkButton() as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('a refusal with code not_configured is not shown as a pending check', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        if (init?.method === 'POST') return json({ success: false, error: 'x', code: 'not_configured' }, 503)
+        return json(statusBody({}))
+      }),
+    )
+    const { container } = render(TabBackups, { props: { backups: BACKUPS, pollMs: 5 } })
+    await screen.findByText('Keine Backups vorhanden.')
+    await fireEvent.click(checkButton())
+
+    expect(await screen.findByTestId('backup-not-managed')).toBeTruthy()
+    expect(container.textContent ?? '').not.toMatch(/nächsten Backup-Lauf/)
   })
 })

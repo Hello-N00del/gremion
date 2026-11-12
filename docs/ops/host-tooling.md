@@ -547,8 +547,20 @@ no new transport). The socket path comes from `GREMION_HOSTD_SOCKET` (default
   line that `gremion-backup` prints before hostd's `EXIT` line says so too. No
   `EXIT` line, a dropped connection or a timeout is `failed`.
 - `config.backups.last_backup_at` is stamped from a finished run only.
-- Socket missing or refusing connections: the button is disabled and shows why.
-  The app container must have the socket mounted for the button to work.
+- The host daemon is optional for the app. Three states are told apart:
+  - **not configured**: `GREMION_HOSTD_SOCKET` is unset (or blank) and no socket
+    exists at the default path. The tab says that backups are not managed from
+    the app and that the operator runs them outside it; it offers neither the
+    backup nor the integrity-check action, and the API refuses both with
+    `503` and `code: "not_configured"`.
+  - **unreachable**: `GREMION_HOSTD_SOCKET` is set but the socket is missing, or
+    it refuses connections. This is an error: the tab shows it and disables
+    both actions. The message names no path.
+  - **available**: the socket exists (a socket at the default path counts, with
+    or without the variable).
+  The app container must have the socket mounted for the button to work. An
+  installation that mounts it somewhere other than the default path, or that
+  wants a missing socket reported as an error, sets `GREMION_HOSTD_SOCKET`.
 - A `started` record left by a dead app process is shown as failed (interrupted);
   the host's own `runtime/last-backup.json` remains the record of what really ran.
 
