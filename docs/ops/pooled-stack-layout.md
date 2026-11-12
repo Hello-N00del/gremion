@@ -174,12 +174,13 @@ the layout's contribution and makes no cost claim.
 The app tier carries no docker-provider router (`traefik.enable=false`), so
 two websecure routers left the compose files with the split:
 
-- **the apex** (`gremion-ui`, `Host(${DOMAIN})` in `docker-compose.prod.yml`),
-  with its `gremion-ui-proxytrust` / `gremion-ui-starting` chain, whose two
-  middlewares now sit on the traefik container as interim names;
-- **the public portal** (`gremion-public`, `Host(public.${DOMAIN})` in
+- **the apex** (`gremion-ui`, formerly `Host(${DOMAIN})` in
+  `docker-compose.prod.yml`), with its `gremion-ui-proxytrust` /
+  `gremion-ui-starting` chain, whose two middlewares now sit on the traefik
+  container as interim names;
+- **the public portal** (`gremion-public`, formerly `Host(public.${DOMAIN})` in
   `docker-compose.yml`, with `public-ratelimit@docker`, which also moved onto
-  the traefik container).
+  the traefik container). Neither compose file defines that router any more.
 
 The former `gremion-ui-apexhost` middleware (the apex tenant injection) is not
 restored anywhere: TASK-041's edge host model deleted it and its guard

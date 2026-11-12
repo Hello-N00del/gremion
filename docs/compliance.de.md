@@ -1,4 +1,4 @@
-<!-- i18n-sync: source=compliance.md sha256=7ce8bd9e0ccab4fcec73c626d423c6bc5ae14825457fcb3a3c2cb575c3fe8b71 -->
+<!-- i18n-sync: source=compliance.md sha256=acc98b82e91f711396c96fc34d1bff3f506caaf6274c6c5f6c47e7deb0d8a819 -->
 [English](./compliance.md) | **Deutsch**
 
 # Compliance: Aufbewahrung, Löschung und Crypto-Shredding-Vertrag für Mandanten
@@ -18,9 +18,9 @@ Die Admin-Shell-App heißt `gremion-ui`, die unten genannten Code-Pfade liegen d
 und `governance`. Die hier beschriebenen Verträge zu Aufbewahrung und Shredding decken
 deshalb Identität und Authentifizierung, Mandantenfähigkeit und die Governance-Domäne ab
 (Gremien, Mitglieder, Organisationsbaum, Protokolle, Beschlüsse, das öffentliche Portal).
-Feature-Module (elections, newsletter, calendar, files, messages, board, users, finance,
-content, vault, handover) sind eigene Services hinter einer stabilen API, jeweils in einem
-eigenen Repository; jedes Modul verantwortet und dokumentiert seine Aufbewahrung selbst.
+Feature-Module (board, calendar, content, elections, files, finance, handover, messaging,
+publishing, vault, votes) liegen unter `modules/` in diesem Repository und docken über das
+Modul-SDK an; jedes Modul verantwortet und dokumentiert seine Aufbewahrung selbst.
 
 Querverweise:
 - Aufbewahrung von Logs auf Infrastrukturebene (Reverse-Proxy, Keycloak, Container-stdout):
