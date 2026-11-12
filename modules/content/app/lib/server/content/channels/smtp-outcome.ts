@@ -53,3 +53,13 @@ export function isOutcomeUnknown(err: unknown): boolean {
 	if (typeof message === 'string' && PRE_SESSION_MESSAGES.some((m) => message === m)) return false
 	return true
 }
+
+/**
+ * Whether a sendMailForTenant throw is the mail server refusing the LOGIN
+ * (nodemailer's EAUTH). The login is the same for every recipient of a pass, so
+ * the next recipient would only present it again; mail servers count refused
+ * logins and lock the account after a few. The caller stops the pass instead.
+ */
+export function isLoginRefused(err: unknown): boolean {
+	return typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 'EAUTH'
+}

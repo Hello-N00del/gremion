@@ -351,6 +351,91 @@ describe('emailRenderer.publish', () => {
 		return Object.assign(new Error('smtp transport error'), over)
 	}
 
+	// A refused login is the same for every recipient: one attempt, then stop.
+	describe('the mail server refuses the login (EAUTH)', () => {
+		const refusedLogin = () =>
+			smtpError({
+				code: 'EAUTH',
+				command: 'AUTH PLAIN',
+				responseCode: 535,
+				response: '535 5.7.8 credentials rejected for relay-user',
+				message: 'Invalid login: 535 5.7.8 credentials rejected for relay-user',
+			})
+
+		it('stops after the first attempt: the other recipients are neither claimed nor tried', async () => {
+			resolvePostRecipients.mockResolvedValue([
+				{ email: 'a@x.de', name: null },
+				{ email: 'b@x.de', name: null },
+				{ email: 'c@x.de', name: null },
+			])
+			sendMailForTenant.mockRejectedValue(refusedLogin())
+
+			const out = await emailRenderer.publish(post, [], channel())
+
+			expect(sendMailForTenant).toHaveBeenCalledTimes(1)
+			expect(claimDelivery).toHaveBeenCalledTimes(1)
+			// the one claimed recipient is handed back for the next publish
+			expect(markDeliveryFailed).toHaveBeenCalledTimes(1)
+			expect(markDeliveryFailed).toHaveBeenCalledWith('p1', 'a@x.de', expect.any(String), TOKEN)
+			expect(setChannelStatus).toHaveBeenCalledWith('p1', 'email', 'failed')
+			expect(out.status).toBe('failed')
+			expect(out.recipientCount).toBe(0)
+			expect(out.detail).toBe('SMTP-Anmeldung abgelehnt')
+		})
+
+		it('says what happened in German, without an address, the login or the server answer', async () => {
+			resolvePostRecipients.mockResolvedValue([
+				{ email: 'a@x.de', name: null },
+				{ email: 'b@x.de', name: null },
+			])
+			sendMailForTenant.mockRejectedValue(refusedLogin())
+
+			const out = await emailRenderer.publish(post, [], channel())
+
+			const shown = [out.detail ?? '', ...out.warnings].join(' | ')
+			expect(shown).toContain('Der Mailserver hat die Anmeldung abgelehnt')
+			expect(shown).not.toContain('a@x.de')
+			expect(shown).not.toContain('relay-user')
+			expect(shown).not.toContain('535')
+			expect(shown).not.toContain('publish again')
+			// nor in the ledger row
+			expect(markDeliveryFailed.mock.calls[0][2]).not.toContain('relay-user')
+		})
+
+		it('after earlier deliveries in the same pass: those stay sent, the rest is not tried', async () => {
+			resolvePostRecipients.mockResolvedValue([
+				{ email: 'a@x.de', name: null },
+				{ email: 'b@x.de', name: null },
+				{ email: 'c@x.de', name: null },
+			])
+			sendMailForTenant.mockResolvedValueOnce({ messageId: 'm1' }).mockRejectedValue(refusedLogin())
+
+			const out = await emailRenderer.publish(post, [], channel())
+
+			expect(sendMailForTenant).toHaveBeenCalledTimes(2)
+			expect(markDeliverySent).toHaveBeenCalledWith('p1', 'a@x.de', 'm1')
+			expect(claimDelivery).toHaveBeenCalledTimes(2)
+			expect(out.status).toBe('failed')
+			expect(out.recipientCount).toBe(1)
+			expect(out.detail).toBe('SMTP-Anmeldung abgelehnt')
+			expect(setChannelStatus).not.toHaveBeenCalledWith('p1', 'email', 'sent')
+		})
+
+		it('an unrecorded delivery earlier in the pass still wins: do not re-publish', async () => {
+			resolvePostRecipients.mockResolvedValue([
+				{ email: 'a@x.de', name: null },
+				{ email: 'b@x.de', name: null },
+			])
+			sendMailForTenant.mockResolvedValueOnce({ messageId: 'm1' }).mockRejectedValue(refusedLogin())
+			markDeliverySent.mockRejectedValue(new Error('db down'))
+
+			const out = await emailRenderer.publish(post, [], channel())
+
+			expect(out.detail).toBe('delivery not recorded')
+			expect(sendMailForTenant).toHaveBeenCalledTimes(2)
+		})
+	})
+
 	describe.each([
 		// The shapes the installed nodemailer really emits (see smtp-outcome.test.ts, which
 		// proves them against the real transport): every socket-level error says 'CONN'.

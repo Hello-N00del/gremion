@@ -7,9 +7,16 @@
 import net from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
 import nodemailer from 'nodemailer'
-import { isOutcomeUnknown } from './smtp-outcome'
+import { isLoginRefused, isOutcomeUnknown } from './smtp-outcome'
 
-type Mode = 'stall-after-dot' | 'drop-after-dot' | 'drop-after-data-cmd' | 'reject-rcpt' | 'reject-data-end' | 'accept'
+type Mode =
+	| 'stall-after-dot'
+	| 'drop-after-dot'
+	| 'drop-after-data-cmd'
+	| 'reject-rcpt'
+	| 'reject-data-end'
+	| 'accept'
+	| 'refuse-login'
 
 const servers: net.Server[] = []
 
@@ -35,7 +42,9 @@ function stub(mode: Mode): Promise<net.Server> {
 						continue
 					}
 					const u = line.toUpperCase()
-					if (u.startsWith('EHLO') || u.startsWith('HELO')) s.write('250 ok\r\n')
+					if (u.startsWith('EHLO') && mode === 'refuse-login') s.write('250-stub\r\n250 AUTH PLAIN LOGIN\r\n')
+					else if (u.startsWith('EHLO') || u.startsWith('HELO')) s.write('250 ok\r\n')
+					else if (u.startsWith('AUTH')) s.write('535 5.7.8 credentials rejected\r\n')
 					else if (u.startsWith('MAIL')) s.write('250 ok\r\n')
 					else if (u.startsWith('RCPT')) s.write(mode === 'reject-rcpt' ? '550 no such user\r\n' : '250 ok\r\n')
 					else if (u === 'DATA') {
@@ -58,12 +67,13 @@ function stub(mode: Mode): Promise<net.Server> {
 	})
 }
 
-async function sendTo(port: number): Promise<unknown> {
+async function sendTo(port: number, auth?: { user: string; pass: string }): Promise<unknown> {
 	const transport = nodemailer.createTransport({
 		host: '127.0.0.1',
 		port,
 		secure: false,
 		ignoreTLS: true,
+		auth,
 		socketTimeout: 800,
 		greetingTimeout: 2000,
 		connectionTimeout: 2000,
@@ -147,5 +157,31 @@ describe('isOutcomeUnknown on the other nodemailer shapes', () => {
 		expect(isOutcomeUnknown(e({ code: 'EAUTH' }))).toBe(false)
 		expect(isOutcomeUnknown(new Error('smtp-unconfigured'))).toBe(false)
 		expect(isOutcomeUnknown('boom')).toBe(false)
+	})
+})
+
+describe('isLoginRefused', () => {
+	const e = (over: Record<string, unknown>) => Object.assign(new Error('x'), over)
+
+	it('the real nodemailer transport, answered 535 to AUTH: the login was refused, and the outcome is definitive', async () => {
+		const srv = await stub('refuse-login')
+		const err = await sendTo((srv.address() as net.AddressInfo).port, { user: 'relay-user', pass: 'wrong' })
+		expect(isLoginRefused(err)).toBe(true)
+		expect(isOutcomeUnknown(err)).toBe(false)
+	})
+
+	it('a refused recipient or message is not a refused login', async () => {
+		const rcpt = await stub('reject-rcpt')
+		expect(isLoginRefused(await sendTo((rcpt.address() as net.AddressInfo).port))).toBe(false)
+		const data = await stub('reject-data-end')
+		expect(isLoginRefused(await sendTo((data.address() as net.AddressInfo).port))).toBe(false)
+	})
+
+	it('transport errors, a failed TLS upgrade and non-errors are not a refused login', () => {
+		expect(isLoginRefused(e({ code: 'ETIMEDOUT', command: 'CONN' }))).toBe(false)
+		expect(isLoginRefused(e({ code: 'ETLS', command: 'STARTTLS' }))).toBe(false)
+		expect(isLoginRefused(new Error('smtp-unconfigured'))).toBe(false)
+		expect(isLoginRefused('EAUTH')).toBe(false)
+		expect(isLoginRefused(null)).toBe(false)
 	})
 })

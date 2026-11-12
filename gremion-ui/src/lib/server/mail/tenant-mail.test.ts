@@ -124,6 +124,16 @@ describe('tenant-mail seam (SP-2 §2)', () => {
       () => getTenantMailContext(),
     )
     expect(createTransport.mock.calls[0][0]).toMatchObject({ port: 465, secure: true })
+    // implicit TLS already covers the login; STARTTLS does not apply
+    expect(createTransport.mock.calls[0][0]).not.toHaveProperty('requireTLS')
+  })
+
+  it('a login on a STARTTLS port makes the upgrade mandatory; without a login it stays opportunistic', () => {
+    runWithTenant(T2_CTX, () => getTenantMailContext())
+    expect(createTransport.mock.calls[0][0]).toMatchObject({ port: 587, secure: false, requireTLS: true })
+    runWithTenant(SVC_CTX, () => getTenantMailContext())
+    expect(createTransport.mock.calls[1][0]).toMatchObject({ port: 587, secure: false, auth: undefined })
+    expect(createTransport.mock.calls[1][0]).not.toHaveProperty('requireTLS')
   })
 
   it('fail-closed: a passwordRef without a user throws (no auth with an undefined username)', () => {
