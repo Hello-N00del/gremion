@@ -112,8 +112,9 @@ const REFRESH_GRACE_MS = 60_000
 const REFRESH_FETCH_TIMEOUT_MS = 5_000
 /** [A] Assumption: after a refresh timeout inside the grace window, later requests
  *  keep the expired token and skip the refresh for this long, so a stalled Keycloak
- *  does not make every request wait out the timeout again. Kept short so a stall
- *  cannot outlast the grace window (the back-off only applies while within grace). */
+ *  does not make every request wait out the timeout again. The retry time is
+ *  clamped to the end of the grace window, and the back-off only applies while
+ *  within grace. */
 const REFRESH_TIMEOUT_BACKOFF_MS = 10_000
 /** 429 back-off: Retry-After as delta-seconds or HTTP-date; default 5 s when
  *  missing/unparseable/non-positive; capped at 60 s (the refresh grace). */
@@ -133,8 +134,28 @@ function retryAfterMs(header: string | null): number {
   return Math.min(ms, CAP_MS)
 }
 
+/**
+ * End of the refresh grace window (ms): accessTokenExpires + REFRESH_GRACE_MS.
+ *
+ * The window is anchored to accessTokenExpires and to nothing else. That value is
+ * part of the encrypted session token the request presents, and only a login or a
+ * successful refresh writes a new one, so the window has the same end for every
+ * request that presents the token: one window per access-token expiry, however
+ * many requests arrive and however long Keycloak takes to answer. Nothing a failed
+ * refresh writes (refreshRetryAt, error) is read here, and no time of a request or
+ * of a failure may ever be: such a value is absent from a token issued earlier.
+ * Past the window the session is refused until Keycloak answers a refresh.
+ *
+ * Without a finite numeric expiry there is no window (0).
+ */
+function refreshGraceEnd(token: Record<string, unknown>): number {
+  const expires = token.accessTokenExpires
+  if (typeof expires !== 'number' || !Number.isFinite(expires)) return 0
+  return expires + REFRESH_GRACE_MS
+}
+
 function withinRefreshGrace(token: Record<string, unknown>): boolean {
-  return Date.now() < ((token.accessTokenExpires as number | undefined) ?? 0) + REFRESH_GRACE_MS
+  return Date.now() < refreshGraceEnd(token)
 }
 
 const jwtCallback: NonNullable<NonNullable<SvelteKitAuthConfig['callbacks']>['jwt']> =
@@ -340,7 +361,10 @@ const jwtCallback: NonNullable<NonNullable<SvelteKitAuthConfig['callbacks']>['jw
           console.warn(`[auth] token refresh timeout tenant=${tenantId} after=${REFRESH_FETCH_TIMEOUT_MS}ms`)
           // Within grace: keep the token and back off so the next requests do not
           // each wait out the timeout; outside grace: same as other transient faults.
-          if (withinRefreshGrace(token)) return { ...token, refreshRetryAt: Date.now() + REFRESH_TIMEOUT_BACKOFF_MS }
+          // Grace is judged now, after the wait, and the back-off ends with the window.
+          if (withinRefreshGrace(token)) {
+            return { ...token, refreshRetryAt: Math.min(Date.now() + REFRESH_TIMEOUT_BACKOFF_MS, refreshGraceEnd(token)) }
+          }
           return { ...token, error: 'RefreshTokenFailed' }
         }
         const e = err as { name?: string; message?: string }
