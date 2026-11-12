@@ -41,9 +41,9 @@ const forbidden = () => json({ success: false, error: 'Forbidden' }, { status: 4
 const internal = () => json({ success: false, code: 'INTERNAL', error: 'Die Anfrage konnte nicht verarbeitet werden.' }, { status: 500 })
 
 const RESUME_REFUSAL: Readonly<Record<PendingRefusal, { code: string; error: string }>> = {
-  gone: { code: 'RESUME_GONE', error: 'Die bestätigte Aktion liegt nicht mehr vor. Bitte lösen Sie sie erneut aus.' },
-  expired: { code: 'RESUME_EXPIRED', error: 'Die Bestätigung hat zu lange gedauert. Bitte lösen Sie die Aktion erneut aus.' },
-  unconfirmed: { code: 'RESUME_UNCONFIRMED', error: 'Die Zwei-Faktor-Prüfung wurde nicht abgeschlossen. Bitte lösen Sie die Aktion erneut aus.' },
+  gone: { code: 'RESUME_GONE', error: 'Die bestätigte Aktion liegt nicht mehr vor. Bitte die Aktion erneut auslösen.' },
+  expired: { code: 'RESUME_EXPIRED', error: 'Die Bestätigung hat zu lange gedauert. Bitte die Aktion erneut auslösen.' },
+  unconfirmed: { code: 'RESUME_UNCONFIRMED', error: 'Die Zwei-Faktor-Prüfung wurde nicht abgeschlossen. Bitte die Aktion erneut auslösen.' },
 }
 
 /** A resume that is not carried out. `pending` (the caller's own claimed switch) names the module the page shows the reason on. */
