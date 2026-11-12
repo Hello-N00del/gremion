@@ -10,7 +10,7 @@ load 'test_helper/host'
 
 TIP='1f2e3d4c5b6a79881f2e3d4c5b6a79881f2e3d4c'
 OTHER_TIP='9a8b7c6d5e4f30219a8b7c6d5e4f30219a8b7c6d'
-MODULES='calendar content publishing votes files messaging'
+MODULES='calendar content publishing votes files messaging board'
 REF='sha256:0000000000000000000000000000000000000000000000000000000000000000 fake-upstream-app gremion-ui/src/x.test.ts'
 
 setup() {
@@ -41,7 +41,7 @@ teardown() {
 # make_evidence <tip> -- what the producer writes for a passing run.
 make_evidence() {
     local tip="$1" m first=1
-    printf '{"produced_by":"verify","tree_clean":true,"release_tip_sha":"%s","verify_record":{"suite":"isolation:tenant","sha":"%s","collected":6,"passed":6,"failed":0},"results":[' "$tip" "$tip"
+    printf '{"produced_by":"verify","tree_clean":true,"release_tip_sha":"%s","verify_record":{"suite":"isolation:tenant","sha":"%s","collected":7,"passed":7,"failed":0},"results":[' "$tip" "$tip"
     for m in $MODULES; do
         [[ "$first" == 1 ]] || printf ','
         first=0
@@ -281,11 +281,20 @@ rows_all_pass() {
     refute_recorded docker "tenant-create"
 }
 
-@test "record refuses a file that does not name exactly the pilot modules (board is never recorded)" {
-    jq '.results += [{"module":"board","test_kind":"cross_customer","passed":true,"release_tip_sha":.release_tip_sha,"evidence_ref":"sha256:00 x"}]' "${GREMION_ROOT}/evidence.json" > "${GREMION_ROOT}/board.json"
-    run "$PROG" record "${GREMION_ROOT}/board.json"
+@test "record refuses a file that does not name exactly the pilot modules (finance is never recorded)" {
+    jq '.results += [{"module":"finance","test_kind":"cross_customer","passed":true,"release_tip_sha":.release_tip_sha,"evidence_ref":"sha256:00 x"}]' "${GREMION_ROOT}/evidence.json" > "${GREMION_ROOT}/extra.json"
+    run "$PROG" record "${GREMION_ROOT}/extra.json"
     [ "$status" -eq 2 ]
     [[ "$output" == *"exactly the pilot modules"* ]]
+    refute_recorded docker "tenant-create"
+}
+
+@test "record requires all seven modules: a file without the board is refused, nothing imported" {
+    jq '.results |= map(select(.module != "board"))' "${GREMION_ROOT}/evidence.json" > "${GREMION_ROOT}/no-board.json"
+    run "$PROG" record "${GREMION_ROOT}/no-board.json"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"exactly the pilot modules"* ]]
+    [[ "$output" == *"board"* ]]
     refute_recorded docker "tenant-create"
 }
 
