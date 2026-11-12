@@ -193,6 +193,11 @@
   <section class="members" aria-labelledby="mem-h">
     <h2 id="mem-h">Vertikale und Mitglieder</h2>
     {#if form?.memberError}<p class="error" role="alert">{form.memberError}</p>{/if}
+    {#if form?.memberWarning}
+      <p class="warn" role="status">Die Vertikale wurde zum Einspielen angestoßen. {form.memberWarning}</p>
+    {:else if ms.wiringWarning}
+      <p class="warn" role="status">{ms.wiringWarning}</p>
+    {/if}
     {#if ms.unreadable}
       <p class="error" role="alert">Der Stand der Mitgliederlisten ist nicht lesbar (Plattform-Datenbank; Details im Panel-Log). Aktionen werden erst wieder angeboten, wenn er gelesen werden kann.</p>
     {:else if ms.noPlatformDb}
@@ -388,6 +393,9 @@
   }
   .error {
     color: var(--bad);
+  }
+  .warn {
+    color: var(--warn);
   }
   .muted {
     color: var(--muted);

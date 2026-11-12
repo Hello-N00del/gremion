@@ -18,7 +18,7 @@
   import { page } from '$app/stores'
   import { Button } from '$lib/components/ui/button'
   import Pill from '$lib/components/pills/Pill.svelte'
-  import AttendanceChips from '$lib/components/protocols/AttendanceChips.svelte'
+  import AttendanceSection from '$lib/components/protocols/AttendanceSection.svelte'
   import ResolutionRow from '$lib/components/protocols/ResolutionRow.svelte'
   import ActionItemRow from '$lib/components/protocols/ActionItemRow.svelte'
   import { protocolBodyMode } from '$lib/governance/protocol-body-mode'
@@ -179,30 +179,14 @@
     {/if}
   </div>
 
-  <section id="anwesenheit" class="space-y-2">
-    <div class="flex flex-wrap items-center gap-2">
-      <h3 class="font-medium">Anwesenheit</h3>
-      <!-- (2) quorum pill — strict majority of eligible voting members present. -->
-      <span
-        class="rounded-full px-2 py-0.5 text-xs font-medium {data.quorum.quorate
-          ? 'bg-green-100 text-green-800'
-          : 'bg-red-100 text-red-800'}"
-      >
-        {data.quorum.quorate
-          ? `Beschlussfähig ${data.quorum.presentVotingCount}/${data.quorum.eligibleVotingCount}`
-          : 'Nicht beschlussfähig'}
-      </span>
-    </div>
-    <AttendanceChips entries={data.attendance} isAdmin={(isAdmin && isEditable) ?? false} protocolId={data.protocol.id} />
-    {#if data.advisoryAttendance.length > 0}
-      <div class="text-xs text-ink-muted pt-1">beratend (nicht stimmberechtigt)</div>
-      <AttendanceChips
-        entries={data.advisoryAttendance}
-        isAdmin={(isAdmin && isEditable) ?? false}
-        protocolId={data.protocol.id}
-      />
-    {/if}
-  </section>
+  <!-- Chips + quorum pill live in one component so a saved click moves both
+       without a reload (finding 3). -->
+  <AttendanceSection
+    attendance={data.attendance}
+    advisoryAttendance={data.advisoryAttendance}
+    isAdmin={(isAdmin && isEditable) ?? false}
+    protocolId={data.protocol.id}
+  />
 
   <section class="space-y-2">
     <h3 class="font-medium">Protokollinhalt</h3>

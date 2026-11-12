@@ -11,6 +11,7 @@
   import { resolveBrand } from '$lib/brand'
   import { deriveHue, deriveAbbr } from '$lib/governance/committee-color'
   import { toast } from 'svelte-sonner'
+  import { senderInitials, senderLabel } from '$lib/components/messaging/sender-label'
 
   let rooms = $derived(Object.values($roomStore))
   // FLOW-MSG-001 (TASK-009 lane B, row 15): archived rooms move to their own
@@ -31,6 +32,22 @@
   let callActiveInThisRoom = $derived(
     callStore.status !== 'idle' && callStore.matrixRoomId === ($selectedRoomId ?? '')
   )
+
+  // Phone width: the room list and the conversation are two screens, not two panes. Below the
+  // breakpoint (the shell's own column breakpoint, 768 px) exactly one of them is rendered; opening
+  // a room shows the conversation, the back control shows the list again. Desktop keeps both.
+  const NARROW_QUERY = '(max-width: 767px)'
+  let narrow = $state(false)
+  let conversationOpen = $state(false)
+  let inConversation = $derived(narrow && conversationOpen && !!activeRoom)
+  let showList = $derived(!narrow || !inConversation)
+  let showMain = $derived(!narrow || inConversation)
+  let narrowQuery: MediaQueryList | null = null
+  const onNarrowChange = (e: { matches: boolean }) => { narrow = e.matches }
+
+  function backToList() {
+    conversationOpen = false
+  }
 
   let messageInput = $state('')
   let sending = $state(false)
@@ -75,13 +92,6 @@
       : d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' })
   }
 
-  function senderInitials(sender: string): string {
-    const local = sender.replace(/^@/, '').split(':')[0] ?? sender
-    const parts = local.split(/[._-]/).filter(Boolean)
-    if (parts.length >= 2) return (parts[0]![0]! + parts[1]![0]!).toUpperCase()
-    return local.slice(0, 2).toUpperCase()
-  }
-
   async function loadRooms() {
     try {
       const res = await fetch('/api/messages/rooms')
@@ -96,7 +106,8 @@
           loaded[r.roomId] = { ...r, messages: $roomStore[r.roomId]?.messages ?? [] }
         }
         roomStore.set(loaded)
-        if (!$selectedRoomId) {
+        // On a phone nothing is opened by itself: the list is the first screen.
+        if (!$selectedRoomId && !narrow) {
           const firstActive = json.data.find((r: { archived?: boolean }) => !r.archived)
           if (firstActive) selectedRoomId.set(firstActive.roomId)
         }
@@ -114,6 +125,11 @@
   }
 
   onMount(async () => {
+    if (typeof window.matchMedia === 'function') {
+      narrowQuery = window.matchMedia(NARROW_QUERY)
+      narrow = narrowQuery.matches
+      narrowQuery.addEventListener('change', onNarrowChange)
+    }
     syncStatus.set('connecting')
     await loadRooms()
 
@@ -162,6 +178,7 @@
   })
 
   onDestroy(() => {
+    narrowQuery?.removeEventListener('change', onNarrowChange)
     eventSource?.close()
   })
 
@@ -173,6 +190,7 @@
   // sidebar badge re-derive from the authoritative Matrix count.
   async function openRoom(roomId: string) {
     selectedRoomId.set(roomId)
+    conversationOpen = true
 
     const room = $roomStore[roomId]
     if (!room || room.unreadCount === 0) return
@@ -287,6 +305,7 @@
         }
       }))
       selectedRoomId.set(roomId)
+      conversationOpen = true
       closeCreateDialog()
     } catch (err) {
       console.error('[messages] submitCreateRoom threw', { error: err instanceof Error ? err.message : String(err) })
@@ -461,8 +480,9 @@
 
 <PageTitle title="Nachrichten" />
 
-<div class="chat-shell">
+<div class="chat-shell" class:narrow>
   <!-- Room list -->
+  {#if showList}
   <aside class="room-list">
     <div class="room-list-head">
       <div class="eyebrow">Matrix</div>
@@ -539,7 +559,7 @@
             type="button"
             class="room-item archived"
             class:active={$selectedRoomId === room.roomId}
-            onclick={() => selectedRoomId.set(room.roomId)}
+            onclick={() => { selectedRoomId.set(room.roomId); conversationOpen = true }}
           >
             <div class="ravatar" style="--c-hue: {hue};">{roomAbbr(room.name)}</div>
             <div class="r-meta">
@@ -551,12 +571,19 @@
       </div>
     {/if}
   </aside>
+  {/if}
 
   <!-- Message area -->
+  {#if showMain}
   <div class="chat-main">
     {#if activeRoom}
       {@const hue = roomHue(activeRoom.roomId)}
       <div class="chat-head">
+        {#if narrow}
+          <button type="button" class="btn btn-ghost btn-sm chat-back" onclick={backToList} aria-label="Zurück zur Raumliste" title="Zurück zur Raumliste">
+            <Icon name="chevron-left" size={18} />
+          </button>
+        {/if}
         <div class="ravatar" style="--c-hue: {hue};">{roomAbbr(activeRoom.name)}</div>
         <div class="chat-head-text">
           <div class="chat-head-name">{activeRoom.name}</div>
@@ -595,11 +622,12 @@
           <div class="divider-label">Heute · {new Date().toLocaleDateString('de-DE')}</div>
         {/if}
         {#each activeRoom.messages as msg (msg.eventId)}
+          {@const who = senderLabel(msg.sender, msg.senderDisplayName)}
           <div class="msg">
-            <div class="mav">{senderInitials(msg.senderDisplayName || msg.sender)}</div>
+            <div class="mav">{senderInitials(who)}</div>
             <div class="mbody">
               <div class="mhead">
-                <span class="mname">{msg.senderDisplayName || msg.sender}</span>
+                <span class="mname">{who}</span>
                 {#if msg.ts}<span class="mtime mono">{fmtRoomTs(msg.ts)}</span>{/if}
               </div>
               <div class="mtext">{msg.body}</div>
@@ -637,6 +665,7 @@
       <div class="chat-placeholder mono">Wählen Sie einen Raum aus.</div>
     {/if}
   </div>
+  {/if}
 </div>
 
 {#if showCreateDialog}
@@ -767,6 +796,35 @@
     border-radius: var(--r-md);
     overflow: hidden;
     background: var(--surface);
+  }
+
+  /* Phone width: one screen at a time (the markup renders only one of the two). */
+  .chat-shell.narrow {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+  .chat-shell.narrow .room-list {
+    border-right: 0;
+  }
+  .chat-back {
+    flex-shrink: 0;
+    min-width: 40px;
+    min-height: 40px;
+    margin-left: -6px;
+  }
+  .chat-shell.narrow .chat-head {
+    flex-wrap: wrap;
+    padding: 10px 12px;
+    gap: 8px;
+  }
+  .chat-shell.narrow .chat-head-text {
+    flex: 1 1 8rem;
+  }
+  .chat-shell.narrow .chat-body {
+    padding: 12px;
+  }
+  .chat-shell.narrow .chat-input {
+    padding: 10px 12px;
   }
 
   .room-list {

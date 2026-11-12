@@ -4,41 +4,36 @@
   import PageTitle from '$lib/components/PageTitle.svelte'
   import Icon from '$lib/components/ui/Icon.svelte'
   import { resolveBrand } from '$lib/brand'
-  import {
-    STATUS_PILL,
-    SERVICE_ICON,
-    PLUGGABLE_MODULES,
-    CORE_MODULE_LABELS,
-    type InstanceState,
-  } from '$lib/instance-status'
-  import { systemHeadline, systemServices, UNKNOWN_PILL } from './signals'
+  import { PLUGGABLE_MODULES, CORE_MODULE_LABELS } from '$lib/instance-status'
+  import { countReachable, ROW_PILL, systemHeadline, systemServices } from './signals'
   import type { PageData } from './$types'
 
-  // #264 (HANDOVER-v8 Part C) — provisioning-convergence Systemstatus. Read-only
-  // for it-admins (the route is it-admin-gated). Renders the real backend state
-  // (data.instance) against the four-state machine, split shared control-plane vs
-  // silo data-plane, plus the active-module catalog. Ported from prototype
-  // web/systemstatus.jsx using repo tokens.
+  // Read-only for it-admins (the route is it-admin-gated). Renders what the app
+  // can check right now (data.services, live probes run by the load) and the
+  // active-module catalog. No provisioning ledger and no canned snapshot: a
+  // service the app cannot check is not listed (see ./signals.ts).
   let { data }: { data: PageData } = $props()
 
   const brand = $derived(resolveBrand(page.data.brand))
-  // NB: not named `state` — that collides with the `$state` rune ($state(...)
-  // gets parsed as store-subscribe of a `state` variable).
-  const instState = $derived(data.instance.state as InstanceState)
-  // K2#13: rows come from real signals only (see ./signals.ts); a service
-  // without one is "Unbekannt", and the banner never claims "ready" over them.
-  const services = $derived(systemServices(instState, data.instance.realStatuses))
-  const meta = $derived(systemHeadline(instState, services))
-
-  const ready = $derived(services.filter((s) => s.status === 'ok').length)
-  const total = $derived(services.length)
-  const pct = $derived(Math.round((ready / total) * 100))
+  const services = $derived(systemServices(data.services))
+  const meta = $derived(systemHeadline(data.tenantActive, services))
+  const tally = $derived(countReachable(services))
+  const pct = $derived(tally.total === 0 ? 0 : Math.round((tally.ok / tally.total) * 100))
   const toneVar = $derived(
     meta.tone === 'danger' ? 'var(--rust)' : meta.tone === 'warn' ? 'var(--ember)' : 'var(--pine)',
   )
 
   const shared = $derived(services.filter((s) => s.plane === 'shared'))
-  const silo = $derived(services.filter((s) => s.plane === 'silo'))
+  const tenantRows = $derived(services.filter((s) => s.plane === 'tenant'))
+
+  const SERVICE_ICON: Record<string, string> = {
+    app: 'package',
+    registry: 'sliders',
+    db: 'archive',
+    keycloak: 'key',
+    nextcloud: 'folder',
+    matrix: 'matrix',
+  }
 
   let refreshing = $state(false)
   async function refresh() {
@@ -56,9 +51,10 @@
 <div class="page-head">
   <div>
     <div class="eyebrow">Verwaltung · Systemstatus</div>
-    <h1 class="page-title">Bereitstellung &amp; Konvergenz</h1>
+    <h1 class="page-title">Dienste &amp; Module</h1>
     <div class="page-sub">
-      {brand.product} · Mandant · Realm <span class="mono">{data.realm}</span>
+      {brand.product} · Mandant{#if data.realm}
+        · Realm <span class="mono">{data.realm}</span>{/if}
     </div>
   </div>
   <button type="button" class="btn btn-sm" onclick={refresh} disabled={refreshing}>
@@ -74,17 +70,19 @@
     </div>
     <div class="sys-headline display">{meta.headline}</div>
     <div class="sys-sub">{meta.sub}</div>
-    <div class="sys-prog">
-      <div class="sys-progbar"><span style="width: {pct}%; background: {toneVar};"></span></div>
-      <span class="mono sys-prog-label">{ready} / {total} Dienste bereit</span>
+    {#if tally.total > 0}
+      <div class="sys-prog">
+        <div class="sys-progbar"><span style="width: {pct}%; background: {toneVar};"></span></div>
+        <span class="mono sys-prog-label">{tally.ok} / {tally.total} Dienste erreichbar</span>
+      </div>
+    {/if}
+  </div>
+  {#if data.realm}
+    <div class="sys-head-side">
+      <div class="eyebrow">Mandant</div>
+      <div class="mono sys-side-val">aktiv · Realm {data.realm}</div>
     </div>
-  </div>
-  <div class="sys-head-side">
-    <div class="eyebrow">Steuerebene</div>
-    <div class="mono sys-side-val">geteilt · 1 Image</div>
-    <div class="eyebrow sys-side-eyebrow">Datenebene</div>
-    <div class="mono sys-side-val">Silo · realm {data.realm}</div>
-  </div>
+  {/if}
 </div>
 
 {#snippet plane(title: string, tag: string, hint: string, list: typeof services)}
@@ -94,7 +92,7 @@
   </div>
   <div class="card sys-svc-card">
     {#each list as s (s.key)}
-      {@const pill = s.status === 'unknown' ? UNKNOWN_PILL : STATUS_PILL[s.status]}
+      {@const pill = ROW_PILL[s.status]}
       <div class="sys-svc is-{s.status}">
         <div class="svc-ico"><Icon name={SERVICE_ICON[s.key] ?? 'package'} size={19} /></div>
         <div class="svc-body">
@@ -107,16 +105,18 @@
             <Icon name={pill.icon} size={10} />
             {pill.label}
           </span>
-          <!-- K2#13: the "Erneut versuchen" button had no handler and was removed;
-               a retry belongs here only once it is wired to a real reprovision call. -->
         </div>
       </div>
     {/each}
   </div>
 {/snippet}
 
-{@render plane('Geteilte Steuerebene', 'shared control-plane', 'ein Image · alle Mandanten', shared)}
-{@render plane('Eigene Datenebene', 'silo data-plane', 'nur dieser Mandant · eigene DB, eigenes Realm', silo)}
+{#if shared.length > 0}
+  {@render plane('Anwendung', 'diese Instanz', 'läuft, sonst gäbe es diese Seite nicht', shared)}
+{/if}
+{#if tenantRows.length > 0}
+  {@render plane('Dienste des Mandanten', 'geprüft beim Laden', 'Zeitlimit je Dienst: 3 Sekunden', tenantRows)}
+{/if}
 
 <!-- Active-module catalog — derived from the registered manifests -->
 <div class="sys-plane-label">
@@ -160,9 +160,8 @@
 <div class="sys-foot">
   <Icon name="info" size={15} />
   <span>
-    Die vier Zustände (<span class="mono">provisioning · ready · degraded · failed</span>) spiegeln den
-    Konvergenz-Controller des Frameworks. Eine zweite Instanz (z. B. Gemeinderat) durchläuft denselben
-    Ablauf — mit eigenem Realm, eigener DB und ihrer eigenen Modulauswahl.
+    Die Anzeige prüft jeden Dienst erneut, wenn die Seite geladen oder „Status aktualisieren“ gedrückt wird.
+    Ein Dienst, den die Anwendung nicht selbst prüfen kann, wird nicht aufgeführt.
   </span>
 </div>
 
@@ -276,9 +275,6 @@
     color: var(--ink-2);
     margin-top: 6px;
   }
-  .sys-side-eyebrow {
-    margin-top: 12px;
-  }
 
   /* Plane label divider */
   .sys-plane-label {
@@ -338,14 +334,12 @@
     display: grid;
     place-items: center;
   }
-  .sys-svc.is-failed .svc-ico {
+  .sys-svc.is-unreachable .svc-ico {
     background: var(--rust-soft);
     color: var(--rust-ink);
   }
-  .sys-svc.is-provisioning .svc-ico,
-  .sys-svc.is-degraded .svc-ico {
-    background: var(--ember-soft);
-    color: var(--ember-ink);
+  .sys-svc.is-off {
+    opacity: 0.7;
   }
   .svc-body {
     flex: 1;

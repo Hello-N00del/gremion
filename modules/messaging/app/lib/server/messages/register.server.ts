@@ -20,6 +20,7 @@ import { evictSynapseAdmin } from './synapse-admin'
 import { getSynapseAdmin } from './synapse-admin'
 import { evictLivekitSettings } from './livekit-client'
 import { evictServiceMatrixTokenCache } from './backend/service-client'
+import { evictSenderNameResolver } from './sender-names'
 import { createMatrixSubsystem } from './provisioning/matrix-subsystem'
 import { messagingErasureHook } from './erasure'
 import { messagingKarenz } from './karenz'
@@ -33,6 +34,8 @@ registerTenantEvictHook(evictLivekitSettings)
 // #389: the service-mode (MESSAGES_BACKEND=service) Matrix token cache — a no-op
 // in inprocess mode (cache empty), evicted here for parity with evictMatrixClient.
 registerTenantEvictHook(evictServiceMatrixTokenCache)
+// The sender-name resolver holds the tenant's Keycloak admin client; drop it with that client.
+registerTenantEvictHook(evictSenderNameResolver)
 
 // The Matrix provisioning adapter. The factory captures the messages module's
 // own Matrix/Synapse clients and per-tenant server name; the governance
