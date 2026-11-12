@@ -1079,8 +1079,7 @@ phase_customer_create_check() {
     # file is 0600 AND owned by the reader uid (a root:root file is EACCES to the readers).
     # The directory the app env mounts (pooled-stack-proof renders TENANT_SECRETS_DIR into app-blue.env, under
     # the scratch root), not the release tree's secrets/tenants, which holds only .gitkeep (#50 item 4).
-    local tsd="${PROOF_TENANT_SECRETS_DIR:-$(sed -n 's/^TENANT_SECRETS_DIR=//p' "$PENV/app-blue.env" 2>/dev/null | tr -d '"
-' | tail -n1)}" tsf tsbad=0 tsn=0 want_uid="${TENANT_SECRETS_UID:-1000}"
+    local tsd="${PROOF_TENANT_SECRETS_DIR:-$(sed -n 's/^TENANT_SECRETS_DIR=//p' "$PENV/app-blue.env" 2>/dev/null | tr -d '"' | tail -n1)}" tsf tsbad=0 tsn=0 want_uid="${TENANT_SECRETS_UID:-1000}"
     [[ -n "$tsd" ]] || tsd="$(croot)/secrets/tenants"
     while IFS= read -r tsf; do
         tsn=$(( tsn + 1 ))
