@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon from '$lib/components/ui/Icon.svelte'
+  import DateFieldDe from './DateFieldDe.svelte'
   import type { CardView, MemberOption } from './types'
 
   // Detail editor for one card: title, description, assignee (a member of the board's own
@@ -35,6 +36,8 @@
   let description = $state(initial.description)
   let assignee = $state(initial.assignee)
   let dueDate = $state(initial.dueDate)
+  // The date field holds text that is no date: '' in dueDate then means "unreadable", not "none".
+  let dueInvalid = $state(false)
   let busy = $state(false)
   let error = $state<string | null>(null)
 
@@ -45,11 +48,15 @@
       error = 'Der Titel darf nicht leer sein.'
       return
     }
+    if (dueInvalid) {
+      error = 'Das Fälligkeitsdatum ist kein gültiges Datum. Bitte gib es im Format TT.MM.JJJJ ein oder leere das Feld.'
+      return
+    }
     const body: Record<string, string | null> = { cardId: card.id }
     if (cleanTitle !== initial.title) body.title = cleanTitle
     if (description.trim() !== initial.description.trim()) body.description = description
     if (assignee !== initial.assignee) body.assigneeKeycloakId = assignee === '' ? null : assignee
-    // <input type="date"> reads and writes ISO (YYYY-MM-DD) whatever the display format is
+    // the date field shows German order and binds the ISO day (YYYY-MM-DD), '' for an empty field
     if (dueDate !== initial.dueDate) body.dueDate = dueDate === '' ? null : dueDate
     if (Object.keys(body).length === 1) {
       onclose()
@@ -155,10 +162,11 @@
             {/each}
           </select>
         </label>
-        <label class="field">
-          <span class="lbl">Fällig am</span>
-          <input type="date" bind:value={dueDate} />
-        </label>
+        <!-- Not a wrapping label: the date field holds a text input, a button and the native picker. -->
+        <div class="field">
+          <label class="lbl" for="card-editor-due">Fällig am</label>
+          <DateFieldDe id="card-editor-due" label="Fälligkeit" bind:value={dueDate} bind:invalid={dueInvalid} />
+        </div>
       </div>
       {#if error}<p class="err" role="alert">{error}</p>{/if}
       <div class="actions">
