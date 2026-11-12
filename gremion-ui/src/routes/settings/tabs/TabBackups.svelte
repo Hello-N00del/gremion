@@ -221,7 +221,9 @@
 <div class="space-y-6 py-4">
   <h2 class="text-lg font-semibold">Backups</h2>
 
-  <!-- Retention setting -->
+  <!-- Retention setting. Where backups are not managed from the app, the operator
+       sets retention together with the backups, so the form is not offered there. -->
+  {#if !notManaged}
   <form class="space-y-3 max-w-xs" onsubmit={(e) => { e.preventDefault(); saveRetention() }}>
     <div class="space-y-1">
       <Label for="b-retention">Aufbewahrungsdauer (Tage)</Label>
@@ -238,6 +240,7 @@
       {/if}
     </div>
   </form>
+  {/if}
 
   {#if notManaged}
     <!-- No host daemon on this installation: nothing here can start or inspect a
@@ -251,6 +254,9 @@
         {#if backupRuns.length === 0}
           Die App hat keine Aufzeichnungen über diese Läufe; Auskunft gibt der Betreiber.
         {/if}
+      </p>
+      <p class="text-sm text-ink-muted">
+        Auch die Aufbewahrungsdauer der Backups legt der Betreiber fest; sie lässt sich hier nicht einstellen.
       </p>
       {#if lastBackupAt}
         <p class="text-xs text-ink-muted" data-testid="backup-last-at">

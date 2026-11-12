@@ -45,6 +45,12 @@ const CHECK_NAME = /Integritätsprüfung anfragen|Anfrage läuft/
 const startButton = () => screen.getByRole('button', { name: START_NAME })
 const checkButton = () => screen.getByRole('button', { name: CHECK_NAME })
 
+// The retention form: its field and its submit button.
+const retentionField = (container: HTMLElement) => container.querySelector('#b-retention')
+const saveButton = () => screen.queryByRole('button', { name: /Speichern|Speichere/ })
+const sentPatch = (fetchMock: ReturnType<typeof vi.fn>) =>
+  fetchMock.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === 'PATCH')
+
 describe('TabBackups.svelte: real backup outcome', () => {
   it('configured but unreachable: an error is shown and neither action can be started', async () => {
     const reason = 'Der Host-Dienst (hostd) ist nicht erreichbar. Aus der App kann derzeit kein Backup ausgelöst werden.'
@@ -196,6 +202,24 @@ describe('TabBackups.svelte: backups not managed from the app', () => {
     expect(fetchMock.mock.calls.every(([, init]) => (init as RequestInit | undefined)?.method !== 'POST')).toBe(true)
   })
 
+  it('offers no retention setting and says that the operator sets retention', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => json(statusBody({ state: 'not_configured' })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { container } = render(TabBackups, { props: { backups: BACKUPS, pollMs: 5 } })
+    const notice = await screen.findByTestId('backup-not-managed')
+
+    // nothing to edit and nothing to save
+    expect(retentionField(container)).toBeNull()
+    expect(saveButton()).toBeNull()
+    expect(container.querySelector('form')).toBeNull()
+    expect(container.textContent ?? '').not.toMatch(/Aufbewahrungsdauer \(Tage\)/)
+    expect(sentPatch(fetchMock)).toBe(false)
+    // and the reason why
+    expect(notice.textContent).toMatch(/Aufbewahrungsdauer/)
+    expect(notice.textContent).toMatch(/Betreiber fest/)
+  })
+
   it('still shows a recorded last successful backup, without claiming there is none', async () => {
     vi.stubGlobal(
       'fetch',
@@ -221,6 +245,27 @@ describe('TabBackups.svelte: backups not managed from the app', () => {
     expect(await screen.findByTestId('backup-not-managed')).toBeTruthy()
     expect(container.textContent ?? '').not.toMatch(/hostd|socket/i)
     expect(screen.queryByRole('button', { name: START_NAME })).toBeNull()
+    // the retention setting leaves with the actions
+    expect(retentionField(container)).toBeNull()
+    expect(saveButton()).toBeNull()
+  })
+})
+
+describe('TabBackups.svelte: retention setting', () => {
+  it('stays editable while the host daemon is available', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json(statusBody({}))))
+    const { container } = render(TabBackups, { props: { backups: BACKUPS, pollMs: 5 } })
+    await screen.findByText('Keine Backups vorhanden.')
+    expect((retentionField(container) as HTMLInputElement).disabled).toBe(false)
+    expect((saveButton() as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('stays editable while the host daemon is unreachable', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json(statusBody({ state: 'unreachable', reason: 'x' }))))
+    const { container } = render(TabBackups, { props: { backups: BACKUPS, pollMs: 5 } })
+    await screen.findByRole('alert')
+    expect((retentionField(container) as HTMLInputElement).disabled).toBe(false)
+    expect((saveButton() as HTMLButtonElement).disabled).toBe(false)
   })
 })
 

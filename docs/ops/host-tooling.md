@@ -552,7 +552,9 @@ no new transport). The socket path comes from `GREMION_HOSTD_SOCKET` (default
     exists at the default path. The tab says that backups are not managed from
     the app and that the operator runs them outside it; it offers neither the
     backup nor the integrity-check action, and the API refuses both with
-    `503` and `code: "not_configured"`.
+    `503` and `code: "not_configured"`. The retention field is not shown
+    either: the tab says that the operator sets retention (on the host,
+    `BACKUP_RETENTION_DAILY/WEEKLY/MONTHLY`).
   - **unreachable**: `GREMION_HOSTD_SOCKET` is set but the socket is missing, or
     it refuses connections. This is an error: the tab shows it and disables
     both actions. The message names no path.
