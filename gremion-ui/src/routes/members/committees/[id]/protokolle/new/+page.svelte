@@ -1,4 +1,5 @@
 <script lang="ts">
+  import PageTitle from '$lib/components/PageTitle.svelte'
   import type { PageData, ActionData } from './$types'
   import { Button } from '$lib/components/ui/button'
   import { Input } from '$lib/components/ui/input'
@@ -6,6 +7,8 @@
 
   let { data, form }: { data: PageData; form: ActionData } = $props()
 </script>
+
+<PageTitle title={`Neues Protokoll – ${data.committee.name}`} />
 
 <div class="max-w-lg space-y-6">
   <h2 class="text-xl font-semibold">Neues Protokoll</h2>

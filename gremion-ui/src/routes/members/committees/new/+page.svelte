@@ -1,4 +1,5 @@
 <script lang="ts">
+  import PageTitle from '$lib/components/PageTitle.svelte'
   import { enhance } from '$app/forms'
   import type { ActionData, PageData } from './$types'
   import { t } from '$lib/i18n'
@@ -6,6 +7,8 @@
   let { data, form }: { data: PageData; form: ActionData } = $props()
   let kind = $state<'council' | 'committee' | 'group'>('committee')
 </script>
+
+<PageTitle title={$t('members.new.title')} />
 
 <div class="max-w-2xl mx-auto">
   <h1 class="text-2xl font-semibold mb-6">{$t('members.new.title')}</h1>

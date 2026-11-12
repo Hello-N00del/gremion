@@ -1,4 +1,5 @@
 <script lang="ts">
+  import PageTitle from '$lib/components/PageTitle.svelte'
   import type { PageData } from './$types'
   import type { ProtocolActionItem } from '$lib/server/protocols/protocol-db'
   import { resolutionPatchBody } from '$lib/governance/resolution-patch-body'
@@ -141,6 +142,8 @@
     document.getElementById('anwesenheit')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 </script>
+
+<PageTitle title={`${data.protocol.title || 'Protokoll'} – ${data.committee.name}`} />
 
 <div class="space-y-6 max-w-4xl">
   <div class="flex flex-wrap items-center gap-3 rounded-lg border px-4 py-3 bg-surface-2/30">
