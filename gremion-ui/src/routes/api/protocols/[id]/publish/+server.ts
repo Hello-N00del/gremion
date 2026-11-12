@@ -12,6 +12,8 @@ import { getProtocolDocumentPort } from '$lib/server/modules/runtime-registry'
 import { getDb } from '$lib/server/db'
 import { getQuorumContext } from '$lib/server/governance/quorum'
 import { sanitizeRichHtml } from '$lib/server/security/html-sanitize'
+import { untalliedResolutionsMessage, UNTALLIED_RESOLUTION_CODE } from '$lib/governance/resolution-vote-state'
+import { UntalliedResolutionError, UNTALLIED_RESOLUTION_MESSAGE } from '$lib/server/protocols/untallied-resolution'
 
 // G-011: Collabora-converted HTML is stored in body_html and rendered via
 // {@html} in the protocol detail page. The sanitizer + allowlist now lives
@@ -40,6 +42,18 @@ export async function POST(event: RequestEvent) {
   // (non-withdrawn) resolution may only be published if the meeting was
   // beschlussfähig; a withdrawn resolution is not a vote and needs no quorum.
   const resolutions = await listResolutions(protocol.id)
+
+  // Publish IS adoption, and a counted resolution nobody voted on (0/0/0, stored
+  // with the rule engine's placeholder "rejected") is not a decision: it must
+  // never be stamped and written to the audit chain as one. Refused first, since
+  // the way out (enter the count, withdraw or delete) also decides whether a
+  // quorum is needed at all. A consent resolution with an empty tally is adopted
+  // (silence adopts) and passes. The submit route applies the same check while
+  // the resolutions are still editable; the adoption record repeats it on the
+  // transaction (recordResolutionAdoptions).
+  const untallied = untalliedResolutionsMessage(resolutions)
+  if (untallied) throw error(422, { message: untallied, code: UNTALLIED_RESOLUTION_CODE })
+
   if (resolutions.some((r) => r.result !== 'withdrawn')) {
     const quorum = await getQuorumContext(protocol.id)
     if (!quorum.quorate) {
@@ -131,6 +145,12 @@ export async function POST(event: RequestEvent) {
     })
   } catch (e) {
     if (!stmtsDone) await restoreOdt()
+    // The adoption record found a row without a vote that the check above did
+    // not see (it changed in between). The transaction rolled back; answer like
+    // the early check instead of a 500.
+    if (e instanceof UntalliedResolutionError) {
+      throw error(422, { message: UNTALLIED_RESOLUTION_MESSAGE, code: UNTALLIED_RESOLUTION_CODE })
+    }
     throw e
   }
 

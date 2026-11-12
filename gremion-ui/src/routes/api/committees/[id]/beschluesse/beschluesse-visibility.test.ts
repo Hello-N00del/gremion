@@ -14,7 +14,12 @@ const UNITS: Record<string, { id: string; visibility: 'all_members' | 'committee
 }
 const MEMBERSHIPS: Record<string, string[]> = { 'unit-member': ['u-closed'] }
 
-const h = vi.hoisted(() => ({ sqlCalls: 0, settingsCalls: 0 }))
+const h = vi.hoisted(() => ({
+  sqlCalls: 0,
+  settingsCalls: 0,
+  rows: [] as Array<Record<string, unknown>>,
+  statements: [] as string[],
+}))
 
 vi.mock('$lib/server/governance/org-units-db', () => ({
   getOrgUnit: vi.fn(async (id: string) => UNITS[id] ?? null),
@@ -27,9 +32,10 @@ vi.mock('$lib/server/protocols/protocol-db', () => ({
   }),
 }))
 vi.mock('$lib/server/db', () => ({
-  getDb: () => (() => {
+  getDb: () => ((strings: TemplateStringsArray) => {
     h.sqlCalls++
-    return Promise.resolve([{ id: 'r1', type: 'beschluss', text: 'Beschluss' }])
+    h.statements.push(strings.join('?'))
+    return Promise.resolve(h.rows)
   }),
 }))
 
@@ -56,9 +62,17 @@ async function statusOf(run: () => Promise<Response>): Promise<number> {
   }
 }
 
+// A published counted resolution with a recorded vote, as the register query returns it.
+const COUNTED = {
+  id: 'r1', type: 'beschluss', text: 'Beschluss', result: 'passed',
+  votes_yes: 3, votes_no: 1, votes_abstain: 0, required_majority: 'simple', adoption_mode: 'tally',
+}
+
 beforeEach(() => {
   h.sqlCalls = 0
   h.settingsCalls = 0
+  h.rows = [COUNTED]
+  h.statements = []
 })
 
 describe('GET /api/committees/[id]/beschluesse -- visibility (D-3)', () => {
@@ -85,5 +99,40 @@ describe('GET /api/committees/[id]/beschluesse -- visibility (D-3)', () => {
 
   it('an unknown unit is a 404, the same answer as a hidden one', async () => {
     expect(await statusOf(() => GET(ev(ADMIN, 'u-missing')))).toBe(404)
+  })
+})
+
+// A protocol published before the vote gate existed may still hold a counted
+// resolution nobody voted on, stored with the rule engine's placeholder
+// "rejected". The register must not report that as a decision: the SERVER marks
+// the row, with the same predicate the protocol page and the gates use.
+describe('GET /api/committees/[id]/beschluesse -- a resolution nobody voted on', () => {
+  type Entry = { id: string; result: string; untallied: boolean }
+  const entriesFor = async () => ((await (await GET(ev(ADMIN, 'u-open'))).json()) as { entries: Entry[] }).entries
+
+  it('reads the rule and the adoption mode the verdict depends on', async () => {
+    await entriesFor()
+    expect(h.statements[0]).toMatch(/r\.required_majority/)
+    expect(h.statements[0]).toMatch(/r\.adoption_mode/)
+  })
+
+  it('marks a counted 0/0/0 resolution as untallied and a voted one as not', async () => {
+    h.rows = [
+      COUNTED,
+      { ...COUNTED, id: 'r2', result: 'rejected', votes_yes: 0, votes_no: 0, votes_abstain: 0 },
+      { ...COUNTED, id: 'r3', result: 'rejected', votes_yes: 0, votes_no: 2, votes_abstain: 0 },
+    ]
+    const entries = await entriesFor()
+    expect(entries.map((e) => [e.id, e.untallied])).toEqual([['r1', false], ['r2', true], ['r3', false]])
+  })
+
+  it('does not mark a consent, an acclamation or a withdrawn resolution with an empty tally', async () => {
+    const empty = { ...COUNTED, votes_yes: 0, votes_no: 0, votes_abstain: 0 }
+    h.rows = [
+      { ...empty, id: 'consent', required_majority: 'consent', result: 'passed' },
+      { ...empty, id: 'acclamation', adoption_mode: 'acclamation', votes_yes: null, votes_no: null, votes_abstain: null },
+      { ...empty, id: 'withdrawn', result: 'withdrawn' },
+    ]
+    expect((await entriesFor()).map((e) => e.untallied)).toEqual([false, false, false])
   })
 })

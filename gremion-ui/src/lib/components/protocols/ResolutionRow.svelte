@@ -2,6 +2,7 @@
   import { Input } from '$lib/components/ui/input'
   import { Button } from '$lib/components/ui/button'
   import { computeResult, type MajorityRule } from '$lib/governance/compute-result'
+  import { isUntalliedResolution } from '$lib/governance/resolution-vote-state'
 
   interface Resolution {
     id?: string
@@ -62,26 +63,23 @@
   const ruleOf = (r: Resolution): MajorityRule => r.required_majority as MajorityRule
   const isAcclamation = $derived(resolution.adoption_mode === 'acclamation')
 
-  // A tally row whose counts are all zero (or empty) has not been voted on yet:
+  // A counted row whose counts are all zero (or empty) has not been voted on yet:
   // a fresh row is created as 0/0/0 and the server computes "rejected" for it,
-  // which must not be shown as a decision (finding 7). Withdrawn rows keep their
-  // verdict, acclamation rows carry a declared result and no tally by design.
-  const tallyIsEmpty = (r: Resolution) =>
-    (Number(r.votes_yes ?? 0) || 0) + (Number(r.votes_no ?? 0) || 0) + (Number(r.votes_abstain ?? 0) || 0) === 0
-  const hasNoVote = $derived(
-    !isAcclamation && resolution.result !== 'withdrawn' && tallyIsEmpty(resolution),
-  )
+  // which must not be shown as a decision (finding 7). The predicate is the one
+  // the server's submit and publish gates use (resolution-vote-state.ts), so the
+  // row and the server agree: withdrawn rows keep their verdict, acclamation rows
+  // carry a declared result and no tally by design, and a consent row with an
+  // empty tally is ADOPTED (silence adopts), not a missing vote.
+  const hasNoVote = $derived(isUntalliedResolution(resolution))
   // In the editor a cleared field (null or '') is a missing count, which the
   // "Stimmen unvollständig" line below explains; only explicit zeros mean "not
   // voted yet".
   const isBlank = (v: unknown) => v === null || v === undefined || v === ''
   const draftHasNoVote = $derived(
-    !isAcclamation &&
-      draft.result !== 'withdrawn' &&
-      !isBlank(draft.votes_yes) &&
+    !isBlank(draft.votes_yes) &&
       !isBlank(draft.votes_no) &&
       !isBlank(draft.votes_abstain) &&
-      tallyIsEmpty(draft),
+      isUntalliedResolution(draft),
   )
 
   // INV-5: the result shown while editing is COMPUTED from the fixed rule +

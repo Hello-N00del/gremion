@@ -1,6 +1,8 @@
 import { getDb } from '../db'
 import { getRunner as genericGetRunner, type PgTransaction } from '$lib/server/db/tx'
 import { writeAuditEntry } from '$lib/server/audit-db'
+import { isUntalliedResolution } from '$lib/governance/resolution-vote-state'
+import { UntalliedResolutionError } from './untallied-resolution'
 
 // #235 (defects 2 & 3): the publish flow runs updateProtocol + the per-resolution
 // global_nr assignment + setProtocolStatus inside ONE getDb().begin(...) tx. These
@@ -505,6 +507,13 @@ export async function assignGlobalNrs(
  * A `withdrawn` resolution is an author act, not a vote — it is skipped (no
  * decision was taken, so no decision timestamp and no audit record).
  *
+ * A counted resolution NOBODY VOTED ON (0/0/0 under a majority rule, see
+ * $lib/governance/resolution-vote-state) is not a decision either, but unlike a
+ * withdrawal it is unfinished data: it throws UntalliedResolutionError, which
+ * rolls the publish transaction back. The verdict is taken from the row as this
+ * statement stamped it, so a count cleared after the caller read `resolutions`
+ * is refused too. A consent resolution with an empty tally is adopted.
+ *
  * #429: IDEMPOTENT. Republishing a protocol (e.g. after document regeneration)
  * calls this again with `allowPublished:true`, and must be a NON-EVENT for
  * already-decided resolutions — no decided_at re-stamp, no duplicate audit row.
@@ -532,14 +541,17 @@ export async function recordResolutionAdoptions(
   let recorded = 0
   for (const r of resolutions) {
     if (r.result === 'withdrawn') continue
-    const stamped = await tx<{ id: string }[]>`
+    const stamped = await tx<ProtocolResolution[]>`
       UPDATE protocol_resolutions SET decided_at = now()
       WHERE id = ${r.id} AND decided_at IS NULL
-      RETURNING id
+      RETURNING *
     `
     // Already decided by an earlier publish — republish is a non-event for
     // this resolution: no re-stamp, no duplicate audit row.
     if (stamped.length === 0) continue
+    // Nobody voted on the row just stamped: not a decision. The throw undoes the
+    // stamp together with the rest of the caller's transaction.
+    if (isUntalliedResolution(stamped[0])) throw new UntalliedResolutionError(r.id)
     await writeAuditEntry(
       {
         userId,

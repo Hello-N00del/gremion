@@ -35,3 +35,25 @@ describe('Beschlussregister page (K2#5)', () => {
     expect(screen.getByText('Haushalt 2026')).toBeTruthy()
   })
 })
+
+// A resolution nobody voted on (marked by the register API) is not a decision:
+// the register must not print the rule engine's placeholder "Abgelehnt" for it.
+describe('Beschlussregister page: a resolution nobody voted on', () => {
+  const entry = (over: Record<string, unknown>) => ({
+    global_nr: 'B-2026-002', type: 'beschluss', text: 'Antrag ohne Abstimmung', meeting_date: '2026-03-01',
+    result: 'rejected', protocol_id: 'p1', untallied: false, ...over,
+  })
+  const rowText = (text: string) => screen.getByText(text).closest('tr')!.textContent ?? ''
+
+  it('shows "keine Abstimmung" instead of "Abgelehnt"', () => {
+    render(Page, { props: { data: { committeeId: 'c1', entries: [entry({ untallied: true })] } } as never })
+    expect(rowText('Antrag ohne Abstimmung')).toMatch(/keine Abstimmung/)
+    expect(rowText('Antrag ohne Abstimmung')).not.toMatch(/Abgelehnt|Angenommen/)
+  })
+
+  it('still shows a counted rejection as "Abgelehnt"', () => {
+    render(Page, { props: { data: { committeeId: 'c1', entries: [entry({ text: 'Abgelehnter Antrag' })] } } as never })
+    expect(rowText('Abgelehnter Antrag')).toMatch(/Abgelehnt/)
+    expect(rowText('Abgelehnter Antrag')).not.toMatch(/keine Abstimmung/)
+  })
+})

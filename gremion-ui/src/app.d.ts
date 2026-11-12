@@ -11,6 +11,8 @@ declare global {
     interface Error {
       message: string
       errId?: string
+      /** Machine-readable reason of an expected refusal, where a page reacts to it. */
+      code?: string
     }
     interface Locals {
       /** Percent-decoded request path (request-path.ts), set once by requestPathHandle; every path check uses it. */
