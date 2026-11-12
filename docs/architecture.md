@@ -61,7 +61,7 @@ Internet
 | `postgres`     | All persistent data: the control-plane registry DB, the per-tenant governance DB(s), and the Keycloak DB |
 | `keycloak`     | OIDC/SSO identity provider; starts with `master` only and no realm of ours (B-01: the boot-time realm import is deleted), relative path `/auth` |
 | `gremion-ui`     | The authenticated SvelteKit app shell — dashboard, settings, system status, and the governance surface (committees, members, protocols, resolutions, portal admin) |
-| `gremion-public` | The read-only public portal at `public.<domain>` — no auth, no sessions, connects to the governance DB through a read-only role |
+| `gremion-public` | The read-only public portal at `public.<domain>`, or under one host of the customer's own ([runbook](runbooks/public-portal-host.md)) — no auth, no sessions, connects to the governance DB through a read-only role |
 | `legal`        | Static legal/portal pages (Impressum, GDPR) served by a non-root nginx |
 | `vector`       | Log pipeline: tails Traefik access logs, pseudonymises IPs, enforces retention |
 | `mailpit`      | Local/staging SMTP catcher (`:1025`); flipping to a real relay is a pure `.env` change — see [`docs/runbooks/email-smtp.md`](runbooks/email-smtp.md) |

@@ -156,7 +156,7 @@ Read-only role used by the `gremion-public` container.
 | Variable | Default | Notes |
 |----------|---------|-------|
 | `PUBLIC_DB_PASSWORD` | (`CHANGE_ME_public_reader`) | `openssl rand -hex 32`; role created by `init-databases.sh` |
-| `GREMION_PUBLIC_DB_URL` | `postgresql://gremion_public_reader:<pw>@postgres:5432/gremion` | Read-only DSN for `gremion-public` |
+| `GREMION_PUBLIC_DB_URL` | `postgresql://gremion_public_reader:<pw>@postgres:5432/gremion` | Read-only DSN for `gremion-public`. The app-tier compose file (`docker-compose.app.yml`) does not read this key: it assembles the DSN from `PUBLIC_DB_PASSWORD` and `PUBLIC_PORTAL_DB_NAME` (see [Public Portal](#public-portal-gremion-public)) |
 
 ### Keycloak database
 
@@ -314,7 +314,8 @@ you normally do not set them directly in `.env`:
 
 ## Public Portal (gremion-public)
 
-The read-only, unauthenticated public portal served at `public.${DOMAIN}`. It
+The read-only, unauthenticated public portal. It is served at `public.${DOMAIN}`
+unless `PUBLIC_PORTAL_HOST` names another host (below). It
 publishes governance content (committees, protocols, resolutions/Beschlüsse).
 Beyond `GREMION_PUBLIC_DB_URL` and `PUBLIC_DB_PASSWORD` (see PostgreSQL above), it
 takes Impressum/contact metadata for TMG §5 compliance:
@@ -328,8 +329,19 @@ takes Impressum/contact metadata for TMG §5 compliance:
 | `PUBLIC_IMPRINT_RESPONSIBLE` | (empty) | Person/role responsible for content |
 | `PUBLIC_LEGISLATURE_LABEL` | (empty) | Optional legislature/term label |
 
-The compose file also derives `PUBLIC_MAIN_APP_URL=https://${DOMAIN}` and
-`ORIGIN=https://public.${DOMAIN}` for this service.
+The app-tier compose file (`docker-compose.app.yml`) derives the portal's own
+origin, its database and its link back to the main app from three optional
+keys of `app-<colour>.env`. An absent or empty key keeps the default, which is
+the value the service had before the key existed:
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `PUBLIC_PORTAL_HOST` | (empty: `public.${DOMAIN}`) | The host the portal is served under (a host name, no scheme). The service's `ORIGIN` is `https://` plus this value |
+| `PUBLIC_PORTAL_DB_NAME` | (empty: `GREMION_DB_NAME`, then `gremion`) | The database the read-only role reads. On a pooled install that is the customer's own database, `t_<tenant id>__kernel`, which exists only after the tenant was created |
+| `PUBLIC_MAIN_APP_URL` | (empty: `https://${PILOT_TENANT_HOST}`, then `https://${DOMAIN}`) | The origin the portal's Login and protocol-PDF links point at |
+
+Serving the portal under a customer's own host also needs one hand-placed edge
+router file: see [runbooks/public-portal-host.md](runbooks/public-portal-host.md).
 
 ---
 
