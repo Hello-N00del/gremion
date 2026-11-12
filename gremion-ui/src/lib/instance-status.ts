@@ -1,36 +1,20 @@
 // src/lib/instance-status.ts
 //
-// #264 — provisioning convergence (the Systemstatus surface engineering is gated
-// on). The instance is two planes (#202): a SHARED control-plane (one app image /
-// edge / module registry for every tenant) and a per-tenant SILO data-plane (its
-// own Postgres, Keycloak realm, Nextcloud, Matrix). Provisioning "converges" when
-// every silo service for the realm is up.
+// #264 — presentation contract for the overall instance state that the shell
+// (topbar convergence badge, dashboard banner) shows while a tenant is not yet
+// ready: labels, tones and icons for the four states. The SERVER maps the real
+// per-tenant boot readiness onto these in $lib/server/tenant/instance-state.ts.
+// NO server-only imports.
 //
-// This module is the CLIENT-SAFE presentation contract — labels, tones, icons,
-// and the per-state service snapshot — mirrored 1:1 from the prototype
-// web/tenancy.jsx + web/systemstatus.jsx. The SERVER maps the real backend state
-// (tenant.status + per-tenant readiness + the tenant_provisioning_resource
-// ledger) onto these shapes in $lib/server/tenant/instance-state.ts; the
-// Systemstatus page, the topbar convergence badge, and the dashboard banner all
-// render from here. NO server-only imports.
+// E3: the Systemstatus page no longer reads from here. It shows live probe results
+// (src/routes/systemstatus/), so the per-service snapshot, the canned per-state
+// messages and the provisioning-ledger helpers that fed it were removed together
+// with the claims they made.
 import { MODULE_MANIFESTS } from '$lib/modules/registry'
 import type { ModuleManifest } from '$lib/modules/types'
 
 /** The four overall states the backend convergence machine reports. */
 export type InstanceState = 'provisioning' | 'ready' | 'degraded' | 'failed'
-
-/** Per-service status within a snapshot. */
-export type ServiceStatus = 'ok' | 'provisioning' | 'queued' | 'degraded' | 'failed'
-
-export type ServicePlane = 'shared' | 'silo'
-
-export interface InstanceService {
-  key: string
-  name: string
-  plane: ServicePlane
-  tech: string
-  detail: string
-}
 
 /** Overall-state presentation (tone drives pill colour + glyph). */
 export interface InstanceStateMeta {
@@ -75,133 +59,6 @@ export const INSTANCE_STATE_META: Record<InstanceState, InstanceStateMeta> = {
     headline: 'Bereitstellung fehlgeschlagen.',
     sub: 'Ein kritischer Silo-Dienst konnte nicht erstellt werden. Bis zur Behebung ist die Instanz nicht nutzbar.',
   },
-}
-
-/** The six services: two shared control-plane, four silo data-plane. */
-export const SERVICES: readonly InstanceService[] = [
-  { key: 'app', name: 'Anwendung & Edge', plane: 'shared', tech: 'SvelteKit · Caddy', detail: 'Geteiltes Image · Routing nach Realm' },
-  { key: 'registry', name: 'Modul-Registry', plane: 'shared', tech: 'module-manifest (#201)', detail: 'Aktive Module dieses Mandanten' },
-  { key: 'db', name: 'PostgreSQL', plane: 'silo', tech: 'eigenes Schema', detail: 'Eigene Datenbank · keine geteilten Zeilen' },
-  { key: 'keycloak', name: 'Keycloak-Realm', plane: 'silo', tech: 'eigener Realm', detail: 'Identitäten, Rollen, SSO' },
-  { key: 'nextcloud', name: 'Nextcloud', plane: 'silo', tech: 'Dateien · CalDAV', detail: 'Dokumente und Kalender' },
-  // tech is tenant-agnostic on purpose (the status page is per-tenant; the
-  // concrete homeserver/realm live in the tenant config, not in source).
-  { key: 'matrix', name: 'Matrix-Homeserver', plane: 'silo', tech: 'Synapse · Föderation', detail: 'Chat und hybride Sitzungen' },
-]
-
-/** The silo subsystems the backend ledger (tenant_provisioning_resource) tracks,
- *  mapped to the SERVICES key (the ledger calls Keycloak "realm"). */
-export const SILO_SUBSYSTEM_TO_SERVICE: Record<string, string> = {
-  db: 'db',
-  realm: 'keycloak',
-  nextcloud: 'nextcloud',
-  matrix: 'matrix',
-}
-
-/** Per-state service snapshot (the convergence log the page renders). */
-export const SERVICE_SNAPSHOTS: Record<InstanceState, Record<string, ServiceStatus>> = {
-  ready: { app: 'ok', registry: 'ok', db: 'ok', keycloak: 'ok', nextcloud: 'ok', matrix: 'ok' },
-  provisioning: { app: 'ok', registry: 'ok', db: 'provisioning', keycloak: 'provisioning', nextcloud: 'queued', matrix: 'queued' },
-  degraded: { app: 'ok', registry: 'ok', db: 'ok', keycloak: 'ok', nextcloud: 'ok', matrix: 'degraded' },
-  failed: { app: 'ok', registry: 'ok', db: 'ok', keycloak: 'failed', nextcloud: 'queued', matrix: 'queued' },
-}
-
-/** State-aware per-service one-line note so the page reads like a real log. */
-export const SERVICE_MESSAGES: Partial<Record<InstanceState, Record<string, string>>> = {
-  provisioning: {
-    db: 'Datenbank wird angelegt · Migrationen laufen',
-    keycloak: 'Realm wird erstellt · Rollen werden importiert',
-    nextcloud: 'Wartet auf Datenbank',
-    matrix: 'Wartet auf Realm',
-  },
-  degraded: {
-    matrix: 'Föderation gestört · Chat verzögert, Anmeldung unberührt',
-  },
-  failed: {
-    keycloak: 'Realm-Import fehlgeschlagen · Anmeldung blockiert',
-    nextcloud: 'Übersprungen · wartet auf Realm',
-    matrix: 'Übersprungen · wartet auf Realm',
-  },
-}
-
-/** Status-tone → pill class + glyph (pill-icon contract, CR-3). The repo has no
- *  `.pill-neutral`; the base `.pill` IS neutral, so `cls:''` renders the base. */
-export const STATUS_PILL: Record<ServiceStatus, { cls: string; icon: string; label: string }> = {
-  ok: { cls: 'pill-success', icon: 'check', label: 'Bereit' },
-  provisioning: { cls: 'pill-warn', icon: 'clock', label: 'Bereitstellung' },
-  queued: { cls: '', icon: 'clock', label: 'Wartet' },
-  degraded: { cls: 'pill-warn', icon: 'alert-triangle', label: 'Eingeschränkt' },
-  failed: { cls: 'pill-danger', icon: 'alert-triangle', label: 'Fehler' },
-}
-
-/** Service-key → Icon name. (The repo Icon set lacks layers/grid/database/server;
- *  package/sliders/archive are the closest in-set glyphs.) */
-export const SERVICE_ICON: Record<string, string> = {
-  app: 'package',
-  registry: 'sliders',
-  db: 'archive',
-  keycloak: 'key',
-  nextcloud: 'folder',
-  matrix: 'matrix',
-}
-
-export interface ResolvedService extends InstanceService {
-  status: ServiceStatus
-  message: string
-}
-
-/**
- * Resolve the full per-service snapshot for an overall state. `realStatuses`
- * (optional) overrides the static snapshot with the actual ledger status of any
- * silo service whose row exists — so a converged default tenant shows all-ok and
- * a real failure shows the failed row, while still honouring the prototype
- * snapshot for services with no ledger row (e.g. the always-on shared plane).
- */
-export function instanceServices(
-  state: InstanceState,
-  realStatuses?: Partial<Record<string, ServiceStatus>>,
-): ResolvedService[] {
-  const snap = SERVICE_SNAPSHOTS[state] ?? SERVICE_SNAPSHOTS.ready
-  const msgs = SERVICE_MESSAGES[state] ?? {}
-  return SERVICES.map((s) => {
-    const status = realStatuses?.[s.key] ?? snap[s.key] ?? 'ok'
-    return { ...s, status, message: msgs[s.key] ?? s.detail }
-  })
-}
-
-/** The feature module that owns a silo service. A service not listed here
- *  (db, keycloak) is kernel-owned and always counts. */
-export const SERVICE_MODULE: Record<string, string> = {
-  nextcloud: 'files',
-  matrix: 'messages',
-}
-
-/** Silo services that belong to a feature module which is OFF in `modules`
- *  (the tenant's module toggle map). A missing key counts as OFF, matching the
- *  module gate (`!config.modules[id]`). */
-export function disabledServices(modules: Record<string, boolean>): string[] {
-  return Object.entries(SERVICE_MODULE)
-    .filter(([, moduleId]) => !modules[moduleId])
-    .map(([service]) => service)
-}
-
-/** Derive the overall state from a set of silo service statuses (server uses this
- *  when real ledger rows exist). all ok -> ready. Services of a DISABLED feature
- *  module (`disabled`, service keys) are skipped entirely: not provisioning, not
- *  failed. A failed kernel service (db, keycloak) -> failed. A failed feature
- *  service (nextcloud, matrix) is an outage of an optional module -> degraded,
- *  never failed (the kernel keeps working). Any pending/provisioning -> provisioning. */
-export function overallFromSilo(
-  silo: Record<string, ServiceStatus>,
-  disabled: readonly string[] = [],
-): InstanceState {
-  const vals = Object.entries(silo).filter(([k]) => !disabled.includes(k))
-  if (vals.every(([, v]) => v === 'ok')) return 'ready'
-  if (vals.some(([k, v]) => v === 'failed' && !(k in SERVICE_MODULE))) return 'failed'
-  const nonOk = vals.filter(([, v]) => v !== 'ok')
-  if (nonOk.some(([, v]) => v === 'provisioning' || v === 'queued')) return 'provisioning'
-  // Only feature-module services are non-ok, and none is mid-provision.
-  return 'degraded'
 }
 
 /** True when the instance is fully converged (badge/banner show only when not). */

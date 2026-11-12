@@ -18,6 +18,7 @@ import { loadCustomerModules, moduleArgs, parseDpiaForm, requestEvents, submitMo
 import { SubmitRefused } from '$lib/server/requests'
 import { retryRequest } from '$lib/server/retry'
 import type { Actions, PageServerLoad } from './$types'
+import { servicesWired, WIRING_ORDER_WARNING } from './wiring'
 
 const SLUG = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/
 
@@ -55,7 +56,9 @@ export const load: PageServerLoad = async ({ params }) => {
   // newest validate accepted (the apply is offered only for it) and the events of the newest ended import request
   // `unreadable`: the import state could not be read (logged); no action is offered then, and the page says so
   // instead of looking as if no validate ever ran.
-  let memberSection: { canAct: boolean; unreadable: boolean; noPlatformDb: boolean; verticals: typeof VERTICALS; validated: ValidatedList | null; importEvents: EventLine[] } | null = null
+  // `wiringWarning`: the order create, wire, seed is named when the customer's services are not wired yet (null: wired, or
+  // the registry cannot tell); the seed is still offered.
+  let memberSection: { canAct: boolean; unreadable: boolean; noPlatformDb: boolean; verticals: typeof VERTICALS; validated: ValidatedList | null; importEvents: EventLine[]; wiringWarning: string | null } | null = null
   if (status) {
     let st: ImportState | null = null
     let unreadable = false
@@ -74,6 +77,7 @@ export const load: PageServerLoad = async ({ params }) => {
       verticals: VERTICALS,
       validated: st?.validated ?? null,
       importEvents: st?.events ?? [],
+      wiringWarning: (await servicesWired(r.config, params.slug)) === false ? WIRING_ORDER_WARNING : null,
     }
   }
   // the dry run's report: the events of the newest reconcile request once it has ended
@@ -193,7 +197,7 @@ async function memberContext({ params, request, locals }: MemberEvent) {
     return { failed: fail(503, { memberError: 'Der Mandant ist nicht lesbar (Kontroll-Registry oder Plattform-Datenbank; Details im Panel-Log).' }) }
   }
   if (!status) return { failed: fail(409, { memberError: 'Es gibt keinen Mandanten mit diesem Kurznamen.' }) }
-  return { p, evidence, status, operatorId: locals.operator.id, slug: params.slug, failed: null }
+  return { p, evidence, status, operatorId: locals.operator.id, slug: params.slug, config: r.config, failed: null }
 }
 /** The one failure shape of the member actions (a concrete type: ReturnType of the overloaded fail() is ActionFailure<unknown> and would erase ActionData). */
 type MemberFailure = ActionFailure<{ memberError: string }>
@@ -213,7 +217,11 @@ async function memberForm(request: Request): Promise<{ form: FormData; failed: n
   }
 }
 
-async function queueMember(c: MemberContext, kind: MemberKind, args: Record<string, unknown>) {
+/**
+ * Queues the request. With a `warning` the request is still queued, and the action answers with the warning instead of
+ * the redirect (the page shows it next to the request that is now open).
+ */
+async function queueMember(c: MemberContext, kind: MemberKind, args: Record<string, unknown>, warning: string | null = null) {
   try {
     await submitMemberRequest(c.p, kind, c.slug, c.status.status, args, c.operatorId, c.evidence)
   } catch (err) {
@@ -221,6 +229,7 @@ async function queueMember(c: MemberContext, kind: MemberKind, args: Record<stri
     if (err instanceof SubmitRefused) return fail(err.status, { memberError: err.message })
     throw err
   }
+  if (warning) return { memberWarning: warning }
   redirect(303, `/customers/${c.slug}`)
 }
 
@@ -235,7 +244,9 @@ const seedVertical = async (e: MemberEvent) => {
   if (f.failed) return f.failed
   const vertical = field(f.form, 'vertical')
   if (!isKnownVertical(vertical)) return fail(400, { memberError: 'Unbekannte Vertikale: bitte eine der angebotenen wählen.' })
-  return queueMember(c, 'seed_vertical', memberArgs.seed(c.slug, vertical))
+  // the order is create, wire, seed: seeding first is allowed (the wire repairs it afterwards), with the order named
+  const wired = await servicesWired(c.config, c.slug)
+  return queueMember(c, 'seed_vertical', memberArgs.seed(c.slug, vertical), wired === false ? WIRING_ORDER_WARNING : null)
 }
 
 const importValidate = async (e: MemberEvent) => {

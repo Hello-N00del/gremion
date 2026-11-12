@@ -58,7 +58,9 @@ ENV
     printf '%s' "$NC_SECRET" > "${GREMION_ROOT}/tenant-secrets/tenant_${SLUG}_client_nextcloud"
     chmod 600 "${GREMION_ROOT}"/tenant-secrets/*
     export GREMION_SERVICES_WAIT_S=3
+    export GREMION_SERVICES_RETRY_WAIT_S=2 GREMION_SERVICES_RETRY_POLL_S=1
     shim_stack
+    ledger_sim
 }
 
 teardown() {
@@ -139,6 +141,17 @@ case " $* " in
       prev="$a"
     done
     case "$sql" in
+      *"__kernel"*)
+        # the customer kernel database name, derived from the registry row (the first step of the creation-order repair)
+        if [ -f "$GREMION_ROOT/no-tenant-row" ]; then exit 0; fi
+        echo "t_0123456789abcdef0123456789abcdef__kernel"; exit 0 ;;
+      *"servicesWiredAt"*)
+        if [ -f "$GREMION_ROOT/no-tenant-row" ]; then echo 0; exit 0; fi
+        printf "wired-marker\n" >> "$ORDER"
+        jq ". + {servicesWiredAt: \"2026-11-11T10:00:00Z\"}" "$row" > "$row.new" && mv "$row.new" "$row"
+        echo 1; exit 0 ;;
+      *"UPDATE provisioning_resources"*) bash "$GREMION_ROOT/ledger-sim.sh" reset; exit 0 ;;
+      *"count(*) FILTER"*) bash "$GREMION_ROOT/ledger-sim.sh" poll; exit 0 ;;
       *"UPDATE tenant"*)
         if [ -f "$GREMION_ROOT/no-tenant-row" ]; then echo 0; exit 0; fi
         printf "psql-update\n" >> "$ORDER"
@@ -178,6 +191,47 @@ case "$url" in
     exit 0 ;;
 esac
 exit 0'
+}
+
+# ledger_sim -- the customer's provisioning ledger (provisioning_resources of its kernel database) as a file, and the
+# one program the psql shim hands its two ledger statements to: `reset` is the wire's UPDATE (failed rows go back to
+# pending, due now), `poll` is the wire's count query after one tick of the app's provisioning worker. What the worker
+# does with a pending row is steered by a switch file: worker-heals (the row turns ok), worker-stuck (it stays pending),
+# neither (it fails again).
+ledger_sim() {
+    cat > "${GREMION_ROOT}/ledger-sim.sh" <<'SH'
+L="$GREMION_ROOT/ledger.json"
+case "$1" in
+  reset)
+    [ -f "$L" ] || { echo "|0"; exit 0; }
+    ids="$(jq -r '[.[] | select(.status == "failed") | .id] | join(",")' "$L")"
+    units="$(jq '[.[] | select(.status == "failed") | .unit] | unique | length' "$L")"
+    jq 'map(if .status == "failed" then .status = "pending" | .reset = true else . end)' "$L" > "$L.new" && mv "$L.new" "$L"
+    printf 'prov-reset\n' >> "$ORDER"
+    echo "${ids}|${units}" ;;
+  poll)
+    [ -f "$L" ] || { echo "0|0|0|0"; exit 0; }
+    if [ -f "$GREMION_ROOT/worker-heals" ]; then to=ok; elif [ -f "$GREMION_ROOT/worker-stuck" ]; then to=pending; else to=failed; fi
+    jq --arg to "$to" 'map(if .status == "pending" then .status = $to else . end)' "$L" > "$L.new" && mv "$L.new" "$L"
+    printf 'prov-poll\n' >> "$ORDER"
+    jq -r '. as $all | [.[] | select(.reset == true)] as $r
+      | [ ([$r[] | select(.status == "ok")] | length),
+          ([$r[] | select(.status == "pending")] | length),
+          ([$r[] | select(.status == "failed")] | length),
+          ([$r[].unit] | unique | map(. as $u | select([$all[] | select(.unit == $u and .status != "ok")] | length == 0)) | length) ]
+      | map(tostring) | join("|")' "$L" ;;
+esac
+SH
+}
+
+# set_ledger <unit>:<status> ... -- one ledger row per argument (a unit may appear twice: matrix and nextcloud)
+set_ledger() {
+    local n=0 a rows='[]'
+    for a in "$@"; do
+        n=$((n + 1))
+        rows="$(jq -c --arg id "$(printf '00000000-0000-4000-8000-%012d' "$n")" --arg u "${a%%:*}" --arg st "${a#*:}" '. + [{id: $id, unit: $u, status: $st}]' <<< "$rows")"
+    done
+    printf '%s\n' "$rows" > "${GREMION_ROOT}/ledger.json"
 }
 
 wire() { run "$SVC" wire "${1:-$SLUG}"; }
@@ -235,7 +289,7 @@ wire() { run "$SVC" wire "${1:-$SLUG}"; }
     grep -q 'compose bootstrap=1 :: .*up -d matrix' "$ORDER"
     grep -q 'compose bootstrap=unset :: .*up -d --force-recreate matrix' "$ORDER"
     # gremion-ui last, in the ACTIVE colour's project, force-recreated
-    tail -n 1 "$ORDER" | grep -q 'app-blue.env up -d --force-recreate gremion-ui'
+    grep '^compose bootstrap=' "$ORDER" | tail -n 1 | grep -q 'app-blue.env up -d --force-recreate gremion-ui'
     # the provider is registered before gremion-ui is recreated
     local p u
     p="$(grep -n 'occ provider-set' "$ORDER" | head -1 | cut -d: -f1)"
@@ -589,12 +643,14 @@ ENV
     wire
     [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
     [ ! -e "${GREMION_ROOT}/tenant-secrets/relay-smtp-password" ]
-    [ ! -e "${GREMION_ROOT}/psql-sql.log" ] || { echo "SQL ran under stalwart"; return 1; }
+    # the wire's own registry steps (the wired marker, the kernel database name) run under every transport; the MAIL
+    # LOGIN's statements (the smtp merge into domain_profile) do not
+    if grep -q "jsonb_build_object('smtp'" "${GREMION_ROOT}/psql-sql.log" 2>/dev/null; then echo "the smtp entry was written under stalwart"; return 1; fi
     # `!` in the middle of a test cannot fail it (errexit ignores a negated pipeline): each carries its own return
     if grep -q '^ui-config$' "$ORDER"; then echo "the config.json was written under stalwart"; return 1; fi
-    if grep -q 'psql' "$SHIM_LOG"; then echo "the control database was touched under stalwart"; return 1; fi
+    if grep -q '^psql-update$' "$ORDER"; then echo "the tenant row's smtp was written under stalwart"; return 1; fi
     [ "$(cksum < "${GREMION_ROOT}/ui-config.json")" = "$cfg_before" ] || { echo "config.json changed under stalwart: $(cat "${GREMION_ROOT}/ui-config.json")"; return 1; }
-    [ "$(jq -c . "${GREMION_ROOT}/tenant-row.json")" = '{"residencyZone":"eu"}' ]
+    [ "$(jq -c 'del(.servicesWiredAt)' "${GREMION_ROOT}/tenant-row.json")" = '{"residencyZone":"eu"}' ]
     [[ "$output" == *"MAIL_TRANSPORT=stalwart"* ]] || { echo "$output"; return 1; }
 }
 
@@ -671,4 +727,115 @@ exec ${real_stat} \"\$@\""
     [ ! -e "${GREMION_ROOT}/tenant-secrets/relay-smtp-password" ]
     [ ! -e "${GREMION_ROOT}/psql-sql.log" ] || { echo "SQL ran after the refusal"; return 1; }
     if grep -q compose "$ORDER"; then echo "something was started after the refusal"; return 1; fi
+}
+
+# ---------------------------------------------------------------------------
+# Step 8: the creation order. A vertical seeded BEFORE the wire leaves every unit's chat room failed (the app
+# had no bot token yet), and the app's own retry backs off for up to an hour and gives up after a day. So the
+# wire, once matrix is ready and gremion-ui carries the token, puts every failed ledger row of the customer
+# back to due and waits for the app's provisioning worker to retry them, and reports how many it repaired.
+# It also marks the customer as wired in the registry row, which is what the control panel reads to warn
+# about the wrong order. The ledger and the worker are played by ledger-sim.sh (see ledger_sim above).
+# ---------------------------------------------------------------------------
+
+@test "wire: failed unit resources are retried AFTER gremion-ui is recreated with the token, and the count of repaired units is reported" {
+    set_ledger u1:failed u1:failed u2:failed u3:ok
+    : > "${GREMION_ROOT}/worker-heals"
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    # the post-condition is the ledger: every row is ok, the one that was ok is untouched
+    [ "$(jq '[.[] | select(.status != "ok")] | length' "${GREMION_ROOT}/ledger.json")" = 0 ] || { cat "${GREMION_ROOT}/ledger.json"; return 1; }
+    [ "$(jq '[.[] | select(.reset == true)] | length' "${GREMION_ROOT}/ledger.json")" = 3 ]
+    [ "$(jq -r '.[] | select(.unit == "u3") | .reset // false' "${GREMION_ROOT}/ledger.json")" = false ]
+    [[ "$output" == *"2 of 2 org units repaired"* ]] || { echo "$output"; return 1; }
+    [[ "$output" == *"3 of 3 resources"* ]] || { echo "$output"; return 1; }
+    # order: matrix out of bootstrap mode, gremion-ui recreated, THEN the retry; the wire still ends ok
+    local m u r
+    m="$(grep -n 'compose bootstrap=unset :: .*force-recreate matrix' "$ORDER" | head -1 | cut -d: -f1)"
+    u="$(grep -n 'force-recreate gremion-ui' "$ORDER" | head -1 | cut -d: -f1)"
+    r="$(grep -n '^prov-reset$' "$ORDER" | head -1 | cut -d: -f1)"
+    [ -n "$m" ] && [ -n "$u" ] && [ -n "$r" ] || { echo "missing step: m=${m} u=${u} r=${r}"; return 1; }
+    [ "$m" -lt "$u" ] && [ "$u" -lt "$r" ] || { echo "order: matrix=${m} ui=${u} retry=${r}"; return 1; }
+    [[ "$output" == *"WIRE: ok ${SLUG}"* ]]
+}
+
+@test "wire: the retry runs in the customer's own kernel database as the state project's postgres user, touches only failed rows and carries no value inline" {
+    set_ledger u1:failed
+    : > "${GREMION_ROOT}/worker-heals"
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    local call sql="${GREMION_ROOT}/psql-sql.log"
+    call="$(grep '^docker exec -i c-pg psql' "$SHIM_LOG" | grep -- '-d t_0123456789abcdef0123456789abcdef__kernel' | head -1)"
+    [[ "$call" == *"-U gremion_pg"* ]] || { echo "no psql call in the customer's kernel database: $(grep psql "$SHIM_LOG")"; return 1; }
+    grep -q "UPDATE provisioning_resources" "$sql" || { cat "$sql"; return 1; }
+    grep -qE "WHERE status = 'failed'" "$sql" || { echo "the reset is not limited to failed rows"; return 1; }
+    # a ledger row is retried by going back to pending and due now, with its backoff and give-up clock cleared
+    grep -q "next_attempt_at = NULL" "$sql"
+    grep -q "first_failed_at = NULL" "$sql"
+}
+
+@test "wire: rows that fail again after the retry are reported as still failing (exit 0: the wiring itself is done), with the count and the way on" {
+    set_ledger u1:failed u2:failed
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"0 of 2 org units repaired"* ]] || { echo "$output"; return 1; }
+    [[ "$output" == *"2 resources are still failing"* ]] || { echo "$output"; return 1; }
+    [[ "$output" == *"WIRE: ok ${SLUG}"* ]]
+}
+
+@test "wire: rows the worker has not reached within the wait stay due and are reported as pending, never as repaired" {
+    set_ledger u1:failed
+    : > "${GREMION_ROOT}/worker-stuck"
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"0 of 1 org units repaired"* ]] || { echo "$output"; return 1; }
+    [[ "$output" == *"1 resource is still pending"* ]] || { echo "$output"; return 1; }
+    # it waited, polling, and then stopped
+    [ "$(grep -c '^prov-poll$' "$ORDER")" -ge 2 ]
+}
+
+@test "wire: the normal order is unaffected: with nothing failed the retry step touches no row, says so, and the wire ends ok" {
+    set_ledger u1:ok u2:ok
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"no failed unit resource to retry"* ]] || { echo "$output"; return 1; }
+    [ "$(jq '[.[] | select(.status != "ok")] | length' "${GREMION_ROOT}/ledger.json")" = 0 ]
+    if grep -q '^prov-poll$' "$ORDER"; then echo "it waited for a worker with nothing to retry"; return 1; fi
+    [[ "$output" == *"WIRE: ok ${SLUG}"* ]]
+}
+
+@test "wire: a customer with no ledger rows at all (nothing seeded yet, the normal order) wires, says so and is marked wired" {
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"no failed unit resource to retry"* ]] || { echo "$output"; return 1; }
+    jq -e '.servicesWiredAt != null' "${GREMION_ROOT}/tenant-row.json" >/dev/null || { cat "${GREMION_ROOT}/tenant-row.json"; return 1; }
+}
+
+@test "wire: the registry row is marked wired (the control panel reads it), merged into domain_profile: the keys it holds stay, and it is idempotent" {
+    relay_mail
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    jq -e '.residencyZone == "eu" and (.servicesWiredAt | type) == "string" and (.smtp | type) == "object"' "${GREMION_ROOT}/tenant-row.json" >/dev/null \
+        || { cat "${GREMION_ROOT}/tenant-row.json"; return 1; }
+    grep -qE "domain_profile *= *domain_profile *\|\| *jsonb_build_object\('servicesWiredAt'" "${GREMION_ROOT}/psql-sql.log" || { cat "${GREMION_ROOT}/psql-sql.log"; return 1; }
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [ "$(jq 'keys | length' "${GREMION_ROOT}/tenant-row.json")" = 3 ]
+}
+
+@test "wire: the marker is written once the wire has worked: a wire that fails before the end leaves the row unmarked" {
+    : > "${GREMION_ROOT}/ui-stale-token"
+    wire
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [ "$(jq -c . "${GREMION_ROOT}/tenant-row.json")" = '{"residencyZone":"eu"}' ] || { cat "${GREMION_ROOT}/tenant-row.json"; return 1; }
+    if grep -q '^prov-reset$' "$ORDER"; then echo "failed units were retried by a wire that did not finish"; return 1; fi
+}
+
+@test "wire: a registry without a row for the customer skips the marker and the retry with a warning, and does not fail the wire" {
+    : > "${GREMION_ROOT}/no-tenant-row"
+    set_ledger u1:failed
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"no registry row"* ]] || { echo "$output"; return 1; }
+    [ "$(jq -r '.[0].status' "${GREMION_ROOT}/ledger.json")" = failed ]
 }

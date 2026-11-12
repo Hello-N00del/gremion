@@ -112,15 +112,32 @@ curl -X POST https://<tenant host>/api/setup/test-smtp \
   -H "Origin: https://<tenant host>" \
   -H "Content-Type: application/json" \
   -H "Cookie: $IT_ADMIN_SESSION_COOKIE" \
-  -d '{"host":"<smtp host>","port":<smtp port>,"user":"","password":"",
-       "from_address":"noreply@localhost","to_address":"test@example.org"}'
+  -d '{"host":"<relay host>","port":587,"user":"","password":"",
+       "from_address":"noreply@example.org"}'
 ```
 
-`<smtp host>` and `<smtp port>` are the transport under test: `mailpit` and `1025`
-where the catcher runs (the `dev` profile), the relay's host and port otherwise.
+`host` and `port` name the transport under test. The endpoint accepts the ports
+25, 465, 587 and 2525 and a host that resolves to a public address, and
+`from_address` must be a full address (`name@domain.tld`); anything else is
+answered with `400`. The Settings form applies the same port and host check when
+it saves.
+
+The catcher is not such a target: `mailpit` resolves to a private address on the
+container network and listens on port 1025, and both are refused unless
+`gremion-ui` runs with `SMTP_TEST_ALLOW_PRIVATE=1` (set it in `.env`, then
+recreate the container; a restart does not read `.env` again). With it set,
+`"host":"mailpit","port":1025` is accepted and the message shows up in Mailpit.
+The rules are in [docs/security/test-smtp-guard.md](../security/test-smtp-guard.md).
+
+The test mail goes to the signed-in admin's own address; the endpoint takes no
+recipient. Leave `user` and `password` empty to authenticate with the tenant's
+stored relay login (the same one real sending uses; it is attached only when
+`host`/`port` name the relay the operator registered, never a host typed in
+Settings). Fill both to try other credentials instead; a password without a
+user is refused.
 
 A success returns `{"success":true,"data":{"success":true}}`; an SMTP failure
-returns `success:false` with the transport error message.
+returns `success:false` with an error text.
 
 Both ways need a signed-in IT-admin session on a tenant host. The local dev stack
 as shipped offers no browser session on port 3001

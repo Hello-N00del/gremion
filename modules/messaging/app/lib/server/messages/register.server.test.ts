@@ -26,6 +26,9 @@ vi.mock('./matrix-client', () => ({
 vi.mock('./synapse-admin', () => ({ getSynapseAdmin: vi.fn(), evictSynapseAdmin: vi.fn() }))
 vi.mock('./livekit-client', () => ({ evictLivekitSettings: vi.fn() }))
 vi.mock('./backend/service-client', () => ({ evictServiceMatrixTokenCache: vi.fn() }))
+vi.mock('$lib/server/keycloak-admin', () => ({
+  getKeycloakAdminClientForCurrentTenant: () => ({ listUsers: vi.fn() }),
+}))
 vi.mock('./provisioning/matrix-subsystem', () => ({ createMatrixSubsystem: vi.fn() }))
 
 // The cache key carries the tenant id. The provider runs inside the request's tenant scope in
@@ -41,6 +44,8 @@ vi.mock('$lib/server/tenant/context', async (importOriginal) => ({
 }))
 
 import { getDataProvider, getErasureHook } from '$lib/server/modules/runtime-registry'
+import * as runtimeRegistry from '$lib/server/modules/runtime-registry'
+import { getSenderNameResolver } from './sender-names'
 import {
   clearAllUnreadCache,
   forgetUnread,
@@ -253,5 +258,15 @@ describe('messaging Karenz participant registration (Module Karenz, Task 15)', (
     const { hasRetentionDeclaration, extractorsFor } = await import('$lib/server/module-karenz/retained/extractors')
     expect(hasRetentionDeclaration('messaging')).toBe(true)
     expect(extractorsFor('messaging')).toEqual([])
+  })
+})
+
+describe('sender-name resolver on the tenant eviction seam', () => {
+  it('is dropped when the tenant runtime is evicted', () => {
+    tenantIdRef.value = 'tenant-evict'
+    const first = getSenderNameResolver()
+    expect(getSenderNameResolver()).toBe(first)
+    runtimeRegistry.runTenantEvictHooks('tenant-evict')
+    expect(getSenderNameResolver()).not.toBe(first)
   })
 })

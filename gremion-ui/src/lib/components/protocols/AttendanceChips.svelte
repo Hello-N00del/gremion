@@ -11,7 +11,11 @@
     displayName?: string
   }
 
-  let { entries, isAdmin, protocolId }: {
+  // `entries` is bindable: the quorum line next to the chips is derived from the
+  // same list, so a saved click must reach the parent. A parent that does not
+  // bind still gets correct chips (the assignment is then local to this
+  // component).
+  let { entries = $bindable(), isAdmin, protocolId }: {
     entries: AttendanceEntry[]
     isAdmin: boolean
     protocolId: string
@@ -26,14 +30,25 @@
     absent: 'danger',
     excused: 'neutral',
   }
+  // German status words for the accessible name (screen readers and the
+  // browser's accessibility tree read this, not the glyph).
+  const STATUS_LABEL: Record<AttendanceEntry['status'], string> = {
+    present: 'anwesend',
+    absent: 'abwesend',
+    excused: 'entschuldigt',
+  }
 
   const SAVE_ERROR = 'Anwesenheit konnte nicht gespeichert werden — erneut versuchen.'
   let saveError = $state<string | null>(null)
+  // user_ids with a save in flight: a second click before the answer would
+  // compute its "next" status from the old one and cycle blind.
+  let pending = $state<Record<string, true>>({})
 
   async function cycle(entry: AttendanceEntry) {
-    if (!isAdmin) return
+    if (!isAdmin || pending[entry.user_id]) return
     const order: AttendanceEntry['status'][] = ['present', 'absent', 'excused']
     const next = order[(order.indexOf(entry.status) + 1) % order.length]
+    pending[entry.user_id] = true
     try {
       const res = await fetch(`/api/protocols/${protocolId}`, {
         method: 'PATCH',
@@ -46,21 +61,26 @@
         saveError = SAVE_ERROR
         return
       }
-      entry.status = next
+      // Replace, not mutate: `entries` may be plain load data that is not
+      // reactive, and a replaced list is what a bound parent observes.
+      entries = entries.map((e) => (e.user_id === entry.user_id ? { ...e, status: next } : e))
       saveError = null
     } catch {
       saveError = SAVE_ERROR
+    } finally {
+      delete pending[entry.user_id]
     }
   }
 </script>
 
 <div class="flex flex-wrap gap-2">
-  {#each entries as entry}
+  {#each entries as entry (entry.user_id)}
     <button
+      type="button"
       onclick={() => cycle(entry)}
       class="cursor-default"
       class:cursor-pointer={isAdmin}
-      aria-label="{entry.displayName ?? entry.user_id}: {entry.status}"
+      aria-label="{entry.displayName ?? entry.user_id}: {STATUS_LABEL[entry.status]}"
     >
       <Pill tone={TONE[entry.status]} icon={entry.status === 'excused' ? 'info' : undefined}>
         {entry.displayName ?? entry.user_id}

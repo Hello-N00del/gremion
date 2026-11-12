@@ -35,6 +35,7 @@
     onDelete: (id: string) => void
   } = $props()
 
+  const uid = $props.id()
   let editing = $state(false)
   let draft = $state({ ...resolution })
 
@@ -60,6 +61,28 @@
   // the editor's three, but API rows carry consent/support_threshold too.
   const ruleOf = (r: Resolution): MajorityRule => r.required_majority as MajorityRule
   const isAcclamation = $derived(resolution.adoption_mode === 'acclamation')
+
+  // A tally row whose counts are all zero (or empty) has not been voted on yet:
+  // a fresh row is created as 0/0/0 and the server computes "rejected" for it,
+  // which must not be shown as a decision (finding 7). Withdrawn rows keep their
+  // verdict, acclamation rows carry a declared result and no tally by design.
+  const tallyIsEmpty = (r: Resolution) =>
+    (Number(r.votes_yes ?? 0) || 0) + (Number(r.votes_no ?? 0) || 0) + (Number(r.votes_abstain ?? 0) || 0) === 0
+  const hasNoVote = $derived(
+    !isAcclamation && resolution.result !== 'withdrawn' && tallyIsEmpty(resolution),
+  )
+  // In the editor a cleared field (null or '') is a missing count, which the
+  // "Stimmen unvollständig" line below explains; only explicit zeros mean "not
+  // voted yet".
+  const isBlank = (v: unknown) => v === null || v === undefined || v === ''
+  const draftHasNoVote = $derived(
+    !isAcclamation &&
+      draft.result !== 'withdrawn' &&
+      !isBlank(draft.votes_yes) &&
+      !isBlank(draft.votes_no) &&
+      !isBlank(draft.votes_abstain) &&
+      tallyIsEmpty(draft),
+  )
 
   // INV-5: the result shown while editing is COMPUTED from the fixed rule +
   // tallies — never an admin's free hand. A withdrawn resolution keeps its
@@ -92,9 +115,20 @@
   <div class="rounded-md border p-3 space-y-2">
     <Input bind:value={draft.text} placeholder="Beschlusstext" />
     <div class="flex flex-wrap items-center gap-2">
-      <Input type="number" bind:value={draft.votes_yes} placeholder="Ja" class="w-16" />
-      <Input type="number" bind:value={draft.votes_no} placeholder="Nein" class="w-16" />
-      <Input type="number" bind:value={draft.votes_abstain} placeholder="Enthal." class="w-20" />
+      <!-- Visible labels (finding 7): the tally fields were announced only by
+           their placeholders, which vanish once a number is typed. -->
+      <div class="flex flex-col gap-0.5">
+        <label for="{uid}-yes" class="text-xs text-ink-muted">Ja</label>
+        <Input id="{uid}-yes" type="number" min="0" bind:value={draft.votes_yes} class="w-16" />
+      </div>
+      <div class="flex flex-col gap-0.5">
+        <label for="{uid}-no" class="text-xs text-ink-muted">Nein</label>
+        <Input id="{uid}-no" type="number" min="0" bind:value={draft.votes_no} class="w-16" />
+      </div>
+      <div class="flex flex-col gap-0.5">
+        <label for="{uid}-abstain" class="text-xs text-ink-muted">Enthaltung</label>
+        <Input id="{uid}-abstain" type="number" min="0" bind:value={draft.votes_abstain} class="w-24" />
+      </div>
       {#if resolution.id}
         <!-- INV-5: the decision rule is FIXED at creation; an existing resolution
              shows it locked, never as an editable selector. -->
@@ -110,7 +144,11 @@
       {/if}
     </div>
     <!-- INV-5: result is computed, not chosen. Shown read-only, tagged 'berechnet'. -->
-    {#if previewResult && isAcclamation && previewResult !== 'withdrawn'}
+    {#if draftHasNoVote}
+      <!-- Nothing counted yet: a computed "Abgelehnt" for 0/0/0 would read as a
+           decision that was never taken (finding 7). -->
+      <div class="text-sm text-ink-muted">Ergebnis: noch keine Abstimmung</div>
+    {:else if previewResult && isAcclamation && previewResult !== 'withdrawn'}
       <div class="text-sm {RESULT_CLASS[previewResult]}">
         Ergebnis: {RESULT_LABEL[previewResult]} <span class="text-xs text-ink-muted">(per Akklamation festgestellt)</span>
       </div>
@@ -144,6 +182,9 @@
         <span class="text-xs font-mono text-ink-muted mr-2">{resolution.global_nr}</span>
       {/if}
       <span>{resolution.text}</span>
+      {#if hasNoVote}
+        <div class="text-sm text-ink-muted">noch keine Abstimmung</div>
+      {:else}
       <div class="text-sm {RESULT_CLASS[resolution.result]}">
         {RESULT_LABEL[resolution.result]}
         {#if isAcclamation}
@@ -155,6 +196,7 @@
           <span class="text-xs text-ink-muted">· {RULE_LABEL[ruleOf(resolution)]}</span>
         {/if}
       </div>
+      {/if}
     </div>
     {#if isAdmin}
       <div class="flex gap-1 ml-2 shrink-0">
