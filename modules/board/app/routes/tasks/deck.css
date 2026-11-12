@@ -108,8 +108,13 @@
 }
 /* Foot: [Sitzung pill] · spacer · [due pill] [avatar]. The state chips (Sitzung,
  * due) are the shared icon-bearing <Pill> (pill-icon contract); the spacer
- * right-aligns the due pill + avatar (audit §1.B — adopt the shared layer). */
-.deck-card-foot { display: flex; align-items: center; gap: 7px; margin-top: 10px; }
+ * right-aligns the due pill + avatar (audit §1.B — adopt the shared layer).
+ * The row wraps: a column may be as narrow as 248 px, and a terminal column
+ * shows the longer "Erledigt" chip, so a card with every item does not fit one
+ * line there. Without the wrap the last item, the edit button, left the card
+ * (and, in the last column, the board's scroll area). A wrapped line keeps to
+ * the right edge like the first one. */
+.deck-card-foot { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 7px; margin-top: 10px; }
 .deck-foot-spacer { flex: 1; }
 .deck-card.editable { cursor: pointer; }
 .deck-edit {
