@@ -56,7 +56,8 @@ DS="env STACK=dev IMAGE_TAG=dev docker compose -p dev-state"
 DA="env STACK=dev COLOUR=blue IMAGE_TAG=dev docker compose -f docker-compose.app.yml -f docker-compose.app.dev.yml -p dev-app-blue"
 ```
 
-`$DS` is `DEV_STATE` (postgres, keycloak, legal, vector, mailpit, nats) and `$DA`
+`$DS` is `DEV_STATE` (postgres, governance-postgres, nats, keycloak, legal, vector,
+mailpit) and `$DA`
 is `DEV_APP` (gremion-ui, gremion-public, control-panel, kernel-api). On a
 distribution host use `docker compose --env-file /opt/gremion/etc/env/<project>.env`
 instead ([ops/runbook/README.md](ops/runbook/README.md)).
@@ -267,8 +268,9 @@ below), and `.env`'s `KEYCLOAK_REALM` must name that same realm — it is what t
 dev/ops scripts hand the Admin API. `make validate-env` fails when the two
 disagree (`scripts/check-realm-env.sh`); before that guard existed the mismatch
 was silent, and `configure-keycloak-clients.sh` would reset the client secrets
-of a realm nobody logs into. The realm carries two clients: **`gremion-ui`** (the app, Auth.js)
-and **`gremion-admin`** (the admin REST service account).
+of a realm nobody logs into. The realm carries five clients. The app itself uses two,
+**`gremion-ui`** (Auth.js) and **`gremion-admin`** (the admin REST service account);
+the base realm also carries `synapse`, `nextcloud` and `gremion-mobile`.
 B-01: **no realm is imported at boot.** The realm is COMPOSED from
 `docker/keycloak/realm-export.base.json` by `buildTenantRealmDoc` and created
 over the Admin API at tenant-create time, with the OIDC client secrets taken
@@ -327,12 +329,15 @@ curl -s http://localhost:8082/auth/realms/<realm>/.well-known/openid-configurati
 Usually a redirect-URI or origin mismatch.
 
 1. Keycloak admin → the tenant's realm → Clients → `gremion-ui` → **Valid Redirect URIs**.
-   For local dev these must cover `http://localhost:3001/*`.
+   They must cover the origin the browser logs in from, which is the tenant's host.
+   The local stack as shipped offers no browser login on port 3001
+   ([below](#every-request-to-port-3001-answers-403-locally)).
 2. Confirm the tenant's registry issuer (the per-tenant `issuer` the app reads;
    gremion-ui no longer reads `AUTH_KEYCLOAK_ISSUER`) matches the
    browser-visible issuer (`http://localhost:8082/auth/realms/<realm>` in dev).
-3. For local dev, `make dev-configure` patches `gremion-ui/.env.local` and the
-   Keycloak redirect URIs for you.
+3. For the Vite dev server, `make dev-configure` writes `gremion-ui/.env.local`
+   and adds its callback (`http://localhost:4001/auth/callback/keycloak`) to the
+   client's redirect URIs ([DEVELOPMENT.md](DEVELOPMENT.md#gremion-ui-dev-server-hot-reload)).
 
 > **Dev vs prod TLS:** dev runs Keycloak in `start-dev` over plain HTTP, but
 > B-01 removed the `KC_REALM_SSL_REQUIRED` knob together with the boot import,
@@ -448,8 +453,8 @@ until `gremion-tenant reconcile <slug> --apply --reason <text>`
 
 ## Email (Mailpit)
 
-By default all mail goes to the **Mailpit** catcher (`host=mailpit port=1025`,
-no auth, TLS off) — nothing leaves the host. Read trapped mail at
+The `dev` profile runs the **Mailpit** catcher (`mailpit:1025`, no auth, TLS
+off); what it receives never leaves the host. Read trapped mail at
 http://localhost:8026.
 
 ```bash
@@ -457,10 +462,12 @@ make ps
 make logs SERVICE=mailpit
 ```
 
-If a feature reports a send failure but no mail appears in Mailpit, confirm the
-producer is pointed at `mailpit:1025` (the compose default) and that Mailpit is
-healthy. To switch to a real relay, see
-[runbooks/email-smtp.md](runbooks/email-smtp.md) — it is a pure `.env` change.
+No compose default points the app at the catcher. If a feature reports a send
+failure and no mail appears in Mailpit, confirm that the tenant's Settings →
+E-Mail name `mailpit` and port `1025` and are marked configured, that
+`gremion-ui` runs with `SMTP_TEST_ALLOW_PRIVATE=1` (without it the SMTP target
+guard refuses that port and a private address), and that Mailpit is healthy. To
+switch to a real relay, see [runbooks/email-smtp.md](runbooks/email-smtp.md).
 
 ---
 

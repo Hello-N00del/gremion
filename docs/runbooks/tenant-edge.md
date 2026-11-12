@@ -56,8 +56,9 @@ browser ──TLS──> traefik:443 (the host's edge address) ──> routers
 ## How a tenant host resolves to a tenant
 
 Tenant selection is performed in `gremion-ui` by the resolver
-(`gremion-ui/src/lib/server/tenant/resolve.ts`), which runs as element 0 of the
-handle sequence — before auth:
+(`gremion-ui/src/lib/server/tenant/resolve.ts`), which runs in the handle sequence
+after the correlation, CSP, request-path, body-size and CSRF-origin guards and
+before auth:
 
 1. **The WHOLE edge-forwarded host is the key.** The resolver normalises the
    trusted `X-Forwarded-Host` (`normaliseHost` in `tenant/host.ts`: lowercase,
@@ -124,8 +125,11 @@ A host reaches a tenant only when BOTH exist:
 
 The compose files carry only apex routers (`keycloak`, `keycloak-admin`,
 `fallback`, plus the pilot services' `matrix` and `livekit`), each literal on
-`${PLATFORM_DOMAIN}`; the `gremion-ui` routers left with the app tier
-(TASK-040). A request for any other host gets Traefik's own no-router 404
+`${PLATFORM_DOMAIN}`, and two anchor routers on reserved `.invalid` hosts
+(`collabora-anchor` on the loopback-only `internaltest` entrypoint and
+`edge-labels` on the unpublished `ping` entrypoint), which answer nothing from
+outside and only keep Traefik from generating a default router for their
+containers; the `gremion-ui` routers left with the app tier (TASK-040). A request for any other host gets Traefik's own no-router 404
 (visible in Traefik's access log with an empty router name). `make lint-edge-host`
 (`scripts/check-edge-host-model.mjs`) fails the tree if a `HostRegexp` leg, the
 old wildcard env key, the apex default-tenant injection or the leftmost-label

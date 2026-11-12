@@ -89,7 +89,7 @@ State project, started without a profile: `postgres`, `governance-postgres`,
 | `keycloak` | OIDC/SSO identity provider; starts with `master` only and no realm of ours (B-01: the boot-time realm import is deleted), relative path `/auth` |
 | `legal` | Static legal/portal pages (Impressum, GDPR) served by a non-root nginx |
 | `vector` | Log pipeline: tails Traefik access logs, pseudonymises IPs, enforces retention |
-| `mailpit` | Dev-only SMTP catcher (`profiles: [dev]`, `:1025`); flipping to a real relay is a pure `.env` change — see [`docs/runbooks/email-smtp.md`](runbooks/email-smtp.md) |
+| `mailpit` | Dev-only SMTP catcher (`profiles: [dev]`, `:1025`); a tenant sends to it, or to a real relay, through its own SMTP settings — see [`docs/runbooks/email-smtp.md`](runbooks/email-smtp.md) |
 | `traefik`, `docker-socket-proxy` | The edge, under `profiles: [production]` |
 | `pgbouncer`, `fallback` | Added by `docker-compose.prod.yml` (`fallback` under `profiles: [production]`) |
 | `matrix` (Synapse), `nextcloud` with `nextcloud-postgres` and `nextcloud-redis`, `collabora`, `livekit`, `element-call` | The collaboration services behind the `messaging`, `nextcloud`, `collabora` and `video` profiles |
@@ -662,4 +662,4 @@ the standing design choices this page describes.
 | Codegen'd manifest registry | Adding/removing a module is a file + codegen step, not a hand-edited array — the carve is a clean subtraction |
 | Request-scoped per-tenant DB pool | Fail-closed tenancy: a missing tenant context throws instead of silently reading tenant #1 |
 | Per-tenant Host routing (Traefik) | Each tenant on its own host preserves the CSRF origin check and lets the resolver select the tenant from the inbound Host header |
-| Mailpit for local mail | Dev-only (`profiles: [dev]`): traps outbound mail; switching to a real relay is a pure `.env` change, no compose edit |
+| Mailpit for local mail | Dev-only (`profiles: [dev]`): traps the mail a tenant's SMTP settings send to it; switching to a real relay is a change of those settings and the tenant's registry credential, no compose edit |

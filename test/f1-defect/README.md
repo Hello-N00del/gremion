@@ -27,7 +27,8 @@ pnpm --dir gremion-ui exec vitest run --config ../test/f1-defect/vitest.config.t
 
 Result when written (2026-09-24): **2 test files, 4 tests, all GREEN** — both
 fixes (item 1 in that session; 715c829/008372e already on the branch) were in
-place. Re-run on 2026-11-11 against fb46f89a: 2 test files, 4 tests, all GREEN.
+place. That figure is a record of that run, not of the current tree; run the
+command above to check it.
 
 ## RED-before-the-fix proof
 

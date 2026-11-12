@@ -74,14 +74,19 @@ renders with `COMPOSE_PROFILES=production`, so no catcher exists there:
 - **Web UI** is mapped to `http://localhost:8026` by
   `docker-compose.override.yml` (bound to `127.0.0.1` / `[::1]` only).
 
-A tenant whose SMTP config points at `host=mailpit port=1025` with no auth
+Nothing sends to the catcher by default: a tenant's SMTP settings start out
+unconfigured, and no compose default names a mail host. A tenant whose SMTP
+config points at `host=mailpit port=1025` with no auth
 sends to the catcher with **zero** real credentials. Captured mail persists
 across restarts in the `mailpit-data` named volume (project-scoped, so
 `dev-state_mailpit-data` for `make up`).
 
 To point a tenant at the catcher, set host `mailpit`, port `1025` in
 **Settings → E-Mail** (leave the test user/password blank), then mark SMTP
-configured. A tenant with no registry override takes its host/port/from straight from its
+configured. `gremion-ui` has to run with `SMTP_TEST_ALLOW_PRIVATE=1` for this:
+without it the SMTP target guard refuses port 1025 and a private address when
+the settings are saved, in the test below and on every send
+([docs/security/test-smtp-guard.md](../security/test-smtp-guard.md)). A tenant with no registry override takes its host/port/from straight from its
 `config.json` and `auth` is undefined — byte-identical to the auth-less Mailpit
 transport.
 
@@ -95,9 +100,11 @@ transport.
 
 ## Sending a test mail
 
-**Via the UI (gremion-ui):** Settings → E-Mail → set host `mailpit`, port `1025`,
-an Absender-Adresse, then click **Test-E-Mail senden**. The message shows up in
-Mailpit at `http://localhost:8026`.
+**Via the UI (gremion-ui):** Settings → E-Mail → set the SMTP host and port and
+an Absender-Adresse, then click **Test-E-Mail senden**. The test mail goes to
+your own address; with the catcher as the target it shows up in Mailpit at
+`http://localhost:8026`. The button calls the endpoint below, so the same rules
+apply.
 
 **Via the test-smtp endpoint** (TASK-042 Q1: a signed-in session with the
 IT-admin role; there is no setup token any more). The endpoint is rate-limited,

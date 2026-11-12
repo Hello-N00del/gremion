@@ -1,20 +1,27 @@
 # Environment Variables Reference
 
-Complete reference for the environment variables used by the Gremion governance
-kernel. Copy `.env.example` to `.env` and configure these values for your
-deployment.
+Reference for the keys of the local `.env` (template: [`.env.example`](../.env.example))
+and for the mail-transport and pilot-service keys of a host's env files. Do not
+copy `.env.example` to `.env` by hand for a local stack: `./scripts/setup.sh`
+writes the file and generates every secret, and it skips that step when the file
+already exists ([LOCAL_TESTING.md](LOCAL_TESTING.md#quick-start)). A production
+host does not use this `.env` at all; its env files are rendered by
+`gremion-init-secrets` from `infra/host/templates/env/`.
 
 This is the operational/technical layer. For the kernel's vision, architecture,
 domain model, and governance charter, see [about-gremion.md](about-gremion.md).
 
-> **Scope.** Gremion is the governance-only kernel. It ships exactly seven
-> default services — `postgres`, `keycloak`, `gremion-ui`, `gremion-public`,
-> `legal`, `vector`, `mailpit` — plus `traefik` + `docker-socket-proxy` (and,
-> from `docker-compose.prod.yml`, `pgbouncer` + `fallback`) in
-> the production profile. Feature modules (elections, newsletter, calendar,
-> files, messages, board, users, finance, content, vault,
-> handover) live in their own repositories — one per module — and are **not**
-> part of the kernel, so none of their environment variables appear here.
+> **Scope.** `make up` runs two compose projects. The state project runs seven
+> services — `postgres`, `governance-postgres`, `nats`, `keycloak`, `legal`,
+> `vector` and, under the `dev` profile, `mailpit` — and the app project four:
+> `gremion-ui`, `gremion-public`, `control-panel` and `kernel-api`. The
+> `production` profile adds `traefik` + `docker-socket-proxy`, and
+> `docker-compose.prod.yml` adds `pgbouncer` + `fallback`. The feature modules
+> (board, calendar, content, elections, files, finance, handover, messaging,
+> publishing, vault, votes) live under `modules/` in this tree
+> ([modules.md](modules.md)); their services start only under their compose
+> profiles, and the keys those need on a host are in
+> [Pilot services](#pilot-services-host-install) below.
 
 > **Note on names.** The admin shell app is `gremion-ui` (SvelteKit / Auth.js)
 > and the public portal app is `gremion-public`. These names appear throughout
@@ -28,10 +35,10 @@ domain model, and governance charter, see [about-gremion.md](about-gremion.md).
   secrets by `./scripts/setup.sh`.
 - To generate a secret by hand: `openssl rand -hex 32` (or
   `openssl rand -base64 32`).
-- Several values are RS256/JWT/OIDC secrets that `buildTenantRealmDoc`
-  substitutes into the composed per-tenant realm document at tenant-create time
-  (B-01: nothing is substituted at Keycloak boot any more) — provisioning throws
-  if a required value is empty.
+- The OIDC client secrets are substituted by `buildTenantRealmDoc` into the
+  composed per-tenant realm document at tenant-create time (nothing is
+  substituted at Keycloak boot) — provisioning throws if a required value is
+  empty.
 
 ---
 
@@ -42,7 +49,9 @@ domain model, and governance charter, see [about-gremion.md](about-gremion.md).
 - **Type:** String (domain name)
 - **Default:** `localhost`
 - **Required:** Yes
-- **Used by:** every service for URL routing and OIDC redirects.
+- **Used by:** `scripts/setup.sh` (which writes it) and the dev/ops scripts. No
+  compose file reads `DOMAIN` itself: `.env.example` binds `PLATFORM_DOMAIN` to
+  it, and that is the key the compose files read.
 
 ```bash
 # Local development
@@ -57,10 +66,20 @@ DOMAIN=gremion.example.org
 > only the apex, which binds no tenant (TRD-075). See
 > [runbooks/tenant-edge.md](runbooks/tenant-edge.md) STEP 0a.
 
+### PLATFORM_DOMAIN
+
+- **Type:** String (domain name)
+- **Default:** `${DOMAIN}` in `.env.example`; a host's env files carry it directly.
+- **Required:** Yes. `docker-compose.app.yml` and `docker-compose.prod.yml`
+  refuse to render without it.
+- **Used by:** the apex routers of the state project, and `gremion-ui` and
+  `gremion-public` (as `DOMAIN`, `PUBLIC_MAIN_APP_URL` and the default of
+  `PUBLIC_BASE_URL`). Also the platform mail transport, see below.
+
 ### TENANT_SECRETS_DIR
 
 - **Type:** String (host path)
-- **Default:** `./secrets/tenants`
+- **Default:** `./secrets/tenants` (the checkout ships the directory)
 - **Used by:** `gremion-ui`, bind-mounted read-only at `/run/secrets/tenants`.
   Per-tenant secret files written by the provisioner appear in the running
   container live, no recreate needed.
@@ -70,8 +89,7 @@ DOMAIN=gremion.example.org
   (`TENANT_PROVISIONER_SECRET_FILE`) and other infra secrets to the tenant
   data-plane container. `pnpm -C gremion-ui check`
   (`scripts/check-tenant-secrets-dir.mjs`) fails the build if the provisioner
-  credential resolves inside `TENANT_SECRETS_DIR`. Create it before `up`:
-  `mkdir -p secrets/tenants`.
+  credential resolves inside `TENANT_SECRETS_DIR`.
 
 ### TENANT_PROXY_SHARED_SECRET
 
@@ -97,15 +115,52 @@ DOMAIN=gremion.example.org
 - **Used by:** the per-tenant rate limit at the resolution seam
   (`gremion-ui/src/lib/server/tenant/rate-limit.ts`). `RPS` = sustained
   tokens/second per tenant; `BURST` = bucket capacity (defaults to `ceil(RPS)`
-  when unset).
+  when unset). `docker-compose.app.yml` does not pass either key to the
+  container.
+
+---
+
+## Compose projects (pooled stack)
+
+Both projects refuse to render while one of their required keys is unset or
+empty (`x-required-env` in `docker-compose.yml` and `docker-compose.app.yml`).
+`.env.example` carries workstation values for all of them.
+
+| Variable | `.env.example` | Notes |
+|----------|----------------|-------|
+| `STACK` | `gremion` | Stack name; prefixes the external networks and volumes (`${STACK}_state`, `${STACK}_edge`). Required by every compose file. `make up` passes `STACK=dev` on the command line |
+| `COLOUR` | (not in `.env`) | The app colour. Required by `docker-compose.app.yml`; `make up` passes `COLOUR=blue` |
+| `COMPOSE_PROFILES` | `dev` | Profiles of the state project. `dev` starts `mailpit`; a host renders with `production` |
+| `IMAGE_TAG` | `dev` | Tag of the first-party `gremion-*` images. `make up` / `make build` pass `dev` |
+| `APP_V4_SUBNET` / `APP_V6_SUBNET` | `10.91.2.0/24` / `fd5a:192::/64` | Subnets of the app project's own network. Required by `docker-compose.app.yml` |
+| `GREMION_ROOT` | `/opt/gremion` | The root whose `etc/edge` directory is Traefik's read-only router directory. Required by `docker-compose.yml` |
+| `GREMION_MIGRATION_DUMP_DIR` | `/opt/gremion/migration-dumps` | Pre-migration dump directory bind-mounted into `kernel-api-migrate`. Required by `docker-compose.app.yml` |
+
+### Edge (Traefik, production profile)
+
+Read by `docker-compose.yml`. Traefik itself starts only under the `production`
+profile, but the keys marked required are checked on every render.
+
+| Variable | `.env.example` | Notes |
+|----------|----------------|-------|
+| `ACME_EMAIL` | (empty) | ACME account address; needed whenever `TRAEFIK_CERT_RESOLVER` is non-empty |
+| `TRAEFIK_CERT_RESOLVER` | `le-http` | Certificate resolver the public routers name. Empty only where TLS terminates in front of Traefik |
+| `ACME_CA_SERVER` | `https://acme.invalid/directory` | ACME directory. Required. The template value is a reserved `.invalid` name, so a copied template can place no real order |
+| `EDGE_V4_SUBNET` / `EDGE_V6_SUBNET` | `10.90.0.0/24` / `fd5a:90::/64` | The pinned `${STACK}_edge` subnets, trusted for forwarded headers. Required |
+| `EDGE_BIND_IP` / `EDGE_BIND_IP6` | `127.0.0.1` / `::1` | Addresses the edge ports publish on. Required, so an empty value can never publish on `0.0.0.0` |
+| `EDGE_HTTP_PORT` / `EDGE_HTTPS_PORT` | `80` / `443` | Published edge ports. Required |
+| `TRAEFIK_API_PORT` / `INTERNALTEST_PORT` | `8080` / `8081` | The Traefik API and the `internaltest` entrypoint, published on `127.0.0.1` only. Required |
 
 ---
 
 ## PostgreSQL
 
-One PostgreSQL instance backs Keycloak, the governance application database,
-and the tenancy control plane. `docker/postgres/init-databases.sh` creates the
-extra databases and roles on first init.
+The `postgres` server backs Keycloak, the governance application database,
+the tenancy control plane and the platform database.
+`docker/postgres/init-databases.sh` creates the Keycloak, application and
+control databases and their roles on first init. The governance service has its
+own server, `governance-postgres`, and each module database server starts under
+its module's compose profile.
 
 ### POSTGRES_USER / POSTGRES_PASSWORD
 
@@ -131,8 +186,8 @@ resolutions, the public portal) lives in this database.
 | `GREMION_DB_PASSWORD` | (`CHANGE_ME_gremion_db`) | `openssl rand -hex 32` |
 | `GREMION_DB_NAME` | `gremion` | Application DB name |
 
-`gremion-ui` derives its `DATABASE_URL` from these:
-`postgresql://${GREMION_DB_USER}:${GREMION_DB_PASSWORD}@postgres:5432/${GREMION_DB_NAME}`.
+The compose files build `gremion-ui`'s `DATABASE_URL` from these, see
+[Database URLs](#database-urls).
 
 ### Control-plane database (tenancy)
 
@@ -146,14 +201,28 @@ init only**.
 | `CONTROL_DB_PASSWORD` | (`CHANGE_ME_control_db`) | `openssl rand -hex 32` |
 | `CONTROL_DB_NAME` | `control` | Control-plane DB name |
 
-`gremion-ui` derives `CONTROL_DATABASE_URL` from these. **`gremion-ui` connects
-directly to `postgres:5432` for the control plane** — never through the
-production PgBouncer overlay (the registry is the direct `+ control` term in the
-connection budget; reads are cached). Without it, boot's
-`runControlMigrations()` fails and every request 503s. To rotate:
-`ALTER ROLE control WITH PASSWORD '<new>';`, update the value, then
-`up -d --force-recreate gremion-ui postgres` (a plain `restart` will **not**
-reload `.env`).
+The compose file builds `CONTROL_DATABASE_URL` from these. **`gremion-ui` connects
+directly to `postgres-<stack>:5432` for the control plane** — never through
+PgBouncer (the registry is the direct `+ control` term in the connection budget;
+reads are cached). Without it, boot's `runControlMigrations()` fails and every
+request 503s. To rotate: `ALTER ROLE control WITH PASSWORD '<new>';`, update the
+value, then recreate `gremion-ui` with `up -d --force-recreate` (a plain
+`restart` will **not** reload `.env`).
+
+### Platform database and service roles
+
+The provisioning ledger and module catalogue live in `gremion_platform`. It is
+created by `gremion-tenant init`, never by `init-databases.sh`; the roles below
+are made by the same init. `setup.sh` generates every password in this table.
+
+| Variable | `.env.example` | Notes |
+|----------|----------------|-------|
+| `PLATFORM_DB_USER` / `PLATFORM_DB_PASSWORD` | `gremion_platform` / (`CHANGE_ME_platform_db`) | Owner of the platform database; `tenant-create` connects as it, directly |
+| `PANEL_DB_USER` / `PANEL_DB_PASSWORD` | `gremion_panel` / (`CHANGE_ME_panel_db`) | The control panel's read-only role |
+| `KERNEL_API_DB_USER` / `KERNEL_API_DB_PASSWORD` | `gremion_kernel_api` / (`CHANGE_ME_kernel_api_db`) | The kernel API's read-only role |
+| `UI_OAC_DB_PASSWORD` | (`CHANGE_ME_ui_oac_db`) | Password of `gremion_ui_oac`, the access-record reader role. Required by `docker-compose.app.yml`; `gremion-ui` reads it as `PLATFORM_ACCESS_DATABASE_URL` |
+| `UI_MODULES_DB_PASSWORD` | (`CHANGE_ME_ui_modules_db`) | Password of `gremion_ui_modules`, the council module-switch role. Optional: when empty, `gremion-ui` gets no `PLATFORM_MODULES_DATABASE_URL` |
+| `GOVERNANCE_PG_USER` / `GOVERNANCE_PG_PASSWORD` | `governance` / (`CHANGE_ME_governance_pg`) | Superuser of `governance-postgres`. The server starts under every profile, so the password must be set |
 
 ### Public-portal reader role
 
@@ -161,8 +230,8 @@ Read-only role used by the `gremion-public` container.
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `PUBLIC_DB_PASSWORD` | (`CHANGE_ME_public_reader`) | `openssl rand -hex 32`; role created by `init-databases.sh` |
-| `GREMION_PUBLIC_DB_URL` | `postgresql://gremion_public_reader:<pw>@postgres:5432/gremion` | Read-only DSN for `gremion-public` |
+| `PUBLIC_DB_PASSWORD` | (`CHANGE_ME_public_reader`) | `openssl rand -hex 32`; role created by `init-databases.sh`, which refuses to run without it. `docker-compose.app.yml` builds the container's `GREMION_PUBLIC_DB_URL` from it |
+| `GREMION_PUBLIC_DB_URL` | `postgresql://gremion_public_reader:<pw>@postgres:5432/gremion` | The `.env` line carries the same password (`setup.sh` fills both). The compose files do not read this line; they build the container's value themselves |
 
 ### Keycloak database
 
@@ -192,7 +261,7 @@ Central identity provider (OIDC/SSO). Admin UI:
 |----------|---------|-------|
 | `KEYCLOAK_REALM` | `gremion` | The realm a dev/ops script addresses over the Keycloak Admin API |
 
-B-01: no realm is imported at boot. Every realm is created by tenant-create and
+No realm is created at boot. Every realm is created by tenant-create and
 named after the tenant slug, so a script that talks to the Admin API has to be
 told which realm it means — `scripts/configure-keycloak-clients.sh` treats an
 unset value as fatal rather than defaulting.
@@ -210,9 +279,9 @@ then the only source of truth) and when the issuer is not Keycloak-shaped.
 
 - **Type:** String (comma-separated CIDRs)
 - **Default:** `127.0.0.1/32` (no external request matches)
-- **Used by:** the `kc-admin-allowlist` IPAllowList middleware that protects the
-  Keycloak admin console + Admin REST API at `https://${DOMAIN}/auth/admin` in
-  production.
+- **Used by:** the `kc-admin-allowlist` IPAllowList middleware
+  (`docker-compose.prod.yml`) that protects the Keycloak admin console + Admin
+  REST API at `https://${PLATFORM_DOMAIN}/auth/admin` in production.
 - **Impact:** With the default, operators reach the console only via
   `docker compose exec keycloak /opt/keycloak/bin/kcadm.sh ...` or
   `kubectl port-forward`. Set a CIDR list to allow bastion/VPN access, e.g.
@@ -220,10 +289,9 @@ then the only source of truth) and when the issuer is not Keycloak-shaped.
 
 ### Retired: `KC_REALM_SSL_REQUIRED`
 
-B-01 deleted this knob from `docker-compose.yml` and from the dev override
-along with the boot import that consumed it. A realm's `sslRequired` is no
-longer an environment variable at all: `buildTenantRealmDoc` pins it to `all`
-on every realm it composes
+B-01 deleted this knob from `docker-compose.yml` and from the dev override. A
+realm's `sslRequired` is no longer an environment variable at all:
+`buildTenantRealmDoc` pins it to `all` on every realm it composes
 (`gremion-ui/src/lib/server/tenant/provisioner/realm-doc.ts`). The internal
 HTTPS listener (`KC_HTTPS_*` + cert) is unchanged and still lives in
 `docker-compose.prod.yml`.
@@ -238,21 +306,22 @@ HTTPS listener (`KC_HTTPS_*` + cert) is unchanged and still lives in
 ### OIDC client secrets
 
 Substituted into the composed per-tenant realm document at tenant-create time by
-`buildTenantRealmDoc` (B-01: not at container start). Both **must** be set —
+`buildTenantRealmDoc` (not at container start). Both **must** be set —
 provisioning throws if either is empty. Generated by `scripts/setup.sh`.
 
 | Variable | Used for |
 |----------|----------|
 | `GREMION_UI_OIDC_CLIENT_SECRET` | The `gremion-ui` (app shell) OIDC client |
-| `GREMION_ADMIN_OIDC_CLIENT_SECRET` | The admin OIDC client |
+| `GREMION_ADMIN_OIDC_CLIENT_SECRET` | The `gremion-admin` (admin REST) client |
 
-### Admin REST / JWT
+### Admin REST
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `KEYCLOAK_ADMIN_CLIENT_SECRET` | (empty) | Service-account secret `gremion-ui` uses for Keycloak Admin API calls (governance committee provisioning, step-up `hasOtpCredential`) |
-| `KEYCLOAK_JWT_PUBLIC_KEY` | (empty) | RS256 public key (PEM, single line with `\n`), filled after first start |
-| `KEYCLOAK_ISSUER_URL` | `http://keycloak:8080/auth/realms/<realm>` | Issuer URL used by the kernel for token validation |
+| `KEYCLOAK_ADMIN_CLIENT_SECRET` | (empty in the template) | Service-account secret `gremion-ui` uses for Keycloak Admin API calls (governance committee provisioning, step-up `hasOtpCredential`). `setup.sh` sets it to the same value as `GREMION_ADMIN_OIDC_CLIENT_SECRET` |
+
+`.env.example` also carries `KEYCLOAK_JWT_PUBLIC_KEY` and `KEYCLOAK_ISSUER_URL`.
+No compose file, script or source file in this tree reads either.
 
 ---
 
@@ -266,34 +335,33 @@ The SvelteKit / Auth.js admin shell that hosts the governance domain.
 |----------|---------|-------|
 | `AUTH_SECRET` | (empty; set by `setup.sh`) | Auth.js signing secret (`openssl rand -hex 32`) |
 | `AUTH_KEYCLOAK_ID` | `gremion-ui` | OIDC client id |
-| `AUTH_KEYCLOAK_SECRET` | (empty) | OIDC client secret — set after the realm is created by tenant-create |
-| `AUTH_KEYCLOAK_ISSUER` | `http://keycloak:8080/auth/realms/<realm>` | Dev tooling only (the realm-consistency check reads it). gremion-ui does not read it and the app compose does not pass it: the issuer comes from the tenant row |
-| `PUBLIC_BASE_URL` | `http://localhost:3000` | Public base URL of the app shell |
+| `AUTH_KEYCLOAK_SECRET` | (empty in the template) | OIDC client secret. `setup.sh` sets it to the same value as `GREMION_UI_OIDC_CLIENT_SECRET` |
+| `AUTH_KEYCLOAK_ISSUER` | `http://keycloak:8080/auth/realms/gremion` | Dev tooling only (the realm-consistency check reads it). gremion-ui does not read it and the app compose does not pass it: the issuer comes from the tenant row |
+| `PUBLIC_BASE_URL` | `http://localhost:3000` in `.env.example` | Public base URL of the app shell. Unset, `docker-compose.app.yml` falls back to `https://` + `PILOT_TENANT_HOST`, else `PLATFORM_DOMAIN`; the dev layer sets `http://localhost:3001` |
 
 The compose file also sets server-only OIDC values that are **not** read from
 `.env`: `AUTH_KEYCLOAK_INTERNAL` and `KEYCLOAK_ADMIN_URL` point at the internal
-TLS listener `https://keycloak:8443` in production (the dev override drops these
-to `http://keycloak:8080`), and `AUTH_TRUST_HOST=1`.
+TLS listener `https://keycloak:8443` (the dev layer `docker-compose.app.dev.yml`
+drops these to `http://keycloak:8080`), and `AUTH_TRUST_HOST=1`.
 
 ### STEPUP_FRESHNESS_SECONDS
 
 - **Type:** Integer (seconds)
 - **Default:** `300`
 - **Used by:** the generic LoA/ACR step-up freshness window — how long a fresh
-  LoA-2 elevation stays valid before a re-prompt. The kernel keeps the Keycloak
-  step-up/ACR plumbing; the module-specific approval-enforcement flag left with
-  the relevant feature module.
+  LoA-2 elevation stays valid before a re-prompt.
 
 ### Database URLs
 
 These are constructed by the compose files from the PostgreSQL variables above;
-you normally do not set them directly in `.env`:
+you do not set them in `.env`:
 
-- `DATABASE_URL` → the application (governance) DB. In production the overlay
-  re-points this through PgBouncer (`pgbouncer:6432`); dev/CI use the direct
-  `postgres:5432` URL.
+- `DATABASE_URL` → the application (governance) DB. `docker-compose.app.yml`
+  points it at PgBouncer (`pgbouncer-<stack>:6432`); the dev layer
+  `docker-compose.app.dev.yml` re-points it to `postgres-<stack>:5432`, because
+  the dev stack runs no PgBouncer.
 - `CONTROL_DATABASE_URL` → the control-plane DB, always direct to
-  `postgres:5432` (never PgBouncer). The prod overlay deliberately does **not**
+  `postgres-<stack>:5432` (never PgBouncer). The dev layer does **not**
   override this key.
 
 ### Internal server-to-server calls
@@ -301,7 +369,7 @@ you normally do not set them directly in `.env`:
 | Variable | Default | Notes |
 |----------|---------|-------|
 | `INTERNAL_PUSH_SECRET` | (`CHANGE_ME_internal_push_secret`) | Shared secret the server-only `internalFetch` helper compares (constant-time) on the `Authorization: Bearer` header for same-app internal calls |
-| `INTERNAL_BASE_URL` | `http://gremion-ui:3000` | The in-container origin `internalFetch`'s server-to-server hop targets. **Load-bearing for tenant isolation:** must be the in-container service name/port, never the public apex — otherwise the apex middleware rewrites `X-Forwarded-Host` and a second tenant's self-call resolves the **default** tenant's data plane. Leave as-is unless you change the service name/port |
+| `INTERNAL_BASE_URL` | `http://gremion-ui:3000` in `.env.example` | The in-container origin `internalFetch`'s server-to-server hop targets. `docker-compose.app.yml` sets the container's value itself (`http://gremion-ui-<colour>:3000`) and does not read the `.env` line. **Load-bearing for tenant isolation:** it must be the in-container service name/port, never the public apex — the `X-Forwarded-Host` the helper stamps is the whole tenant selector, and an edge that restated it would aim the self-call at another tenant's data plane |
 
 ### Seeding (test fixtures)
 
@@ -314,16 +382,24 @@ you normally do not set them directly in `.env`:
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `TRACE_EXPORTER` | `log` | Trace exporter selection for the `TracerPort` (`@gremion/ports`) |
+| `TRACE_EXPORTER` | `log` | Trace exporter selection for the `TracerPort` (`@gremion/ports`). Not in `.env.example`; `docker-compose.app.yml` defaults it |
+
+### Source offer
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `PUBLIC_SOURCE_URL` | unset (both shells fall back to upstream) | The AGPL-3.0 section 13 Corresponding Source link both app shells render in their footer. Set it to the repository holding your version if you modified Gremion. Passed to `gremion-ui` and `gremion-public` by `docker-compose.app.yml` |
 
 ---
 
 ## Public Portal (gremion-public)
 
-The read-only, unauthenticated public portal served at `public.${DOMAIN}`. It
-publishes governance content (committees, protocols, resolutions/Beschlüsse).
-Beyond `GREMION_PUBLIC_DB_URL` and `PUBLIC_DB_PASSWORD` (see PostgreSQL above), it
-takes Impressum/contact metadata for TMG §5 compliance:
+The read-only, unauthenticated public portal. It publishes governance content
+(committees, protocols, resolutions/Beschlüsse). Locally it is published on
+`http://localhost:3002`; this tree carries no public router for it today
+([runbooks/tenant-edge.md](runbooks/tenant-edge.md)). Beyond
+`PUBLIC_DB_PASSWORD` (see PostgreSQL above), it takes Impressum/contact metadata
+for TMG §5 compliance:
 
 | Variable | Default | Notes |
 |----------|---------|-------|
@@ -334,27 +410,34 @@ takes Impressum/contact metadata for TMG §5 compliance:
 | `PUBLIC_IMPRINT_RESPONSIBLE` | (empty) | Person/role responsible for content |
 | `PUBLIC_LEGISLATURE_LABEL` | (empty) | Optional legislature/term label |
 
-The compose file also derives `PUBLIC_MAIN_APP_URL=https://${DOMAIN}` and
-`ORIGIN=https://public.${DOMAIN}` for this service.
+`.env.example` ships sample values for the contact fields. The compose file also
+derives `PUBLIC_MAIN_APP_URL=https://${PLATFORM_DOMAIN}` and
+`ORIGIN=https://public.${PLATFORM_DOMAIN}` for this service; the dev layer sets
+them to `http://localhost:3001` and `http://localhost:3002`.
+
+Where the portal is mounted, and an optional link to a site above it:
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `PUBLIC_BASE_PATH` | (empty; the portal is served at `/`) | A **build** argument, not a runtime setting: SvelteKit bakes the base path into the bundle, so a change needs a rebuild of `gremion-public` |
+| `PUBLIC_APEX_URL` / `PUBLIC_APEX_LABEL` | unset | Back-link strip to a site at the origin root. Rendered only when both are set |
+| `PUBLIC_APEX_NOTE` / `PUBLIC_APEX_COLOPHON` | unset | Optional note of the strip and the footer colophon; the colophon needs the URL too |
 
 ---
 
 ## Outgoing Email / SMTP
 
-**Default = Mailpit catcher.** With no email vars set, the stack sends all mail
-to the internal `mailpit` service (`mailpit:1025`, no auth, TLS off) and nothing
-leaves the host. Read trapped mail at `http://localhost:8026` (web UI). You
-normally need none of these for staging — the compose defaults already point at
-Mailpit. Set them only to switch to a real outbound relay. Full activation
-steps: [runbooks/email-smtp.md](runbooks/email-smtp.md).
-
+**The catcher.** The `dev` profile of the state project runs `mailpit`
+(`mailpit:1025`, no auth, TLS off; web UI at `http://localhost:8026`), and what it
+receives never leaves the host. No compose default points the app at it:
 `gremion-ui`'s SMTP host/port/from come from the in-app **Settings → E-Mail**
-wizard (stored in config), **not** from env — only the SMTP password is read
-from the environment.
+form (stored in the tenant's config), **not** from env, and a tenant starts with
+SMTP unconfigured. Activation steps: [runbooks/email-smtp.md](runbooks/email-smtp.md).
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `EMAIL_HOST_PASSWORD` | (empty) | SMTP relay password for the app shell's mailer (set on the prod host; never in the template) |
+| `SMTP_TEST_ALLOW_PRIVATE` | unset | `1` lets the SMTP target guard accept a private (RFC1918 / IPv6 unique-local) target and port `1025`, which is what the Mailpit catcher on the container network is. The guard applies to the SMTP test, to saving the settings and to sending. Loopback, link-local, CGNAT and metadata addresses stay refused with it set. Leave it empty in production. Read at container create time (`up -d --force-recreate gremion-ui`). Details: [security/test-smtp-guard.md](security/test-smtp-guard.md) |
+| `EMAIL_HOST_PASSWORD` | unset (commented out in the template) | Not read by any kernel code path: `gremion-ui` resolves a tenant's SMTP credential only from the registry `passwordRef` ([runbooks/email-smtp.md](runbooks/email-smtp.md#per-tenant-smtp-resolution)) |
 
 ### Platform mail transport (Keycloak realms)
 
@@ -387,12 +470,14 @@ through its `_REF`. See
 The static `legal` nginx service serves Impressum/GDPR pages. Its configuration
 comes from a dedicated env file rather than the root `.env`:
 
-- **Env file:** `legal/legal.env` (loaded via `env_file` in compose)
+- **Env file:** `legal/legal.env` (loaded via `env_file` in compose; `setup.sh`
+  creates it from `legal/legal.env.example`, and the state project does not
+  render without it)
 - **Port (local dev):** `127.0.0.1:8083:8080`
 
-In production the config-driven legal pages are rendered by the `gremion-ui` apex
-catch-all router; the `legal` nginx is retained for the imprint pages and
-reached internally by `gremion-ui`.
+In production the config-driven `/legal` pages are served by `gremion-ui`
+(Settings → Rechtliches); the `legal` nginx has no `/legal` router, is retained
+for the imprint pages and is reached internally by `gremion-ui`.
 
 ---
 
@@ -425,38 +510,57 @@ The IP-pseudonymisation key is supplied to Vector as a Docker secret file
 
 ## Backup (restic + rclone)
 
-Provider-agnostic backup configuration.
+Read by `scripts/backup.sh` and `scripts/restore.sh` from `.env`
+([OPERATIONS.md](OPERATIONS.md#backup--restore)).
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `RESTIC_PASSWORD` | (`CHANGE_ME_restic_repo_password`) | Restic repository password |
-| `RCLONE_BACKEND_TYPE` | `s3` | `s3` \| `sftp` \| `b2` |
-| `RCLONE_ENDPOINT` | (empty) | Provider endpoint URL |
-| `RCLONE_ACCESS_KEY_ID` | (empty) | Provider access key |
-| `RCLONE_SECRET_ACCESS_KEY` | (empty) | Provider secret key |
-| `RCLONE_BUCKET` | (empty) | Target bucket |
+| `RESTIC_PASSWORD` | (`CHANGE_ME_restic_repo_password`) | Restic repository password; `setup.sh` generates it |
+| `RCLONE_BUCKET` | (empty) | Target bucket. Empty keeps the repository local; set, `backup.sh` also needs `rclone` |
+
+`.env.example` also carries `RCLONE_BACKEND_TYPE`, `RCLONE_ENDPOINT`,
+`RCLONE_ACCESS_KEY_ID` and `RCLONE_SECRET_ACCESS_KEY`. `backup.sh` does not read
+them: the remote is configured through rclone's own
+`RCLONE_CONFIG_<REMOTE>_<KEY>` variables (the script header lists them).
 
 ---
 
 ## Production Overlay (docker-compose.prod.yml)
 
-The production overlay is **not** auto-loaded. Bring it up explicitly:
+The production overlay is **not** auto-loaded. On a host the state project's env
+file names it in `COMPOSE_FILE`, so no `-f` is passed:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+docker compose --env-file /opt/gremion/etc/env/state.env <verb>
 ```
 
-It adds `pgbouncer` and a static `fallback` service, wires Traefik routing,
-and reads one extra variable:
+It adds `pgbouncer` and a static `fallback` service and carries the apex routers
+of the state project. The app tier is not overlaid here: it is
+`docker-compose.app.yml`, one project per colour. One key belongs to it:
 
 ### PGBOUNCER_AUTH_PASSWORD
 
 - **Type:** String (`openssl rand -hex 32`)
 - **Default:** (`CHANGE_ME_pgbouncer_auth`)
 - **Note:** Password for the `pgbouncer_auth` login role (the `auth_query`
-  lookup user). **Not** read by compose — it is used at deploy to render
-  `docker/pgbouncer/userlist.txt` from `userlist.txt.example` and to create the
-  role.
+  lookup user). **Not** read by compose — `scripts/render-pgbouncer-userlist.sh`
+  renders `docker/pgbouncer/userlist.txt` from it, and it is the password the
+  role is created with ([runbooks/pgbouncer.md](runbooks/pgbouncer.md)).
+
+---
+
+## Chat module (messaging profile)
+
+Read by `docker-compose.yml` only with the `messaging` profile
+(`messaging-postgres` and `matrix`). The passwords ship empty in `.env.example`
+and `setup.sh` does not generate them; set both before enabling the profile. A
+host generates them (`infra/host/templates/env/state.env.tmpl`).
+
+| Variable | `.env.example` | Notes |
+|----------|----------------|-------|
+| `MESSAGING_PG_USER` / `MESSAGING_PG_PASSWORD` | `messaging` / (empty) | Superuser of the chat module's database server |
+| `SYNAPSE_DB_PASSWORD` | (empty) | Synapse's database password |
+| `SYNAPSE_KEYCLOAK_ISSUER_URL` / `SYNAPSE_KEYCLOAK_FETCH_URL` | (empty) | The realm's issuer, blank until the realm exists (Synapse refuses to boot with a blank issuer), and an optional fetch URL (blank derives the in-network one) |
 
 ---
 
@@ -484,55 +588,14 @@ below live in the host env files (`state.env`, `app-<colour>.env`), generated by
 
 ---
 
-## Example: minimal local development `.env`
+## A local `.env`
 
-Every other line below is a literal you can use as it stands. `<realm>` is not:
-it is a placeholder for the Keycloak realm this deployment provisions, and the
-issuer line does not work until you replace it. The realm is whatever the last
-path segment of `AUTH_KEYCLOAK_ISSUER` says it is — the kernel derives the name
-from that value, it is not configured anywhere else.
-
-```bash
-DOMAIN=localhost
-
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=dev_postgres_root
-
-GREMION_DB_USER=gremion
-GREMION_DB_PASSWORD=dev_gremion_db
-GREMION_DB_NAME=gremion
-
-CONTROL_DB_USER=control
-CONTROL_DB_PASSWORD=dev_control_db
-CONTROL_DB_NAME=control
-
-PUBLIC_DB_PASSWORD=dev_public_reader
-GREMION_PUBLIC_DB_URL=postgresql://gremion_public_reader:dev_public_reader@postgres:5432/gremion
-
-KEYCLOAK_DB_USER=keycloak
-KEYCLOAK_DB_PASSWORD=dev_keycloak_db
-KEYCLOAK_DB_NAME=keycloak
-
-KEYCLOAK_ADMIN=admin
-KEYCLOAK_ADMIN_PASSWORD=dev_keycloak_admin
-KC_ADMIN_ALLOWLIST_CIDRS=127.0.0.1/32
-
-GREMION_UI_OIDC_CLIENT_SECRET=dev_gremion_ui_oidc
-GREMION_ADMIN_OIDC_CLIENT_SECRET=dev_gremion_admin_oidc
-
-AUTH_SECRET=dev_auth_secret
-AUTH_KEYCLOAK_ID=gremion-ui
-AUTH_KEYCLOAK_SECRET=dev_gremion_ui_oidc
-AUTH_KEYCLOAK_ISSUER=http://keycloak:8080/auth/realms/<realm>
-PUBLIC_BASE_URL=http://localhost:3000
-
-INTERNAL_PUSH_SECRET=dev_internal_push_secret
-SEED_TOKEN=dev_seed_token
-SEED_USER_PASSWORD=dev_seed_user_pw
-```
-
-> For local development the `scripts/setup.sh` helper generates `.env` with
-> random secrets for you — prefer it over editing values by hand.
+There is no hand-written minimal `.env`: both compose projects check a list of
+required keys on every render (the edge keys, `STACK`, `PLATFORM_DOMAIN`, the app
+subnets, the role passwords and `TENANT_PROXY_SHARED_SECRET` among them), so a
+file with only the application keys does not render. Let `scripts/setup.sh` write
+the file from `.env.example`, then add `TENANT_PROXY_SHARED_SECRET`
+([LOCAL_TESTING.md](LOCAL_TESTING.md#quick-start)).
 
 ---
 
@@ -540,18 +603,25 @@ SEED_USER_PASSWORD=dev_seed_user_pw
 
 ### `CHANGE_ME` placeholder still in .env
 
-`./scripts/setup.sh` replaces these with random values. If some remain:
+`./scripts/setup.sh` replaces these with random values when it writes the file.
+A `.env` you copied by hand keeps them, because the script skips generation when
+the file exists:
 
 ```bash
-# Check which ones failed
+# Check which ones are left
 grep 'CHANGE_ME' .env
 ```
 
 ### Environment variable not being read
 
+A bare `docker compose` in the repository addresses neither dev project. Use the
+two command prefixes from
+[TROUBLESHOOTING.md](TROUBLESHOOTING.md#default-services--host-ports-local-dev)
+to see the rendered value:
+
 ```bash
-# Confirm the rendered value Docker Compose will use
-docker compose config | grep VARIABLE_NAME
+$DS config | grep VARIABLE_NAME     # state project
+$DA config | grep VARIABLE_NAME     # app colour
 ```
 
 Remember: a `.env` change only lands on a running container via
@@ -561,12 +631,11 @@ Remember: a `.env` change only lands on a running container via
 
 ```bash
 # Verify the realm's OIDC discovery document is reachable
-curl https://${DOMAIN}/auth/realms/<realm>/.well-known/openid-configuration
+curl https://${PLATFORM_DOMAIN}/auth/realms/<realm>/.well-known/openid-configuration
 
-# Confirm the client secrets match: both GREMION_UI_OIDC_CLIENT_SECRET and
-# GREMION_ADMIN_OIDC_CLIENT_SECRET must be non-empty, or tenant-create fails
-# when buildTenantRealmDoc composes the realm.
-grep -E 'GREMION_(UI|ADMIN)_OIDC_CLIENT_SECRET' .env
+# Both GREMION_UI_OIDC_CLIENT_SECRET and GREMION_ADMIN_OIDC_CLIENT_SECRET must
+# be non-empty, or tenant-create fails when buildTenantRealmDoc composes the realm.
+grep -cE '^GREMION_(UI|ADMIN)_OIDC_CLIENT_SECRET=.+' .env    # expect 2
 ```
 
 ### A tenant host 404s in production

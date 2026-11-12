@@ -83,8 +83,8 @@ External Docker networks (created by `make dev-networks`):
 ```
 
 > The admin shell app is **`gremion-ui`**. The Keycloak realm is named by the last
-> path segment of `AUTH_KEYCLOAK_ISSUER` (`<realm>` below), with clients **`gremion-ui`** and
-> **`gremion-admin`**. The **production** profile additionally starts Traefik and
+> path segment of `AUTH_KEYCLOAK_ISSUER` (`<realm>` below). The app uses its clients
+> **`gremion-ui`** and **`gremion-admin`**; the base realm carries five. The **production** profile additionally starts Traefik and
 > a read-only docker-socket-proxy (`docker-compose.yml`, `profiles: [production]`),
 > plus PgBouncer and the fallback page from `docker-compose.prod.yml`. None of those
 > run in local dev. The command prefixes used below (`$DS` for the state project,
@@ -155,10 +155,10 @@ first-run setup wizard.
 5. Mints the internal TLS CA + Keycloak server cert (the app project bind-mounts
    `internal-ca.pem`, so dev needs it too), renders the PgBouncer userlist, and
    runs the bind-mount preflight (`scripts/check-bind-sources.sh --all`).
-6. B-01: prepares no realm. Keycloak starts with `master` only; the
-   governance-only realm (the `gremion-ui` and `gremion-admin` clients) is
-   composed from `docker/keycloak/realm-export.base.json` and created at
-   tenant-create time. `CONFIG_PATH=… make gen-realm` writes a vertical's
+6. B-01: prepares no realm. Keycloak starts with `master` only; a tenant's
+   realm is composed from `docker/keycloak/realm-export.base.json` (five
+   clients: `gremion-ui`, `gremion-admin`, `synapse`, `nextcloud` and
+   `gremion-mobile`) and created at tenant-create time. `CONFIG_PATH=… make gen-realm` writes a vertical's
    composed template to the gitignored `docker/keycloak/realm-export.json` for
    inspection only.
 7. Creates the external networks and shared volumes (`make dev-networks`),
@@ -210,7 +210,7 @@ dev-app-blue-gremion-public-1 healthy         127.0.0.1:3002->3000/tcp
 
 (plus `governance-postgres`, `nats`, `vector`, `control-panel` and `kernel-api`,
 which publish no port. The ports above are what `docker-compose.override.yml` and
-`docker-compose.app.dev.yml` bind.)
+`docker-compose.app.dev.yml` bind, and `docker-compose.yml` for legal.)
 
 Quick endpoint probes:
 
@@ -304,9 +304,11 @@ curl -X POST \
 
 It answers `409` when `org_units` is not empty. Every seeded user is created in
 Keycloak with the password from
-`SEED_USER_PASSWORD`. `scripts/setup.sh` generates that value into your `.env`
-and prints it once in its closing summary; re-read it at any time with
-`grep '^SEED_USER_PASSWORD=' .env`. These fixtures are for local and demo use
+`SEED_USER_PASSWORD`. `scripts/setup.sh` generates that value into your `.env`;
+read it with `grep '^SEED_USER_PASSWORD=' .env`. (The script's closing summary
+prints the value only on the run that generated `.env`. In the two-run Quick
+Start that run stops before the summary, and the second run prints the `grep`
+hint instead.) These fixtures are for local and demo use
 only — never seed them into a real deployment (`GREMION_DISABLE_SEEDS=true`,
 which `docker-compose.app.yml` already sets).
 
@@ -366,7 +368,7 @@ portal deliberately holds none.
 
 ### Identity
 - [ ] Keycloak admin UI at http://localhost:8082/auth/admin is accessible
-- [ ] Once a tenant exists: the `<realm>` realm exists with the `gremion-ui` and `gremion-admin` clients
+- [ ] Once a tenant exists: the `<realm>` realm exists and carries the `gremion-ui` and `gremion-admin` clients (two of the base realm's five)
 - [ ] On a deployment behind the edge: SSO login from the app redirects to Keycloak and back
 
 ### Governance domain (needs a tenant and a browser session; not available on the local stack as shipped)
@@ -478,10 +480,13 @@ lsof -ti:3001 | xargs kill -9
 
 ### No mail arrives
 
-**Cause:** In local dev all outbound mail is captured by **Mailpit**, not sent.
+**Cause:** The local stack relays nothing to the internet. A tenant sends mail
+only once its Settings → E-Mail are configured, and the mail reaches the
+**Mailpit** catcher only when they name `mailpit` and port `1025`, which the app
+accepts with `SMTP_TEST_ALLOW_PRIVATE=1`.
 
-**Fix:** Read trapped messages at http://localhost:8026. Switching to a real
-relay is a `.env`-only change (see `docs/runbooks/email-smtp.md`).
+**Fix:** Read trapped messages at http://localhost:8026. The catcher and the
+switch to a real relay are described in `docs/runbooks/email-smtp.md`.
 
 ---
 
