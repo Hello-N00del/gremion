@@ -48,7 +48,6 @@
           user: testUser,
           password: testPassword,
           from_address: fromAddress,
-          to_address: fromAddress,
         }),
       })
       const body = await res.json()
@@ -147,13 +146,18 @@
   <!-- SMTP test section -->
   <div class="rounded-lg border p-4 space-y-3 max-w-lg">
     <h3 class="text-sm font-semibold">Test-E-Mail senden</h3>
+    <p class="text-xs text-ink-muted">
+      Der Test verwendet die hinterlegte Anmeldung des Mailservers, dieselbe wie der echte Versand,
+      und schickt die Test-E-Mail an Ihre eigene Adresse. Die beiden Felder sind nur nötig, wenn
+      Sie stattdessen andere Zugangsdaten ausprobieren möchten. Sie werden nicht gespeichert.
+    </p>
     <div class="grid grid-cols-2 gap-3">
       <div class="space-y-1">
-        <Label for="e-test-user">SMTP-Benutzer (für Test)</Label>
+        <Label for="e-test-user">SMTP-Benutzer (optional, für Test)</Label>
         <Input id="e-test-user" bind:value={testUser} autocomplete="username" />
       </div>
       <div class="space-y-1">
-        <Label for="e-test-pass">Passwort (für Test)</Label>
+        <Label for="e-test-pass">Passwort (optional, für Test)</Label>
         <Input id="e-test-pass" type="password" bind:value={testPassword} autocomplete="current-password" />
       </div>
     </div>

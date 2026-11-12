@@ -12,4 +12,4 @@
 #
 # To re-pin after an intentional bump:
 #   docker buildx imagetools inspect ghcr.io/element-hq/element-call:<tag> --format '{{.Manifest.Digest}}'
-FROM ghcr.io/element-hq/element-call@sha256:9d380bd2f38ab14abb3ec6a08cf7ad118de0267e4fb84044666369bceda99e61
+FROM ghcr.io/element-hq/element-call@sha256:c61fc9e4e04f75690c693d4556d01c09a2b9246f3fc8d35222d3aac36ba29906

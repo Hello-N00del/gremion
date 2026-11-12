@@ -80,8 +80,8 @@
     },
     "area:docker/collabora@L0": {
       "title": "Collabora container build",
-      "what": "This folder holds one Dockerfile. It builds the Collabora image for the office editor. The base is the official Collabora image, pinned by digest. The recipe then upgrades one system library. The library decodes compressed web answers, and its old version has a known security fault.",
-      "why": "Collabora fetches documents and linked files over HTTP, so it uses this library. The upgrade closes the fault. The recipe calls the fix a stopgap, because the Collabora line in use has no new release.",
+      "what": "This folder holds one Dockerfile. It builds the Collabora image for the office editor. The base is the official Collabora image, pinned by digest. The recipe adds nothing to it. The base image has no shell and no package tool, so nothing can be installed in it.",
+      "why": "The old Collabora line needed a patched system library, because its old version had a known security fault. The new line does not contain that library, so the fault is not present. The recipe keeps the notes on this check for the next upgrade.",
       "leadsTo": "The compose file builds the service collabora from this folder. Nextcloud uses the service to let a person edit a document in the browser."
     },
     "area:docker/element-call@L0": {
@@ -712,7 +712,7 @@
       "title": "CI: the check of each change",
       "what": "This workflow is the main check of the code. It starts on a push to the main or develop branch and on a pull request to one of them. A person can also start it by hand. Its jobs lint the files, run the tests, build the images and judge the result.",
       "why": "A change must not break the code. This workflow finds a break before the change joins the main branch. A new push to a pull request stops the old run of that pull request. On a pull request from this repository, a failed lint or verify job also cancels the rest of the run.",
-      "leadsTo": "The job verify-gate waits for lint and for the verify jobs. It gives the one verdict of these jobs. The jobs docker-build, integration-test and e2e-smoke run beside it. The folder scripts/ci-local holds the same kind of merge guards for one computer, for a time when GitHub Actions does not run."
+      "leadsTo": "The job verify-gate waits for lint, for the verify jobs and for the job docker-build. It gives the one verdict of these jobs. The jobs integration-test and e2e-smoke run beside it. The folder scripts/ci-local holds the same kind of merge guards for one computer, for a time when GitHub Actions does not run."
     },
     "area:github-actions/release-images@L0": {
       "title": "Release images: build and push",
@@ -731,12 +731,6 @@
       "what": "This workflow checks the packages that the product needs when it runs. It starts once a week and a person can start it by hand. The job audit fails when it finds a high or critical advisory. The job report then opens an issue.",
       "why": "A package can get a known fault after a person wrote the code. A weekly check finds this fault even when nobody changes the code. The check does not run on a pull request. The job audit also lists old packages in its summary, and this list does not change the result.",
       "leadsTo": "The job report opens one issue, or adds a comment to the issue that is open. A person reads the issue and updates the package."
-    },
-    "area:github-actions/dependabot-unpause@L0": {
-      "title": "Dependabot: restore the update limit",
-      "what": "A person starts this workflow by hand. It has no schedule. The job measure reads how fast GitHub starts a job. The job unpause runs only when this time is 120 seconds or less. Then it restores paused update limits in the Dependabot settings, and it opens a pull request when it changes a limit.",
-      "why": "Dependabot is a tool that opens pull requests for new versions of packages. A person can pause it for one kind of package. This workflow reverses a pause. If GitHub is slow to start the job measure, the job unpause does not run and no limit changes. If the settings hold no paused limit, the run makes no change and ends without an error.",
-      "leadsTo": "The pull request has the labels dependencies, ci and automated. A person reads the pull request and merges it. The workflow never merges it."
     },
     "area:github-actions/semgrep@L0": {
       "title": "Semgrep: a scan for security faults",
@@ -901,12 +895,11 @@
     "lint": "A fast check of files for mistakes. A lint check does not run the program.",
     "guard": "A check that stops a change when the change breaks a rule.",
     "advisory": "A public notice of a security fault in a package.",
-    "verify-gate": "A job of the CI workflow. It waits for lint and for the verify jobs, and then gives one verdict. The other jobs of the workflow run beside it. It does not wait for them.",
+    "verify-gate": "A job of the CI workflow. It waits for lint, for the verify jobs and for the image builds, and then gives one verdict. The other jobs of the workflow run beside it. It does not wait for them.",
     "ci.yml": "The workflow file of the main check of each change.",
     "release-images.yml": "The workflow file that builds and pushes the images of a release.",
     "release-npm.yml": "The workflow file that publishes two packages to npm.",
     "dependency-audit.yml": "The workflow file of the weekly check of the packages that the product needs.",
-    "dependabot-unpause.yml": "The workflow file that restores paused update limits of Dependabot.",
     "semgrep.yml": "The workflow file that scans the code for security faults.",
     "scripts/ci-local": "A folder of guards and a snapshot tool. A person runs them on one computer when GitHub Actions does not run.",
     "Semgrep": "A tool that scans code for security faults.",
@@ -1272,7 +1265,7 @@
           "nodeId": "file:apps/control-panel/Dockerfile"
         },
         {
-          "text": "This job waits for lint and for the eleven verify jobs. It joins their records and judges them. It gives the one verdict of the run. It does not wait for docker-build.",
+          "text": "This job waits for lint, for the eleven verify jobs and for docker-build. It joins the records of the verify jobs and judges them. It gives the one verdict of the run. On a pull request it accepts a skipped docker-build or census only when the job changes ran and found no change for it.",
           "nodeId": "job:.github/workflows/ci.yml#verify-gate"
         },
         {

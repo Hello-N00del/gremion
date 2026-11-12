@@ -1242,6 +1242,164 @@ emitted_extra_router() {  # <router name> <service>
     done
 }
 
+# ── the public portal's own host (docs/runbooks/public-portal-host.md) ───────
+# etc/edge/public-host.yml is the one router file a person places by hand. The
+# helpers below place the SHIPPED template (the host substituted, exactly what
+# the runbook tells the operator to do) and add what traefik reports once it has
+# loaded that file, so the file the repository ships is the file under test.
+PORTAL_HOST="portal.customer.example"
+PORTAL_TEMPLATE="${REPO_ROOT}/infra/host/templates/edge/public-host.example.yml"
+
+portal_file() {  # <host>
+    sed "s/portal\.customer\.example/$1/g" "$PORTAL_TEMPLATE" > "${GREMION_ROOT}/etc/edge/public-host.yml"
+    grep -qF "Host(\`$1\`)" "${GREMION_ROOT}/etc/edge/public-host.yml"
+}
+
+portal_live() {  # <host> [service]
+    local f svc="${2:-public@file}"
+    f="${FAKE_HTTP}/api-http-routers.json"
+    jq --arg h "$1" --arg s "$svc" '. + [{name: "public-host@file", status: "enabled", entryPoints: ["websecure"],
+        rule: ("Host(`" + $h + "`)"), service: $s, tls: {certResolver: "le-http"},
+        middlewares: ["edge-hostpin-public.portal@file", "edge-hsts-custom@docker", "edge-ratelimit-portal@docker"]}]' \
+        "$f" > "${f}.new" && mv "${f}.new" "$f"
+    f="${FAKE_HTTP}/api-http-middlewares.json"
+    jq --arg h "$1" '. + [
+        {name: "edge-hostpin-public.portal@file", provider: "file", type: "headers",
+         headers: {customRequestHeaders: {"X-Forwarded-Host": $h}}},
+        {name: "edge-ratelimit-portal@docker", provider: "docker", type: "ratelimit",
+         rateLimit: {average: 100, burst: 50, period: "1m"}}]' "$f" > "${f}.new" && mv "${f}.new" "$f"
+    f="${FAKE_DOCKER}/c9.labels"
+    jq '. + {"traefik.http.middlewares.edge-ratelimit-portal.ratelimit.average": "100"}' "$f" > "${f}.new" && mv "${f}.new" "$f"
+}
+
+@test "portal host: the shipped template, placed and live, passes, and its host is certified like any other" {
+    portal_file "$PORTAL_HOST"
+    portal_live "$PORTAL_HOST"
+    printf '%s\n' "$PORTAL_HOST" >> "$HOSTS"
+    fake_cert "$PORTAL_HOST" "DNS:${PORTAL_HOST}" 0
+    fake_http "https://${PORTAL_HOST}:8443/whoami" 200 '{"ok":true,"app":"gremion-public"}'
+    fake_http "https://${PORTAL_HOST}:8443/whoami" 200 '{"ok":true,"app":"gremion-public"}' forged
+    fake_http "http://${PORTAL_HOST}:8090/.well-known/acme-challenge/probe" 404 ""
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"all checks passed"* ]]
+    run jq -r '.routers[] | select(.name == "public-host@file") | "\(.class) \(.host) \(.san) \(.healthy)"' \
+        "${GREMION_ROOT}/runtime/last-verify.json"
+    [ "$output" = "colour-bound ${PORTAL_HOST} true true" ]
+}
+
+@test "portal host: a placed file whose router traefik does not serve fails" {
+    portal_file "$PORTAL_HOST"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"placed router public-host@file (etc/edge/public-host.yml) is not live in traefik (status=absent)"* ]]
+}
+
+@test "portal host: a rule in the placed file that is not the rule traefik serves fails" {
+    portal_file "$PORTAL_HOST"
+    portal_live "other.customer.example"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"placed router public-host@file: traefik serves rule 'Host(\`other.customer.example\`)', but etc/edge/public-host.yml says 'Host(\`${PORTAL_HOST}\`)'"* ]]
+}
+
+@test "portal host: a router that targets the app instead of the portal fails" {
+    portal_file "$PORTAL_HOST"
+    sed -i 's/service: "public@file"/service: "app@file"/' "${GREMION_ROOT}/etc/edge/public-host.yml"
+    portal_live "$PORTAL_HOST" app@file
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router public-host@file targets 'app@file', not public@file"* ]]
+}
+
+# The router universal accepts ANY edge-ratelimit-* tier and says nothing about a
+# middleware it does not know, so these two chains are green without the portal
+# check: the app tier's 30-times-wider limit, and the app's shared-secret stamp.
+@test "portal host: a chain with the app tier's rate limit instead of the portal's fails" {
+    portal_file "$PORTAL_HOST"
+    portal_live "$PORTAL_HOST"
+    api_edit routers 'map(if .name == "public-host@file" then .middlewares |= map(if . == "edge-ratelimit-portal@docker" then "edge-ratelimit-app@docker" else . end) else . end)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router public-host@file chains 'edge-hostpin-public.portal@file edge-hsts-custom@docker edge-ratelimit-app@docker', not 'edge-hostpin-public.portal@file edge-hsts-custom@docker edge-ratelimit-portal@docker'"* ]]
+}
+
+@test "portal host: a chain that also carries the app's proxy-trust stamp fails" {
+    portal_file "$PORTAL_HOST"
+    portal_live "$PORTAL_HOST"
+    api_edit routers 'map(if .name == "public-host@file" then .middlewares += ["gremion-ui-proxytrust@docker"] else . end)'
+    api_edit middlewares '. + [{"name":"gremion-ui-proxytrust@docker","provider":"docker","type":"headers","headers":{"customRequestHeaders":{"x-proxy-trust":"fixture"}}}]'
+    jq '. + {"traefik.http.middlewares.gremion-ui-proxytrust.headers.customrequestheaders.x-proxy-trust": "fixture"}' \
+        "${FAKE_DOCKER}/c9.labels" > "${FAKE_DOCKER}/c9.labels.new"
+    mv "${FAKE_DOCKER}/c9.labels.new" "${FAKE_DOCKER}/c9.labels"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router public-host@file chains '"*"gremion-ui-proxytrust@docker', not 'edge-hostpin-public.portal@file edge-hsts-custom@docker edge-ratelimit-portal@docker'"* ]]
+}
+
+@test "portal host: a second router in the placed file fails" {
+    portal_file "$PORTAL_HOST"
+    portal_live "$PORTAL_HOST"
+    sed -i 's/^  middlewares:$/    tenant-a-9:\n      rule: "Host(`x.customer.example`)"\n  middlewares:/' "${GREMION_ROOT}/etc/edge/public-host.yml"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"etc/edge/public-host.yml declares router tenant-a-9"* ]]
+}
+
+@test "portal host: a middleware other than its own pin in the placed file fails" {
+    portal_file "$PORTAL_HOST"
+    portal_live "$PORTAL_HOST"
+    printf '    edge-hostpin-a-7:\n      headers:\n        customRequestHeaders:\n          X-Forwarded-Host: "tenant-a.example.org"\n' \
+        >> "${GREMION_ROOT}/etc/edge/public-host.yml"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"etc/edge/public-host.yml declares middleware edge-hostpin-a-7"* ]]
+}
+
+@test "portal host: a section other than routers and middlewares in the placed file fails" {
+    portal_file "$PORTAL_HOST"
+    portal_live "$PORTAL_HOST"
+    printf '  services:\n    public:\n      loadBalancer: {}\n' >> "${GREMION_ROOT}/etc/edge/public-host.yml"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"etc/edge/public-host.yml declares http.services"* ]]
+}
+
+@test "portal host: a placed file that declares no router fails" {
+    printf 'http:\n  middlewares: {}\n' > "${GREMION_ROOT}/etc/edge/public-host.yml"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"etc/edge/public-host.yml declares no router"* ]]
+}
+
+@test "portal host: a public-host.yaml sibling fails" {
+    portal_file "$PORTAL_HOST"
+    portal_live "$PORTAL_HOST"
+    cp "${GREMION_ROOT}/etc/edge/public-host.yml" "${GREMION_ROOT}/etc/edge/public-host.yaml"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"etc/edge/public-host.yaml"* ]]
+}
+
+@test "portal host: the router served from a file of another name fails" {
+    portal_file "$PORTAL_HOST"
+    portal_live "$PORTAL_HOST"
+    mv "${GREMION_ROOT}/etc/edge/public-host.yml" "${GREMION_ROOT}/etc/edge/portal.yml"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"traefik serves router public-host@file, but etc/edge/public-host.yml does not exist"* ]]
+}
+
+@test "portal host: a tenant file cannot take the portal's router or pin name" {
+    sed -i 's/^    tenant-a:$/    public-host:/' "${GREMION_ROOT}/etc/edge/tenant-a.yml"
+    printf '    edge-hostpin-public.portal:\n      headers:\n        customRequestHeaders:\n          X-Forwarded-Host: "tenant-a.example.org"\n' \
+        >> "${GREMION_ROOT}/etc/edge/tenant-a.yml"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"etc/edge/tenant-a.yml declares router public-host, which is not tenant-a"* ]]
+    [[ "$output" == *"etc/edge/tenant-a.yml declares middleware edge-hostpin-public.portal"* ]]
+}
+
 @test "the router functions are wired into run_pass, in order" {
     local body
     body="$(sed -n '/^run_pass() {/,/^}/p' "$VERIFY")"

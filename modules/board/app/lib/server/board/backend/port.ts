@@ -64,6 +64,16 @@ export interface MoveCardTarget {
   order: number
 }
 
+/** The editable fields of a card. A field left out stays as it is; an explicit
+ *  null clears description / assignee / due date. The title cannot be cleared. */
+export interface UpdateCardPatch {
+  title?: string
+  description?: string | null
+  assigneeKeycloakId?: string | null
+  dueDate?: string | null
+  label?: string | null
+}
+
 /** The already-resolved protocol action item promoted into a card. The route
  *  resolves it from the kernel-owned protocol-db BEFORE calling the port, so
  *  this seam carries only board-owned data (no cross-DB read in the leaf). */
@@ -118,6 +128,9 @@ export interface BoardBackendPort {
   createCard(data: CreateCardInput): Promise<Card>
   /** Move/reorder a card (its stack IS its status). null when the card is gone. */
   moveCard(id: string, to: MoveCardTarget): Promise<Card | null>
+  /** Edit a card's title / description / assignee / due date. null when the card is gone.
+   *  The port does NOT check the assignee: the route does (a member of the board's body). */
+  updateCard(id: string, patch: UpdateCardPatch): Promise<Card | null>
   /** Promote a resolved action item into the board's first stack (idempotent).
    *  THROWS when the board has no stacks. */
   promoteActionItem(boardId: string, item: PromoteActionItemInput, createdBy: string): Promise<Card>

@@ -7,6 +7,12 @@
 
   let { data }: { data: PageData } = $props()
 
+  // The roster is shown from local state that starts as the loaded data (a writable $derived):
+  // a successful add, remove, assign or recall updates the rows at once, and the next load
+  // (invalidateAll) replaces them with the server's copy. A failed call changes nothing here.
+  let members = $derived(data.members)
+  let roles = $derived(data.roles)
+
   // ── Add-member panel state ─────────────────────────────────────────────────
   let showAddMember = $state(false)
   let memberSearch = $state('')
@@ -22,7 +28,7 @@
       const res = await fetch(`/api/users?search=${encodeURIComponent(memberSearch.trim())}&slim=true&max=10`)
       if (!res.ok) { memberAddError = `Suche fehlgeschlagen (${res.status})`; return }
       const body = await res.json()
-      const existingIds = new Set(data.members.map((m) => m.user_keycloak_id))
+      const existingIds = new Set(members.map((m) => m.user_keycloak_id))
       memberResults = (body.data ?? [])
         .filter((u: { id: string }) => !existingIds.has(u.id))
         .map((u: { id: string; email?: string; firstName?: string; lastName?: string; username?: string }) => ({
@@ -52,6 +58,21 @@
     const result = await res.json().catch(() => ({}))
     if (result?.success === false) {
       memberAddError = result.error ?? 'Bereitstellung nicht vollständig.'
+    }
+    // The member row exists (201, or 207 with a provisioning problem): list it now.
+    const added = memberResults.find((u) => u.id === userKeycloakId)
+    if (!members.some((m) => m.user_keycloak_id === userKeycloakId)) {
+      members = [...members, {
+        id: `new-${userKeycloakId}`,
+        org_unit_id: data.committee.id,
+        user_keycloak_id: userKeycloakId,
+        membership_type: newMemberType,
+        term_start: null,
+        term_end: null,
+        voting: true,
+        joined_at: new Date(),
+        displayName: added?.name ?? userKeycloakId,
+      }]
     }
     memberResults = memberResults.filter((u) => u.id !== userKeycloakId)
     memberSearch = ''
@@ -90,6 +111,7 @@
       if (res.ok) {
         // K2#7: 207 + success:false = removed, but provisioning failed somewhere.
         if (body?.success === false) removeError = body.error ?? 'Bereitstellung nicht vollständig.'
+        members = members.filter((m) => m.user_keycloak_id !== memberId)
         await invalidateAll()
       } else {
         removeError = body?.error ?? `Mitglied konnte nicht entfernt werden (${res.status})`
@@ -126,6 +148,8 @@
       })
       if (res.ok) {
         const body = await res.json().catch(() => ({}))
+        const recalledRoleId = recallTarget.roleId
+        roles = roles.map((r) => (r.id === recalledRoleId ? { ...r, currentAssignment: null } : r))
         recallTarget = null
         if (body?.groupsReconciled === false) {
           // The recall is recorded; only the module-group cleanup failed.
@@ -140,6 +164,67 @@
       recallError = 'Verbindungsfehler. Bitte erneut versuchen.'
     } finally {
       recalling = false
+    }
+  }
+
+  // ── Assign an office (Amt zuweisen) ───────────────────────────────────────
+  // Uses the roles/:roleId/assign endpoint (CouncilAdmin only, enforced there). Clearing an
+  // office is the recall above ("Abberufen"), which records a reason.
+  let assignTarget = $state<{ roleId: string; roleName: string } | null>(null)
+  let assignUserId = $state('')
+  let assignStart = $state('')
+  let assignEnd = $state('')
+  let assignError = $state('')
+  let assignNotice = $state('')
+  let assigning = $state(false)
+
+  function isoDate(d: Date) {
+    return d.toISOString().slice(0, 10)
+  }
+
+  function openAssign(roleId: string, roleName: string) {
+    const start = new Date()
+    const end = new Date(start)
+    end.setUTCFullYear(end.getUTCFullYear() + 1)
+    assignTarget = { roleId, roleName }
+    assignUserId = ''
+    assignStart = isoDate(start)
+    assignEnd = isoDate(end)
+    assignError = ''
+  }
+
+  async function confirmAssign() {
+    if (!assignTarget || assigning || !assignUserId) return
+    assigning = true
+    assignError = ''
+    try {
+      const target = assignTarget
+      const userId = assignUserId
+      const res = await fetch(`/api/governance/committees/${encodeURIComponent(data.committee.id)}/roles/${encodeURIComponent(target.roleId)}/assign`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userKeycloakId: userId, startDate: assignStart, endDate: assignEnd }),
+      })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok || !body?.data) {
+        assignError = body?.error ?? `Zuweisung fehlgeschlagen (${res.status})`
+        return
+      }
+      const holder = members.find((m) => m.user_keycloak_id === userId)
+      roles = roles.map((r) =>
+        r.id === target.roleId
+          ? { ...r, currentAssignment: { ...body.data, displayName: holder?.displayName ?? userId } }
+          : r
+      )
+      assignTarget = null
+      assignNotice = body.groupsReconciled === false
+        ? 'Amt zugewiesen, aber die Gruppenrechte konnten nicht angepasst werden. Bitte die Gruppen in Keycloak prüfen.'
+        : ''
+      await invalidateAll()
+    } catch {
+      assignError = 'Verbindungsfehler. Bitte erneut versuchen.'
+    } finally {
+      assigning = false
     }
   }
 
@@ -170,12 +255,12 @@
   // Build a combined roster: one row per role (with holder or vacant) + members without a role
   const rosterRows = $derived(() => {
     const assignedIds = new Set(
-      data.roles
+      roles
         .map((r) => r.currentAssignment?.user_keycloak_id)
         .filter((id): id is string => !!id)
     )
 
-    const roleRows = data.roles.map((r) => ({
+    const roleRows = roles.map((r) => ({
       type: 'role' as const,
       roleId: r.id,
       role: r.name,
@@ -187,7 +272,7 @@
       vacant: !r.currentAssignment,
     }))
 
-    const memberOnlyRows = data.members
+    const memberOnlyRows = members
       .filter((m) => !assignedIds.has(m.user_keycloak_id))
       .map((m) => ({
         type: 'member' as const,
@@ -255,6 +340,9 @@
   {/if}
   {#if removeError}
     <p class="mb-4 text-sm text-rust">{removeError}</p>
+  {/if}
+  {#if assignNotice}
+    <p class="mb-4 text-sm text-rust" role="status">{assignNotice}</p>
   {/if}
 
   <!-- ── Roster header + add-member toggle ─────────────────────────────────── -->
@@ -375,7 +463,14 @@
             <!-- Actions -->
             {#if data.isAdmin}
               <td class="px-4 py-3 text-right">
-                {#if !row.vacant && row.memberId}
+                {#if row.vacant && row.roleId}
+                  <button
+                    class="text-xs text-accent hover:underline disabled:opacity-50"
+                    disabled={members.length === 0}
+                    title={members.length === 0 ? 'Zuerst ein Mitglied hinzufügen' : ''}
+                    onclick={() => openAssign(row.roleId!, row.role!)}
+                  >Amt zuweisen</button>
+                {:else if !row.vacant && row.memberId}
                   {#if row.roleId}
                     <button
                       class="mr-3 text-xs text-rust hover:underline"
@@ -476,6 +571,58 @@
           class="rounded-md border border-rust/40 px-3 py-1.5 text-xs font-medium text-rust hover:bg-rust-soft disabled:opacity-50"
         >
           {recalling ? 'Wird abberufen…' : 'Abberufen'}
+        </button>
+      </div>
+    {/if}
+  </Dialog>
+
+  <!-- ── Assign dialog (member + term) ───────────────────────────────────── -->
+  <Dialog open={assignTarget !== null} onClose={() => { if (!assigning) assignTarget = null }}>
+    <DialogHeader>
+      <DialogTitle>Amt zuweisen</DialogTitle>
+    </DialogHeader>
+    {#if assignTarget}
+      <p class="mt-2 text-sm text-ink-muted">Wer soll das Amt „{assignTarget.roleName}" übernehmen?</p>
+      <div class="mt-3 space-y-3">
+        <div class="space-y-1">
+          <label for="assign-member" class="text-sm font-medium">Mitglied</label>
+          <select id="assign-member" bind:value={assignUserId} class="w-full rounded-md border border-border-strong bg-paper px-3 py-2 text-sm">
+            <option value="">Mitglied wählen…</option>
+            {#each members as m (m.user_keycloak_id)}
+              <option value={m.user_keycloak_id}>{m.displayName}</option>
+            {/each}
+          </select>
+        </div>
+        <div class="flex gap-3">
+          <div class="flex-1 space-y-1">
+            <label for="assign-start" class="text-sm font-medium">Amtszeit von</label>
+            <input id="assign-start" type="date" bind:value={assignStart} class="w-full rounded-md border border-border-strong bg-paper px-3 py-2 text-sm" />
+          </div>
+          <div class="flex-1 space-y-1">
+            <label for="assign-end" class="text-sm font-medium">Amtszeit bis</label>
+            <input id="assign-end" type="date" bind:value={assignEnd} class="w-full rounded-md border border-border-strong bg-paper px-3 py-2 text-sm" />
+          </div>
+        </div>
+      </div>
+      {#if assignError}
+        <p class="mt-2 text-sm text-rust" role="alert">{assignError}</p>
+      {/if}
+      <div class="mt-4 flex justify-end gap-2">
+        <button
+          type="button"
+          onclick={() => (assignTarget = null)}
+          disabled={assigning}
+          class="rounded-md border border-border px-3 py-1.5 text-xs font-medium hover:bg-surface-2 disabled:opacity-50"
+        >
+          Abbrechen
+        </button>
+        <button
+          type="button"
+          onclick={confirmAssign}
+          disabled={assigning || !assignUserId || !assignStart || !assignEnd || assignEnd <= assignStart}
+          class="rounded-md border border-accent/40 px-3 py-1.5 text-xs font-medium text-accent hover:bg-accent/10 disabled:opacity-50"
+        >
+          {assigning ? 'Wird zugewiesen…' : 'Zuweisen'}
         </button>
       </div>
     {/if}

@@ -284,14 +284,30 @@ services:
       # and caches no tenant, so the switch has nothing to evict here.
     environment:
       COLOUR: ${COLOUR:?COLOUR required}
-      ORIGIN:                      https://public.${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}
-      GREMION_PUBLIC_DB_URL:       postgresql://gremion_public_reader:${PUBLIC_DB_PASSWORD}@postgres-${STACK:?STACK required}:5432/${GREMION_DB_NAME:-gremion}
+      # The portal on a customer's own host (docs/runbooks/public-portal-host.md).
+      # Three keys of app-<colour>.env (scripts/check-portal-public-host.test.mjs).
+      # Unset, the host and the database keep the values this block had before
+      # the keys existed; the main-app link then follows PILOT_TENANT_HOST when
+      # that is set, and was the platform domain before:
+      #   PUBLIC_PORTAL_HOST     the one extra host name the edge serves the
+      #                          portal under; unset: public.<platform domain>.
+      #   PUBLIC_PORTAL_DB_NAME  the database the read-only role reads. On a
+      #                          pooled install that is the customer's own
+      #                          database, whose name carries the tenant id, so
+      #                          it is known only after the tenant exists; unset:
+      #                          GREMION_DB_NAME, then gremion.
+      #   PUBLIC_MAIN_APP_URL    where Login and the protocol PDFs point. An
+      #                          explicit value wins; else the customer host
+      #                          (the shape of gremion-ui's PUBLIC_BASE_URL
+      #                          above); else the platform domain.
+      ORIGIN:                      https://${PUBLIC_PORTAL_HOST:-public.${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}}
+      GREMION_PUBLIC_DB_URL:       postgresql://gremion_public_reader:${PUBLIC_DB_PASSWORD}@postgres-${STACK:?STACK required}:5432/${PUBLIC_PORTAL_DB_NAME:-${GREMION_DB_NAME:-gremion}}
       PUBLIC_CONTACT_NAME:         ${PUBLIC_CONTACT_NAME:-}
       PUBLIC_CONTACT_ADDRESS:      ${PUBLIC_CONTACT_ADDRESS:-}
       PUBLIC_CONTACT_EMAIL:        ${PUBLIC_CONTACT_EMAIL:-}
       PUBLIC_CONTACT_PHONE:        ${PUBLIC_CONTACT_PHONE:-}
       PUBLIC_IMPRINT_RESPONSIBLE:  ${PUBLIC_IMPRINT_RESPONSIBLE:-}
-      PUBLIC_MAIN_APP_URL:         https://${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}
+      PUBLIC_MAIN_APP_URL:         ${PUBLIC_MAIN_APP_URL:-https://${PILOT_TENANT_HOST:-${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}}}
       PUBLIC_SOURCE_URL:           ${PUBLIC_SOURCE_URL:-}
       PUBLIC_LEGISLATURE_LABEL:    ${PUBLIC_LEGISLATURE_LABEL:-}
       PUBLIC_APEX_URL:             ${PUBLIC_APEX_URL:-}

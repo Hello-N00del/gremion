@@ -91,6 +91,7 @@ export const BOARD_ROUTE_KINDS: ReadonlyMap<string, 'read' | 'write' | 'control'
   ['GET /api/v1/boards/:id/deck', 'read'],
   ['POST /api/v1/boards/:id/stacks', 'write'],
   ['POST /api/v1/cards', 'write'],
+  ['PATCH /api/v1/cards/:id', 'write'],
   ['PATCH /api/v1/cards/:id/move', 'write'],
   ['POST /api/v1/cards/promoted', 'read'],
   ['POST /api/v1/boards/:id/promote', 'write'],
@@ -148,6 +149,13 @@ export function boardAttempts(): Attempt[] {
       what: "a card into B's stack",
       run: ({ api, attacker, victim }) =>
         api.createCard(attacker, { stackId: victim.stackIds[0], title: 'intrusion-5', createdBy: 'attacker' }),
+    },
+    {
+      vector: '6',
+      route: 'PATCH /api/v1/cards/:id',
+      kind: 'write',
+      what: "B's card retitled",
+      run: ({ api, attacker, victim }) => api.updateCard(attacker, victim.cardId, { title: 'intrusion-6u', description: 'intrusion-6u' }),
     },
     {
       vector: '6',

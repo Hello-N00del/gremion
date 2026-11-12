@@ -137,3 +137,81 @@ describe('ResolutionRow — Phase-2 row shapes from the API', () => {
     expect(getByText(/per Akklamation festgestellt/)).toBeTruthy()
   })
 })
+
+// Finding 7 (E2E 2026-11-11): a freshly added decision (text empty, tally 0/0/0)
+// rendered "Abgelehnt · 0/0/0" before any vote existed, and the three tally
+// fields were announced only by their placeholders.
+describe('ResolutionRow — a decision without a vote (finding 7)', () => {
+  const fresh = { ...baseResolution, text: '', votes_yes: 0, votes_no: 0, votes_abstain: 0, result: 'rejected' as const }
+
+  function renderFresh(over: Record<string, unknown> = {}, isAdmin = true) {
+    return render(ResolutionRow, {
+      props: {
+        resolution: { ...fresh, ...over } as never,
+        isAdmin,
+        protocolId: 'p-1',
+        onSave: noopSave,
+        onDelete: noopDelete,
+      },
+    })
+  }
+
+  test('read view shows "noch keine Abstimmung" and no Angenommen/Abgelehnt', () => {
+    const { container, getByText } = renderFresh()
+    expect(getByText(/noch keine Abstimmung/)).toBeTruthy()
+    expect(container.textContent).not.toMatch(/Angenommen|Abgelehnt/)
+    expect(container.textContent).not.toMatch(/0 Ja \/ 0 Nein/)
+  })
+
+  test('the same holds for a consent row (0 Nein would otherwise read "Angenommen")', () => {
+    const { container, getByText } = renderFresh({ required_majority: 'consent', result: 'passed' })
+    expect(getByText(/noch keine Abstimmung/)).toBeTruthy()
+    expect(container.textContent).not.toMatch(/Angenommen|Abgelehnt/)
+  })
+
+  test('edit preview shows "noch keine Abstimmung" instead of a computed verdict', async () => {
+    const { container, getByText } = renderFresh()
+    await enterEditMode(getByText)
+    expect(container.textContent).toMatch(/noch keine Abstimmung/)
+    expect(container.textContent).not.toMatch(/Angenommen|Abgelehnt/)
+  })
+
+  test('once counts are saved the verdict is shown again', () => {
+    const { container } = renderFresh({ votes_yes: 3, votes_no: 1, result: 'passed' })
+    expect(container.textContent).toMatch(/Angenommen/)
+    expect(container.textContent).not.toMatch(/noch keine Abstimmung/)
+  })
+
+  test('a withdrawn row keeps its verdict even with an empty tally', () => {
+    const { container } = renderFresh({ result: 'withdrawn' })
+    expect(container.textContent).toMatch(/Zurückgezogen/)
+    expect(container.textContent).not.toMatch(/noch keine Abstimmung/)
+  })
+
+  test('an acclamation row is not a missing vote', () => {
+    const { container } = renderFresh({
+      adoption_mode: 'acclamation', result: 'passed', votes_yes: null, votes_no: null, votes_abstain: null,
+    })
+    expect(container.textContent).toMatch(/Angenommen/)
+    expect(container.textContent).not.toMatch(/noch keine Abstimmung/)
+  })
+
+  test('the Ja, Nein and Enthaltung fields have visible labels bound to the inputs', async () => {
+    const { getByText, getByLabelText } = renderFresh()
+    await enterEditMode(getByText)
+    for (const label of ['Ja', 'Nein', 'Enthaltung']) {
+      expect(getByText(label, { selector: 'label' })).toBeTruthy()
+      expect(getByLabelText(label).tagName).toBe('INPUT')
+    }
+  })
+
+  test('clearing every tally field in the editor reports missing counts, not "noch keine Abstimmung"', async () => {
+    const { container, getByText, getByLabelText } = renderFresh()
+    await enterEditMode(getByText)
+    for (const label of ['Ja', 'Nein', 'Enthaltung']) {
+      await fireEvent.input(getByLabelText(label), { target: { value: '' } })
+    }
+    expect(container.textContent).toMatch(/Stimmen unvollständig/)
+    expect(container.textContent).not.toMatch(/noch keine Abstimmung/)
+  })
+})

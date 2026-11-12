@@ -29,6 +29,7 @@ const api: BoardApi = {
   createStack: unreachable,
   createCard: unreachable,
   moveCard: unreachable,
+  updateCard: unreachable,
   promote: unreachable,
   promoted: unreachable,
 }
@@ -44,9 +45,9 @@ describe('board isolation case — contract shape (TASK-044)', () => {
     expect(boardCase.controls.length).toBeGreaterThan(0)
   })
 
-  it('BOARD_ROUTE_KINDS names exactly the leaf route table (nine routes)', () => {
+  it('BOARD_ROUTE_KINDS names exactly the leaf route table (ten routes)', () => {
     expect([...BOARD_ROUTE_KINDS.keys()].sort()).toEqual(ROUTE_TABLE)
-    expect(ROUTE_TABLE).toHaveLength(9)
+    expect(ROUTE_TABLE).toHaveLength(10)
   })
 
   it('every route has the attempt (or control) it needs, inside routePrefixes', () => {

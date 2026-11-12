@@ -937,12 +937,20 @@ services:
       retries: 5
       start_period: 180s
 
-  # Collabora Online (docker/collabora: the 24.04 image with the libbrotli fix).
-  # server_name is the pilot tenant host, and net.service_root moves the whole
-  # service under /office, so the editor iframe is same-origin with gremion-ui
-  # (CSP frame-src 'self'). The image's own healthcheck probes the root and reads
-  # unhealthy under a service root, and Traefik then silently drops the router:
-  # the probe below is the one that holds.
+  # Collabora Online (docker/collabora: the official 26.04 image, pinned by digest).
+  # The image is shell-less (no sh, no curl) and runs as uid 1001, so the probe below
+  # is an exec-form coolwsd call and the service sets no user. server_name is the
+  # pilot tenant host, and net.service_root moves the whole service under /office, so
+  # the editor iframe is same-origin with gremion-ui (CSP frame-src 'self'). The
+  # probe reads the same environment as the server (--use-env-vars), so it asks
+  # /office/livez: a probe that missed the service root would read unhealthy, and
+  # Traefik then silently drops the router. Isolation is left at the default
+  # (security.capabilities true): coolwsd builds a chroot jail through its
+  # coolforkit-caps helper, which needs only the container's default capabilities,
+  # and refuses to start when it can get no isolation at all. Setting it to false
+  # asks for landlock alone and runs unisolated on a kernel without it. Do not add
+  # cap_drop or no-new-privileges to this service: the helper's file capabilities
+  # then do not apply, and coolwsd never becomes healthy (it fails closed).
   collabora:
     build:
       context: docker/collabora
@@ -961,9 +969,9 @@ services:
       server_name: ${PILOT_TENANT_HOST:-}
       DONT_GEN_SSL_CERT: "YES"
       dictionaries: de_DE en_GB en_US
-      extra_params: --o:ssl.enable=false --o:ssl.termination=true --o:security.capabilities=false --o:net.service_root=/office
+      extra_params: --o:ssl.enable=false --o:ssl.termination=true --o:net.service_root=/office
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:9980/office/hosting/discovery"]
+      test: ["CMD", "/usr/bin/coolwsd", "--probe", "--use-env-vars"]
       interval: 30s
       timeout: 10s
       retries: 5

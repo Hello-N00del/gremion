@@ -11,6 +11,22 @@ test('Collabora accepts exactly one literal WOPI host, with no regex metacharact
   assert.ok(!/[*+?()[\]|]/.test(m[1]), `aliasgroup1 is literal: ${m[1]}`)
 })
 
+test('Collabora runs on the shell-less 26.04 image: no RUN layer, exec-form probe without curl or a shell', () => {
+  const docker = read('docker/collabora/Dockerfile')
+  const from = docker.match(/^FROM collabora\/code:(\S+)@sha256:[0-9a-f]{64}$/m)
+  assert.ok(from, 'the base is pinned by tag and digest')
+  assert.match(from[1], /^(2[6-9]|[3-9]\d)\./, `the base is the shell-less line (26.04 or later): ${from[1]}`)
+  assert.doesNotMatch(docker, /^(RUN|USER)\b/m, 'a shell-less image cannot run a RUN layer, and it sets its own user')
+  const compose = read('docker-compose.yml')
+  const svc = compose.slice(compose.indexOf('\n  collabora:'), compose.indexOf('\n  livekit:'))
+  const probe = svc.match(/healthcheck:\s*\n\s*test:\s*(\[[^\]]*\])/)
+  assert.ok(probe, 'collabora has a healthcheck')
+  const argv = JSON.parse(probe[1])
+  assert.equal(argv[0], 'CMD', 'exec form: CMD-SHELL needs a shell the image does not have')
+  assert.ok(!argv.some((a) => /(^|\/)(curl|wget|sh|bash)$/.test(a)), `the probe uses no curl or shell: ${probe[1]}`)
+  assert.ok(argv.includes('--use-env-vars'), 'the probe reads the same env as the server, so it follows net.service_root')
+})
+
 test('the content leaf can authenticate its mail callbacks', () => {
   const app = read('docker-compose.app.yml')
   const svc = app.slice(app.indexOf('\n  content-service:'), app.indexOf('\n  newsletter-service:'))
