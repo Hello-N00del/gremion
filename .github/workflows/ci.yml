@@ -1605,7 +1605,7 @@ jobs:
       - name: Wait for PostgreSQL to be healthy
         run: |
           echo "Waiting for PostgreSQL..."
-          timeout 120 bash -c 'until docker compose exec -T postgres pg_isready -U "${POSTGRES_USER:-postgres}" >/dev/null 2>&1; do sleep 3; printf "."; done'
+          timeout 120 bash -c 'until docker compose exec -T postgres pg_isready -h 127.0.0.1 -U "${POSTGRES_USER:-postgres}" >/dev/null 2>&1; do sleep 3; printf "."; done'
           echo " ready"
 
       - name: Start Keycloak
@@ -1803,7 +1803,7 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U gremion"
+          --health-cmd "pg_isready -h 127.0.0.1 -U gremion"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
