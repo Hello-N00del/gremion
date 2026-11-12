@@ -542,7 +542,8 @@ check_l4_routers() {
 # Every @docker middleware a router can chain must be declared on the TRAEFIK
 # container's labels (compose service `traefik`), the one container that exists
 # whenever a router does; each tenant's pin and per-IP cap live in that
-# tenant's emitted file, and no other file-provider middleware may exist. An
+# tenant's emitted file, the portal host's pin lives in its hand-placed file
+# (check_portal_host_file), and no other file-provider middleware may exist. An
 # APP-TIER container (a colour: gremion-ui-*/gremion-public-* or a
 # *-app-blue|green compose project) vanishes on every switch and takes its
 # middlewares along, leaving every router that chains them in error with no way
@@ -617,6 +618,9 @@ check_middleware_placement() {
 # reads that shape — keys at two spaces under `http:` are sections, keys at
 # four spaces are object names, `rule:` at six spaces belongs to the current
 # router — and anything it cannot place is reported by the shape checks.
+#
+# The one file in etc/edge that is NOT emitted, the hand-placed portal host
+# file, is held to its own contract at the end (check_portal_host_file).
 check_emitted_routers() {
     local dir f slug rel kind obj rest status nrouters api_rule
     local -A seen_name=()
@@ -671,16 +675,109 @@ check_emitted_routers() {
                 top)
                     [[ "$obj" == "http" ]] || fail "${rel} declares top-level ${obj} — an emitted file declares only http" ;;
             esac
-        done < <(awk '
-            { sub(/\r$/, "") }
-            /^[[:space:]]*(#|$)/ { next }
-            /^[^ ]/              { k=$1; sub(/:.*/, "", k); print "top " k; sec=""; cur=""; next }
-            /^  [^ ]/            { k=$1; sub(/:.*/, "", k); sec=k; cur=""; print "section " k; next }
-            /^    [^ ]/          { k=$1; sub(/:.*/, "", k); cur=k; if (sec != "") print sec " " k; next }
-            /^      rule: /      { if (sec == "routers" && cur != "") { v=$0; sub(/^      rule: "/, "", v); sub(/"[[:space:]]*$/, "", v); print "rule " cur " " v }; next }
-        ' "$f")
+        done < <(edge_file_tokens "$f")
         (( nrouters > 0 )) || fail "${rel} declares no router — an emitted file with no router should not exist"
     done
+    check_portal_host_file "$dir"
+    return 0
+}
+
+# edge_file_tokens <file> -> one line per thing a fixed-shape etc/edge file
+# declares: `top <key>`, `section <key>`, `routers <name>`, `middlewares <name>`
+# and `rule <router> <rule>`. The one reader of both file kinds.
+edge_file_tokens() {
+    awk '
+        { sub(/\r$/, "") }
+        /^[[:space:]]*(#|$)/ { next }
+        /^[^ ]/              { k=$1; sub(/:.*/, "", k); print "top " k; sec=""; cur=""; next }
+        /^  [^ ]/            { k=$1; sub(/:.*/, "", k); sec=k; cur=""; print "section " k; next }
+        /^    [^ ]/          { k=$1; sub(/:.*/, "", k); cur=k; if (sec != "") print sec " " k; next }
+        /^      rule: /      { if (sec == "routers" && cur != "") { v=$0; sub(/^      rule: "/, "", v); sub(/"[[:space:]]*$/, "", v); print "rule " cur " " v }; next }
+    ' "$1"
+}
+
+# ── the public portal's own host (docs/runbooks/public-portal-host.md) ───────
+# etc/edge/public-host.yml is the ONE router file a person places by hand: one
+# extra host name that carries the read-only portal and nothing else
+# (infra/host/templates/edge/public-host.example.yml). The router universal
+# holds its router like any other the moment Traefik loads it; what the
+# universal cannot see is the file. A file Traefik refused, a rule another
+# definition won, a copy under a second name: each leaves the universal green
+# and the portal host dead or served by something nobody placed. So the file,
+# when it is there, is held to being LIVE and to its own contract:
+#   - only http.routers and http.middlewares; exactly the router public-host
+#     and the pin edge-hostpin-public.portal. The dot is outside the tenant-slug
+#     alphabet, so no tenant file can declare either name (a tenant file that
+#     tries is refused above), and no second definition can win;
+#   - Traefik reports public-host@file enabled, with the rule the file carries;
+#   - it targets public@file. This host carries the portal ONLY: the app on it
+#     would be a second, unregistered way into a tenant;
+#   - its chain is exactly pin, edge-hsts-custom, edge-ratelimit-portal. The
+#     universal accepts any rate-limit tier and is silent about a middleware it
+#     does not know, so the app tier's limit or the app's proxy-trust stamp
+#     (a shared secret the portal must never receive) would pass it.
+# And the reverse: a router of that name served from any other file is one this
+# check never read. A .yaml sibling is loaded by Traefik and read by nothing.
+# The file is optional; its absence alone is not a failure.
+PORTAL_ROUTER_FILE="public-host.yml"
+PORTAL_ROUTER="public-host"
+PORTAL_PIN="edge-hostpin-public.portal"
+PORTAL_SERVICE="public@file"
+PORTAL_CHAIN="${PORTAL_PIN}@file edge-hsts-custom@docker edge-ratelimit-portal@docker"
+
+check_portal_host_file() {   # <the etc/edge directory>
+    local dir="$1" f rel kind obj rest status api_rule live svc chain m nrouters=0
+    local -a mws=()
+    f="${dir}/${PORTAL_ROUTER_FILE}"
+    rel="etc/edge/${PORTAL_ROUTER_FILE}"
+    [[ ! -e "${f%.yml}.yaml" ]] \
+        || fail "etc/edge/${PORTAL_ROUTER_FILE%.yml}.yaml: the portal host file with a .yaml suffix — traefik loads it and nothing verifies it; the file is ${PORTAL_ROUTER_FILE}"
+    live="$(printf '%s' "$ROUTERS_JSON" | jq -c --arg n "${PORTAL_ROUTER}@file" '[.[] | select(.name == $n)][0] // null')"
+    if [[ ! -e "$f" ]]; then
+        [[ "$live" == "null" ]] \
+            || fail "traefik serves router ${PORTAL_ROUTER}@file, but ${rel} does not exist — it comes from a file this check does not read"
+        return 0
+    fi
+    while IFS=' ' read -r kind obj rest; do
+        case "$kind" in
+            top)
+                [[ "$obj" == "http" ]] || fail "${rel} declares top-level ${obj} — the portal host file declares only http" ;;
+            section)
+                [[ "$obj" == "routers" || "$obj" == "middlewares" ]] \
+                    || fail "${rel} declares http.${obj} — the portal host file declares only routers and middlewares" ;;
+            routers)
+                nrouters=$(( nrouters + 1 ))
+                if [[ "$obj" != "$PORTAL_ROUTER" ]]; then
+                    fail "${rel} declares router ${obj} — the portal host file declares the one router ${PORTAL_ROUTER}"
+                    continue
+                fi
+                status="$(jq -r '.status // "absent"' <<<"$live")"
+                [[ "$status" == "enabled" ]] \
+                    || fail "placed router ${obj}@file (${rel}) is not live in traefik (status=${status})" ;;
+            rule)
+                [[ "$obj" == "$PORTAL_ROUTER" ]] || continue
+                api_rule="$(jq -r '.rule // ""' <<<"$live")"
+                [[ -z "$api_rule" || "$api_rule" == "$rest" ]] \
+                    || fail "placed router ${obj}@file: traefik serves rule '${api_rule}', but ${rel} says '${rest}' — another file's definition won" ;;
+            middlewares)
+                [[ "$obj" == "$PORTAL_PIN" ]] \
+                    || fail "${rel} declares middleware ${obj} — only ${PORTAL_PIN} belongs in the portal host file" ;;
+        esac
+    done < <(edge_file_tokens "$f")
+    (( nrouters > 0 )) || fail "${rel} declares no router — a portal host file with no router should not exist"
+
+    # What Traefik LOADED, not what the file says: the service and the chain.
+    [[ "$live" != "null" ]] || return 0
+    svc="${ROUTER_SERVICE[${PORTAL_ROUTER}@file]:-}"
+    [[ "$svc" == "$PORTAL_SERVICE" ]] \
+        || fail "router ${PORTAL_ROUTER}@file targets '${svc}', not ${PORTAL_SERVICE} — this host carries the portal only"
+    chain=""
+    mapfile -t mws < <(jq -r '.middlewares // [] | .[]' <<<"$live")
+    for m in "${mws[@]}"; do
+        chain+="${chain:+ }$(qualify_ref "$m" "${PORTAL_ROUTER}@file")"
+    done
+    [[ "$chain" == "$PORTAL_CHAIN" ]] \
+        || fail "router ${PORTAL_ROUTER}@file chains '${chain}', not '${PORTAL_CHAIN}'"
     return 0
 }
 
