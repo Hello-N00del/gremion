@@ -14,6 +14,7 @@ import type {
   Card,
   CreateCardInput,
   MoveCardTarget,
+  UpdateCardPatch,
   PromoteActionItemInput,
   Deck,
   CreateBoardInput,
@@ -44,6 +45,10 @@ export class InprocessBoardClient implements BoardBackendPort {
 
   async moveCard(id: string, to: MoveCardTarget): Promise<Card | null> {
     return boardDb.moveCard(id, to)
+  }
+
+  async updateCard(id: string, patch: UpdateCardPatch): Promise<Card | null> {
+    return boardDb.updateCard(id, patch)
   }
 
   async promoteActionItem(

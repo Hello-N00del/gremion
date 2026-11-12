@@ -121,6 +121,19 @@ describe('InprocessBoardClient — byte-identical delegation to boardDb', () => 
     expect(result).toBeNull()
   })
 
+  it('updateCard delegates (id, patch) to boardDb.updateCard and passes the result through', async () => {
+    const patch = { title: 'Neu benannt', description: 'Text', assigneeKeycloakId: 'u2', dueDate: '2026-12-01' }
+    mockUpdateCard.mockResolvedValueOnce(CARD)
+    const result = await client.updateCard('c1', patch)
+    expect(mockUpdateCard).toHaveBeenCalledWith('c1', patch)
+    expect(result).toBe(CARD)
+  })
+
+  it('updateCard returns null when boardDb returns null', async () => {
+    mockUpdateCard.mockResolvedValueOnce(null)
+    expect(await client.updateCard('gone', { title: 'x' })).toBeNull()
+  })
+
   it('promoteActionItem delegates argument-for-argument and returns the card', async () => {
     const item = { id: 'ai-1', text: 'Do it', assigneeKeycloakId: null, dueDate: null }
     mockPromoteActionItem.mockResolvedValueOnce(CARD)

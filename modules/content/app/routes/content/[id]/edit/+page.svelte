@@ -11,6 +11,8 @@
   // surfaced, never silent.
   import PageTitle from '$lib/components/PageTitle.svelte'
   import RichTextComposer from '$lib/components/news/RichTextComposer.svelte'
+  import DateTimeDe from '$lib/components/news/DateTimeDe.svelte'
+  import { formatLocalInputDe, parseDateTimeDe } from '$lib/components/news/format-de'
   import { untrack } from 'svelte'
   import type { PageData } from './$types'
   import type { ChannelId, ChannelStatus, MailingList } from '$lib/server/content/types'
@@ -227,7 +229,8 @@
     }
   }
 
-  // schedule control: a per-channel datetime-local value bound in the markup.
+  // schedule control: a per-channel value in German order (TT.MM.JJJJ HH:MM) bound in the markup;
+  // what is sent stays ISO (see schedule()).
   let scheduleInput = $state<Record<ChannelId, string>>(
     untrack(() => ({
       email: toLocalInput(data.channelState.email.scheduled_at),
@@ -236,19 +239,27 @@
     })),
   )
 
-  // ISO ↔ <input type=datetime-local> (the input has no timezone; treat as local).
+  // ISO instant → the German local text of the field (the field has no timezone; treat as local).
   function toLocalInput(iso: string | null): string {
     if (!iso) return ''
     const d = new Date(iso)
     if (Number.isNaN(d.getTime())) return ''
     const pad = (n: number) => String(n).padStart(2, '0')
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+    return formatLocalInputDe(
+      `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`,
+    )
   }
 
   async function schedule(ch: ChannelId) {
     const v = scheduleInput[ch]
     if (!v) return
-    const iso = new Date(v).toISOString()
+    // The field shows German order; what is stored and sent is the ISO instant.
+    const local = parseDateTimeDe(v)
+    if (!local) {
+      publishError[ch] = 'Bitte Datum und Uhrzeit so eingeben: TT.MM.JJJJ HH:MM'
+      return
+    }
+    const iso = new Date(local).toISOString()
     publishError[ch] = ''
     // The scheduler sends whatever the post holds at tick time: save the text on
     // screen first, and arm nothing when that fails.
@@ -412,7 +423,7 @@
         {publishing[ch] ? 'Veröffentlicht…' : 'Jetzt veröffentlichen'}
       </button>
       <div class="sched">
-        <input type="datetime-local" bind:value={scheduleInput[ch]} aria-label="Geplante Zeit" />
+        <DateTimeDe bind:value={scheduleInput[ch]} label="Geplante Zeit" />
         <button class="btn-secondary" onclick={() => schedule(ch)} disabled={!scheduleInput[ch]}>
           Planen
         </button>
@@ -672,7 +683,6 @@
   .publish { margin-top: 12px; border-top: 1px solid var(--border, #eee); padding-top: 12px; }
   .publish-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
   .sched { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-  .sched input { padding: 6px 8px; border: 1px solid var(--border, #ccc); border-radius: 6px; font-size: 13px; background: var(--surface, #fff); color: inherit; }
   .btn-primary { padding: 7px 14px; border: 1px solid var(--accent, #345); border-radius: 6px; background: var(--accent, #345); color: var(--paper, #fff); font-size: 13px; cursor: pointer; }
   .btn-primary:disabled { opacity: 0.6; cursor: default; }
   .btn-secondary { padding: 6px 12px; border: 1px solid var(--border, #ccc); border-radius: 6px; background: var(--surface, #fff); color: inherit; font-size: 13px; cursor: pointer; }

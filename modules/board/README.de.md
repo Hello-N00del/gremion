@@ -1,4 +1,4 @@
-<!-- i18n-sync: source=README.md sha256=fb69fd1d54ea6190c10e124d314e652e760be22df733cf2a6b17248f84859467 -->
+<!-- i18n-sync: source=README.md sha256=f695e336c608a1d6e8431201d5e421f5a41198c671dbe363e91f36792d101d9c -->
 [English](./README.md) | **Deutsch**
 
 # board
@@ -43,7 +43,7 @@ Leaf (`src/http/routes.ts`), alle Routen außer `/healthz` hinter dem Shared-Sec
 
 `GET|POST /api/v1/boards`, `GET /api/v1/boards/:id`, `POST /api/v1/boards/:id/stacks`,
 `GET /api/v1/boards/:id/deck`, `POST /api/v1/boards/:id/promote`, `POST /api/v1/cards`,
-`PATCH /api/v1/cards/:id/move`, `POST /api/v1/cards/promoted`.
+`PATCH /api/v1/cards/:id`, `PATCH /api/v1/cards/:id/move`, `POST /api/v1/cards/promoted`.
 
 ## Migrationen
 
