@@ -19,14 +19,14 @@ declared `nonMigration[]` entry; `make lint-migration-register` (part of
 
 ```sh
 node scripts/migrations/register.mjs claim --chain kernel-data --name my_change
-#   -> gremion-ui/migrations/0059_my_change.sql   (highWater 58 -> 59)
+#   -> gremion-ui/migrations/0065_my_change.sql   (highWater 64 -> 65)
 # write the file, regenerate the chain's manifest, then
 node scripts/migrations/register.mjs freeze --chain kernel-data
 node scripts/migrations/register.mjs check
 ```
 
 A block of a multi-directory chain is claimed with `--dir`
-(`--chain kernel-data --dir modules/content/app/migrations` -> `1202_...`).
+(`--chain kernel-data --dir modules/content/app/migrations` -> `1203_...`).
 
 **Standing grant (after TASK-029 merges):** the `highWater` lines of
 `ranges.json` and the entries of `applied.lock.json` are shared-append for
@@ -49,22 +49,23 @@ database. `legacyFloor` / `legacy[]` are written once and never edited
   Module leaf chains run in their own databases: the finance leaf legitimately
   carries `money_running_no_fiscal_year_idx` / `money_fk_indexes`.
 
-## Chains at the freeze (2026-09-28)
+## Chains (read on 2026-11-11; the lock was frozen on 2026-09-28)
 
 | Chain | Database | Dirs | Pad | Files |
 |---|---|---|---|---|
-| `kernel-data` | kernel | `gremion-ui/migrations` + block `modules/content/app/migrations` [1200, 1299] | 4 | 31 legacy (<= 0058) + 1200, 1201, 1202 |
+| `kernel-data` | kernel | `gremion-ui/migrations` + block `modules/content/app/migrations` [1200, 1299] | 4 | 31 legacy (<= 0058), 0059 to 0064, and 1200, 1201, 1202 (`highWater` 64; block `highWater` 1202) |
 | `control` | control | `gremion-ui/migrations-control` | 3 | 5 legacy (<= 006, gap at 005) |
-| `module-<id>` | module:<id> | `modules/<id>/migrations` (board, calendar, content, finance, publishing, vault) | 3 | 15, numbers kept |
-| `kernel-api` | service:kernel-api | `services/kernel-api/migrations/{bodies,authz,roles,erasure}` | 4 | none yet |
-| `governance`, `mail` | service:<id> | `services/<id>/migrations` | 4 | none yet |
-| `platform` | gremion_platform | `packages/tenant-store/src/lifecycle/platform-migrations` (TASK-021) | 4 | 3 legacy (<= 0003) |
+| `module-<id>` | module:<id> | `modules/<id>/migrations` (board, calendar, content, finance, publishing, vault) | 3 | 16 in all (board 1, calendar 3, content 3, finance 6, publishing 1, vault 2), numbers kept |
+| `kernel-api` | service:kernel-api | `services/kernel-api/migrations/{bodies,authz,roles,erasure,core}` | 4 | 5 (`highWater` 5) |
+| `governance` | service:governance | `services/governance/migrations` | 4 | 1 (`0001_gov_setup.sql`) |
+| `mail` | service:mail | `services/mail/migrations` | 4 | none yet (the directory does not exist) |
+| `platform` | gremion_platform | `packages/tenant-store/src/lifecycle/platform-migrations` (TASK-021) | 4 | 17 (3 legacy, <= 0003; `highWater` 17) |
 
 A chain with no file must keep `highWater` 0 and no locked file. The rule is
 read **per chain**: an empty lock entry (`files: {}`) counts as "no lock
 entry", and a declared directory of a chain that already has files elsewhere
-may still be absent. `kernel-api`'s four subdirectories fill one at a time
-(TASK-080/081/204/132), so refusing an absent sibling would refuse the first
+may still be absent. `kernel-api`'s subdirectories filled one at a time
+(TASK-080/081/204/132), so refusing an absent sibling would have refused the first
 claim into any of them.
 
 ## Deviations from the brief (recorded for the ledger)
@@ -91,7 +92,7 @@ claim into any of them.
 
 ## Known limits (residuals)
 
-- The kernel-data chain spans two directories and `kernel-api` four; a runner
+- The kernel-data chain spans two directories and `kernel-api` five; a runner
   that reads the union of `dirs[]` ordered by number is TASK-075/077's.
   `chainPreApply` already treats the chain as that union.
 - gremion-ui's own ledger (`db.ts`) has no sha256 column, so the kernel data
@@ -109,7 +110,7 @@ claim into any of them.
   (`LEDGER_NAME_NOT_IN_CHAIN`, proven in `runtime.test.mjs`); wiring it into
   the kernel data plane belongs to the same owner as the ledger hash (a
   `db.ts` change beyond G5 is outside this unit).
-- `modules/content/app/migrations` (1200, 1201; kernel database) has no
+- `modules/content/app/migrations` (1200, 1201, 1202; kernel database) has no
   `manifest.json` and so no `manifestDirs` entry: neither verify's
   migration-hash suite nor `verifyApplied` covers it, and `verifyApplied`
   would refuse those rows as `NOT_IN_MANIFEST` once a union runner uses it

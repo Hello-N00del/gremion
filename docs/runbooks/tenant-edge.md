@@ -16,40 +16,51 @@ both names appear in the compose files and Traefik router labels below.
 ## Topology
 
 ```
-browser ──TLS──> CDN / tunnel edge ──https──> traefik:443 ──> app routers
-                                                              ├─ gremion-ui   (apex + one router per tenant host)
-                                                              ├─ keycloak   (/auth path routers)
-                                                              └─ gremion-public (public.example.org)
+browser ──TLS──> traefik:443 (the host's edge address) ──> routers
+                                                           ├─ gremion-ui   (one router file per tenant host, on the active colour)
+                                                           └─ keycloak   (/auth path routers on the apex; the realm paths on a customer host)
 ```
+
+- **The public portal has no public router by default.** `active.yml`
+  defines the `public` and `public-next` services for `gremion-public`, and the
+  only router of the rendered files that uses one of them is the loopback-only
+  `test-public` router of the inactive colour
+  (`infra/host/templates/edge/active.yml.tmpl`). Neither the compose labels nor
+  the per-tenant router files route a public host to the portal. A customer's
+  own portal host gets its router from one hand-placed file,
+  `etc/edge/public-host.yml` ([public-portal-host.md](public-portal-host.md)).
 
 - **Traefik is the sole ingress** and runs only in the `production` profile
   (`docker-compose.yml`, `profiles: [production]`). In local dev there is no
-  Traefik — services are reached on direct host ports. The governance-only
-  default stack is seven services (postgres, keycloak, gremion-ui, gremion-public,
-  legal, vector, mailpit); the `production` profile adds **traefik** and
-  **docker-socket-proxy**, and `docker-compose.prod.yml` additionally brings up
-  **pgbouncer**, the **fallback** "starting" page, and a **cloudflared** tunnel
-  connector.
-- **Origin TLS.** Traefik serves a certificate via its file provider
-  (`docker/traefik/dynamic/tls.yml`); cert/key are mounted from
-  `secrets/cf-origin.pem` / `secrets/cf-origin.key` on the `traefik` service.
-  Use a wildcard certificate (SAN covering `example.org` and `*.example.org`) so
-  every tenant host terminates on the same cert with no per-tenant ACME work —
-  the edge routers stay bare `tls=true` (no certresolver).
-- **The edge connector** (`cloudflared` in `docker-compose.prod.yml`) runs
-  `tunnel --no-autoupdate run`, reads `TUNNEL_TOKEN` from the environment
-  (`CF_TUNNEL_TOKEN` in `.env`), and dials out to the CDN edge — no inbound
-  ports are opened on the host. Public-hostname → `https://traefik:443` routing
-  lives in the tunnel provider's dashboard, not in this repo. The repo ships
-  only `docker/cloudflared/origin-ca-root.pem` (the origin CA the connector uses
-  to verify Traefik's cert), mounted read-only at
-  `/etc/cloudflared/origin-ca.pem`.
+  Traefik — services are reached on direct host ports. It belongs to the state
+  project together with `docker-socket-proxy`, `pgbouncer` and the `fallback`
+  "starting" page (`docker-compose.prod.yml`); `gremion-ui` and `gremion-public`
+  are the app project's, one project per colour, reached only through
+  `etc/edge/active.yml` and the per-tenant router files
+  ([deployment-architecture.md](../deployment-architecture.md)). There is no
+  `cloudflared` service and no tunnel: `docker-compose.prod.yml` records it as
+  removed.
+- **TLS.** Traefik obtains its certificates itself from an ACME CA over HTTP-01
+  through the `le-http` resolver (`docker/traefik/traefik.yml`); the host
+  publishes `:80` and `:443` on its edge address and requests arrive directly.
+  Each rendered router file names its resolver itself (`certResolver`; a router
+  with a bare `tls` serves Traefik's self-signed default), so
+  there is no wildcard certificate, no origin certificate
+  (`docker/traefik/dynamic/tls.yml` and the Cloudflare Origin mounts are gone)
+  and no per-tenant certificate step. Details and checks:
+  [deployment.md](../deployment.md#the-edge-traefik--acme).
+- **DNS.** A tenant host is an ordinary `A`/`AAAA` record at the registrar,
+  published by hand at the host's edge address; the zone wildcard is deliberately
+  absent. `gremion-dns-check` reads what is published (edit 2 covers the tenant
+  hosts), and the create request's `domain_bound` step runs a DNS pre-flight
+  against the edge address.
 
 ## How a tenant host resolves to a tenant
 
 Tenant selection is performed in `gremion-ui` by the resolver
-(`gremion-ui/src/lib/server/tenant/resolve.ts`), which runs as element 0 of the
-handle sequence — before auth:
+(`gremion-ui/src/lib/server/tenant/resolve.ts`), which runs in the handle sequence
+after the correlation, CSP, request-path, body-size and CSRF-origin guards and
+before auth:
 
 1. **The WHOLE edge-forwarded host is the key.** The resolver normalises the
    trusted `X-Forwarded-Host` (`normaliseHost` in `tenant/host.ts`: lowercase,
@@ -79,12 +90,14 @@ host cross-check make this enforceable rather than topology-only.
 
 ## Operator steps
 
-> Run these against the **production** composition:
-> ```bash
-> docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile production <cmd>
-> ```
-> Use `up -d --force-recreate <svc>` (never plain `restart`) whenever an env var
-> changes — a restart does **not** reload `.env`.
+> On a distribution host, run `docker compose` only as
+> `docker compose --env-file /opt/gremion/etc/env/<project>.env <cmd>` from the
+> release tree (`state` for Traefik, Keycloak and the databases; `app-blue` /
+> `app-green` for the app colours). The env file carries `COMPOSE_FILE`, the
+> project name and the profiles, so no `-f`, `-p` or `--profile` is passed
+> ([docs/ops/runbook/README.md](../ops/runbook/README.md)). Use
+> `up -d --force-recreate <svc>` (never plain `restart`) whenever an env value
+> changes — a restart does **not** re-read the env file.
 
 ### ⛔ STEP 0a — bind every host you serve (no wildcard)
 
@@ -112,10 +125,14 @@ A host reaches a tenant only when BOTH exist:
 > `etc/edge/tenant-<slug>.yml` from the host. Do not hand-insert
 > `tenant_domain` rows: a raw `INSERT` skips all three guards.
 
-The compose files carry only the apex routers (`gremion-ui`, `keycloak`,
-`keycloak-admin`, `fallback`), each literal on `${DOMAIN}`. A request for any
-other host gets Traefik's own no-router 404 (visible in Traefik's access log
-with an empty router name). `make lint-edge-host`
+The compose files carry only apex routers (`keycloak`, `keycloak-admin`,
+`fallback`, plus the pilot services' `matrix` and `livekit`), each literal on
+`${PLATFORM_DOMAIN}`, and two anchor routers on reserved `.invalid` hosts
+(`collabora-anchor` on the loopback-only `internaltest` entrypoint and
+`edge-labels` on the unpublished `ping` entrypoint), which answer nothing from
+outside and only keep Traefik from generating a default router for their
+containers; the `gremion-ui` routers left with the app tier (TASK-040). A request for any other host gets Traefik's own no-router 404
+(visible in Traefik's access log with an empty router name). `make lint-edge-host`
 (`scripts/check-edge-host-model.mjs`) fails the tree if a `HostRegexp` leg, the
 old wildcard env key, the apex default-tenant injection or the leftmost-label
 resolver comes back.
@@ -123,9 +140,8 @@ resolver comes back.
 Verify the rendered apex routers (read-only — never `up`):
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.prod.yml \
-  --profile production config \
-  | grep -E 'routers\.(gremion-ui|keycloak|keycloak-admin|fallback)\.rule'
+docker compose --env-file /opt/gremion/etc/env/state.env config \
+  | grep -E 'routers\.(keycloak|keycloak-admin|fallback)\.rule'
 # PASS: every rule is Host(`example.org`) literal (keycloak adds its path prefixes)
 # FAIL: any HostRegexp(...) leg
 ```
@@ -152,17 +168,17 @@ tenant's data plane**. That middleware is gone (TASK-041), but the header is now
 the ENTIRE tenant selector, so the inner hop must still never meet an edge that
 could restate it.
 
-**`INTERNAL_BASE_URL=http://gremion-ui:3000`** (set on the gremion-ui service in
-`docker-compose.yml`, inherited by prod) points the hop at the in-container
-service origin directly — it never traverses Traefik, so the stamped primary
-host survives and the resolver re-selects the correct tenant. **Leave it set; do NOT point it at the public apex.** Verify
-(read-only — never `up`):
+**`INTERNAL_BASE_URL=http://gremion-ui-<colour>:3000`** (set on the `gremion-ui`
+service in `docker-compose.app.yml`, derived from `COLOUR` and never read from an
+env file) points the hop at this colour's own container directly — it never
+traverses Traefik, so the stamped primary host survives and the resolver
+re-selects the correct tenant. **Leave it as it is; do NOT point it at the public
+apex.** Verify (read-only — never `up`):
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.prod.yml \
-  --profile production config \
-  | grep -A1 'INTERNAL_BASE_URL'
-# PASS: INTERNAL_BASE_URL: http://gremion-ui:3000   (an in-container origin)
+docker compose --env-file /opt/gremion/etc/env/app-blue.env config \
+  | grep 'INTERNAL_BASE_URL'
+# PASS: INTERNAL_BASE_URL: http://gremion-ui-blue:3000   (an in-container origin)
 # FAIL: absent (falls through to the public apex) OR https://example.org
 ```
 
@@ -179,57 +195,55 @@ registry lookup. An `internalFetch` hop never traverses the edge, so its
 `x-internal-host-trust` secret (STEP 0b) satisfies the gate as an OR.
 
 The gate is **fail-open only while the secret is unset** (a byte-identical
-no-op). The app env line and the Traefik label both interpolate the same
-`.env` var — set them together, or the middleware stamps a header the app never
-checks. Once set, the gate is fail-closed (absent/mismatched header → 403).
+no-op). The app env line (`app-<colour>.env`, read by `docker-compose.app.yml`)
+and the Traefik label (`state.env`, read by `docker-compose.prod.yml`) both
+interpolate `TENANT_PROXY_SHARED_SECRET` — set them to the same value together,
+or the middleware stamps a header the app never checks. Once set, the gate is
+fail-closed (absent/mismatched header → 403). The `kernel-api` service refuses
+to start without it, so a host that runs the app project has it set.
 
-### ⛔ STEP 0d — materialize the default tenant's stored config BEFORE the recreate
+### ⛔ STEP 0d — materialize a tenant's stored config BEFORE the recreate
 
 The kernel ships **no** institution-identity defaults in source — `config.ts`
 does not back-fill any brand block. The brand-identity readiness guard
 therefore **refuses to boot a tenant whose stored `config.json` lacks a complete
-brand block** (a loud, tenant-scoped 503). Before a recreate brings gremion-ui up,
-bake the fully-merged effective config back to each tenant's stored
-`config.json`:
+brand block** (a loud, tenant-scoped 503). A create request writes the brand
+identity into the tenant's config; a tenant whose config predates that needs it
+baked in before a recreate brings the new colour up. Bake the fully-merged
+effective config back to the tenant's stored `config.json`:
 
 ```bash
-# Against the default tenant's live config.json (CONFIG_PATH). Add <slug> for a
-# non-default tenant, or --config <path> to point at a specific file.
-pnpm -C gremion-ui exec tsx scripts/tenant-provision.mjs materialize-config
+# <slug> is required. Add --config <path> to point at a specific file.
+pnpm -C gremion-ui exec tsx scripts/tenant-provision.ts materialize-config <slug>
 ```
 
 The command merges current defaults into the stored config, enforces the
 brand-identity guard, and writes the complete config back atomically. **If the
 stored config has a blank/missing brand it exits non-zero and writes nothing** —
-fix the brand (Setup wizard / Settings) and re-run before deploying.
+fix the brand (Settings) and re-run before deploying.
 
-### 1. Add the wildcard public hostname on the tunnel
+### 1. Publish the host's DNS records
 
-A wildcard tunnel hostname only carries `*.example.org` traffic to Traefik. It
-serves nothing by itself: which hosts reach a tenant is decided by the
-per-host routers and `tenant_domain` rows of STEP 0a. A customer's own domain
-(not under `example.org`) needs its own literal public hostname.
+At the registrar, add an `A` (and `AAAA`) record for the tenant host that points
+at the host's edge address (`EDGE_BIND_IP` / `EDGE_BIND_IP6` in `state.env`). A
+customer's own domain (not under `example.org`) needs its own record. There is
+no wildcard record and no tunnel hostname: which hosts reach a tenant is decided
+by the per-host routers and `tenant_domain` rows of STEP 0a. Check what is
+published:
 
-In the tunnel provider's dashboard, add a public hostname for the tunnel:
+```bash
+gremion-dns-check --domain example.org --edge-ip <EDGE_BIND_IP> --edge-ip6 <EDGE_BIND_IP6> \
+  --mail-ip <mail address> --tenant-hosts <file, one host per line> --edit 2
+```
 
-- Subdomain: `*` — Domain: `example.org` (i.e. `*.example.org`)
-- Service: **HTTPS** → `traefik:443`
-- TLS → **Origin Server Name:** `example.org`; **CA Pool:**
-  `/etc/cloudflared/origin-ca.pem` (the mounted origin CA root)
+### 2. Let the edge issue the certificate
 
-Mirror these TLS settings on the apex (`example.org`) and the public-portal
-(`public.example.org`) hostnames.
-
-### 2. Add the wildcard DNS record manually
-
-Some tunnel dashboards auto-create DNS for **literal** hostnames but not for
-wildcard public hostnames. Add a `CNAME` record manually in the DNS zone:
-
-- Type: `CNAME` — Name: `*`
-- Target: `<TUNNEL_ID>.cfargotunnel.com` (the tunnel UUID; same target as the
-  apex record)
-- Proxy status: **Proxied** (required — `cfargotunnel.com` is not directly
-  reachable)
+Nothing to configure per tenant. The router file written by the create request
+names the `le-http` resolver, so Traefik requests a certificate for the host over
+HTTP-01 when it loads that file (`:80` must reach Traefik, which is why the `web`
+entrypoint never captures `/.well-known/acme-challenge/`, and the host's DNS
+record must already resolve to the edge address). Rehearse against the ACME staging directory
+first (`ACME_CA_SERVER`, [deployment.md](../deployment.md#the-edge-traefik--acme)).
 
 ### 3. Create the control-plane DB on an existing volume (one-shot)
 
@@ -237,14 +251,14 @@ Postgres `initdb` hooks do **not** re-run on an existing data volume, so the
 `control` database (tenant registry + fleet-migration ledger,
 `gremion-ui/migrations-control/`) added to `docker/postgres/init-databases.sh`
 must be created once by hand on an upgraded host. The `CONTROL_DB_*` env keys
-and `CONTROL_DATABASE_URL` must already be on the containers — so recreate
-postgres + gremion-ui FIRST, then re-run the bind-mounted init script (idempotent
-by construction — every statement is create-if-missing / grant):
+must already be on the `postgres` container (`state.env`) and
+`CONTROL_DATABASE_URL` on the app colour — so recreate `postgres` and the app
+colour FIRST, then re-run the bind-mounted init script (idempotent by
+construction — every statement is create-if-missing / grant):
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.prod.yml \
-  --profile production exec postgres \
-  bash /docker-entrypoint-initdb.d/init-databases.sh
+docker compose --env-file /opt/gremion/etc/env/state.env \
+  exec postgres bash /docker-entrypoint-initdb.d/init-databases.sh
 ```
 
 Verify: `… exec postgres psql -U "$POSTGRES_USER" -l` lists `control` owned by
@@ -254,7 +268,7 @@ Verify: `… exec postgres psql -U "$POSTGRES_USER" -l` lists `control` owned by
 ### 4. Create the tenant-secrets host dir BEFORE the recreate
 
 ```bash
-mkdir -p secrets/tenants
+mkdir -p secrets/tenants     # a host sets TENANT_SECRETS_DIR=/opt/gremion/etc/secrets/tenants (bootstrap.sh creates it)
 ```
 
 The gremion-ui service carries a read-only bind mount
@@ -311,17 +325,9 @@ file that carries the realm router.
    the app has `TENANT_PROXY_SHARED_SECRET` set but the Traefik
    `gremion-ui-proxytrust` middleware is not stamping a matching `x-proxy-trust`
    (the env var and the label must hold the same value).
-4. **Edge 5xx (e.g. 530)** = the tunnel rejected/missed the hostname (step 1).
-5. **NXDOMAIN** = the DNS record is missing (step 2).
-
-## Residual risk + fallback
-
-**Wildcard public hostnames on a tunnel may be gated by account/plan.** If the
-dashboard rejects `*.example.org` in step 1, the fallback is to **enumerate
-per-tenant hostnames at provisioning time**: for each new tenant add a literal
-public hostname `<slug>.example.org` → `https://traefik:443` (same Origin Server
-Name + CA pool as step 1); dashboards typically auto-create DNS for literal
-hostnames. This becomes a documented manual step in the tenant-provisioning
-runbook ([tenant-lifecycle.md](./tenant-lifecycle.md)); it is deliberately not
-automated (no tunnel-provider API token in this stack). The wildcard DNS record
-from step 2 is harmless to keep in either case.
+4. **Edge 5xx** = the colour behind `active.yml` is not answering `/healthz`
+   (Traefik's service health check removes it), or the `fallback` "starting"
+   page is being served; read `gremion-verify`.
+5. **NXDOMAIN, or the default certificate** = the DNS record is missing (step 1),
+   or the router names no certificate resolver (step 2; `gremion-verify` turns the
+   latter red).

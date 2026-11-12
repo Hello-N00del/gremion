@@ -11,16 +11,20 @@
 > [`docs/playbooks/extract-a-service.md`](./extract-a-service.md) (that one cuts an
 > existing module OUT to its own service; this one plugs a new one IN).
 >
-> **What ships in the kernel.** The Gremion kernel registers exactly **two**
+> **What ships in the kernel.** The kernel's own source registers exactly **two**
 > manifests — `core` (the always-on shell: dashboard, settings, systemstatus) and
 > `governance` (the always-on flagship: members, committees, portal, protocols,
-> resolutions). Both are `toggleable:false`. Everything else — every feature
-> vertical — is a module added through this playbook, and lives in the kernel only
-> when its files are present. Feature modules (elections, newsletter, calendar,
-> files, messages, board, users, finance, content, vault, handover)
-> live in their own repositories — one per module — and plug in over this same
-> SDK; they are never required for the kernel to build or boot. Most are
-> AGPL-3.0-only; finance, content, vault and handover are closed.
+> resolutions), committed as `gremion-ui/src/lib/modules/manifests/core.ts` and
+> `governance.ts`. Both are `toggleable:false`. Everything else — every feature
+> vertical — is a module added through this playbook. The feature modules
+> (board, calendar, content, elections, files, finance, handover, messaging,
+> publishing, vault, votes) live under `modules/<id>/` in this tree
+> ([modules.md](../modules.md)); each keeps its in-process half under
+> `modules/<id>/app/`, which `gremion-ui/scripts/interim-module-overlay.mjs`
+> copies onto `gremion-ui/src/` before every build, check and test, and a module
+> listed in `modules/disabled.json` (today `finance` and `vault`) is left out of
+> the default build. They plug in over this same SDK and are never required for
+> the kernel to build or boot.
 >
 > **The load-bearing promise.** Adding a module edits **NO shared composition
 > function**. You write the module's own files (manifest, server logic, routes,
@@ -78,6 +82,13 @@ interface ModuleManifest {
   nav?: NavItem[]                                  // rail fragment, woven at its
                                                    //   { slot:'module', moduleId }
                                                    //   anchor
+  defaultEnabled?: boolean                         // initial config.modules[id]
+                                                   //   of a toggleable module;
+                                                   //   absent = true, false = off
+  status?: { label: string; service?: string; note?: string }
+                                                   // Systemstatus module card
+  processing?: ModuleProcessing                    // record of processing
+                                                   //   activities (TRD-162)
 }
 ```
 
@@ -91,8 +102,9 @@ manifests (`core` is `10`, `governance` is `15`); appending high keeps existing
 
 > **Evidence anchors:** `gremion-ui/src/lib/modules/types.ts` (the interface +
 > field-level docs); `gremion-ui/src/lib/modules/manifests/governance.ts` and
-> `manifests/core.ts` are the two registered references (both `toggleable:false`,
-> both carry an explicit `order`). The throwaway `demo_vertical` manifest in
+> `manifests/core.ts` are the two kernel references (both `toggleable:false`,
+> both carry an explicit `order`); `modules/calendar/app/lib/modules/manifests/calendar.ts`
+> is a toggleable module's manifest. The throwaway `demo_vertical` manifest in
 > `add-a-module.proof.test.ts` is a fully-populated example carrying one of every
 > field.
 
@@ -108,30 +120,45 @@ manifests (`core` is `10`, `governance` is `15`); appending high keeps existing
 
 A module is a fan of files under stable, predictable locations. **None** of the
 kernel composition files are hand-edited. You add the module's own files and
-re-run two build-time scanners that regenerate the committed barrels.
+re-run build-time scanners that regenerate the committed barrels.
+
+In this tree a module's in-process half lives under `modules/<id>/app/`, laid out
+like `gremion-ui/src/` (`modules/<id>/app/<rest>` ↔ `gremion-ui/src/<rest>`), and
+the overlay copies it into `gremion-ui/src/` (the copies are gitignored build
+output). The paths below are written relative to `gremion-ui/src/`; put your
+files in the same place under `modules/<id>/app/`. A module also carries a
+`modules/<id>/module.json` (the catalogue entry), a `README.md` and a row in
+[docs/modules.md](../modules.md) (`scripts/check-module-docs.mjs` fails without
+them), and, when it owns a store, a leaf service under `modules/<id>/src/`.
 
 | Surface | Location | Shared? |
 |---|---|---|
-| **Manifest** | `gremion-ui/src/lib/modules/manifests/<mod>.ts` | new file |
-| **Registration** | _none by hand_ — `scripts/build-module-manifest.mjs` scans `manifests/*.ts` → emits `manifests/index.generated.ts` | codegen output |
-| Server logic | `gremion-ui/src/lib/server/<mod>/` | new dir |
-| **Server self-registration** | `gremion-ui/src/lib/server/<mod>/register.server.ts` (optional; §7) — picked up by `scripts/build-module-server-init.mjs` → `server/modules/server-init.generated.ts` | codegen output |
-| Page routes | `gremion-ui/src/routes/<mod>/` (must match a `pages[].segment` + a `routePrefixes` entry) | new dir |
-| API routes | `gremion-ui/src/routes/api/<mod>/` (must match a `routePrefixes` entry) | new dir |
-| Migrations | `gremion-ui/migrations/NNN_<mod>_<name>.sql` — **OWNED tables only** | new files |
+| **Manifest** | `lib/modules/manifests/<mod>.ts` | new file |
+| **Registration** | _none by hand_ — `gremion-ui/scripts/build-module-manifest.mjs` scans `manifests/*.ts` → emits `manifests/index.generated.ts` | codegen output |
+| Server logic | `lib/server/<mod>/` | new dir |
+| **Server self-registration** | `lib/server/<mod>/register.server.ts` (optional; §7) — picked up by `gremion-ui/scripts/build-module-server-init.mjs` → `lib/server/modules/server-init.generated.ts` | codegen output |
+| Page routes | `routes/<mod>/` (must match a `pages[].segment` + a `routePrefixes` entry) | new dir |
+| API routes | `routes/api/<mod>/` (must match a `routePrefixes` entry) | new dir |
+| Migrations | `modules/<id>/app/migrations/NNNN_<name>.sql`: a four-digit number from the module's block of the `kernel-data` chain in `scripts/migrations/ranges.json` (content holds 1200–1299, e.g. `1200_content_news_posts.sql`), claimed with `node scripts/migrations/register.mjs claim --chain kernel-data --dir modules/<id>/app/migrations --name <slug>` ([`scripts/migrations/README.md`](../../scripts/migrations/README.md)); copied to `gremion-ui/migrations/` by `interim-module-overlay.mjs --migrations` (build only) — **OWNED tables only**, and no basename or number may collide with a kernel one (`scripts/check-module-migration-names.mjs`) | new files |
 | Realm fragment | declared in the manifest's `realm` (KC groups/roles) | in-manifest |
 | Capabilities | declared in the manifest's `capabilities` | in-manifest |
 | Nav | declared in the manifest's `nav` (+ a `{ slot:'module', moduleId }` anchor) | see §6 |
 
-**The two codegen re-runs.** After dropping your files in place:
+**The codegen re-runs.** After dropping your files in place, from `gremion-ui/`:
 
 ```sh
+# 0. Copy every enabled module's app/ half onto src/ (only for a module under modules/).
+node scripts/interim-module-overlay.mjs
+
 # 1. Re-scan manifests/*.ts → regenerate the registry barrel.
 node scripts/build-module-manifest.mjs
 
 # 2. Re-scan src/lib/server for register.server.ts → regenerate the boot barrel.
 node scripts/build-module-server-init.mjs
 ```
+
+(`pnpm build` runs the same chain as `prebuild`, plus the migration manifests;
+`pnpm check` and the test scripts run the overlay first.)
 
 `build-module-manifest.mjs` reads every `manifests/*.ts`, extracts each file's
 `export const <name>Manifest` and its `order:` rank, and writes
@@ -155,16 +182,17 @@ a migration of yours fall outside your `migrations[]` list.
 
 > **Evidence anchors:** `gremion-ui/scripts/build-module-manifest.mjs` (the manifest
 > scanner; exits 1 on a missing `order`); `gremion-ui/scripts/build-module-server-init.mjs`
-> (the boot-barrel scanner); `gremion-ui/src/lib/modules/manifests/index.ts`
+> (the boot-barrel scanner); `gremion-ui/scripts/interim-module-overlay.mjs` (the
+> `modules/<id>/app/` overlay); `gremion-ui/src/lib/modules/manifests/index.ts`
 > (re-exports the generated barrel); `gremion-ui/src/lib/modules/registry.ts`
 > (re-exports `MODULE_MANIFESTS` for all downstream consumers).
 
 ### Checklist
-- [ ] Manifest at `manifests/<mod>.ts`; **re-run `build-module-manifest.mjs`** and commit the regenerated `index.generated.ts`.
+- [ ] Manifest at `manifests/<mod>.ts` (under `modules/<id>/app/lib/modules/manifests/` for a module of this tree); **re-run the overlay and `build-module-manifest.mjs`** and commit the regenerated `index.generated.ts`.
 - [ ] Server logic under `lib/server/<mod>/`; if it has a `register.server.ts`, **re-run `build-module-server-init.mjs`** and commit `server-init.generated.ts`.
 - [ ] Pages under `routes/<mod>/`; APIs under `routes/api/<mod>/`.
 - [ ] Every `pages[].segment` and `routePrefixes` entry has a matching route directory.
-- [ ] Migrations named `NNN_<mod>_*.sql`, listed in `migrations[]`, touching OWNED tables only.
+- [ ] Migrations named `NNNN_<name>.sql` with a number claimed from the module's block (`register.mjs claim --dir`), listed in `migrations[]`, touching OWNED tables only, with names and numbers no kernel migration uses.
 
 ---
 
@@ -309,8 +337,8 @@ Put one `register.server.ts` in your module's server dir
 (`gremion-ui/src/lib/server/<mod>/register.server.ts`). `build-module-server-init.mjs`
 scans for it and emits the side-effect import barrel
 (`server/modules/server-init.generated.ts`), which `hooks.server.ts` imports once
-at cold start — running every module's registration. The registry exposes five
-kinds of contribution:
+at cold start — running every module's registration. The registry's main kinds
+of contribution are:
 
 - **Server-init (boot) hooks** — `registerServerInitHook(hook)`. Boot-time
   workers (schedulers, consumers, drains). The kernel runs them via
@@ -328,9 +356,18 @@ kinds of contribution:
   unregistered and the caller degrades to its empty state. The provider key set
   is the kernel-owned `DataProviderContract` — extend it there if your module
   contributes a new kernel-consumed read.
-- **Setup-wizard health probes** — `registerSetupHealthProbe(probe)`. A
-  credential probe the setup-wizard health route runs to predict provisioning
-  success; an unregistered module simply contributes no probe.
+- **Health probes** — `registerSetupHealthProbe(probe)`. A credential probe that
+  `GET /api/health` runs as a liveness check while the probe's `moduleId` is
+  enabled for the tenant (a failing probe lists its `service` under `degraded`);
+  an unregistered module simply contributes no probe. (The first-run setup wizard
+  that once ran these is gone.)
+
+The registry also carries the narrower ports a few modules fill — the protocol
+document port, the role-group grant resolver, decision rules, second-locus
+strategies and erasure hooks (`registerProtocolDocumentPort`,
+`registerRoleGroupGrantResolver`, `registerDecisionRule`,
+`registerSecondLocusStrategy`, `registerErasureHook`); read
+`runtime-registry.ts` for the full set.
 
 The point of the seam: `hooks.server.ts`, `tenant/registry.ts`, the governance
 orchestrator, and the kernel route loads depend ONLY on `runtime-registry.ts` —
@@ -342,7 +379,7 @@ the registry too, and register into it.
 > `server-init.generated.ts` changes (byte-pinned by `server-init.generated.test.ts`).
 >
 > **Evidence anchors:** `gremion-ui/src/lib/server/modules/runtime-registry.ts` (the
-> five registries + their register/run/get functions);
+> registries + their register/run/get functions);
 > `gremion-ui/scripts/build-module-server-init.mjs` (the scanner);
 > `gremion-ui/src/lib/server/modules/runtime-registry.test.ts`;
 > `gremion-ui/src/lib/server/boundary/kernel-clean.test.ts` (the boundary backstop
@@ -362,13 +399,15 @@ on-by-default and fully runtime-toggleable with no further wiring:
 
 - **Config toggle key (automatic).** `defaultModulesConfig()` (in `config.ts`)
   sources its toggleable ids from `MODULE_MANIFESTS`, so your id is `true` by
-  default with **zero edit to `config.ts`**. `config.modules` is an open
+  default (or `false` when the manifest sets `defaultEnabled: false`) with **zero
+  edit to `config.ts`**. `config.modules` is an open
   `Record<string, boolean>`; the zod schema (`modulesSchema`) and the `mergeStored`
   back-fill accept your id structurally. `REQUIRED_MODULES` is **`[]`** in the
   governance-only kernel — it ships no always-on feature modules (the `core` and
   `governance` manifests are `toggleable:false`, so they never appear in the toggle
   map at all). A feature module contributes its own required ids only if it is
-  present.
+  present. A module that must stay off for a customer also joins
+  `HELD_OFF_MODULE_IDS` in `gremion-ui/src/lib/modules/held-off.ts`.
 
 - **Migration gating + OFF→ON catch-up (automatic).** On a **fresh init** with the
   module OFF, `disabledModuleMigrationFiles` filters your `migrations[]` out of the
@@ -423,14 +462,15 @@ every field above and asserts, **with no edit to any shared composition file**:
   gated (the module-gate 403s its prefix), migrations skipped on fresh init.
 - **DESELECT** disabling a toggleable module removes it from nav, page-access,
   capabilities, realm, and route-prefixes — purely via config / the manifest set,
-  with zero shared-file edits. (In the governance-only kernel the two registered
-  manifests `core` and `governance` are non-toggleable and never deselect, so the
-  throwaway `demo_vertical` proves the contract.)
+  with zero shared-file edits. (The two kernel manifests `core` and `governance`
+  are non-toggleable and never deselect, so the throwaway `demo_vertical` proves
+  the contract.)
 
 The list-parameterised seams (`composeNavSchema`, `composeRealm`,
 `disabledModuleMigrationFiles`, `moduleReenableCatchup`) receive the mock manifest
 as an argument; the global-set seams (`composePageAccess`, `moduleRoutePrefixes`,
 `composeCapabilities`, `defaultModulesConfig`, and the module-gate) get it by
 `vi.doMock`-ing the barrel `$lib/modules/manifests` to include the mock alongside
-the real `core` and `governance` manifests. Every seam is reachable with the mock
+the real `core` and `governance` manifests (not the overlaid module manifests).
+Every seam is reachable with the mock
 without any signature change, so there is no real-manifest-only fallback.

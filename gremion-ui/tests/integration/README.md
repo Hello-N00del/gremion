@@ -10,7 +10,8 @@ in — or pollute — that shared DB, so they live outside `src/**` and run in a
 for the purpose.
 
 > These are **deliberate local steps** run by hand against a stack you stand
-> up for the purpose, not CI gates; CI runs the unit and hygiene suites only.
+> up for the purpose, not CI gates: no CI job runs this lane (the shared
+> integration lane runs in the `verify-integration-db` job).
 
 ---
 
@@ -79,7 +80,7 @@ export SEED_USER_PASSWORD='pw'   # runSeed requires a seed password
 > supported scenario (the live `/api/setup/seed` endpoint 409s on a non-empty
 > `org_units`), so always start from a fresh volume.
 
-### Run (criteria 1–6)
+### Run (criteria 1–6; 5 has no case)
 
 ```bash
 pnpm -C gremion-ui test:deselection
@@ -92,8 +93,8 @@ pnpm -C gremion-ui test:deselection
 | 2 | Municipal vocabulary, no leakage | `loadOrgSchema()` kinds are **exactly** `administration/committee/council/district_council`; labels render `Gemeinderat`/`Ausschuss`/`Ortschaftsrat`; the StuRa-only `group`=Gruppe residue is pruned (T4) |
 | 3 | Councillor in 1 Fraktion + ≥2 Ausschüsse | `caucus_membership` count = 1 and `org_unit_members` of `kind='committee'` ≥ 2 for the Hauptausschuss councillor |
 | 4 | Distinct data-plane DB | `dbNameForSlug('musterstadt') === 't_musterstadt'`, ≠ `gremion` / `t_demo` (registry-level) |
-| 5 | LiveKit token mint tenant-scoped | `assertRoomInTenantNamespace` rejects a tenant-#1 caller from a `t.musterstadt.*` room and a musterstadt caller from another namespace (cross-tenant) |
-| 6 | Newsletter module absent from the kernel | `MODULE_MANIFESTS` (the kernel's generated manifest barrel) never registers a `newsletter` module id — carved out (gremion#22); a tenant that wants it gets it from the modules overlay (`gremion-modules`) |
+| 5 | (carved out) LiveKit token mint tenant-scoped | no case remains: the token-namespace check rode with the messages/video feature module and the test file only keeps a comment for it |
+| 6 | Newsletter module absent from the kernel | the case asserts that `MODULE_MANIFESTS` holds no `newsletter` module id. The committed barrel `src/lib/modules/manifests/index.generated.ts` now imports `newsletterManifest` (the manifest lives in `modules/publishing/` and `scripts/interim-module-overlay.mjs` copies it into `src/`; its id is `newsletter`, see `docs/modules.md`), so the barrel and this case disagree |
 
 ### Run (criterion 7 — realm contract, env-gated, optional)
 

@@ -31,17 +31,20 @@ project's name and is not used outwardly, for two independent reasons:
 The alias is named in two places — on this page, and in
 [`about-gremion.md`](./about-gremion.md) — so that a reader who encounters it in
 the commit history knows what it refers to. What still carries the old name in
-this tree is the header comment text of four applied migrations (`008`, `042`,
-`043`, `048`); it is inventoried as naming debt in
+this tree is the header comment text of four applied migrations (`0008`, `0042`,
+`0043`, `0048`); it is inventoried as naming debt in
 [`../KNOWN_ISSUES.md`](../KNOWN_ISSUES.md) and is not renamed in 0.1.0 because
 migration files are hash-pinned and forward-only — editing one after it has been
 applied makes every existing database fail integrity verification on boot.
 
-No Docker volume, network, or database name carries it: the volumes are
-`gremion_pg_data`, `gremion_mailpit_data`, `gremion_config_data`,
-`gremion_tenant_config_data`, `gremion_traefik_logs` and
-`gremion_vector_processed_logs`, the network is `gremion_net`, and the databases
-are `keycloak`, `gremion` and `control`.
+No Docker volume, network, or database name carries it: the state project's
+volumes are project-scoped (`pg-data`, `nats-data`, `mailpit-data`,
+`traefik-logs`, `vector-processed-logs` and the per-module `<id>-pg-data`
+volumes), the shared externals are `${STACK}_config_data`,
+`${STACK}_tenant_config_data`, `${STACK}_nats_accounts` and
+`${STACK}_traefik_acme`, the networks are `${STACK}_edge`, `${STACK}_state` and
+the colour-scoped `app`, and the databases are `keycloak`, `gremion`, `control`,
+`gremion_platform` and the per-customer `t_<hex32>__<module>`.
 
 ## Using the name
 

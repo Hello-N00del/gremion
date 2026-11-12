@@ -15,13 +15,14 @@ Addresses here are documentation values (`example.org`, `203.0.113.0/24`,
 
 | Project | Compose project name | Holds |
 |---|---|---|
-| state | `${STACK}-state` | every Postgres server, Keycloak, Traefik, socket proxy, pgbouncer, NATS, Redis, vector, legal, fallback, the sales site and the module-owned services |
-| app (blue) | `${STACK}-app-blue` | `gremion-ui`, `gremion-public`, the nine leaves, `migrate` |
+| state | `${STACK}-state` | every Postgres server (the kernel's, the governance one, each module's and each service's), Keycloak, Traefik, socket proxy, pgbouncer, NATS, Redis (Nextcloud's), vector, legal, fallback, and the pilot's services (Nextcloud, Collabora, Synapse, LiveKit, Element Call), each behind its own compose profile |
+| app (blue) | `${STACK}-app-blue` | `gremion-ui`, `gremion-public`, `control-panel`, `kernel-api`, the leaf services the install enables (`calendar-service`, `content-service`, `newsletter-service`), and the `migrate`, `tenant-create` and `kernel-api-migrate` one-shots |
 | app (green) | `${STACK}-app-green` | the same set, the other colour |
 
-"State project" is a **deploy-time placement**, never repo ownership: a
-module's service block lives in that module's own repository as
-`compose/<id>.yml` and is inlined by the assembler at release build.
+"State project" is a **deploy-time placement**, never repo ownership: a module's
+database server is a state-project service in `docker-compose.yml` (profile
+`<id>` or the module's own), its leaf service is an app-project service in
+`docker-compose.app.yml`, and the release layers pin the first-party ones.
 
 App-tier services carry `traefik.enable=false` and colour-suffixed network
 aliases; only the edge publishes ports. Composition is env-file only:
@@ -31,7 +32,7 @@ aliases; only the edge publishes ports. Composition is env-file only:
 
 | Network | Purpose | Created by |
 |---|---|---|
-| `${STACK}_edge` | Traefik ↔ app tiers, control plane, sales site, legal, fallback | the host bootstrap; `external: true` in every project |
+| `${STACK}_edge` | Traefik ↔ the app tier, Keycloak, legal, fallback and the routed pilot services (Collabora, Synapse, LiveKit) | the host bootstrap; `external: true` in every project |
 | `${STACK}_state` | databases, Keycloak, NATS, Redis, and the other state services | the host bootstrap; `external: true` |
 | `app` | one per colour, project-scoped | the colour project |
 
@@ -73,11 +74,17 @@ A release is a directory checked out at its tag, carrying:
 |---|---|
 | `release.json` | `{tag, overlap, migrations, distManifestDigest}`; the digest is `"sha256:" + 64 lowercase hex` of the manifest bytes as read — the bare hex form is rejected at both ends |
 | `docker-compose.pins.yml` | the app layer: every first-party app-tier service `build: !reset null` plus `image: …@sha256:` (the colour projects' pins) |
-| `docker-compose.state-pins.yml` | the state layer: the same for every first-party state service (legal, vector, fallback), layered only onto the state project |
+| `docker-compose.state-pins.yml` | the state layer: the same for every first-party state service (legal, vector, fallback, Synapse, the Nextcloud, Collabora and Element Call images), layered only onto the state project |
 | `docker-compose.app.yml` | the colour project's app-tier services |
 | `pnpm-lock.yaml` | the assembled lockfile, committed next to the pins, so `--frozen-lockfile` holds inside the image build |
 
-`gremion-migrate` is a separate first-party image, pinned like the others.
+Both layers are emitted by `.github/workflows/release-images.yml` (it builds and
+pushes every first-party image to ghcr.io and emits the layers from the pushed
+digests) and committed by `scripts/release/cut-dist-tag.sh`, which signs the
+pinned digests and pushes the annotated `dist-vX.Y.Z` tag
+([release cadence](ops/release-cadence.md)). `gremion-migrate` is a separate
+first-party image (the `migrate` and `tenant-create` one-shots), pinned like the
+others.
 `gremion-deploy` checks the release out with `git clone --depth 1 --branch
 <tag>` of the whole repository, so `docs/` travels with a release and
 `gremion-verify` reads the signed waiver ledger out of `current/docs/ops/`

@@ -1,9 +1,9 @@
 # Gremion — Testing Guide
 
 This document covers the Gremion governance-kernel test strategy: the
-application's static checks and Vitest suites (`gremion-ui`), the open-core
-boundary backstop, the module-registry golden, the add-a-module proof, and the
-infrastructure-level shell/integration tests.
+`make verify` gate, the application's static checks and Vitest suites
+(`gremion-ui`), the open-core boundary backstop, the module-registry golden, the
+add-a-module proof, and the infrastructure-level shell/integration tests.
 
 For the vision, architecture, and governance charter the kernel implements, see
 [about-gremion.md](about-gremion.md). This guide is the operational/technical
@@ -19,19 +19,54 @@ layer — how the kernel is verified, not what it is.
 
 | Test type | Tool | Scope | Requires Docker? |
 |-----------|------|-------|-----------------|
+| The gate | `make verify` (`scripts/verify/verify.mjs`) | The suites in `scripts/verify/required-suites.txt`, each judged for vacuity; see "The verify gate" | Some parts |
 | Static checks | `svelte-check` + `tsc` + custom guards | `gremion-ui` Svelte/TS sources, env/port/domain guards | No |
-| Unit tests | Vitest | Server clients, API routes, auth, the module SDK, `@gremion/db`, `@gremion/ports` | No |
+| Unit tests | Vitest | Server clients, API routes, auth, the module SDK, `@gremion/db`, `@gremion/ports`, `@gremion/storage` | No |
+| Browser tests | Vitest browser mode (Chromium) | The responsive navigation shell components | No |
 | Boundary backstop | Vitest | Open-core dependency-direction (kernel never imports a feature module) | No |
 | Integration tests (app) | Vitest | DB-backed boot/migration/registry suites | Yes (Postgres) |
-| Shell unit tests | BATS | `scripts/`, `docker/` shell scripts | No |
-| Infra integration | BATS | Live stack health + OIDC wiring + legal rendering | Yes (running stack) |
-| Linting | shellcheck + yamllint | Shell + YAML files | No |
+| Shell unit tests | BATS | `test/*.bats` (scripts, realm, backup) and `test/host/*.bats` (the distribution-host tooling) | No |
+| Infra integration | BATS | Live stack health + OIDC wiring + legal rendering + login theme | Yes (running stack) |
+| Linting | shellcheck + yamllint + oxlint + the `lint-*` guards | Shell, YAML, JS/TS, compose and the repository guards | No |
 | Config validation | `docker compose config` | Compose files | No |
 
-The kernel ships exactly two module manifests — `core` and `governance` (both
-always-on / `toggleable: false`). The Vitest suites described below assert that
-the composed surface is precisely the `[core, governance]` set; there are no
-finance/voting/content/calendar/files/messaging suites in the kernel.
+The kernel's own manifests are `core` and `governance` (both always-on /
+`toggleable: false`); the build overlays the enabled modules' manifests next to
+them, so the composed surface the Vitest suites assert is the ten manifests of
+the default build (see "Registry golden" below). The module packages carry their
+own suites (`pnpm --filter ./modules/<id> test`); `modules/disabled.json` lists
+the modules the default build leaves out.
+
+---
+
+## The verify gate
+
+`make verify` (also `pnpm verify`) runs `scripts/verify/verify.mjs`: every suite
+named in `scripts/verify/required-suites.txt` — `typecheck`, `unit`,
+`integration`, `migration-hash`, `carve-lint`, `isolation`, `census`,
+`expand-contract`, `render-guards`, `boundary-lint`, `vendor-mail`,
+`observability` — judged by the fail-closed vacuity rules in
+`scripts/verify/lib/guard.mjs` (a suite that collected nothing, or skipped
+everything, fails). It writes a result record
+(`scripts/verify/out/<sha>.json`) that `scripts/verify/check-record.mjs` reads.
+There is no skip flag: the only argument is `--only <suite[,suite]>`, and
+`unit:<part>` and `integration:<part>` name the parts of the two large suites
+(for example `unit:ui`, `unit:ports`, `unit:modules`, `unit:bats-1-of-2`,
+`integration:fresh-init`).
+
+CI (`.github/workflows/ci.yml`) splits the same suites over the legs
+`verify-static`, `verify-render-ops`, `verify-unit-ui`, `verify-unit-packages`,
+`verify-unit-host`, the two BATS shards (`verify-unit-bats-1`,
+`verify-unit-bats-2`), `verify-integration-db`, `verify-integration-brokers`,
+`verify-integration-events-alert` and `verify-census`, and the `Lint` job fails when a
+required suite is run by none of them or by more than one
+(`scripts/check-ci-verify-coverage.mjs`). The `unit:node` part runs
+`scripts/**/*.test.mjs`, which includes the tests of the documentation guards:
+`scripts/check-doc-translations.mjs` (German twins) and
+`scripts/check-module-docs.mjs` (`docs/modules.md` against `modules/`).
+`make lint-hygiene` runs `scripts/kernel-hygiene-check.mjs` and `make
+lint-compliance` the marketing-copy check over `README.md` and
+`docs/about-gremion.md`.
 
 ---
 
@@ -49,10 +84,13 @@ pnpm install
 
 `pnpm check` is the kernel's first gate. It runs, in order:
 
-1. `check-tenant-env-guard.mjs --enforce --root src` — tenancy/env-isolation guard
-2. `check-app-port-binding.mjs` — app port-binding guard
-3. `check-tenant-secrets-dir.mjs` — per-tenant secrets-dir guard
-4. `svelte-kit sync` then `svelte-check --tsconfig ./tsconfig.json` — type +
+0. `precheck` — `interim-module-overlay.mjs` overlays the enabled modules' app
+   halves onto `src/`
+1. `node src/lib/i18n/compile.js` — compile the i18n catalogue
+2. `check-tenant-env-guard.mjs --enforce --root src` — tenancy/env-isolation guard
+3. `check-app-port-binding.mjs` — app port-binding guard
+4. `check-tenant-secrets-dir.mjs` — per-tenant secrets-dir guard
+5. `svelte-kit sync` then `svelte-check --tsconfig ./tsconfig.json` — type +
    Svelte diagnostics across the whole app
 
 ```bash
@@ -64,15 +102,15 @@ pnpm check:watch    # svelte-check in watch mode (skips the standalone guards)
 
 The fast, dependency-free suite. Configured in `vite.config.ts` (`test` block):
 
-- **Includes:** `tests/unit/**/*.test.ts`, `src/**/*.test.ts`, and the
-  workspace packages `../packages/db/src/**/*.test.ts` and
-  `../packages/ports/src/**/*.test.ts`. The two `@gremion/*` packages are
-  `noExternal`'d and collected through `gremion-ui`'s Vitest so their
-  dependency-free specs (e.g. `client.test.ts`, `broker.test.ts`) run in the
-  same pass. (`@gremion/ports` also carries its own `vitest.config.ts` for
-  `pnpm -C packages/ports test`.)
+- **Includes:** `tests/unit/**/*.test.ts`, `src/**/*.test.ts`,
+  `scripts/install-git-hooks.test.ts`, and the workspace packages
+  `../packages/db/src/**/*.test.ts`, `../packages/ports/src/**/*.test.ts` and
+  `../packages/storage/src/**/*.test.ts`. The `@gremion/*` packages are
+  collected through `gremion-ui`'s Vitest so their dependency-free specs (e.g.
+  `client.test.ts`, `broker.test.ts`) run in the same pass. (`@gremion/ports`
+  also carries its own `vitest.config.ts` for `pnpm -C packages/ports test`.)
 - **Excludes:** `**/*.integration.test.ts` (those need a real Postgres — see
-  the integration lane).
+  the integration lane) and `**/*.browser.test.ts`.
 - `environment: 'jsdom'`, `globals: true`, `setupFiles: ['tests/unit/setup.ts']`,
   `fileParallelism: false`.
 
@@ -80,7 +118,12 @@ The fast, dependency-free suite. Configured in `vite.config.ts` (`test` block):
 pnpm test:unit              # run once
 pnpm test:unit:watch        # watch mode
 pnpm coverage               # vitest run --coverage (v8)
+pnpm test:browser           # the Chromium projects `browser` and `browser-dsf2`
 ```
+
+`vite.config.ts` defines three Vitest projects: `unit` (the jsdom run above),
+`browser` and `browser-dsf2` (the real-Chromium responsive-shell suite,
+`*.browser.test.ts`; a run that collects none fails).
 
 ### Integration tests — `pnpm test:integration`
 
@@ -133,40 +176,44 @@ the only sanctioned exceptions are the SDK seams (`modules/registry`,
 `modules/types`, the runtime-registry) and per-module `register.server.ts`
 composition roots.
 
-Post-carve the feature-module directories are removed, so no kernel file can
-resolve one today. The backstop is retained so that if a feature module is ever
-re-added in-tree and a kernel file imports it, the test reds immediately. It
-also enforces a non-vacuous floor (`scanned > 200`) so a path regression that
-wiped most of the tree can't make the guard pass silently, and keeps the
-documented-exception `ALLOW` map honest (currently empty).
+Files under the module-owned directories (the overlaid module halves) are
+exempt as importers, so the boundary stays a single source of truth. The
+tracked kernel tree resolves no module directory today; the backstop is what
+reds the moment a kernel file imports one. It also enforces a non-vacuous floor
+(`scanned > 200`) so a path regression that wiped most of the tree can't make the
+guard pass silently, and keeps the documented-exception `ALLOW` map honest
+(currently empty).
 
 This single test is what would have caught — all at once — the kernel→feature
 couplings that per-directory import rules originally missed.
 
 ### Registry golden — `registry.test.ts`
 
-`src/lib/modules/registry.test.ts` pins the composed module surface for the
-governance-only kernel:
+`src/lib/modules/registry.test.ts` pins the composed module surface of the
+default build (the kernel manifests plus the enabled modules' overlaid ones):
 
 - **Codegen staleness guard:** the committed `manifests/index.generated.ts`
   must byte-equal a fresh `node scripts/build-module-manifest.mjs --stdout`
   run (EOL-normalised), so the generated barrel can't drift from
   `manifests/*.ts`.
-- **Exact id set + order:** the generated barrel exposes exactly
-  `['core', 'governance']`, in that registration order, and
+- **Exact id set + order:** the generated barrel exposes exactly `core`,
+  `governance`, `elections`, `votes`, `content`, `newsletter`, `calendar`,
+  `files`, `messages`, `board`, in that registration order, and
   `MODULE_MANIFESTS` (via `registry`) **is** that same array (no second source
   of truth). It is a synchronous array, not a Promise.
-- **Always-on:** every kernel manifest is `toggleable: false`.
-- **Golden composition:** `composePageAccess()` reproduces the kernel
-  `PAGE_ACCESS` map exactly (`dashboard`, `settings`, `systemstatus` from
-  `core`; `members`, `committees`, `portal`, `protokolle`, `beschluesse` from
-  `governance`); `moduleRoutePrefixes()` is empty (no toggleable modules);
-  `composeCapabilities()` is empty (neither manifest declares capabilities).
+- **Always-on:** the two kernel manifests are `toggleable: false`.
+- **Golden composition:** `composePageAccess()` reproduces the composed
+  `PAGE_ACCESS` map exactly (`dashboard`, `module-off`, `settings`,
+  `systemstatus` from `core`; `members`, `committees`, `portal`, `protokolle`,
+  `beschluesse` from `governance`; then each enabled module's own segments);
+  `moduleRoutePrefixes()` is exactly the toggleable modules' prefixes in
+  registration order (the two kernel manifests add none); `composeCapabilities()`
+  is pinned the same way.
 
 The codegen barrel is rebuilt by `pnpm --filter gremion-ui prebuild` (which runs
-`build-module-manifest.mjs`, `build-module-server-init.mjs`, and the two
-migration-manifest builds). Re-run the codegen after adding, removing, or
-re-ordering a manifest or the golden reds.
+the module overlay with `--migrations`, `build-module-manifest.mjs`,
+`build-module-server-init.mjs`, and the two migration-manifest builds). Re-run
+the codegen after adding, removing, or re-ordering a manifest or the golden reds.
 
 ### Add-a-module proof — `add-a-module.proof.test.ts`
 
@@ -192,9 +239,10 @@ do:
   `$lib/modules/manifests` barrel so the global set is the two real kernel
   manifests (`core`, `governance`) plus `demo_vertical`.
 
-Because the kernel has no real toggleable feature module to drop, the throwaway
-`demo_vertical` is what exercises the deselect contract; `core`/`governance` are
-always-on and never deselect.
+The throwaway `demo_vertical` is what exercises the generic deselect contract
+without naming a real module; `core`/`governance` are always-on and never
+deselect. The per-module deselection of the real modules is pinned separately by
+`scripts/check-module-deselectable.test.mjs`.
 
 ---
 
@@ -309,31 +357,42 @@ pip install yamllint
 ```bash
 make test            # unit (no containers)
 make test-integration  # requires a running stack
-make test-all        # both
-make lint            # shellcheck + yamllint + json + compose config
-make health          # service status + endpoint reachability
+make test-all        # unit + integration + the NATS, nats-auth and events proofs
+make lint            # the lint-* targets: shellcheck, yamllint, json, compose and the repository guards
+make lint-js         # oxlint (see docs/lint.md); run by the verify carve-lint suite
+make verify          # the verify gate
+make health          # service status + Keycloak/legal reachability (its gremion-ui line reads NOT REACHABLE locally, see LOCAL_TESTING.md)
 ```
 
-- **Unit (`make test-unit`):** `test/setup.bats`, `test/backup.bats`,
-  `test/restore.bats`, `test/configure-keycloak.bats`, `test/legal.bats`.
+- **Unit (`make test-unit`):** globbed, not listed: `test/*.bats` (setup,
+  backup, restore, configure-keycloak, legal, realm fixtures and others) and
+  `test/host/*.bats` (the distribution-host tooling). `test/integration/` is
+  deliberately not matched. `test/host/no-host-literals.bats` asserts the recipe
+  still collects every file under `test/host`.
 - **Integration (`make test-integration`):** `test/integration/health.bats`,
-  `test/integration/oidc.bats`, `test/integration/legal.bats` — these need a
-  running stack (`make up`, or `make setup` then `docker compose up -d
-  keycloak`).
+  `test/integration/oidc.bats`, `test/integration/legal.bats` and
+  `test/integration/login-theme.bats` — these need a running stack (`make up`; a
+  bare `docker compose` addresses neither dev project, a single service is
+  started with the `$DS` prefix from
+  [TROUBLESHOOTING.md](TROUBLESHOOTING.md#default-services--host-ports-local-dev),
+  for example `$DS up -d keycloak`).
+- **Windows development box:** `make test-unit` cannot run there; `make
+  test-host-docker` runs `test/host/*.bats` in a Linux image.
 - **Lint targets:** `lint-sh` (shellcheck), `lint-yaml` (yamllint against the
-  compose + override + `k8s/`), `lint-json` (validates
-  `docker/keycloak/realm-export.json`), `lint-compose` (`docker compose
-  config`).
+  compose files, the override, the app files and `k8s/`), `lint-json` (validates
+  `docker/keycloak/realm-export.base.json`), `lint-compose` (`docker compose
+  config`), and the repository guards (`lint-hygiene`, `lint-pooled-stack`,
+  `lint-module-scan` and the rest of the `lint` aggregate in the `Makefile`).
 
-### The governance-only stack under test
+### The stack under test
 
-The default `docker compose` stack is **7 services**: `postgres`, `keycloak`,
-`gremion-ui`, `gremion-public`, `legal`, `vector`, `mailpit`. The production profile
-(`docker-compose.yml`, `profiles: [production]`) adds `traefik` +
-`docker-socket-proxy`, and `docker-compose.prod.yml` adds `pgbouncer` +
-`cloudflared`. The infra integration tests verify health and OIDC wiring across
-this set — there are no finance, Nextcloud, Matrix/Synapse, LiveKit, or Helios
-services to start.
+The infra integration tests run against a stack started with `make up` (the
+state project plus the `blue` app project, `docker-compose.yml` with its override
+and `docker-compose.app.yml` with `docker-compose.app.dev.yml`; see
+[architecture.md](architecture.md), "Component overview"). They verify health,
+OIDC wiring, legal rendering and the login theme of the services that start
+without a module profile; the Nextcloud, Matrix/Synapse, LiveKit and module
+services start only under their compose profiles and are not part of this set.
 
 ### Writing a BATS test
 

@@ -21,9 +21,9 @@ mark. Shipping it in the kernel would put one organisation's glyph in every
 self-hoster's browser tab — a wrong-attribution and trademark hazard, and the
 same reason a deployment host, product name or marketing copy does not belong
 in a shipped artefact. `scripts/kernel-hygiene-check.mjs` check i1 enforces the
-host half of that across contracts/, docker/, k8s/, .github/, scripts/, test/
-and docs/; the app source under `gremion-ui/` and `gremion-public/` is a named
-residual there, not yet covered.
+host half of that across every tracked file (its scope list is empty, so the
+app source under `gremion-ui/` and `gremion-public/` is covered too; a short
+exemption list is skipped).
 
 Until an operator drops files in, the three `<link>` elements in `app.html`
 resolve to 404 — which is what the single `favicon.png` reference they replaced

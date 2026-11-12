@@ -60,9 +60,11 @@ loudly while a realm still carries the other mode's stamp).
 
 ## Default: the Mailpit catcher (local dev / staging)
 
-Out of the box the stack does **not** relay mail to the internet. A `mailpit`
-service (`axllent/mailpit`, pinned) runs on the internal `gremion_net` network
-and **captures** every message instead:
+Out of the box the dev stack does **not** relay mail to the internet. A
+`mailpit` service (`axllent/mailpit`, pinned by tag and digest) runs on the state
+network (`${STACK}_state`) and **captures** every message sent to it. It carries
+`profiles: [dev]`: `.env.example` sets `COMPOSE_PROFILES=dev`, while a host
+renders with `COMPOSE_PROFILES=production`, so no catcher exists there:
 
 - **SMTP** listens on `mailpit:1025` (internal network only — no host port, no
   auth, no TLS). Mailpit is configured to accept any/no SMTP auth
@@ -72,43 +74,69 @@ and **captures** every message instead:
 - **Web UI** is mapped to `http://localhost:8026` by
   `docker-compose.override.yml` (bound to `127.0.0.1` / `[::1]` only).
 
-A tenant whose SMTP config points at `host=mailpit port=1025` with no auth
+Nothing sends to the catcher by default: on the local stack a tenant's SMTP
+settings start out unconfigured, and no compose default names a mail host. (On
+a host with `MAIL_TRANSPORT=relay`, `gremion-services wire` writes the tenant's
+SMTP settings for the relay, see [ops/pilot-services.md](../ops/pilot-services.md).) A tenant whose SMTP
+config points at `host=mailpit port=1025` with no auth
 sends to the catcher with **zero** real credentials. Captured mail persists
-across restarts in the `gremion_mailpit_data` named volume.
+across restarts in the `mailpit-data` named volume (project-scoped, so
+`dev-state_mailpit-data` for `make up`).
 
 To point a tenant at the catcher, set host `mailpit`, port `1025` in
 **Settings → E-Mail** (leave the test user/password blank), then mark SMTP
-configured. The `default` tenant carries no registry override, so its
-host/port/from come straight from its `config.json` and `auth` is undefined —
-byte-identical to the auth-less Mailpit transport.
+configured. `gremion-ui` has to run with `SMTP_TEST_ALLOW_PRIVATE=1` for this:
+without it the SMTP target guard refuses port 1025 and a private address when
+the settings are saved, in the test below and on every send
+([docs/security/test-smtp-guard.md](../security/test-smtp-guard.md)). A tenant with no registry override takes its host/port/from straight from its
+`config.json` and `auth` is undefined — byte-identical to the auth-less Mailpit
+transport.
 
 ## Reading trapped mail
 
 1. Open `http://localhost:8026` in a browser on the dev/staging host.
-2. Every message any tenant sent appears in the inbox — subject, sender,
-   recipients, raw source, and an HTML preview.
+2. Every message a tenant sent to the catcher appears in the inbox — subject,
+   sender, recipients, raw source, and an HTML preview.
 3. Nothing is delivered to real mailboxes, so it is safe to trigger password
    resets, committee/protocol notifications, etc.
 
 ## Sending a test mail
 
-**Via the UI (gremion-ui):** Settings → E-Mail → set host `mailpit`, port `1025`,
-an Absender-Adresse, then click **Test-E-Mail senden**. The message shows up in
-Mailpit at `http://localhost:8026`.
+**Via the UI (gremion-ui):** Settings → E-Mail → set the SMTP host and port and
+an Absender-Adresse, then click **Test-E-Mail senden**. The test mail goes to
+your own address; with the catcher as the target it shows up in Mailpit at
+`http://localhost:8026`. The button calls the endpoint below, so the same rules
+apply.
 
 **Via the test-smtp endpoint** (TASK-042 Q1: a signed-in session with the
 IT-admin role; there is no setup token any more). The endpoint is rate-limited,
 target-guarded (docs/security/test-smtp-guard.md) and opens an outbound connection to the body-supplied
 `host:port`, so the cap also bounds its use as an SSRF/port-probe oracle. Send
-the session cookie of an IT admin:
+the session cookie of an IT admin to the tenant's own host, with an `Origin`
+header naming that host (the CSRF guard refuses a cookie-authenticated `POST`
+without a matching one):
 
 ```bash
-curl -X POST http://localhost:3001/api/setup/test-smtp \
+curl -X POST https://<tenant host>/api/setup/test-smtp \
+  -H "Origin: https://<tenant host>" \
   -H "Content-Type: application/json" \
   -H "Cookie: $IT_ADMIN_SESSION_COOKIE" \
-  -d '{"host":"mailpit","port":1025,"user":"","password":"",
-       "from_address":"noreply@localhost"}'
+  -d '{"host":"<relay host>","port":587,"user":"","password":"",
+       "from_address":"noreply@example.org"}'
 ```
+
+`host` and `port` name the transport under test. The endpoint accepts the ports
+25, 465, 587 and 2525 and a host that resolves to a public address, and
+`from_address` must be a full address (`name@domain.tld`); anything else is
+answered with `400`. The Settings form applies the same port and host check when
+it saves.
+
+The catcher is not such a target: `mailpit` resolves to a private address on the
+container network and listens on port 1025, and both are refused unless
+`gremion-ui` runs with `SMTP_TEST_ALLOW_PRIVATE=1` (set it in `.env`, then
+recreate the container; a restart does not read `.env` again). With it set,
+`"host":"mailpit","port":1025` is accepted and the message shows up in Mailpit.
+The rules are in [docs/security/test-smtp-guard.md](../security/test-smtp-guard.md).
 
 The test mail goes to the signed-in admin's own address; the endpoint takes no
 recipient. Leave `user` and `password` empty to authenticate with the tenant's
@@ -118,7 +146,13 @@ Settings). Fill both to try other credentials instead; a password without a
 user is refused.
 
 A success returns `{"success":true,"data":{"success":true}}`; an SMTP failure
-returns `success:false` with the transport error message.
+returns `success:false` with an error text.
+
+Both ways need a signed-in IT-admin session on a tenant host. The local dev stack
+as shipped offers no browser session on port 3001
+([LOCAL_TESTING.md](../LOCAL_TESTING.md#quick-start)), so they apply to a
+deployment that serves the tenant through an edge; the Mailpit values and its web
+UI apply only where that deployment runs the `dev` profile.
 
 ## Per-tenant SMTP resolution
 
@@ -179,8 +213,8 @@ An optional per-tenant credential lives in the control-DB registry row:
 ## Switching a tenant to a real outbound relay (production)
 
 Real SMTP credentials are an **operator action** (a long-lead external
-dependency). Until they exist, the stack keeps using Mailpit — nothing here
-blocks on them. When you have a relay (host, port, user, password) for a
+dependency). Until they exist, a tenant sends no mail to the outside (on the
+local stack it can use the catcher above) — nothing here blocks on them. When you have a relay (host, port, user, password) for a
 tenant:
 
 1. **Write the tenant's SMTP password** to the per-tenant secrets directory on
@@ -200,7 +234,7 @@ tenant:
    `passwordRef: file:/run/secrets/tenants/<slug>-smtp-pass`) **before** the
    tenant is flipped `active`.
 
-3. **Set host / port / from** in **Settings → E-Mail** (or the setup wizard) to
+3. **Set host / port / from** in **Settings → E-Mail** to
    the relay values, and mark SMTP configured. (The registry override wins over
    `config.json` for host/port/from when present, but keeping them in sync keeps
    the UI honest.)
@@ -208,26 +242,25 @@ tenant:
 4. **Verify** before declaring it live. A `config.json` edit is picked up within
    `RESOLUTION_CACHE_TTL_MS`; a registry/secret rotation should be paired with a
    tenant evict so the transport is rebuilt. Then send a real test mail to your
-   own address. In production Mailpit is not exposed, so confirm by checking the
-   recipient mailbox (and the relay's send logs), not the Mailpit UI.
-
-> You may drop the `mailpit` service entirely in production by adding a
-> `profiles:` guard or simply not relying on it — once every active tenant
-> points at a real relay, no producer points at `mailpit` anymore. Keeping it
-> running is harmless (internal-only) and useful for catching stray mail during
-> a cutover.
+   own address. A host runs no Mailpit (it is `profiles: [dev]` and a host
+   renders with `COMPOSE_PROFILES=production`), so confirm by checking the
+   recipient mailbox (and the relay's send logs), not the Mailpit UI. A tenant
+   that still points at `mailpit:1025` on a host has nowhere to send.
 
 ## Bumping the Mailpit image
 
-The image is pinned in `docker-compose.yml` (`axllent/mailpit:v1.30.1`). Bump
-it deliberately: change the tag, then
-`docker compose up -d --force-recreate mailpit` and confirm the web UI still
-loads at `http://localhost:8026`. Do not use `:latest` — tags drift.
+The image is pinned in `docker-compose.yml` by tag and digest
+(`axllent/mailpit:v1.30.1@sha256:…`). Bump it deliberately: change the tag and
+the digest together, then recreate it in the dev state project
+(`STACK=dev IMAGE_TAG=dev docker compose -p dev-state up -d --force-recreate mailpit`)
+and confirm the web UI still loads at `http://localhost:8026`. Do not use
+`:latest` — tags drift (`make lint-image-digests` and `make lint-compose-latest`
+refuse it).
 
 ## Files
 
-- `docker-compose.yml` — `mailpit` service + `mailpit-data` volume
-  (`gremion_mailpit_data`); internal `gremion_net` network.
+- `docker-compose.yml` — `mailpit` service (`profiles: [dev]`) + `mailpit-data`
+  volume; the `${STACK}_state` network.
 - `docker-compose.override.yml` — Mailpit web-UI host-port mapping
   (`8026:8025`, loopback-only).
 - `gremion-ui/src/lib/server/mail/tenant-mail.ts` — the single per-tenant mail

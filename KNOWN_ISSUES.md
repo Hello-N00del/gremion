@@ -1,8 +1,8 @@
 # Known Issues — Gremion kernel
 
-This file tracks issues in the **governance kernel only**. Issues for modules
-(finance, elections, content, calendar, files, messages, …) and for verticals
-live in their own repositories.
+This file tracks issues in this repository: the **governance kernel** and the
+feature modules, which live under `modules/` in this tree (the votes and
+messaging entries at the end are module issues).
 
 **Bare `#NNN` references in this tree do not link to Gremion issues.** Roughly
 650 of them, across some 260 files, predate the extraction and refer to the
@@ -372,8 +372,9 @@ default you find in source is a bug, not a supported fallback.
   stylesheet in the public repo.
 - **Two contract documents are validated by no mode.**
   `contracts/calendar/asyncapi.calendar.json` and
-  `contracts/content/asyncapi.content.json` describe module leaves that ship in
-  their own repositories. `boundary-lint --contracts` discovers documents from
+  `contracts/content/asyncapi.content.json` describe the leaves of the `calendar`
+  and `content` modules, which live under `modules/` in this tree.
+  `boundary-lint --contracts` discovers documents from
   `contracts/kernel/` only, so those two are never schema-checked here. Widening
   the discovery today fails on a `collectUnresolvedRefs` false positive — the
   content spec's channel `$ref`s are percent-encoded

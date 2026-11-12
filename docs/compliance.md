@@ -16,9 +16,9 @@ The admin shell app is `gremion-ui`, so code paths below are under `gremion-ui/`
 manifests — `core` and `governance` — so the retention and shred contracts here
 cover identity/auth, multi-tenancy, and the governance domain (committees,
 members, the org-unit tree, protocols, resolutions, the public portal). Feature
-modules (elections, newsletter, calendar, files, messages, board,
-users, finance, content, vault, handover) are separate services over a stable
-API, each in its own repository; each owns and documents its own retention.
+modules (board, calendar, content, elections, files, finance, handover,
+messaging, publishing, vault, votes) live under `modules/` in this repository
+and attach over the module SDK; each owns and documents its own retention.
 
 Cross-references:
 - Infrastructure-layer log retention (reverse proxy, Keycloak, container
