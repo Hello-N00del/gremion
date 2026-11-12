@@ -35,7 +35,8 @@ export function makeFakeNc() {
       type: p.type,
       owner: { userId: p.owner ?? 'admin', displayName: p.owner ?? 'admin' },
       configuration: { title: p.title, description: p.description, allowComment: false, anonymous: p.anonymous, expire: p.expire, ...(p.showResults !== undefined ? { showResults: p.showResults } : {}) },
-      status: { expired: p.expire > 0 && p.expire * 1000 < Date.now(), countOptions: p.options.length },
+      // The closed flag under the name Nextcloud Polls reports it (`isExpired` since Polls 8; `expired` before).
+      status: { isExpired: p.expire > 0 && p.expire * 1000 < Date.now(), countOptions: p.options.length },
       currentUserStatus: { userRole: 'voter', isLocked: false, countVotes: p.voters.get(who)?.size ?? 0 },
     }
   }

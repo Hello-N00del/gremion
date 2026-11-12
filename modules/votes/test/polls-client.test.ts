@@ -111,3 +111,58 @@ describe('NextcloudPollsClient.createPoll (H16)', () => {
     expect(calls.at(-1)).toMatchObject({ method: 'DELETE', path: '/poll/42' })
   })
 })
+
+// The closed flag. Nextcloud Polls reports it as `status.isExpired` (since Polls 8; `status.expired` before);
+// the leaf hands the aggregator `status.expired` as a real boolean that follows the deadline, like the in-process client.
+describe('NextcloudPollsClient.listPolls: the closed flag follows the real deadline', () => {
+  const TENANT = '11111111-1111-1111-1111-111111111111'
+  const NOW = Date.parse('2026-11-12T09:00:00Z')
+  const YESTERDAY = Math.floor(Date.parse('2026-11-11T17:00:00Z') / 1000)
+  const TOMORROW = Math.floor(Date.parse('2026-11-13T17:00:00Z') / 1000)
+  const realFetch = globalThis.fetch
+
+  const upstream = (id: number, expire: number, status: Record<string, unknown>) => ({
+    id,
+    type: 'textPoll',
+    owner: { userId: 'admin' },
+    configuration: { title: `[gt:${TENANT}] Poll ${id}`, description: '', allowComment: false, anonymous: false, expire },
+    status,
+    currentUserStatus: { userRole: 'owner', isLocked: false, countVotes: 0 },
+  })
+
+  beforeEach(() => {
+    process.env.NEXTCLOUD_URL = 'http://nc.test'
+    process.env.NEXTCLOUD_ADMIN_USER = 'admin'
+    process.env.NEXTCLOUD_ADMIN_PASSWORD = 'pw'
+    vi.useFakeTimers({ now: NOW, toFake: ['Date'] })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    globalThis.fetch = realFetch
+  })
+
+  it('closed when Nextcloud says so (isExpired or expired) or the deadline has passed; running otherwise', async () => {
+    globalThis.fetch = vi.fn(async () =>
+      ocs({
+        polls: [
+          upstream(1, YESTERDAY, { isExpired: true }),
+          upstream(2, YESTERDAY, { expired: true }),
+          upstream(3, YESTERDAY, {}),
+          upstream(4, TOMORROW, { isExpired: false }),
+          upstream(5, 0, { isExpired: false }),
+          upstream(6, 0, {}),
+        ],
+      }),
+    ) as typeof fetch
+    const polls = await NextcloudPollsClient.listPolls(TENANT)
+    expect(polls.map((p) => [p.id, p.status.expired])).toEqual([
+      [1, true],
+      [2, true],
+      [3, true],
+      [4, false],
+      [5, false],
+      [6, false],
+    ])
+  })
+})
