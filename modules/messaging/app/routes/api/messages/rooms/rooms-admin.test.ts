@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({
   createRoom: vi.fn(),
   renameRoom: vi.fn(),
   archiveRoom: vi.fn(),
+  unarchiveRoom: vi.fn(),
   deleteRoom: vi.fn(),
   getRoomArchiveMarker: vi.fn(),
 }))
@@ -23,6 +24,7 @@ vi.mock('$lib/server/messages/admin/room-admin', async () => {
     createRoom: h.createRoom,
     renameRoom: h.renameRoom,
     archiveRoom: h.archiveRoom,
+    unarchiveRoom: h.unarchiveRoom,
     deleteRoom: h.deleteRoom,
     getRoomArchiveMarker: h.getRoomArchiveMarker,
   }
@@ -51,6 +53,7 @@ const { RoomConflictError, RoomNotFoundError, MatrixUnavailableError } =
 const { POST: createPOST } = await import('./+server')
 const { PATCH, DELETE } = await import('./[roomId]/+server')
 const { POST: archivePOST } = await import('./[roomId]/archive/+server')
+const { POST: unarchivePOST } = await import('./[roomId]/unarchive/+server')
 
 const COUNCIL_ADMIN = { id: 'ca-1', roles: [Role.CouncilAdmin], groups: [], email: 'ca@example.org', name: 'ca' }
 const IT_ADMIN = { id: 'it-1', roles: [Role.ITAdmin], groups: [], email: 'it@example.org', name: 'it' }
@@ -228,6 +231,71 @@ describe('T15/T17: POST /api/messages/rooms/[roomId]/archive', () => {
     const res = await archivePOST(eventFor({ user: COUNCIL_ADMIN, roomId: '!r:matrix.test', body: { orgUnitId: 'u1' } }))
     expect(res.status, await res.clone().text()).toBe(502)
     expect(h.archiveRoom).not.toHaveBeenCalled()
+  })
+})
+
+// An archived room could not be restored from the room administration. room-admin.unarchiveRoom (the Karenz
+// restore) already undoes an archive; this is its route. unarchiveRoom itself decides whether the
+// room is an archived room of the unit (marker of the admin bot, unit of this customer).
+describe('POST /api/messages/rooms/[roomId]/unarchive (restore)', () => {
+  it('401 unauthenticated', async () => {
+    const res = await unarchivePOST(eventFor({ user: undefined, body: { orgUnitId: 'u1' } }))
+    expect(res.status).toBe(401)
+    expect(h.unarchiveRoom).not.toHaveBeenCalled()
+  })
+
+  it('403 Member', async () => {
+    const res = await unarchivePOST(eventFor({ user: MEMBER, body: { orgUnitId: 'u1' } }))
+    expect(res.status).toBe(403)
+    expect(h.unarchiveRoom).not.toHaveBeenCalled()
+  })
+
+  it('400 without an orgUnitId', async () => {
+    const res = await unarchivePOST(eventFor({ user: COUNCIL_ADMIN, body: {} }))
+    expect(res.status).toBe(400)
+    expect(h.unarchiveRoom).not.toHaveBeenCalled()
+  })
+
+  it('400 on a body that is not JSON', async () => {
+    const event = eventFor({ user: COUNCIL_ADMIN }) as unknown as { request: Request }
+    event.request = new Request('http://localhost/x', { method: 'POST', body: 'not json' })
+    const res = await unarchivePOST(event as never)
+    expect(res.status).toBe(400)
+    expect(h.unarchiveRoom).not.toHaveBeenCalled()
+  })
+
+  it('200 CouncilAdmin: restores the room named in the path for the unit in the body', async () => {
+    h.unarchiveRoom.mockResolvedValue({ aliasRestored: true, priorGuessed: false })
+    const res = await unarchivePOST(eventFor({ user: COUNCIL_ADMIN, roomId: '!arch:matrix.test', body: { orgUnitId: 'u1' } }))
+    expect(res.status, await res.clone().text()).toBe(200)
+    expect(h.unarchiveRoom).toHaveBeenCalledWith('u1', '!arch:matrix.test', { userId: 'ca-1' })
+    expect(await res.json()).toEqual({ success: true, data: { roomId: '!arch:matrix.test', aliasRestored: true } })
+  })
+
+  it('200 ITAdmin (inherits)', async () => {
+    h.unarchiveRoom.mockResolvedValue({ aliasRestored: false, priorGuessed: true })
+    const res = await unarchivePOST(eventFor({ user: IT_ADMIN, roomId: '!arch:matrix.test', body: { orgUnitId: 'u1' } }))
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.aliasRestored).toBe(false)
+  })
+
+  it('404 when the room is not an archived room of this unit', async () => {
+    h.unarchiveRoom.mockRejectedValue(new RoomNotFoundError('room !x is not an archived Gremion room of unit u1'))
+    const res = await unarchivePOST(eventFor({ user: COUNCIL_ADMIN, roomId: '!x:matrix.test', body: { orgUnitId: 'u1' } }))
+    expect(res.status).toBe(404)
+  })
+
+  it('409 when the unit already has another room', async () => {
+    h.unarchiveRoom.mockRejectedValue(new RoomConflictError('!live:matrix.test'))
+    const res = await unarchivePOST(eventFor({ user: COUNCIL_ADMIN, roomId: '!arch:matrix.test', body: { orgUnitId: 'u1' } }))
+    expect(res.status).toBe(409)
+  })
+
+  it('503 when Matrix is unavailable', async () => {
+    h.unarchiveRoom.mockRejectedValue(new MatrixUnavailableError('connect ECONNREFUSED'))
+    const res = await unarchivePOST(eventFor({ user: COUNCIL_ADMIN, roomId: '!arch:matrix.test', body: { orgUnitId: 'u1' } }))
+    expect(res.status).toBe(503)
+    expect((await res.json()).error).toBe('MATRIX_UNAVAILABLE')
   })
 })
 

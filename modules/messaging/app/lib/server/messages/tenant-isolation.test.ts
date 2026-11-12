@@ -93,6 +93,7 @@ import { PUT as typingPut } from '../../../routes/api/messages/rooms/[roomId]/ty
 import { POST as mediaPost } from '../../../routes/api/messages/rooms/[roomId]/media/+server'
 import { PATCH as roomPatch, DELETE as roomDelete } from '../../../routes/api/messages/rooms/[roomId]/+server'
 import { POST as roomArchive } from '../../../routes/api/messages/rooms/[roomId]/archive/+server'
+import { POST as roomUnarchive } from '../../../routes/api/messages/rooms/[roomId]/unarchive/+server'
 import { GET as roomUnit } from '../../../routes/api/messages/rooms/[roomId]/unit/+server'
 import { getMessagesBackend } from './backend'
 import { __resetMatrixCachesForTests, evictMatrixClient, getMatrixClient } from './matrix-client'
@@ -557,6 +558,21 @@ describe("an administration action on B's room as A is refused before any Matrix
     expect(writes(net.since(m))).toEqual([])
   })
 
+  it("restore: B's archived room as A is a 404, stays archived, and writes nothing", async () => {
+    // B archived its room: the marker of the admin bot names B's unit, the ledger row is released.
+    const marker = { org_unit_id: 'unit-b', archived_at: '2026-01-01T00:00:00Z', prior: null }
+    sharedSynapse.rooms.get(ROOM_B)!.state.set('org.gremion.room.archived', { sender: sharedSynapse.bot, content: marker })
+    LEDGER.rooms.get('tid-b')!.delete('unit-b')
+    const m = net.mark()
+    for (const orgUnitId of ['unit-a', 'unit-b']) {
+      const res = (await route(A_SHARED, roomUnarchive, ev(A_SHARED, ADMIN_A, 'admin-a', { roomId: ROOM_B, method: 'POST', body: JSON.stringify({ orgUnitId }), headers: json }))) as Response
+      expect(res.status).toBe(404)
+    }
+    expect(writes(net.since(m))).toEqual([])
+    expect(sharedSynapse.rooms.get(ROOM_B)!.state.get('org.gremion.room.archived')!.content).toEqual(marker)
+    expect(LEDGER.rooms.get('tid-a')!.get('unit-a')).toBe(ROOM_A)
+  })
+
   it("delete: B's room as A is a 404, B's room is not deleted, no delete request leaves", async () => {
     const m = net.mark()
     for (const orgUnitId of ['unit-a', 'unit-b']) {
@@ -577,7 +593,7 @@ describe("an administration action on B's room as A is refused before any Matrix
 
   it('a member without the admin role is refused before the ledger or Matrix is touched', async () => {
     const m = net.mark()
-    for (const [h, method, query] of [[roomPatch, 'PATCH', ''], [roomArchive, 'POST', ''], [roomDelete, 'DELETE', '?orgUnitId=unit-a']] as const) {
+    for (const [h, method, query] of [[roomPatch, 'PATCH', ''], [roomArchive, 'POST', ''], [roomUnarchive, 'POST', ''], [roomDelete, 'DELETE', '?orgUnitId=unit-a']] as const) {
       const res = (await route(A_SHARED, h as Handler, ev(A_SHARED, ALICE, 'alice', { roomId: ROOM_A, method, query, body: method === 'DELETE' ? null : JSON.stringify({ orgUnitId: 'unit-a', name: 'x' }), headers: json }))) as Response
       expect(res.status).toBe(403)
     }

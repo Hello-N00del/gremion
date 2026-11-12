@@ -3,6 +3,7 @@
   import Icon from '$lib/components/ui/Icon.svelte'
   import { onMount, onDestroy } from 'svelte'
   import { page } from '$app/stores'
+  import { page as pageState } from '$app/state'
   import { invalidate } from '$app/navigation'
   import { roomStore, selectedRoomId, syncStatus } from '$lib/stores/matrix'
   import type { MatrixMessage, RoomState } from '$lib/stores/matrix'
@@ -63,6 +64,12 @@
   // True once loadRooms() got a successful answer. Before that the empty store only means "not
   // loaded yet", so the empty-list copy must not say anything about the user's membership.
   let roomsLoaded = $state(false)
+  // /messages?room=<room id>: the room a link names (the archive of the room administration links
+  // the history of a room this way). Taken once, with the first room list. A room that is not in
+  // that list (a room is only in the list of its members) opens NO other room in its place.
+  let linkedRoomPending = true
+  let linkedRoomMissing = $state(false)
+  const LINKED_ROOM_MISSING = 'Dieser Raum ist in Ihrer Raumliste nicht vorhanden. Den Verlauf können nur Mitglieder des Raums lesen.'
 
   let totalUnread = $derived(activeRooms.reduce((sum, r) => sum + (r.unreadCount ?? 0), 0))
 
@@ -106,6 +113,21 @@
           loaded[r.roomId] = { ...r, messages: $roomStore[r.roomId]?.messages ?? [] }
         }
         roomStore.set(loaded)
+        const linkedRoomId = linkedRoomPending ? pageState.url.searchParams.get('room') : null
+        linkedRoomPending = false
+        if (linkedRoomId) {
+          if (loaded[linkedRoomId]) {
+            void openRoom(linkedRoomId)
+          } else {
+            linkedRoomMissing = true
+            selectedRoomId.set(null)
+            toast.error(LINKED_ROOM_MISSING)
+          }
+          return
+        }
+        // The open room outlives the page (it is a store). A room that is gone from the list,
+        // deleted in the meantime, is not kept: nothing would be open and nothing would be chosen.
+        if ($selectedRoomId && !loaded[$selectedRoomId]) selectedRoomId.set(null)
         // On a phone nothing is opened by itself: the list is the first screen.
         if (!$selectedRoomId && !narrow) {
           const firstActive = json.data.find((r: { archived?: boolean }) => !r.archived)
@@ -191,6 +213,7 @@
   async function openRoom(roomId: string) {
     selectedRoomId.set(roomId)
     conversationOpen = true
+    linkedRoomMissing = false
 
     const room = $roomStore[roomId]
     if (!room || room.unreadCount === 0) return
@@ -411,6 +434,7 @@
       roomStore.update((store) =>
         store[roomId] ? { ...store, [roomId]: { ...store[roomId], name: newName } } : store
       )
+      toast.success(`Raum in „${newName}“ umbenannt`)
       closeSettings()
     } catch (err) {
       console.error('[messages] saveSettingsName threw', { roomId: settingsRoomId, error: err instanceof Error ? err.message : String(err) })
@@ -661,6 +685,8 @@
           </button>
         </div>
       {/if}
+    {:else if linkedRoomMissing}
+      <div class="chat-placeholder mono" role="status">{LINKED_ROOM_MISSING}</div>
     {:else}
       <div class="chat-placeholder mono">Wählen Sie einen Raum aus.</div>
     {/if}

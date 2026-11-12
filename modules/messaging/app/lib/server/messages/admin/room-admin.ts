@@ -481,12 +481,29 @@ export interface RoomOverviewEntry {
   unitName: string
   state: RoomOverviewState
   roomId?: string
+  /** The room's own name (m.room.name). A rename changes this and never the unit's name. Absent
+   *  while Matrix is unreachable, or when the name could not be read. */
+  roomName?: string
   lastError?: string
+}
+
+/** One archived room. A unit can have several (archived, a new room created, archived again),
+ *  and a unit that has an active room again still has its archived ones. */
+export interface ArchivedRoomEntry {
+  roomId: string
+  unitId: string
+  unitName: string
+  roomName?: string
+  archivedAt?: string
+  /** False when the unit has another room: unarchiveRoom refuses that restore (RoomConflictError). */
+  restorable: boolean
 }
 
 export interface RoomOverview {
   matrix: 'reachable' | 'unreachable'
   units: RoomOverviewEntry[]
+  /** Every archived room of the given units, newest archive first. Empty while Matrix is unreachable. */
+  archivedRooms: ArchivedRoomEntry[]
 }
 
 // FLOW-MSG-001 (TASK-009 fu1 defect 1): bounded-concurrency map, used so
@@ -495,6 +512,8 @@ export interface RoomOverview {
 // (a server with hundreds of Gremion-managed rooms would otherwise open
 // hundreds of concurrent connections to Synapse for a single overview load).
 const ARCHIVE_MARKER_CONCURRENCY = 8
+
+interface FoundArchivedRoom { roomId: string; unitId: string; archivedAt?: string }
 
 async function mapWithConcurrency<T, R>(
   items: readonly T[], limit: number, fn: (item: T) => Promise<R>
@@ -534,9 +553,13 @@ async function mapWithConcurrency<T, R>(
  *  candidate's marker, bounded to ARCHIVE_MARKER_CONCURRENCY at a time.
  *  Best-effort: any failure (listing or a single marker read) degrades to
  *  detecting nothing archived, so the overview still renders every unit's
- *  ledger-derived state (PRD-DEP-004) instead of throwing. */
-async function findArchivedRooms(): Promise<Map<string, { roomId: string; archivedAt?: string }>> {
-  const byUnit = new Map<string, { roomId: string; archivedAt?: string }>()
+ *  ledger-derived state (PRD-DEP-004) instead of throwing.
+ *
+ *  Answers EVERY archived room, newest archive first (ties by room id, so the order never
+ *  depends on the listing). A unit can have more than one: keeping only the newest per unit
+ *  hid the others, and deleting the newest then brought the next one up in its place. */
+async function findArchivedRooms(): Promise<FoundArchivedRoom[]> {
+  const found: FoundArchivedRoom[] = []
   try {
     const bot = getMatrixClient().getAdminBotUserId()
     // LOW (TASK-009 fu1 round 2 verifier): an unconfigured admin bot user id
@@ -550,13 +573,12 @@ async function findArchivedRooms(): Promise<Map<string, { roomId: string; archiv
     // own explicit signal rather than degrading in silence.
     if (!bot) {
       console.error('[room-admin] findArchivedRooms: admin bot user id unconfigured, cannot detect archived rooms')
-      return byUnit
+      return found
     }
     const allRooms = await getSynapseAdmin().listRooms()
     const candidates = allRooms.filter((room) => room.creator === bot)
     // Markers are read with bounded concurrency (each independent of the
-    // others), then merged sequentially so a genuine multi-archive collision
-    // (LOW, r2-rooms-B3) can still be resolved deterministically by archivedAt.
+    // others), then merged sequentially and ordered by archivedAt below.
     const markers = await mapWithConcurrency(candidates, ARCHIVE_MARKER_CONCURRENCY, async (room) => {
       const roomId = room.room_id
       if (!roomId) return null
@@ -575,15 +597,15 @@ async function findArchivedRooms(): Promise<Map<string, { roomId: string; archiv
     })
     for (const entry of markers) {
       if (!entry) continue
-      const unitId = entry.marker.org_unit_id as string
-      const existing = byUnit.get(unitId)
-      // Deterministic pick when a unit has more than one archived room
-      // (re-archived after a recreate cycle): keep the newest archivedAt
-      // rather than whichever listing order happened to win.
-      if (!existing || (entry.marker.archived_at ?? '') > (existing.archivedAt ?? '')) {
-        byUnit.set(unitId, { roomId: entry.roomId, archivedAt: entry.marker.archived_at })
-      }
+      const archivedAt = typeof entry.marker.archived_at === 'string' ? entry.marker.archived_at : undefined
+      found.push({ roomId: entry.roomId, unitId: entry.marker.org_unit_id as string, archivedAt })
     }
+    // Newest first. The timestamps are ISO strings of one writer, so they order as text; a tie
+    // (or two markers without a timestamp) falls back to the room id.
+    found.sort((a, b) => {
+      const byDate = (b.archivedAt ?? '').localeCompare(a.archivedAt ?? '')
+      return byDate === 0 ? a.roomId.localeCompare(b.roomId) : byDate
+    })
   } catch (err) {
     // Matrix listing unreachable/erroring — degrade to none-detected (see
     // above), but log it: a genuine listRooms bug must not look identical to
@@ -591,21 +613,53 @@ async function findArchivedRooms(): Promise<Map<string, { roomId: string; archiv
     console.error('[room-admin] findArchivedRooms: listRooms failed, degrading to none-detected', {
       error: err instanceof Error ? err.message : String(err),
     })
+    return []
   }
-  return byUnit
+  return found
+}
+
+/** The own names (m.room.name) of the given rooms, read as the admin bot like every other state
+ *  read here, at most ARCHIVE_MARKER_CONCURRENCY at a time. Read as room state and not taken from
+ *  the admin room listing: that listing is fed from the homeserver's room statistics, which trail
+ *  a state change, and the overview is reloaded right after a rename. A failed read is logged and
+ *  leaves the name out; it never fails the overview. */
+async function readRoomNames(roomIds: readonly string[]): Promise<Map<string, string>> {
+  const names = new Map<string, string>()
+  const mc = getMatrixClient()
+  await mapWithConcurrency(roomIds, ARCHIVE_MARKER_CONCURRENCY, async (roomId) => {
+    try {
+      const content = (await mc.getRoomState(roomId, 'm.room.name')) as { name?: unknown } | null
+      if (typeof content?.name === 'string' && content.name !== '') names.set(roomId, content.name)
+    } catch (err) {
+      console.error('[room-admin] listOverview: room name could not be read, showing the room without it', {
+        roomId, error: err instanceof Error ? err.message : 'unknown error',
+      })
+    }
+  })
+  return names
 }
 
 /** GET /messages/manage load (route layer, next unit). Never throws — every
  *  per-unit ledger read is caught individually, and Matrix reachability
  *  degrades to 'unreachable' via validateCredentials's own no-throw contract
  *  (PRD-DEP-004: the rest of the page/admin still works with Matrix down). The
- *  archived-room search only runs while Matrix is reachable, so an outage
- *  never adds extra failing calls on top of the already-degraded state. */
+ *  archived-room search and the room-name reads only run while Matrix is
+ *  reachable, so an outage never adds extra failing calls on top of the
+ *  already-degraded state. */
 export async function listOverview(
   units: readonly Pick<OrgUnit, 'id' | 'name'>[]
 ): Promise<RoomOverview> {
   const matrixReachable = await getSynapseAdmin().validateCredentials().catch(() => false)
-  const archivedByUnit = matrixReachable ? await findArchivedRooms() : new Map<string, { roomId: string; archivedAt?: string }>()
+  const archived = matrixReachable ? await findArchivedRooms() : []
+  // The newest archived room of each unit (the list is newest first): what a unit without a
+  // ledger row shows as its 'archiviert' room.
+  const archivedByUnit = new Map<string, FoundArchivedRoom>()
+  for (const room of archived) {
+    if (!archivedByUnit.has(room.unitId)) archivedByUnit.set(room.unitId, room)
+  }
+  // What unarchiveRoom checks before a restore: the room the unit's ledger row names, if any. A
+  // unit whose row could not be read is absent, and its archived rooms are not offered for restore.
+  const ledgerRoomByUnit = new Map<string, string | null>()
 
   // Parallel per-unit ledger reads (N+1 -> one round-trip batch, MEDIUM,
   // r1-kernel-nav-roomsB2): each read is independent of every other unit's.
@@ -625,6 +679,7 @@ export async function listOverview(
           unitId: unit.id, error: err instanceof Error ? err.message : String(err),
         })
       }
+      if (!readFailed) ledgerRoomByUnit.set(unit.id, resource?.external_id ?? null)
       let state: RoomOverviewState
       let roomId: string | undefined
       let lastError: string | undefined
@@ -642,10 +697,10 @@ export async function listOverview(
         // No ledger row at all — either never had a room (leer) or the row
         // was released on archive (S2.1 "Matrix first, DB second"), which
         // the archived-room cross-reference below can still detect.
-        const archived = archivedByUnit.get(unit.id)
-        if (archived) {
+        const newestArchived = archivedByUnit.get(unit.id)
+        if (newestArchived) {
           state = 'archiviert'
-          roomId = archived.roomId
+          roomId = newestArchived.roomId
         } else {
           state = 'leer'
         }
@@ -666,7 +721,28 @@ export async function listOverview(
       return { unitId: unit.id, unitName: unit.name, state, roomId, lastError }
     })
   )
-  return { matrix: matrixReachable ? 'reachable' : 'unreachable', units: entries }
+  if (!matrixReachable) return { matrix: 'unreachable', units: entries, archivedRooms: [] }
+
+  // Only rooms of THESE units: a marker naming any other unit (one that was removed, or one of
+  // another customer on the same homeserver) is not this overview's to show.
+  const unitNames = new Map(units.map((unit) => [unit.id, unit.name]))
+  const ownArchived = archived.filter((room) => unitNames.has(room.unitId))
+  const activeRoomIds = entries.flatMap((entry) => (entry.state === 'aktiv' && entry.roomId ? [entry.roomId] : []))
+  const names = await readRoomNames([...new Set([...activeRoomIds, ...ownArchived.map((room) => room.roomId)])])
+
+  const archivedRooms: ArchivedRoomEntry[] = ownArchived.map((room) => {
+    const ledgerRoom = ledgerRoomByUnit.get(room.unitId)
+    return {
+      roomId: room.roomId,
+      unitId: room.unitId,
+      unitName: unitNames.get(room.unitId) ?? '',
+      roomName: names.get(room.roomId),
+      archivedAt: room.archivedAt,
+      restorable: ledgerRoom !== undefined && (ledgerRoom === null || ledgerRoom === room.roomId),
+    }
+  })
+  const withNames = entries.map((entry) => (entry.roomId ? { ...entry, roomName: names.get(entry.roomId) } : entry))
+  return { matrix: 'reachable', units: withNames, archivedRooms }
 }
 
 /** Standalone Matrix-reachability probe (the overview's own reachability check
