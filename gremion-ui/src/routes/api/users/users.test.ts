@@ -126,9 +126,9 @@ describe('GET /api/users: what is returned', () => {
     expect(body.data.some((u) => u.username.startsWith('service-account-'))).toBe(false)
   })
 
-  it('asks Keycloak for enabled users only, with the trimmed search term', async () => {
+  it('asks Keycloak for enabled users only, with the trimmed term as an infix search (users.search.test.ts has the matching)', async () => {
     await GET(event({ query: '?search=%20anna%20' }))
-    expect(realms['tenant-a'].listUsers).toHaveBeenCalledWith({ search: 'anna', max: 10, first: 0, enabled: true })
+    expect(realms['tenant-a'].listUsers).toHaveBeenCalledWith({ search: '*anna*', max: 10, first: 0, enabled: true })
   })
 })
 
