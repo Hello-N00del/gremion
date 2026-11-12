@@ -91,7 +91,7 @@ test('6: the kernel-data chain is the union of its dirs ordered by number (0058 
   const names = chainFileNames('kernel-data', { root: REPO_ROOT })
   // 31 legacy + F1-FIX-02-K's claimed 0059 + TRD-196's claimed 0060 + 0061 + 0062 + 0063 + the content app block (1200, 1201, 1202)
   // (a later claim adds a name to the list below, never a rewrite of the offsets)
-  const claimed = ['0058_public_reader_grants.sql', '0059_audit_log_chain_anchor.sql', '0060_erasure_report.sql', '0061_audit_log_actor_uuid_check.sql', '0062_vorstand_role_backfill.sql', '0063_module_switch_request.sql', '0064_module_karenz.sql']
+  const claimed = ['0058_public_reader_grants.sql', '0059_audit_log_chain_anchor.sql', '0060_erasure_report.sql', '0061_audit_log_actor_uuid_check.sql', '0062_vorstand_role_backfill.sql', '0063_module_switch_request.sql', '0064_module_karenz.sql', '0065_module_switch_pending.sql']
   assert.ok(names.length >= 37, `kernel-data chain has ${names.length} files`)
   assert.deepEqual(names.filter((n) => claimed.includes(n)), claimed, 'the claimed files are present, in numeric order')
   assert.ok(names.indexOf(claimed.at(-1)) === names.length - 4, 'the last claimed file sits right below the content app block')

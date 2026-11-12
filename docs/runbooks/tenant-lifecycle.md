@@ -462,6 +462,17 @@ when the realm emits none), the value the executor compares it with, not the gre
 server's clock; an ID token without either, or older than the 3600 s evidence window, also
 gets `401 STEP_UP_REQUIRED`.
 
+**The confirmed switch survives the step-up.** With that `401` the server keeps the confirmed
+input for the round trip (tenant table `module_switch_pending`, migration `0065`): one row per
+person, found by the SHA-256 of a random handle that the browser holds in an HttpOnly,
+SameSite=Strict cookie scoped to `/api/settings/modules`. Back on the settings page, the page
+sends `POST /api/settings/modules {"resume": true}` once. The server removes the row as it
+reads it (single use) and carries the switch out only for the person who confirmed it, within
+300 s, and with a second factor newer than the one of the confirming session; the unchanged
+switch service then runs every check again, the fresh LoA 2 included. A resume that cannot be
+carried out is a `409` (`RESUME_GONE`, `RESUME_EXPIRED`, `RESUME_UNCONFIRMED`) that the page
+shows; it never starts a second step-up, and the admin triggers the switch again.
+
 **How the request is submitted.** gremion-ui connects to `gremion_platform` as the
 least-privilege role `gremion_ui_modules` (LOGIN, member of `plt_council_requester`, EXECUTE
 on the three council request functions, no table privilege) through
