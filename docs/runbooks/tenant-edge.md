@@ -41,8 +41,8 @@ browser ──TLS──> traefik:443 (the host's edge address) ──> routers
 - **TLS.** Traefik obtains its certificates itself from an ACME CA over HTTP-01
   through the `le-http` resolver (`docker/traefik/traefik.yml`); the host
   publishes `:80` and `:443` on its edge address and requests arrive directly.
-  Every router names its resolver itself (`certResolver` in each rendered router
-  file; a router with a bare `tls` serves Traefik's self-signed default), so
+  Each rendered router file names its resolver itself (`certResolver`; a router
+  with a bare `tls` serves Traefik's self-signed default), so
   there is no wildcard certificate, no origin certificate
   (`docker/traefik/dynamic/tls.yml` and the Cloudflare Origin mounts are gone)
   and no per-tenant certificate step. Details and checks:

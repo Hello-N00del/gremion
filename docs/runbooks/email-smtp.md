@@ -112,9 +112,12 @@ curl -X POST https://<tenant host>/api/setup/test-smtp \
   -H "Origin: https://<tenant host>" \
   -H "Content-Type: application/json" \
   -H "Cookie: $IT_ADMIN_SESSION_COOKIE" \
-  -d '{"host":"mailpit","port":1025,"user":"","password":"",
+  -d '{"host":"<smtp host>","port":<smtp port>,"user":"","password":"",
        "from_address":"noreply@localhost","to_address":"test@example.org"}'
 ```
+
+`<smtp host>` and `<smtp port>` are the transport under test: `mailpit` and `1025`
+where the catcher runs (the `dev` profile), the relay's host and port otherwise.
 
 A success returns `{"success":true,"data":{"success":true}}`; an SMTP failure
 returns `success:false` with the transport error message.
@@ -122,7 +125,8 @@ returns `success:false` with the transport error message.
 Both ways need a signed-in IT-admin session on a tenant host. The local dev stack
 as shipped offers no browser session on port 3001
 ([LOCAL_TESTING.md](../LOCAL_TESTING.md#quick-start)), so they apply to a
-deployment that serves the tenant through the edge.
+deployment that serves the tenant through an edge; the Mailpit values and its web
+UI apply only where that deployment runs the `dev` profile.
 
 ## Per-tenant SMTP resolution
 
