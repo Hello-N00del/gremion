@@ -180,7 +180,7 @@ two websecure routers left the compose files with the split:
   container as interim names;
 - **the public portal** (`gremion-public`, formerly `Host(public.${DOMAIN})` in
   `docker-compose.yml`, with `public-ratelimit@docker`, which also moved onto
-  the traefik container). Neither compose file defines that router any more.
+  the traefik container).
 
 The former `gremion-ui-apexhost` middleware (the apex tenant injection) is not
 restored anywhere: TASK-041's edge host model deleted it and its guard

@@ -115,8 +115,7 @@ DOMAIN=gremion.example.org
 - **Used by:** the per-tenant rate limit at the resolution seam
   (`gremion-ui/src/lib/server/tenant/rate-limit.ts`). `RPS` = sustained
   tokens/second per tenant; `BURST` = bucket capacity (defaults to `ceil(RPS)`
-  when unset). `docker-compose.app.yml` does not pass either key to the
-  container.
+  when unset). `gremion-ui` reads both from its own process environment.
 
 ---
 
