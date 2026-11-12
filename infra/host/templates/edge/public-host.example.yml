@@ -2,9 +2,11 @@
 # Runbook: docs/runbooks/public-portal-host.md.
 #
 # Copy this file to etc/edge/public-host.yml under the Gremion root (exactly that
-# name, mode 0644), replace BOTH occurrences of portal.customer.example with the
-# customer's portal host, and change nothing else. No program writes, rewrites or
-# prunes it: it has to be placed again after a re-install.
+# name, mode 0644), replace the placeholder host with the customer's portal host
+# in BOTH places it stands (the rule and the pin; this comment does not spell
+# it, so a count of the host in the placed file is exactly 2), and change
+# nothing else. No program writes, rewrites or prunes it: it has to be placed
+# again after a re-install.
 #
 # The host carries the read-only portal and nothing else. The app, Keycloak and
 # the platform stay on their own hosts, so this host must never become a

@@ -96,8 +96,8 @@ makes compose replace the container.
 
 ## 3. The router file (`etc/edge/public-host.yml`)
 
-Copy the template, replace **both** occurrences of the placeholder host, and
-move the result into place under exactly this name. Run this as `gremion`, the
+Copy the template, replace the placeholder host in **both** places it stands
+(the rule and the pin), and move the result into place under exactly this name. Run this as `gremion`, the
 owner of `etc/edge`:
 
 ```bash
@@ -143,8 +143,10 @@ Run all of them; each reads the running system.
    # t_<tenant id>__kernel
    ```
 
-2. **The read-only role can connect to that database and read the two tables
-   the portal shows.** `<db>` is the name from step 2.
+2. **The read-only role may connect to that database and read the two tables
+   the portal shows.** `<db>` is the name from step 2. This proves the role's
+   privileges; that the portal logs in with its password is proven by check 4,
+   whose pages are read from this database.
 
    ```bash
    docker compose --env-file /opt/gremion/etc/env/state.env exec -T postgres \
@@ -152,7 +154,7 @@ Run all of them; each reads the running system.
      -c "SELECT has_database_privilege('gremion_public_reader', current_database(), 'CONNECT')" \
      -c "SET ROLE gremion_public_reader" \
      -c "SELECT count(*) FROM org_units" -c "SELECT count(*) FROM protocols"
-   # t, then two counts; any "permission denied" is a failure
+   # t, SET, then two counts; any "permission denied" is a failure
    ```
 
 3. **The edge serves the host, with its own certificate.**

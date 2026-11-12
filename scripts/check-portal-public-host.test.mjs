@@ -135,6 +135,8 @@ test('portal router template: one websecure router on one literal example host, 
   const m = /^Host\(`([a-z0-9.-]+)`\)$/.exec(r.rule)
   assert.ok(m, `the rule is exactly one literal lower-case Host(): ${r.rule}`)
   assert.match(m[1], /(^|\.)example(\.(org|com|net))?$/, `the template names an RFC 2606 host, never a real one: ${m[1]}`)
+  // the runbook's own check after substituting the host: `grep -c` prints 2, the rule and the pin
+  assert.equal(text.split(/\n/).filter((l) => l.includes(m[1])).length, 2, 'the placeholder host stands on exactly two lines, so the runbook count of 2 holds')
   // the line shape gremion-verify's reader of etc/edge files understands
   assert.match(text, /^ {4}public-host:$/m)
   assert.match(text, /^ {6}rule: "Host\(`[a-z0-9.-]+`\)"$/m)
