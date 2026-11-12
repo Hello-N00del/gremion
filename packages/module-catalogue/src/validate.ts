@@ -9,8 +9,9 @@
 //   - a `contracts` block: TASK-030's validateModuleContracts.
 //
 // Under-declaration is judged from the TREE, not from the file alone: a
-// migrations/manifest.json on disk with runtime.database null is refused,
-// and every declared server must be a compose service labelled
+// migrations/manifest.json on disk with runtime.database null is refused
+// (except for a LEAF_ONLY_SERVERS module, whose migrations belong to a
+// test-environment leaf), and every declared server must be a compose service labelled
 // org.gremion.postgres=module:* (checkClaims adds the catalogue-wide
 // one-claim rule).
 import { existsSync } from 'node:fs'
@@ -18,7 +19,7 @@ import { join } from 'node:path'
 import { loadApiVersions, validateModuleContracts, type ModuleContractDeclaration } from '@gremion/generated-clients/module-contracts'
 import { loadRegistry, type RegistryEntry } from '@gremion/generated-clients/registry'
 import { checkExtractionSourceAgreement, KERNEL_ROOT, readFrozenExtractionSource } from '../../../scripts/lib/extraction-source.mjs'
-import { POSTGRES_LABEL, serverDefaultDatabase, SERVER_BUILTIN_DATABASES, type CatalogueEntry, type ComposeModel } from './runtime.ts'
+import { LEAF_ONLY_SERVERS, POSTGRES_LABEL, serverDefaultDatabase, SERVER_BUILTIN_DATABASES, type CatalogueEntry, type ComposeModel } from './runtime.ts'
 
 /** names.ts MODULE_ID (D13): the separator in t_<hex>__<module> stays unambiguous. */
 export const NAMES_MODULE_ID = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/
@@ -132,7 +133,7 @@ export function validateModuleJson(json: unknown, ctx: ValidateContext): string[
   const database = r.database
   let dbService: string | undefined
   if (database === null || database === undefined) {
-    if (onDisk) p.push(`${where}: migrations/manifest.json is on disk but runtime.database is null — the module under-declares its database`)
+    if (onDisk && !Object.hasOwn(LEAF_ONLY_SERVERS, ctx.id)) p.push(`${where}: migrations/manifest.json is on disk but runtime.database is null — the module under-declares its database`)
   } else if (!isRecord(database)) {
     p.push(`${where}: runtime.database must be null or {postgresService, migrations}`)
   } else {
@@ -246,7 +247,7 @@ export function checkClaims(entries: readonly Pick<CatalogueEntry, 'id' | 'modul
   const claims = new Map<string, Set<string>>()
   for (const m of entries) {
     const r = m.moduleJson.runtime
-    for (const svc of [r.database?.postgresService, r.platformServer?.postgresService]) {
+    for (const svc of [r.database?.postgresService ?? LEAF_ONLY_SERVERS[m.id], r.platformServer?.postgresService]) {
       if (typeof svc !== 'string') continue
       if (!claims.has(svc)) claims.set(svc, new Set())
       claims.get(svc)?.add(m.id)

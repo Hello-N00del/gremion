@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // node --test suite for the pilot module defaults check (TASK-058-A; pilot wave 2 task 3 widened the set to
-// votes, calendar, content, publishing, files, messaging). Each RED case mutates a throwaway tree and asserts
+// votes, calendar, content, publishing, files, messaging; the board wave of 2026-11-11 added board). Each RED case mutates a throwaway tree and asserts
 // on the report text.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -41,15 +41,15 @@ test('RED (a): elections in the pilot request', () => {
   } finally { f.cleanup() }
 })
 
-test('the pilot set is votes, calendar, content, publishing, files, messaging', () => {
-  assert.deepEqual([...PILOT_IDS].sort(), ['calendar', 'content', 'files', 'messaging', 'publishing', 'votes'])
+test('the pilot set is votes, calendar, content, publishing, files, messaging, board', () => {
+  assert.deepEqual([...PILOT_IDS].sort(), ['board', 'calendar', 'content', 'files', 'messaging', 'publishing', 'votes'])
 })
 
-test('GREEN (a): content and publishing are part of the pilot request', () => {
+test('GREEN (a): content, publishing and board are part of the pilot request', () => {
   const f = fixture()
   try {
     const enable = JSON.parse(readFileSync(join(f.root, REQUEST_PATH), 'utf8')).enable.sort()
-    assert.deepEqual(enable, ['calendar', 'content', 'files', 'messaging', 'publishing', 'votes'])
+    assert.deepEqual(enable, ['board', 'calendar', 'content', 'files', 'messaging', 'publishing', 'votes'])
     assert.deepEqual(failures(f.root), [])
   } finally { f.cleanup() }
 })
@@ -64,14 +64,22 @@ test('RED (a): each pilot module missing from the request is named', () => {
   } finally { f.cleanup() }
 })
 
-test('RED (a): board, finance, vault and handover stay out of the request', () => {
+test('RED (a): finance, vault and handover stay out of the request', () => {
   const f = fixture()
   try {
-    for (const id of ['board', 'finance', 'vault', 'handover']) {
+    for (const id of ['finance', 'vault', 'handover']) {
       f.put(`modules/${id}/module.json`, JSON.stringify({ id }))
       f.put(REQUEST_PATH, JSON.stringify({ enable: [...PILOT_IDS, id] }))
       assert.match(failures(f.root).join('\n'), new RegExp(`\\(a\\) the pilot request enables "${id}"`), id)
     }
+  } finally { f.cleanup() }
+})
+
+test('RED (a): board missing from the request is named like any other pilot module', () => {
+  const f = fixture()
+  try {
+    f.put(REQUEST_PATH, JSON.stringify({ enable: PILOT_IDS.filter((x) => x !== 'board') }))
+    assert.match(failures(f.root).join('\n'), /\(a\) the pilot request does not enable board/)
   } finally { f.cleanup() }
 })
 

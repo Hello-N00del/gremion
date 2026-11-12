@@ -19,12 +19,14 @@
 import { MODULE_MANIFESTS } from './manifests'
 
 /**
- * Catalogue ids refused by name for every enable path: board (not tenant-isolated
- * yet) and vault (stays off for the pilot). A copy of @gremion/provisioning
+ * Catalogue ids refused by name for every enable path: vault (stays off for the pilot).
+ * Board was lifted from this list in the board wave of 2026-11-11 (its isolation case
+ * gates it like every other module); it stays in HELD_BACK_CATALOGUE_IDS below, so a
+ * council still cannot switch it. A copy of @gremion/provisioning
  * DEFAULT_DENY, kept local so client code never imports the provisioning library;
  * the unit test pins the two lists equal.
  */
-export const DENIED_BY_NAME: ReadonlySet<string> = new Set(['board', 'vault'])
+export const DENIED_BY_NAME: ReadonlySet<string> = new Set(['vault'])
 
 /**
  * Catalogue ids a council admin may switch. Each owns a toggleable manifest of
@@ -38,7 +40,7 @@ export const SWITCHABLE_CATALOGUE_IDS: ReadonlySet<string> = new Set(['calendar'
  * test pins it against modules/<id>/module.json.
  */
 export const HELD_BACK_CATALOGUE_IDS: Readonly<Record<string, string>> = Object.freeze({
-  board: 'denied by name: not tenant-isolated yet',
+  board: 'held back: switching it off needs its own retention and Karenz work before a council may do it',
   content: 'held back: switching it off needs its own retention and Karenz work before a council may do it',
   files: 'held back: switching it off needs its own retention and Karenz work before a council may do it',
   messaging: 'held back: switching it off needs its own retention and Karenz work before a council may do it',

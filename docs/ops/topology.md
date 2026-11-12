@@ -146,18 +146,23 @@ scores against (the council's own vs. the bundled `vaultwarden` compose profile)
 (⚑ Q-2.5, TRD-351/TRD-263), owner the operator, closing at the Beschluss; this record makes no
 running/pinned claim about it either way.
 
-## 3. One image set; tasks board and password vault stay disabled
+## 3. One image set; the password vault stays disabled, the tasks board runs in-process
 
 The release produces one image set and does not require a private manifest (PRD-REC-004): every
 first-party image above is a `gremion/*` image or a locally built image, none held in a private
 registry manifest separate from this record.
 
-The tasks board and the password vault (native Vaultwarden alternative) are **not enabled** for any
-council under decision P2 (PRD-REC-003). Both stay off until PRD-PLAT-012's cross-tenant isolation
-test passes for that module:
+The password vault (native Vaultwarden alternative) is **not enabled** for any council under
+decision P2 (PRD-REC-003). It stays off until PRD-PLAT-012's cross-tenant isolation test passes for
+that module. The tasks board is different since the board wave of 2026-11-11:
 
-- Tasks board: off, blocked on the isolation proof (PRD-PLAT-012). The test environment runs
-  it as a dated, test-only exception (R29-I1); see §5.4. The pilot configuration stays off.
+- Tasks board: on for the pilot, served in-process by the app from each customer's own kernel
+  database (database-per-customer, the same path as protocols and members). It is chosen at
+  creation through the isolation gate like the other modules and needs no board-postgres server,
+  no compose profile and no module database. The board service and board-postgres of §1 are the
+  leaf that only the test environment runs (`BOARD_BACKEND=service`, §5.4). The gate accepts board
+  once a host has recorded a passed cross-customer isolation result for the release in use; that
+  recording is a post-deployment step.
 - Native password vault: off by default; may be enabled later in the pilot once its isolation test
   passes [D R19-D13, D R19-D37]. Vaultwarden (the council's own externally-operated instance, per
   TRD §11's reading of PRD §12.1a) remains the supported alternative credential tool for the pilot
@@ -234,8 +239,8 @@ host marker records the StuRaOS master `87c004a8` (kernel gitlink `a21c1740`), e
   `board_default`), with counts and checksums equal to the legacy store at cut-over. Opted in on
   the test environment on 2026-09-30 (single-tenant exception); the per-tenant store went live with
   the same evening's redeploy.
-- This is a test-environment exception. §3 is unchanged for the pilot: the tasks board stays off
-  until PRD-PLAT-012's cross-tenant isolation proof passes (PRD-REC-003). No new deployment unit
-  is involved: the board service is one of the 32 services in §1.
+- This is a test-environment exception for the leaf (`BOARD_BACKEND=service`). The pilot does not use
+  the leaf: §3 describes the in-process board, which is what a created customer gets. No new
+  deployment unit is involved: the board service is one of the 32 services in §1.
 - The native password vault is unchanged: off at the application level (the web app's environment
   carries no vault backend key) while its container remains one of the 32.

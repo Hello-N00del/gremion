@@ -115,7 +115,7 @@ export interface EnableCustomerModuleResult {
 
 /**
  * Lane note D3: enable one module for an existing customer (active or still
- * provisioning) -- the deny list (board, vault: refused by name, before any
+ * provisioning) -- the deny list (vault: refused by name, before any
  * read of the gate), the catalogue version `init` loaded, the gate's
  * pre-flight, the DPIA decision recorded, enableModule through the gate, then
  * the customer's broker users for the enabled set.

@@ -1,4 +1,4 @@
-<!-- i18n-sync: source=README.md sha256=f695e336c608a1d6e8431201d5e421f5a41198c671dbe363e91f36792d101d9c -->
+<!-- i18n-sync: source=README.md sha256=84368303119f3592e6a224cb7e563af8efcb809cb883966ad0d6c738fe807dad -->
 [English](./README.md) | **Deutsch**
 
 # board
@@ -47,14 +47,21 @@ Leaf (`src/http/routes.ts`), alle Routen außer `/healthz` hinter dem Shared-Sec
 
 ## Migrationen
 
+Im Standardmodus (im Prozess) liegen die Board-Tabellen (`board`, `stack`, `card`) in der eigenen
+Kernel-Datenbank des Kunden und werden von der Kernel-Migration
+`gremion-ui/migrations/0034_deck_board.sql` angelegt, unabhängig davon, ob das Modul an oder aus
+ist. `module.json` deklariert deshalb weder `runtime.database` noch `runtime.export`: Das Aktivieren
+von board öffnet keine Moduldatenbank und startet kein `board-postgres`. Der Rest dieses Abschnitts
+beschreibt den Leaf (`BOARD_BACKEND=service`, nur Testumgebung).
+
 Je Mandant eine Datenbank für das Modul board. `migrations/001_init.sql` legt `board`, `stack` und
 `card` an. Die Fremdschlüssel auf die Kernel-Tabellen (Organisationseinheiten, Aktionspunkte
 aus Protokollen) fehlen, weil sie Datenbankgrenzen überschreiten würden. Der Leaf legt nie
 selbst eine Datenbank an und migriert auch keine; das übernimmt das Aktivieren des Moduls
 für einen Mandanten, und ein Schema-Gate prüft die angewendeten Dateien gegen
 `migrations/manifest.json`, bevor eine Mandantendatenbank genutzt wird.
-Wird das Modul für einen Mandanten deaktiviert, werden dessen Daten mit `pg_dump` unter dem
-Aufbewahrungsprofil `rp-brd-module-data` exportiert (`module.json`).
+Das Aufbewahrungsprofil `rp-brd-module-data` ist ein vorläufiges Profil des Katalog-Laders
+(`packages/provisioning/src/catalogue-rows.ts`), kein Export aus `module.json`.
 
 ## Konfiguration
 
@@ -67,28 +74,30 @@ Aufbewahrungsprofil `rp-brd-module-data` exportiert (`module.json`).
 | `PORT` | Leaf | Listen-Port, Standard 8080. |
 | `TRACE_EXPORTER` | Kernel-App | Auswahl des Tracing-Exporters. |
 
-Der PostgreSQL-Server des Moduls ist der Service `board-postgres` unter dem Compose-Profil
-`board`; seine Zugangsdaten stammen aus `BOARD_PG_USER` und `BOARD_PG_PASSWORD`.
+Nur im Service-Modus ist der PostgreSQL-Server des Moduls der Service `board-postgres` unter dem
+Compose-Profil `board`; seine Zugangsdaten stammen aus `BOARD_PG_USER` und `BOARD_PG_PASSWORD`.
+Der Standardmodus im Prozess braucht beides nicht.
 
 ## Externe Dienste
 
-Keine außer dem Kernel und dem PostgreSQL-Server des Moduls.
+Keine außer dem Kernel (und im Service-Modus dem PostgreSQL-Server des Leaf).
 
 ## Aktivieren und Deaktivieren
 
 - Build: im Standard-Build enthalten.
 - Je Kunde: Aktivierung mit `--enable board` bei der Anlage oder über die
-  `enable_module`-Anfrage des Panels; `disable_module` exportiert und verifiziert die
-  Modul-Datenbank, bevor sie gelöscht wird
-  ([runbooks/tenant-lifecycle.md](../../docs/runbooks/tenant-lifecycle.md) (englisch)).
+  `enable_module`-Anfrage des Panels. Board durchläuft dasselbe Isolations-Gate wie die anderen
+  Module. Es hat keine Moduldatenbank; `disable_module` entfernt daher nur die
+  Plattform-Aktivierung: Es erzeugt keinen Export und löscht keine Board-Daten, die in der
+  Kernel-Datenbank des Kunden bleiben
+  ([runbooks/tenant-lifecycle.md](../../docs/runbooks/tenant-lifecycle.md) (englisch)). Ein Gremium
+  kann board in den eigenen Einstellungen nicht schalten: Dort ist es zurückgehalten.
 - Instanzeinstellung: Mit `config.modules.board = false` liefern `/tasks` und `/api/board` die
   Antwort für deaktivierte Module aus.
 - Leaf: `docker build -f modules/board/Dockerfile .` aus dem Repository-Root.
 
-`docs/pilot/module-defaults.md` hält fest, dass board nicht über das Aktivierungs-Gate angefragt
-wird (das es weiterhin namentlich ablehnt), im Pilot aber im Prozess ausgeliefert und
-standardmäßig an ist (Entscheidung des Betreibers 2026-11-09) und dass es den Isolationsnachweis
-nicht hat, den ein zweiter Kunde bräuchte.
+`docs/pilot/module-defaults.md` hält fest, dass board Teil der Pilot-Anlageanfrage ist und das
+Aktivierungs-Gate durchläuft; nur vault wird weiterhin namentlich abgelehnt.
 
 ## Tests
 
@@ -105,6 +114,5 @@ nicht hat, den ein zweiter Kunde bräuchte.
 
 ## Nicht aus dem Code belegt
 
-- `app/lib/modules/manifests/board.ts` beschreibt in einem Kommentar noch einen
-  Datenbankkatalog `board_<slug>`; `src/app.ts` löst Mandantendatenbanken über
-  `@gremion/tenant-store` auf. Dieses README folgt `src/app.ts`.
+- `src/app.ts` des Leaf löst Mandantendatenbanken über `@gremion/tenant-store` auf; die
+  Leaf-Abschnitte oben folgen dem. Der Leaf ist nicht das, was ein angelegter Kunde betreibt.

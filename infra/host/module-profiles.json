@@ -18,7 +18,7 @@
       "pilot": false,
       "profiles": [],
       "postRealm": [],
-      "reason": "runs in-process on kernel tables (operator ruling 2026-11-09, default on, no leaf, no isolation gate lift); board-postgres is not started"
+      "reason": "runs in-process on kernel tables and needs no compose profile (board-postgres is not started); it is selectable at create through the isolation gate since the board wave of 2026-11-11, and pilot stays false only because a pilot module here asks for at least one profile"
     },
     "calendar": {
       "pilot": true,

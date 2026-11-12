@@ -23,13 +23,12 @@ export const boardManifest: ModuleManifest = {
   id: 'board',
   order: 100,
   toggleable: true,
-  // No notTenantIsolated marker: the board leaf keeps one database per tenant,
-  // board_<slug>, catalogued in board_control (services/board/src/tenant-store.ts),
-  // with the (id, slug) pair bound on every call. Marker removed for this
-  // vertical's test environment under R29-I1 (leaf per-tenant store plus a leaf-level,
-  // shared-secret isolation pass). This is not the TRD-060 pass and does not
-  // satisfy TRD-064; the kernel keeps the board off (R29-BOARD-STORE-K §3.4,
-  // TASK-058).
+  // No notTenantIsolated marker: the default (BOARD_BACKEND unset) serves the board in-process, and
+  // every handle comes from getDb(), i.e. the requesting customer's own kernel database (migration
+  // 0034), so the board is as separated as protocols and members. The module is selectable at
+  // customer creation through the isolation gate (board wave, 2026-11-11); module.json declares no
+  // database. The board_<slug> leaf catalogue (services/board, BOARD_BACKEND=service) is test
+  // environment only and not what a created customer runs.
   pages: [{ segment: 'tasks', minRole: Role.Member }],
   routePrefixes: ['/tasks', '/api/board'],
 }

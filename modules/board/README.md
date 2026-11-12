@@ -45,13 +45,20 @@ Leaf (`src/http/routes.ts`), all under the shared-secret guard except `/healthz`
 
 ## Migrations
 
+In the default in-process mode the board tables (`board`, `stack`, `card`) live in the
+customer's own kernel database and are created by the kernel migration
+`gremion-ui/migrations/0034_deck_board.sql`, whether the module is on or off. `module.json`
+therefore declares no `runtime.database` and no `runtime.export`: enabling board opens no
+module database and starts no `board-postgres`. The rest of this section describes the leaf
+(`BOARD_BACKEND=service`, test environment only).
+
 One database per tenant and board. `migrations/001_init.sql` creates `board`, `stack` and
 `card`. The foreign keys to the kernel tables (organisational units, protocol action items)
 are omitted because they would cross databases. The leaf never creates or migrates a
 database itself; enabling the module for a tenant does that, and a schema gate checks the
 applied files against `migrations/manifest.json` before a tenant database is used.
-When the module is disabled for a tenant, its data is exported with `pg_dump` under the
-retention profile `rp-brd-module-data` (`module.json`).
+The retention profile `rp-brd-module-data` is a provisional profile of the catalogue loader
+(`packages/provisioning/src/catalogue-rows.ts`), not a `module.json` export.
 
 ## Configuration
 
@@ -64,26 +71,29 @@ retention profile `rp-brd-module-data` (`module.json`).
 | `PORT` | leaf | Listen port, default 8080. |
 | `TRACE_EXPORTER` | kernel app | Tracing exporter selection. |
 
-The module's PostgreSQL server is the `board-postgres` service under the compose profile
-`board`; its credentials come from `BOARD_PG_USER` and `BOARD_PG_PASSWORD`.
+In service mode only, the module's PostgreSQL server is the `board-postgres` service under the
+compose profile `board`; its credentials come from `BOARD_PG_USER` and `BOARD_PG_PASSWORD`. The
+default in-process mode needs neither.
 
 ## External services
 
-None besides the kernel and the module's PostgreSQL server.
+None besides the kernel (and, in service mode, the leaf's PostgreSQL server).
 
 ## Enabling and disabling
 
 - Build: included in the default build.
 - Per customer: enable with `--enable board` at creation or through the panel's
-  `enable_module` request; `disable_module` exports and verifies the module database before
-  it is dropped ([runbooks/tenant-lifecycle.md](../../docs/runbooks/tenant-lifecycle.md)).
+  `enable_module` request. Board passes the same isolation gate as the other modules. It has no
+  module database, so `disable_module` removes the platform enablement only: it creates no export
+  and deletes no board data, which stays in the customer's kernel database
+  ([runbooks/tenant-lifecycle.md](../../docs/runbooks/tenant-lifecycle.md)). A council cannot
+  switch board in its own settings: it is held back there.
 - Instance setting: `config.modules.board = false` makes `/tasks` and `/api/board` answer
   with the module-disabled surface.
 - Leaf: `docker build -f modules/board/Dockerfile .` from the repository root.
 
-`docs/pilot/module-defaults.md` states that board is not requested through the enable gate
-(which still refuses it by name) but is served in-process and on by default for the pilot
-(operator ruling 2026-11-09), and that it has no isolation evidence a second customer would need.
+`docs/pilot/module-defaults.md` states that board is part of the pilot create request and passes
+the enable gate; only vault is still refused by name.
 
 ## Tests
 
@@ -99,6 +109,5 @@ None besides the kernel and the module's PostgreSQL server.
 
 ## Not established from the code
 
-- `app/lib/modules/manifests/board.ts` still describes a `board_<slug>` database catalogue
-  in a comment; `src/app.ts` resolves per-tenant databases through `@gremion/tenant-store`.
-  This README follows `src/app.ts`.
+- The leaf's `src/app.ts` resolves per-tenant databases through `@gremion/tenant-store`; the
+  leaf sections above follow it. The leaf is not what a created customer runs.

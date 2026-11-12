@@ -26,6 +26,18 @@ describe('validateModuleJson — the good fixtures pass', () => {
   })
 })
 
+describe('validateModuleJson — leaf-only servers (board wave, 2026-11-11)', () => {
+  it('board may keep migrations on disk with a null database: its leaf server is test-environment only', () => {
+    const text = validateModuleJson(load('migrations-null-database'), { id: 'board', dir: ALPHA, compose }).join('\n')
+    expect(text).not.toMatch(/migrations\/manifest\.json is on disk but runtime\.database is null/)
+  })
+
+  it('the same layout stays a problem for every other module', () => {
+    const text = validateModuleJson(load('migrations-null-database'), { id: 'alpha', dir: ALPHA, compose }).join('\n')
+    expect(text).toMatch(/alpha: migrations\/manifest\.json is on disk but runtime\.database is null/)
+  })
+})
+
 // [fixture, ctx id, ctx dir, expected problem]
 const REFUSALS: [string, string, string, RegExp][] = [
   ['missing-runtime', 'alpha', ALPHA, /alpha: module\.json has no runtime block/],

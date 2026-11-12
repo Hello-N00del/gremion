@@ -1,4 +1,4 @@
-<!-- i18n-sync: source=modules.md sha256=4c6163c557841f71f5c60ce5d1cfae32d847a45128cf685dac30d46f4530245f -->
+<!-- i18n-sync: source=modules.md sha256=c1b61e4875a1bf3b36bb3568cee1c7b0658de0ead9c0ac21a4f9a0a4613162dd -->
 [English](./modules.md) | **Deutsch**
 
 # Unterstützte Module
@@ -37,7 +37,7 @@ bekommt und was nicht behauptet wird, steht in
 
 | Modul | Zweck | Status | Benötigte externe Dienste | README |
 |---|---|---|---|---|
-| `board` | Aufgabenboard (Stacks und Karten) je Organisationseinheit; Aktionspunkte aus Protokollen lassen sich in Karten umwandeln. | unterstützt | außer dem Kernel nichts; ein eigener PostgreSQL-Server (Compose-Profil `board`) | [modules/board/README.de.md](../modules/board/README.de.md) |
+| `board` | Aufgabenboard (Stacks und Karten) je Organisationseinheit; Aktionspunkte aus Protokollen lassen sich in Karten umwandeln. | unterstützt | außer dem Kernel nichts; ein eigener PostgreSQL-Server (Compose-Profil `board`) nur im Service-Modus (`BOARD_BACKEND=service`, Testumgebung), im Standardmodus im Prozess keiner | [modules/board/README.de.md](../modules/board/README.de.md) |
 | `calendar` | Termine, Terminarten, Wiederholungen und Kalendereinstellungen der Gremien; überträgt Termine an CalDAV und leitet Änderungsereignisse über NATS weiter. | unterstützt | Nextcloud (CalDAV), NATS, ein eigener PostgreSQL-Server (Profil `calendar`) | [modules/calendar/README.de.md](../modules/calendar/README.de.md) |
 | `content` | Content-Engine: Beiträge mit den Kanälen E-Mail, Website (Portal) und Instagram, Mailinglisten, zeitgesteuerte Veröffentlichung. | unterstützt | NATS, SMTP über den Kernel, Instagram Graph API (optionaler Kanal), ein eigener PostgreSQL-Server (Profil `content`) | [modules/content/README.de.md](../modules/content/README.de.md) |
 | `elections` | Optionale Gremienwahlen über Helios, mit einem dauerhaften Hinweis, dass das Modul keine satzungsgemäße Wahl ersetzt. Nur App-Hälfte; kein Leaf-Service. | unterstützt | Helios (Wahlserver) | [modules/elections/README.de.md](../modules/elections/README.de.md) |

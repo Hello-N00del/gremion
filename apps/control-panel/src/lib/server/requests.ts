@@ -55,11 +55,10 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
  * Modules the gate refuses BY NAME, with the reason shown on the form. This is
  * the panel's copy of @gremion/provisioning's DENY_REASONS (the panel image
  * does not depend on that package); requests.test.ts pins the two equal, so a
- * change in the gate (TASK-058 lifts board) fails here until it is mirrored.
+ * change in the gate fails here until it is mirrored (the board wave of 2026-11-11 lifted board).
  * The executor's request-verify enforces the real list either way.
  */
 export const DENY_REASONS: Readonly<Record<string, string>> = Object.freeze({
-  board: 'board ist noch nicht mandantengetrennt und kann nicht aktiviert werden (R29-I1).',
   vault: 'vault (Tresor) bleibt im Pilotbetrieb abgeschaltet und kann nicht aktiviert werden (PRD-PLAT-012).',
 })
 
@@ -209,7 +208,7 @@ export interface ModuleChoice {
  * preflight refuses any other one (NO_ISOLATION_RESULT) after the form was accepted. A constant on purpose: a
  * query of the evidence table that is wrong would block every create. requests.test.ts pins it equal to the script.
  */
-export const PROVEN_MODULES: ReadonlySet<string> = new Set(['calendar', 'content', 'publishing', 'votes', 'files', 'messaging'])
+export const PROVEN_MODULES: ReadonlySet<string> = new Set(['board', 'calendar', 'content', 'publishing', 'votes', 'files', 'messaging'])
 
 const NOT_PROVEN = 'keine Isolationsprüfung auf diesem Stand; das Modul kann beim Anlegen nicht gewählt werden.'
 
