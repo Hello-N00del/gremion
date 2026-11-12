@@ -17,15 +17,21 @@
 // Source of truth for "is a module on": the platform enablement WHERE a platform row exists. Modules
 // with no row ("unmanaged": default-on in config.modules, every pre-existing council) keep following
 // config.modules; the one-time alignment below never touches them.
+//
+// The board is the one module that follows the platform enablement without being council-switchable
+// (PLATFORM_FOLLOWED_CATALOGUE_IDS): the alignment covers it, and a later platform disable or enable of it
+// is followed within a minute (followPlatform), so a platform disable hides it for that customer.
 import { manifestIdOf, SWITCHABLE_CATALOGUE_IDS } from '$lib/modules/catalogue-map'
 import { isHeldOffModule } from '$lib/modules/held-off'
+import { MODULE_MANIFESTS } from '$lib/modules/manifests'
 import { readConfig, writeConfig } from '$lib/server/config'
 import type { TenantContext } from '$lib/server/tenant/context'
 import { notifyModuleSwitchListeners, type ModuleSwitchEvent } from './listeners'
+import { _clearPlatformHeldForTests, rememberPlatformHeld } from './platform-held'
 import * as realStore from './store'
 import type { SwitchRow } from './store'
 
-/** How often register.server.ts runs a pass per active tenant. Without a pending row a pass makes a platform call only every SWEEP_INTERVAL_MS. */
+/** How often register.server.ts runs a pass per active tenant. Without a pending row a pass reads the platform enablement state once every FOLLOW_INTERVAL_MS (the platform-followed modules, the board) and the requests only every SWEEP_INTERVAL_MS. */
 export const MODULE_SWITCH_INTERVAL_MS = 10_000
 
 /** plt.council_module_requests allows 1..100. */
@@ -41,6 +47,45 @@ const SWEEP_INTERVAL_MS = 5 * 60_000
 const ALIGN_RETRY_MS = 60_000
 /** The stored outcome text is capped; the executor text can be long. */
 const OUTCOME_MAX = 500
+
+/**
+ * Catalogue ids that follow the PLATFORM enablement although a council may not switch them (they are in
+ * HELD_BACK_CATALOGUE_IDS, never in SWITCHABLE_CATALOGUE_IDS, and no council request can name them).
+ *
+ * The board: it is served in-process on the tenant's kernel tables and owns no module database, so a
+ * platform-level disable_module of it blocks nothing and, without this, left config.modules.board true
+ * (the board stayed reachable). Following the platform hides it: config.modules.board false, and every
+ * board page and api answers as for any disabled module. Nothing is deleted: the rows stay in the tenant
+ * database, and an enable brings the board back with its data.
+ */
+const PLATFORM_FOLLOWED_CATALOGUE_IDS: readonly string[] = Object.freeze(['board'])
+
+/** After the first alignment a followed module's platform state is read at most this often per tenant, so a platform disable hides it within about a minute. */
+const FOLLOW_INTERVAL_MS = 60_000
+
+/** The (catalogue id, manifest id) pairs the alignment covers: the council-switchable modules, then the platform-followed ones. A followed id whose manifest is not shipped or not toggleable is skipped. */
+function alignTargets(): Array<{ catalogueId: string; manifestId: string }> {
+  const out: Array<{ catalogueId: string; manifestId: string }> = []
+  for (const catalogueId of SWITCHABLE_CATALOGUE_IDS) {
+    const manifestId = manifestIdOf(catalogueId)
+    if (manifestId !== null) out.push({ catalogueId, manifestId })
+  }
+  for (const catalogueId of PLATFORM_FOLLOWED_CATALOGUE_IDS) {
+    if (MODULE_MANIFESTS.some((m) => m.id === catalogueId && m.toggleable)) out.push({ catalogueId, manifestId: catalogueId })
+  }
+  return out
+}
+
+/**
+ * What a platform row says about a platform-followed module: true (enabled), false (disabled), or null for
+ * the in-progress states (awaiting_isolation_test, test_failed). A module that is already running is not
+ * hidden while the platform is still testing its enablement, so an in-progress state is not followed.
+ */
+function platformSays(state: string): boolean | null {
+  if (state === 'enabled') return true
+  if (state === 'disabled') return false
+  return null
+}
 
 /** A row of plt.council_module_requests. */
 export interface CouncilRequestRow {
@@ -87,6 +132,12 @@ export interface ReconcilerState {
   alignRetryAt: Map<string, number>
   /** Tenants whose alignment turned a module on but whose migration catch-up has not succeeded yet. */
   migrateOwed: Set<string>
+  /**
+   * Tenant id -> the last platform state seen for the platform-followed modules (manifest id -> enabled) and
+   * when it was read. Set by a completed alignment; a tenant without an entry is not followed yet. Optional so
+   * a state built by hand (a test double) stays valid.
+   */
+  followed?: Map<string, { at: number; on: Record<string, boolean> }>
 }
 
 export interface ReconcilerDeps {
@@ -100,10 +151,12 @@ export interface ReconcilerDeps {
   now: () => number
 }
 
-const processState: ReconcilerState = { aligned: new Set(), sweptAt: new Map(), alignRetryAt: new Map(), migrateOwed: new Set() }
+const processState: ReconcilerState = { aligned: new Set(), sweptAt: new Map(), alignRetryAt: new Map(), migrateOwed: new Set(), followed: new Map() }
 
 /** Test-only: forget what this process remembers. */
 export function _resetModuleSwitchReconcilerForTests(): void {
+  processState.followed?.clear()
+  _clearPlatformHeldForTests()
   processState.aligned.clear()
   processState.sweptAt.clear()
   processState.alignRetryAt.clear()
@@ -205,10 +258,17 @@ async function alignOnce(tenant: TenantContext, d: ReconcilerDeps, council: Coun
     const diff: Record<string, boolean> = {}
     /** manifest id -> catalogue id, for the modules this alignment would turn ON. */
     const turningOn = new Map<string, string>()
-    for (const catalogueId of SWITCHABLE_CATALOGUE_IDS) {
-      const manifestId = manifestIdOf(catalogueId)
+    /** The platform state of every followed module that has a row, remembered once the alignment completes. */
+    const seen: Record<string, boolean> = {}
+    for (const { catalogueId, manifestId } of alignTargets()) {
       const row = byKey.get(catalogueId)
-      if (manifestId === null || !row?.has_row) continue
+      if (!row?.has_row) continue
+      const followed = PLATFORM_FOLLOWED_CATALOGUE_IDS.includes(catalogueId)
+      if (followed) {
+        const says = platformSays(row.state)
+        if (says === null) continue
+        seen[manifestId] = says
+      }
       const platformOn = row.state === 'enabled'
       // A held-off module stays off whatever the platform says: aligning it on would be dropped by the pin.
       if (platformOn && isHeldOffModule(manifestId)) continue
@@ -261,9 +321,80 @@ async function alignOnce(tenant: TenantContext, d: ReconcilerDeps, council: Coun
       return
     }
     d.state.aligned.add(tenant.id)
+    // From here on the platform-followed modules are watched for a change of the platform state.
+    d.state.followed ??= new Map()
+    d.state.followed.set(tenant.id, { at: d.now(), on: seen })
+    for (const [manifestId, on] of Object.entries(seen)) rememberPlatformHeld(tenant.id, manifestId, !on)
   } catch (err) {
     d.state.alignRetryAt.set(tenant.id, d.now() + ALIGN_RETRY_MS)
     console.error(`[module-switch] ${tenant.slug}: aligning config.modules to the platform state failed (retried later):`, errText(err))
+  }
+}
+
+/**
+ * After the one-time alignment: follow a CHANGE of the platform enablement of the platform-followed
+ * modules (the board), at most every FOLLOW_INTERVAL_MS per tenant. A platform disable_module reaches no
+ * council request, so nothing else would tell the app; a platform enable of a module that was off brings
+ * it back.
+ *
+ * The platform is authoritative in the OFF direction: while it says disabled, a config.modules value of on
+ * is put back within the interval (the settings routes refuse to write it in the first place, see
+ * platform-held.ts). In the ON direction only a CHANGE of the platform state is acted on: while the platform
+ * says enabled the admin's own switch-off in config.modules stays as it is (the alignment at boot is the one
+ * place the platform state wins outright, like for the council-switchable modules). The in-progress platform
+ * states (awaiting the isolation test, test failed) are not followed. A module turned ON passes the
+ * same pre-apply work as an applied enable (the Art. 17 replay of a Karenz restore) before config.modules is
+ * written, then the migration catch-up; if either fails the platform state is not remembered, so the next
+ * interval retries. Turning it OFF writes only config.modules: the data stays where it is.
+ *
+ * A tenant without a baseline (the alignment has not completed in this process) is not followed, and no
+ * failure here stops the pass.
+ */
+async function followPlatform(tenant: TenantContext, d: ReconcilerDeps, council: CouncilPort): Promise<void> {
+  const known = d.state.followed?.get(tenant.id)
+  if (!known || d.now() - known.at < FOLLOW_INTERVAL_MS) return
+  const targets = alignTargets().filter((t) => PLATFORM_FOLLOWED_CATALOGUE_IDS.includes(t.catalogueId))
+  // Nothing followed is shipped here: no platform read at all.
+  if (targets.length === 0) return
+  known.at = d.now()
+  try {
+    const rows = await council.state(tenant.id)
+    const byKey = new Map(rows.map((r) => [r.module_key, r]))
+    for (const { catalogueId, manifestId } of targets) {
+      const row = byKey.get(catalogueId)
+      if (!row?.has_row) continue
+      const platformOn = platformSays(row.state)
+      if (platformOn === null) continue
+      // No state remembered yet (the row appeared after the alignment): the module counts as having been on, the
+      // default of a module without a row, so a row that appears already disabled still hides it.
+      const changed = platformOn !== (known.on[manifestId] ?? true)
+      // The platform is authoritative in the off direction: while it says disabled, a config.modules value of on
+      // (a settings write that got past the direct-write guard, a hand edit) is put back, not only on a change.
+      const heldOn = !platformOn && (d.readConfig(tenant).modules ?? {})[manifestId] !== false
+      if (!changed && !heldOn) continue
+      try {
+        if (platformOn) {
+          await runPreApplyHooks({ requestId: 'alignment', tenantId: tenant.id, slug: tenant.slug, moduleId: catalogueId, manifestId, action: 'enable', actorUserId: 'system', detail: null })
+        }
+        if ((d.readConfig(tenant).modules ?? {})[manifestId] !== platformOn) {
+          d.writeConfig({ modules: { [manifestId]: platformOn } }, tenant)
+          if ((d.readConfig(tenant).modules ?? {})[manifestId] !== platformOn) {
+            throw new Error(`config.modules.${manifestId} did not take the value ${platformOn} after the write`)
+          }
+        }
+        if (platformOn) {
+          const m = await d.migrate({ id: tenant.id, slug: tenant.slug })
+          if (!m.ok) throw new Error(m.error ?? 'module migration catch-up failed')
+        }
+        known.on[manifestId] = platformOn
+        rememberPlatformHeld(tenant.id, manifestId, !platformOn)
+        console.info(`[module-switch] ${tenant.slug}: ${catalogueId} follows the platform state: config.modules.${manifestId}=${platformOn}`)
+      } catch (err) {
+        console.error(`[module-switch] ${tenant.slug}: following the platform state of ${catalogueId} failed (retried on the next interval):`, errText(err))
+      }
+    }
+  } catch (err) {
+    console.error(`[module-switch] ${tenant.slug}: reading the platform state to follow it failed (retried on the next interval):`, errText(err))
   }
 }
 
@@ -330,11 +461,12 @@ export async function runModuleSwitchPass(tenant: TenantContext, deps: Partial<R
   const council = d.council()
 
   await alignOnce(tenant, d, council)
+  await followPlatform(tenant, d, council)
 
   let pending = await d.store.pendingSwitches(db)
   const lastSweep = d.state.sweptAt.get(tenant.id)
   const sweepDue = lastSweep === undefined || d.now() - lastSweep >= SWEEP_INTERVAL_MS
-  // Cadence: nothing pending means no platform call, except the read at boot and then every SWEEP_INTERVAL_MS, which also adopts.
+  // Cadence: nothing pending means no read of the platform requests, except the read at boot and then every SWEEP_INTERVAL_MS, which also adopts. (followPlatform separately reads the platform enablement state every FOLLOW_INTERVAL_MS.)
   if (pending.length === 0 && !sweepDue) return out
 
   const requests = await council.requests(tenant.slug, REQUEST_LIMIT)
