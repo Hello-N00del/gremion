@@ -1,4 +1,4 @@
-<!-- i18n-sync: source=about-gremion.md sha256=97c0a413534a0962cd570af4ea9cd0f18d7b4d51b185ace22060e290d5408450 -->
+<!-- i18n-sync: source=about-gremion.md sha256=4ef57127e1db1e51735568f42f3410e18f8ae522c62df750c276439f2c13cc90 -->
 [English](./about-gremion.md) | **Deutsch**
 
 # Über Gremion
@@ -32,9 +32,9 @@ Jedes Deployment ist eine **Vertikale**, die Konfiguration, i18n, Seed-Daten und
 
 - **StuRaOS**: das erste Referenz-Deployment, eine deutsche Studierendenrat-Instanz (das Preset aus gewählter Versammlung, Mehrheitsbeschluss und Vier-Augen-Finanzen). Es liegt in einem privaten Repository; das Deployment, auf dem es lief, wurde stillgelegt.
 - **Musterstadt**: eine kommunale *Gemeinderat*-Vertikale (Finanzen aus, kommunales Vokabular, drei *Fraktionen*) und der Nachweis, dass Gremion ein wiederverwendbares Framework ist und nicht StuRaOS mit Mandantenfähigkeit.
+- Ein generischer **Demo**-Mandant.
 
 Dieser Tree enthält zwei Vertikalen als Daten unter [`verticals/`](../verticals): `stura` und `municipal` (siehe [`verticals/README.md`](../verticals/README.md), englisch).
-- Ein generischer **Demo**-Mandant.
 
 **Im Umfang:** personenbasierte Gremien, die als strikter Baum modelliert sind. **Nicht im Umfang** (eine eigene Schwester-Abstraktionshöhe): der Quadrant aus tokengewichteten, selbstausführenden, in Eigentum befindlichen und souveränen Körperschaften, also DAOs, Unternehmen und souveräne Stellen.
 
@@ -54,7 +54,7 @@ Als Lint-Regel umgesetzt, hält sich die Grenze selbst aufrecht. Der Klassifikat
 |-------|------|---------|---------------|
 | **1. Kernel** | Domänenneutrale Grundlage + **Invarianten-Hooks** der Governance | Öffentlich, AGPL-3.0-only | Nie |
 | **2. Governance** | Die Governance-Domäne als Flaggschiff, im Tree ausgeliefert, standardmäßig aktiv; architektonisch ein *Modul*, das die Kernel-Hooks aufruft | Öffentlich, AGPL-3.0-only | Nein (immer aktiv) |
-| **3. Funktionsmodule** | Wahlen, Newsletter, Kalender, Dateien, Nachrichten, Aufgabenboard, Verwaltungsoberfläche für Nutzer:innen, Finanzen, Inhalte, Tresor, Übergabe | Überwiegend AGPL-3.0-only; vier sind geschlossen (siehe unten) | Ja |
+| **3. Funktionsmodule** | board, calendar, content, elections, files, finance, handover, messaging, publishing, vault, votes (die Verzeichnisse unter `modules/`) | Quellen in diesem Repository, unter der AGPL-3.0-`LICENSE` im Wurzelverzeichnis (siehe [unten](#repository-topologie--produktfamilie)) | Ja |
 
 Die Grenze entspricht 1:1 der Governance-Charta: Die **4 festen Invarianten sind Kernel-Hooks**; die **3 Strategie-Slots und alle Funktionen sind Module**. Der eine katastrophale, nicht umkehrbare Fehlschnitt, den es zu vermeiden gilt, wäre ein Schalter zum „Abschalten der Manipulationssicherheit“: Audit-Kette, Quorum-Durchsetzung, Authentifizierung und Identität sowie Mandantentrennung sind unverhandelbar nie abwählbar.
 
@@ -121,7 +121,7 @@ Gremion steht **dauerhaft unter AGPL-3.0-only**; es wird nie unter eine nicht fr
 
 Beiträge werden **inbound = outbound** unter AGPL-3.0-only angenommen, per Sign-off nach dem **Developer Certificate of Origin** (`git commit -s`). Es gibt **weder CLA noch FLA**; daher kann keine Partei, auch nicht die Maintainer:innen, einen Beitrag jemals aus der AGPL herausrelizenzieren.
 
-Die meisten Module stehen selbst unter AGPL-3.0-only, für sie stellt sich diese Frage nicht. Bei den vier Modulen, die geschlossen bleiben (Finanzen, Inhalte, Tresor, Übergabe), ist der tragende Mechanismus die **Prozessgrenze, nicht ein CLA.** Die FSF behandelt alles, was im selben Prozess mit einem AGPL-Programm gelinkt ist (Plugins *und* in die App einkompilierte UI-Routen), als ein zusammengehöriges Werk, das ebenfalls AGPL sein muss, und § 13 löst die Pflicht zur Offenlegung des Quellcodes aus, sobald das veränderte Programm über ein Netzwerk bereitgestellt wird. Deshalb **kann ein geschlossenes Modul nicht „bloß In-App-Routen“** im Kernel sein; um geschlossen zu bleiben, muss es ein **vollständig eigener Dienst** sein (eigene API *und* eigene Oberfläche), den der Kernel über HTTP zusammensetzt („bloße Aggregation“). Geschlossener Code gelangt konstruktionsbedingt nie in die öffentliche Git-Historie: getrennte Repositories, nie ein gemeinsames Monorepo mit einem `ee/`-Verzeichnis.
+Die Modulquellen in diesem Tree liegen unter derselben `LICENSE` im Wurzelverzeichnis wie der Kernel, für sie stellt sich diese Frage nicht. Bei einer Komponente, die geschlossen bleiben muss, ist der tragende Mechanismus die **Prozessgrenze, nicht ein CLA.** Die FSF behandelt alles, was im selben Prozess mit einem AGPL-Programm gelinkt ist (Plugins *und* in die App einkompilierte UI-Routen), als ein zusammengehöriges Werk, das ebenfalls AGPL sein muss, und § 13 löst die Pflicht zur Offenlegung des Quellcodes aus, sobald das veränderte Programm über ein Netzwerk bereitgestellt wird. Deshalb **kann eine geschlossene Komponente nicht „bloß In-App-Routen“** im Kernel sein; um geschlossen zu bleiben, muss sie ein **vollständig eigener Dienst** sein (eigene API *und* eigene Oberfläche), den der Kernel über HTTP zusammensetzt („bloße Aggregation“). Geschlossener Code gelangt konstruktionsbedingt nie in die öffentliche Git-Historie: getrennte Repositories, nie ein gemeinsames Monorepo mit einem `ee/`-Verzeichnis.
 
 Den vollständigen Text und die Begründung enthalten [`../README.de.md`](../README.de.md) und [`../CONTRIBUTING.md`](../CONTRIBUTING.md) (englisch).
 
@@ -132,10 +132,10 @@ Gremion ist der offene Kern einer Produktfamilie. Das Ziel sind Module und Verti
 | Repo | Sichtbarkeit | Rolle |
 |------|-----------|------|
 | **gremion** (dieses Repo) | öffentlich, AGPL-3.0-only | Der Kernel + Modul-SDK + eine Referenz-Core-Shell. Startet eigenständig. |
-| Modul-Repositories | gemischt, siehe unten | Ein Repository pro Modul. |
+| Modulquellen | heute in diesem Repository, unter `modules/` | Siehe unten; ein Repository pro Modul ist das Ziel, nicht der heutige Stand. |
 | Vertikalen und die Hosting-Control-Plane | privat | Deployment-spezifische Konfiguration, Seed-Daten und Theming; Hosting / Provisioning / Abrechnung. |
 
-**Module liegen jeweils in einem eigenen Repository und sind nicht durchgehend geschlossen.** Öffentlich, AGPL-3.0-only: die Module für Wahlen, Newsletter, Kalender, Dateien, Nachrichten, Aufgabenboard und Nutzer:innen. Diese Lizenz gilt nur für den Modulcode; die Upstream-Systeme, die diese Module umhüllen (das Helios-Overlay, Nextcloud, der Matrix-Homeserver, LiveKit), behalten ihre eigenen Lizenzen, die im [Lizenzregister](compliance/licence-register.md) (englisch) festgehalten sind. Geschlossen: Finanzen, Inhalte, Tresor, Übergabe. „Modulschicht“ ist nicht als „proprietäre Schicht“ zu lesen, denn der größte Teil ist AGPL. Die Auslagerung aus dem einen Sammel-Repository ist im Gang: Heute werden die Modulquellen in diesem Tree unter `modules/` geführt (eingefrorene Kopien einer Extraktionsquelle, siehe [ops/extraction-source.md](./ops/extraction-source.md), englisch) statt als veröffentlichte Pakete. `@gremion/db` und `@gremion/ports` werden ab 0.1.0 auf npm veröffentlicht.
+**Die Modulquellen liegen heute in diesem Repository.** `modules/` enthält elf Module: board, calendar, content, elections, files, finance, handover, messaging, publishing, vault und votes. Kein Modulverzeichnis hat eine eigene Lizenzdatei, und kein `package.json` eines Moduls nennt eine Lizenz; die Lizenzdatei über ihnen ist die [`LICENSE`](../LICENSE) im Wurzelverzeichnis (AGPL-3.0), und das `package.json` im Wurzelverzeichnis nennt `AGPL-3.0-only`. Das betrifft nur den Modulcode; die Upstream-Systeme, die diese Module umhüllen (das Helios-Overlay, Nextcloud, der Matrix-Homeserver, LiveKit), behalten ihre eigenen Lizenzen, die im [Lizenzregister](compliance/licence-register.md) (englisch) festgehalten sind. `finance` und `vault` sind vom Standard-Build und vom Standard-Deployment ausgenommen ([`modules/disabled.json`](../modules/disabled.json)); das ist eine Build-Voreinstellung und keine Lizenzaussage. Die Modulquellen sind eingefrorene Kopien einer Extraktionsquelle (siehe [ops/extraction-source.md](./ops/extraction-source.md), englisch) und keine veröffentlichten Pakete. `@gremion/db` und `@gremion/ports` werden ab 0.1.0 auf npm veröffentlicht.
 
 **Historie.** Dieses Repository beginnt mit einem einzigen Root-Commit. Es ist eine **frische Extraktion** nur der beschlossenen Kern-Teilmenge, mit einer Bereinigung dieser Teilmenge von Secrets und personenbezogenen Daten, und keine erneute Veröffentlichung des privaten Produkt-Repositorys, dessen Historie privat bleibt.
 
@@ -151,7 +151,7 @@ Die Architektur ist ein **modularer Monolith mit Extraktion nach Bedarf**, auf G
 
 **Voraussetzungen für Open Core (das Scharnier, beide umgesetzt):** den Rück-Import `org-units-db → finance/tx` invertieren und die Auto-Discovery des Registers so bauen, dass der Kernel das Manifest eines Moduls nie fest verdrahtet.
 
-**Modulform.** Ein Modul, das geschlossen bleibt, kann nicht „bloß In-App-Routen“ im Kernel sein (siehe [Lizenzierung und Beiträge](#lizenzierung-und-beiträge)); daher sind die vier geschlossenen Module vollständige eigene Dienste mit eigener API *und* eigener Oberfläche, über HTTP zusammengesetzt. Für die AGPL-Module gilt diese Einschränkung nicht.
+**Modulform.** Eine Komponente, die geschlossen bleibt, kann nicht „bloß In-App-Routen“ im Kernel sein (siehe [Lizenzierung und Beiträge](#lizenzierung-und-beiträge)); daher muss sie ein vollständig eigener Dienst mit eigener API *und* eigener Oberfläche sein, über HTTP zusammengesetzt. Für die Module in diesem Tree gilt diese Einschränkung nicht.
 
 ## Verhältnis zu StuRaOS und Stand
 

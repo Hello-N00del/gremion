@@ -103,10 +103,13 @@ Mailpit at `http://localhost:8026`.
 IT-admin role; there is no setup token any more). The endpoint is rate-limited,
 target-guarded (docs/security/test-smtp-guard.md) and opens an outbound connection to the body-supplied
 `host:port`, so the cap also bounds its use as an SSRF/port-probe oracle. Send
-the session cookie of an IT admin:
+the session cookie of an IT admin to the tenant's own host, with an `Origin`
+header naming that host (the CSRF guard refuses a cookie-authenticated `POST`
+without a matching one):
 
 ```bash
-curl -X POST http://localhost:3001/api/setup/test-smtp \
+curl -X POST https://<tenant host>/api/setup/test-smtp \
+  -H "Origin: https://<tenant host>" \
   -H "Content-Type: application/json" \
   -H "Cookie: $IT_ADMIN_SESSION_COOKIE" \
   -d '{"host":"mailpit","port":1025,"user":"","password":"",
@@ -115,6 +118,11 @@ curl -X POST http://localhost:3001/api/setup/test-smtp \
 
 A success returns `{"success":true,"data":{"success":true}}`; an SMTP failure
 returns `success:false` with the transport error message.
+
+Both ways need a signed-in IT-admin session on a tenant host. The local dev stack
+as shipped offers no browser session on port 3001
+([LOCAL_TESTING.md](../LOCAL_TESTING.md#quick-start)), so they apply to a
+deployment that serves the tenant through the edge.
 
 ## Per-tenant SMTP resolution
 

@@ -31,9 +31,9 @@ Each deployment is a **vertical** that layers config, i18n, seed data, and theme
 
 - **StuRaOS** — the first reference deployment, a German student council instance (the elected-assembly + majority-vote + four-eyes-finance preset). It lives in a private repository; the deployment it ran on has been retired.
 - **Musterstadt** — a municipal *Gemeinderat* vertical (finance off, municipal vocabulary, three *Fraktionen*), the proof that Gremion is a reusable framework rather than StuRaOS-with-tenancy.
+- A generic **demo** tenant.
 
 This tree carries two verticals as data under [`verticals/`](../verticals): `stura` and `municipal` (see [`verticals/README.md`](../verticals/README.md)).
-- A generic **demo** tenant.
 
 **In scope:** person-membered bodies modelled as a strict tree. **Out of scope** (a separate sibling altitude): the token-weighted / self-executing / owned / sovereign quadrant — DAOs, corporations, sovereign bodies.
 
@@ -53,7 +53,7 @@ Made a lint, the line maintains itself. The classification test for any piece of
 |-------|------|---------|---------------|
 | **1. Kernel** | Domain-neutral substrate + governance **invariant hooks** | Public AGPL-3.0-only | Never |
 | **2. Governance** | The flagship governance domain, shipped in-tree, default-on — architecturally a *module* that calls the kernel hooks | Public AGPL-3.0-only | No (always-on) |
-| **3. Feature modules** | elections, newsletter, calendar, files, messages, board, users-admin UI, finance, content, vault, handover | Mostly AGPL-3.0-only; four are closed (see below) | Yes |
+| **3. Feature modules** | board, calendar, content, elections, files, finance, handover, messaging, publishing, vault, votes (the directories under `modules/`) | Sources in this repository, under the root AGPL-3.0 `LICENSE` (see [below](#repo-topology--product-family)) | Yes |
 
 The boundary maps 1:1 onto the governance charter: the **4 fixed invariants are kernel hooks**; the **3 strategy slots and all features are modules**. The one catastrophic, irreversible mis-cut to avoid is a "turn off tamper-evidence" toggle — the audit chain, quorum enforcement, auth/identity, and tenant isolation are non-negotiably never-deselectable.
 
@@ -120,7 +120,7 @@ Gremion is **AGPL-3.0-only, permanent** — it will never be relicensed under a 
 
 Contributions are accepted **inbound = outbound** under AGPL-3.0-only via a **Developer Certificate of Origin** sign-off (`git commit -s`). There is **no CLA and no FLA**, so no party, including the maintainers, can ever relicense a contribution away from the AGPL.
 
-Most modules are themselves AGPL-3.0-only, so for them this question does not arise. For the four that stay closed (finance, content, vault, handover), the load-bearing mechanic is the **process boundary, not a CLA.** The FSF treats anything linked in-process with an AGPL program (plugins *and* UI routes compiled into the app) as one combined work that must also be AGPL, and §13 triggers source-disclosure once the modified program is served over a network. Therefore a closed module **cannot be "just in-app routes"** on the kernel; to stay closed it must be a **full separate service** (its own API *and* its own UI) the kernel composes over HTTP ("mere aggregation"). Closed code never enters public git history by construction — separate repositories, never a shared monorepo with an `ee/` directory.
+The module sources in this tree sit under the same root `LICENSE` as the kernel, so for them this question does not arise. For a component that has to stay closed, the load-bearing mechanic is the **process boundary, not a CLA.** The FSF treats anything linked in-process with an AGPL program (plugins *and* UI routes compiled into the app) as one combined work that must also be AGPL, and §13 triggers source-disclosure once the modified program is served over a network. Therefore a closed component **cannot be "just in-app routes"** on the kernel; to stay closed it must be a **full separate service** (its own API *and* its own UI) the kernel composes over HTTP ("mere aggregation"). Closed code never enters public git history by construction — separate repositories, never a shared monorepo with an `ee/` directory.
 
 For the full text and rationale, see [`../README.md`](../README.md) and [`../CONTRIBUTING.md`](../CONTRIBUTING.md).
 
@@ -131,10 +131,10 @@ Gremion is the open core of a product family. The target is modules and vertical
 | Repo | Visibility | Role |
 |------|-----------|------|
 | **gremion** (this repo) | public, AGPL-3.0-only | The kernel + module SDK + a reference core shell. Boots standalone. |
-| module repositories | mixed — see below | One repository per module. |
+| module sources | in this repository today, under `modules/` | See below; one repository per module is the target, not the present state. |
 | verticals and the hosting control plane | private | Deployment-specific config, seed data and theming; hosting / provisioning / billing. |
 
-**Modules are one repository per module, and they are not uniformly closed.** Public, AGPL-3.0-only: the elections, newsletter, calendar, files, messages, board and users modules. That licence covers the module code only; the upstream systems those modules wrap (the Helios overlay, Nextcloud, the Matrix homeserver, LiveKit) keep their own licences, which are recorded in [the licence register](compliance/licence-register.md). Closed: finance, content, vault, handover. Do not read "module layer" as "proprietary layer" — most of it is AGPL. The split out of the single holding repository is in progress: today the module sources are carried in this tree under `modules/` (frozen copies of one extraction source, see [ops/extraction-source.md](./ops/extraction-source.md)) rather than as published packages; `@gremion/db` and `@gremion/ports` begin publishing to npm at 0.1.0.
+**The module sources are in this repository today.** `modules/` carries eleven modules: board, calendar, content, elections, files, finance, handover, messaging, publishing, vault and votes. No module directory has a licence file of its own and no module `package.json` declares a licence; the licence file above them is the root [`LICENSE`](../LICENSE) (AGPL-3.0), and the root `package.json` declares `AGPL-3.0-only`. That covers the module code only; the upstream systems those modules wrap (the Helios overlay, Nextcloud, the Matrix homeserver, LiveKit) keep their own licences, which are recorded in [the licence register](compliance/licence-register.md). `finance` and `vault` are excluded from the default build and deploy ([`modules/disabled.json`](../modules/disabled.json)); that is a build default, not a licence statement. The module sources are frozen copies of one extraction source (see [ops/extraction-source.md](./ops/extraction-source.md)) rather than published packages; `@gremion/db` and `@gremion/ports` begin publishing to npm at 0.1.0.
 
 **History.** This repository starts from a single root commit. It is a **fresh extraction** of only the ratified core subset, with a secret/PII sweep of that subset, not a re-publish of the private product repository, whose history stays private.
 
@@ -150,7 +150,7 @@ The architecture is a **modular monolith — extract on demand**, on the proven 
 
 **Open-core prerequisites (the hinge, both executed):** invert the `org-units-db → finance/tx` reverse-import, and make the registry auto-discovery so the kernel never hardcodes a module's manifest.
 
-**Module shape.** A module that stays closed cannot be "just in-app routes" on the kernel (see [Licensing & contribution](#licensing--contribution)), so the four closed modules are full separate services with their own API *and* their own UI, composed over HTTP. The AGPL modules are under no such constraint.
+**Module shape.** A component that stays closed cannot be "just in-app routes" on the kernel (see [Licensing & contribution](#licensing--contribution)), so it has to be a full separate service with its own API *and* its own UI, composed over HTTP. The modules in this tree are under no such constraint.
 
 ## Relationship to StuRaOS and status
 

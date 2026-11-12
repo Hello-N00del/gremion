@@ -131,9 +131,15 @@ There are two supported deployment paths:
 
 ```bash
 git clone <your-fork> gremion && cd gremion
-cp .env.example .env
-./scripts/setup.sh          # or: make setup
+./scripts/setup.sh          # or: make setup — writes .env itself; stops at the image build (next line)
+echo "TENANT_PROXY_SHARED_SECRET=$(openssl rand -hex 32)" >> .env
+./scripts/setup.sh          # keeps the .env, builds and starts both projects
 ```
+
+Do not copy `.env.example` to `.env` before the first run: `setup.sh` writes the
+file itself and skips secret generation when it already exists, which would leave
+every `CHANGE_ME_` placeholder in place. The two runs and the reason for them are
+in [LOCAL_TESTING.md](LOCAL_TESTING.md#quick-start).
 
 `scripts/setup.sh` prompts for a domain (press Enter for `localhost`), fills
 `.env` from `.env.example`, generates random secrets for every `CHANGE_ME_`
@@ -150,7 +156,7 @@ services are published on loopback host ports:
 
 | Service | URL |
 |---------|-----|
-| `gremion-ui` (admin shell) | <http://localhost:3001> |
+| `gremion-ui` (admin shell) | <http://localhost:3001> (with `curl` and the resolver headers, see below; `/healthz` needs none) |
 | `gremion-public` (portal) | <http://localhost:3002> |
 | Keycloak | <http://localhost:8082/auth> |
 | Legal pages | <http://localhost:8083/impressum> |
@@ -160,10 +166,13 @@ services are published on loopback host ports:
 > **Required value.** `docker-compose.app.yml` marks `TENANT_PROXY_SHARED_SECRET`
 > required for `kernel-api`, while `.env.example` ships it commented out and
 > `setup.sh` does not set it: the app project does not render until `.env` holds a
-> value (checked with `docker compose config` at `fb46f89a`). With a value set the
-> tenant resolver's proxy-trust gate is on, so a request straight to a loopback
-> port must carry `x-proxy-trust: <the value>`
-> ([runbooks/tenant-edge.md](runbooks/tenant-edge.md), STEP 0c).
+> value. With a value set the tenant resolver's proxy-trust gate is on, so a
+> request straight to port 3001 must carry `x-proxy-trust: <the value>` and name
+> the tenant's bound host in both `Host` and `X-Forwarded-Host`
+> ([LOCAL_TESTING.md](LOCAL_TESTING.md#probing-gremion-ui-by-hand);
+> [runbooks/tenant-edge.md](runbooks/tenant-edge.md), STEP 0c). A browser cannot
+> send that header and the local stack runs no proxy that adds it, so the app on
+> port 3001 is not usable from a browser on the stack as shipped.
 
 > **Host ports bind loopback only (`127.0.0.1` + `[::1]`), deliberately.** The
 > tenant resolver selects a tenant from the inbound `x-forwarded-host`; a
@@ -179,7 +188,7 @@ them. Common lifecycle commands (see the `Makefile` for the full list):
 make up                 # state project, then the blue app colour
 make ps                 # running containers of both projects
 make logs SERVICE=gremion-ui
-make health             # service + endpoint health summary
+make health             # container status + Keycloak/legal probes (its gremion-ui line reads NOT REACHABLE locally; use /healthz)
 make rebuild            # rebuild and force-recreate both projects
 make down               # stop (volumes preserved)
 make validate-env       # fail if .env still has CHANGE_ME_ placeholders
@@ -188,11 +197,14 @@ make validate-env       # fail if .env still has CHANGE_ME_ placeholders
 ### Seeding governance fixtures (optional)
 
 The kernel seeds via a one-time endpoint rather than a script. With
-`SEED_TOKEN` set in `.env`:
+`SEED_TOKEN` set in `.env` (the last three headers are what the tenant resolver
+needs on the loopback port):
 
 ```bash
 curl -X POST -H "X-Seed-Token: $SEED_TOKEN" \
-  -H "X-Forwarded-Host: <a host bound to a tenant>" \
+  -H "Host: <a host bound to a tenant>" \
+  -H "X-Forwarded-Host: <the same host>" \
+  -H "x-proxy-trust: $TENANT_PROXY_SHARED_SECRET" \
   http://localhost:3001/api/setup/seed
 ```
 
@@ -303,13 +315,11 @@ red.
   files, `active.yml`). A file written there registers without a restart.
   `docker/traefik/dynamic/dev-csp.yaml` is kept in the repository but is no
   longer mounted by any composition (TASK-041 decides its home).
-- **Known gap until TASK-034.** The `keycloak`, `keycloak-admin` and `fallback`
-  routers in `docker-compose.prod.yml` still carry `tls=true` without a
-  `certresolver`, and a TLS router does **not** inherit the entrypoint's resolver
-  (measured), so until TASK-034 labels them they serve Traefik's default
-  certificate. The routers of the pilot's `matrix` and `livekit` services name
-  `le-http` themselves, and so does every per-customer router file rendered by
-  `packages/edge-routers` (`gremion-verify` fails a public router without one).
+- **Known gap until TASK-034.** The routers in `docker-compose.yml` and
+  `docker-compose.prod.yml` still carry `tls=true` without a `certresolver`,
+  and a TLS router does **not** inherit the entrypoint's resolver (measured),
+  so until TASK-034 labels them they serve Traefik's default certificate.
+  Nothing deploys before the pilot re-init (TASK-038), which carries TASK-034.
 
 Proofs: `make lint-edge-render` (the render guard,
 `scripts/check-compose-edge.test.mjs`), and `make test-edge-static`

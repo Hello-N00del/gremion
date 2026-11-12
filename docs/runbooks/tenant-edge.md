@@ -18,9 +18,15 @@ both names appear in the compose files and Traefik router labels below.
 ```
 browser ──TLS──> traefik:443 (the host's edge address) ──> routers
                                                            ├─ gremion-ui   (one router file per tenant host, on the active colour)
-                                                           ├─ keycloak   (/auth path routers on the apex; the realm paths on a customer host)
-                                                           └─ gremion-public (public.example.org)
+                                                           └─ keycloak   (/auth path routers on the apex; the realm paths on a customer host)
 ```
+
+- **The public portal has no public router in this tree today.** `active.yml`
+  defines the `public` and `public-next` services for `gremion-public`, and the
+  only router that uses one of them is the loopback-only `test-public` router of
+  the inactive colour (`infra/host/templates/edge/active.yml.tmpl`). Neither the
+  compose labels nor the per-tenant router files route a public host to the
+  portal.
 
 - **Traefik is the sole ingress** and runs only in the `production` profile
   (`docker-compose.yml`, `profiles: [production]`). In local dev there is no

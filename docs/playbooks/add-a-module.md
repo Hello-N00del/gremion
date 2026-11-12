@@ -139,7 +139,7 @@ them), and, when it owns a store, a leaf service under `modules/<id>/src/`.
 | **Server self-registration** | `lib/server/<mod>/register.server.ts` (optional; §7) — picked up by `gremion-ui/scripts/build-module-server-init.mjs` → `lib/server/modules/server-init.generated.ts` | codegen output |
 | Page routes | `routes/<mod>/` (must match a `pages[].segment` + a `routePrefixes` entry) | new dir |
 | API routes | `routes/api/<mod>/` (must match a `routePrefixes` entry) | new dir |
-| Migrations | `modules/<id>/app/migrations/NNN_<mod>_<name>.sql`, copied to `gremion-ui/migrations/` by `interim-module-overlay.mjs --migrations` (build only) — **OWNED tables only**, and no basename or number may collide with a kernel one (`scripts/check-module-migration-names.mjs`) | new files |
+| Migrations | `modules/<id>/app/migrations/NNNN_<name>.sql`: a four-digit number from the module's block of the `kernel-data` chain in `scripts/migrations/ranges.json` (content holds 1200–1299, e.g. `1200_content_news_posts.sql`), claimed with `node scripts/migrations/register.mjs claim --chain kernel-data --dir modules/<id>/app/migrations --name <slug>` ([`scripts/migrations/README.md`](../../scripts/migrations/README.md)); copied to `gremion-ui/migrations/` by `interim-module-overlay.mjs --migrations` (build only) — **OWNED tables only**, and no basename or number may collide with a kernel one (`scripts/check-module-migration-names.mjs`) | new files |
 | Realm fragment | declared in the manifest's `realm` (KC groups/roles) | in-manifest |
 | Capabilities | declared in the manifest's `capabilities` | in-manifest |
 | Nav | declared in the manifest's `nav` (+ a `{ slot:'module', moduleId }` anchor) | see §6 |
@@ -192,7 +192,7 @@ a migration of yours fall outside your `migrations[]` list.
 - [ ] Server logic under `lib/server/<mod>/`; if it has a `register.server.ts`, **re-run `build-module-server-init.mjs`** and commit `server-init.generated.ts`.
 - [ ] Pages under `routes/<mod>/`; APIs under `routes/api/<mod>/`.
 - [ ] Every `pages[].segment` and `routePrefixes` entry has a matching route directory.
-- [ ] Migrations named `NNN_<mod>_*.sql`, listed in `migrations[]`, touching OWNED tables only, with names and numbers no kernel migration uses.
+- [ ] Migrations named `NNNN_<name>.sql` with a number claimed from the module's block (`register.mjs claim --dir`), listed in `migrations[]`, touching OWNED tables only, with names and numbers no kernel migration uses.
 
 ---
 

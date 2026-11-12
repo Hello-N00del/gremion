@@ -76,13 +76,19 @@ DOMAIN=gremion.example.org
 ### TENANT_PROXY_SHARED_SECRET
 
 - **Type:** String (secret; `openssl rand -hex 32`)
-- **Default:** unset (the proxy-trust gate is a byte-identical no-op)
-- **Used by:** Traefik (injects `x-proxy-trust` on the `gremion-ui` routers) and
+- **Default:** unset in `.env.example` (commented out), and `setup.sh` does not
+  generate it. `docker-compose.app.yml` nevertheless **requires** a value for
+  `kernel-api`, so the app project does not render without one, in local dev
+  too ([LOCAL_TESTING.md](LOCAL_TESTING.md#quick-start), step 3).
+- **Used by:** Traefik (injects `x-proxy-trust` on the `gremion-ui` routers),
   the tenant resolver (`resolve.ts isProxyTrusted`), which 403s any request
-  lacking a constant-time match.
+  lacking a constant-time match, and `kernel-api`.
 - **Impact:** When set, x-forwarded-host trust no longer rests on network
-  topology alone. Set the env var **and** the Traefik label together at deploy;
-  leave unset for local dev.
+  topology alone. On a host, set the env var **and** the Traefik label together
+  at deploy. In local dev there is no Traefik to inject the header, so a request
+  to port 3001 must carry it itself
+  ([LOCAL_TESTING.md](LOCAL_TESTING.md#probing-gremion-ui-by-hand)). In
+  `gremion-ui` alone an unset value makes the gate a no-op.
 
 ### TENANT_RATE_LIMIT_RPS / TENANT_RATE_LIMIT_BURST
 

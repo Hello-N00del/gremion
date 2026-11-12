@@ -80,7 +80,11 @@ make logs                         # all services
 make logs SERVICE=gremion-ui        # one service
 ```
 
-`make health` probes `gremion-ui` (3001), Keycloak (8082) and Legal (8083).
+`make health` probes `gremion-ui` (3001), Keycloak (8082) and Legal (8083). Its
+`gremion-ui` line reads `NOT REACHABLE` on a healthy local stack: the target
+requests `/` without the tenant resolver's headers and gets a 403. Use
+`curl -sf http://localhost:3001/healthz` (no headers needed) and the `healthy`
+state in `make ps` for `gremion-ui`.
 
 ### Verify prerequisites
 
@@ -105,7 +109,11 @@ generates random secrets, mints the internal TLS CA, renders the PgBouncer
 userlist, checks the compose bind-mount sources, creates the dev networks and
 volumes, builds the images, and starts the state project and the blue app colour
 (`make up`) — then waits for `gremion-ui` to become healthy. No realm file is
-prepared (B-01).
+prepared (B-01). Do not copy `.env.example` to `.env` yourself first: the script
+skips secret generation when `.env` exists. A first run on a fresh clone stops at
+the image build until `TENANT_PROXY_SHARED_SECRET` is added to `.env` (last row of
+the table below; the two-run sequence is in
+[LOCAL_TESTING.md](LOCAL_TESTING.md#quick-start)).
 
 ### Setup aborts before starting containers
 
@@ -116,15 +124,20 @@ prepared (B-01).
 | `Invalid domain name` | Domain prompt got a bad value | Re-run; press Enter for `localhost`, or enter a valid hostname |
 | `Some CHANGE_ME_ placeholders were not replaced` | `sed` incompatibility | Check your `sed`; on macOS the script uses BSD `sed -i ''` automatically |
 | `gen-realm: set CONFIG_PATH=...` | `make gen-realm` run without a vertical config | Supply `CONFIG_PATH=/path/to/config.json` or add `config/config.json`. Nothing needs `realm-export.json` to exist: B-01 deleted the boot import and the file is a gitignored generator output |
-| `required variable TENANT_PROXY_SHARED_SECRET is missing a value` (from `make up`) | `docker-compose.app.yml` requires it for `kernel-api`; `.env.example` ships it commented out and `setup.sh` does not set it | Put a value in `.env` (`openssl rand -hex 32`). The tenant resolver's proxy-trust gate is then on, so a request to a loopback port must carry `x-proxy-trust: <that value>` ([runbooks/tenant-edge.md](runbooks/tenant-edge.md) STEP 0c) |
+| `required variable TENANT_PROXY_SHARED_SECRET is missing a value` (from `make build` / `make up`) | `docker-compose.app.yml` requires it for `kernel-api`; `.env.example` ships it commented out and `setup.sh` does not set it | Append a value to the `.env` that `setup.sh` wrote (`echo "TENANT_PROXY_SHARED_SECRET=$(openssl rand -hex 32)" >> .env`) and run `./scripts/setup.sh` again. The tenant resolver's proxy-trust gate is then on: a request to port 3001 must carry `x-proxy-trust`, `X-Forwarded-Host` and a matching `Host` ([LOCAL_TESTING.md](LOCAL_TESTING.md#probing-gremion-ui-by-hand)) |
 
 ### `.env` already exists — secrets not regenerated
 
-`setup.sh` skips secret generation if `.env` exists. To start clean:
+`setup.sh` skips secret generation if `.env` exists, which is also what happens
+when `.env.example` was copied to `.env` by hand before the first run (`make
+validate-env` then lists the `CHANGE_ME_` placeholders). To start clean:
 
 ```bash
 rm .env && make setup
 ```
+
+The new `.env` again lacks `TENANT_PROXY_SHARED_SECRET`; add it as in the table
+above.
 
 > `.env` holds the Postgres superuser password, the Keycloak admin password,
 > `AUTH_SECRET`, the OIDC client secrets and the restic passphrase. `setup.sh`
@@ -147,17 +160,20 @@ timeout usually means one of them is not up — check `make ps` and the logs for
 
 `fresh-start` is retired; seed via the one-time endpoint after the stack is up and
 a tenant exists. The seed runs in the request's tenant context, so the request
-names a host that is bound to a provisioned tenant:
+names a host that is bound to a provisioned tenant and carries the resolver's
+headers (`SEED_TOKEN` and `TENANT_PROXY_SHARED_SECRET` are the values in `.env`):
 
 ```bash
 curl -X POST -H "X-Seed-Token: $SEED_TOKEN" \
-  -H "X-Forwarded-Host: <a host bound to a tenant>" \
+  -H "Host: <a host bound to a tenant>" \
+  -H "X-Forwarded-Host: <the same host>" \
+  -H "x-proxy-trust: $TENANT_PROXY_SHARED_SECRET" \
   http://localhost:3001/api/setup/seed
 ```
 
-`SEED_TOKEN` lives in `.env`. Leave it empty to disable the endpoint. The endpoint
-answers `409` when `org_units` is not empty. See
-[LOCAL_TESTING.md](LOCAL_TESTING.md).
+Leave `SEED_TOKEN` empty to disable the endpoint. The endpoint answers `409` when
+`org_units` is not empty. See
+[LOCAL_TESTING.md](LOCAL_TESTING.md#the-seed-endpoint-test-fixtures).
 
 ---
 
@@ -336,9 +352,17 @@ Usually a redirect-URI or origin mismatch.
 The tenant resolver is **fail-closed**: it looks the WHOLE `x-forwarded-host`
 up in `tenant_domain`, and any request whose host is absent, malformed or bound
 to no active tenant gets a **404** (it cannot select a tenant), logged as one
-`tenant.host.rejected` line naming the host and the reason. In
-production a missing edge-injected `x-proxy-trust` (once
-`TENANT_PROXY_SHARED_SECRET` is set) gets a **403**.
+`tenant.host.rejected` line naming the host and the reason. Once
+`TENANT_PROXY_SHARED_SECRET` is set, which the app project requires on a host and
+in local dev alike, a request without a matching `x-proxy-trust` gets a **403**
+before any lookup; on a host the edge injects the header.
+
+### Every request to port 3001 answers 403 locally
+
+The request carries no `x-proxy-trust`. A browser cannot send it and the local
+stack runs no proxy that adds it, so the app on port 3001 is reached with `curl`
+and the headers below, not from a browser. `/healthz` is exempt and answers
+without headers.
 
 ### Every request 404s locally
 
@@ -347,12 +371,20 @@ is no default tenant (TRD-075); a create request (TASK-043, run by the host
 executor) binds the customer's host ([runbooks/tenant-edge.md](runbooks/tenant-edge.md)
 STEP 0a), so a stack with no customer answers 404 on every tenant route. The
 `gremion-ui` healthcheck probes `/healthz`, which is exempt from resolution. To
-test by hand, stamp a bound host (and `x-proxy-trust` when
-`TENANT_PROXY_SHARED_SECRET` is set):
+test by hand, send the bound host as `X-Forwarded-Host` AND as `Host` (with the
+secret set the resolver answers 404 when the two differ, and a plain `curl` to
+`localhost:3001` sends `Host: localhost:3001`), plus `x-proxy-trust`:
 
 ```bash
-curl -s -H 'X-Forwarded-Host: <a-bound-host>' http://localhost:3001/
+SECRET=$(grep '^TENANT_PROXY_SHARED_SECRET=' .env | cut -d= -f2)
+curl -s -o /dev/null -w '%{http_code}\n' \
+  -H 'Host: <a-bound-host>' -H 'X-Forwarded-Host: <a-bound-host>' \
+  -H "x-proxy-trust: ${SECRET}" \
+  http://localhost:3001/
 ```
+
+The answers are tabulated in
+[LOCAL_TESTING.md](LOCAL_TESTING.md#probing-gremion-ui-by-hand).
 
 ### A tenant host 404s at the edge (production)
 
@@ -396,7 +428,8 @@ make logs SERVICE=gremion-ui | grep -i 'migration\|fleet-migrations'
 ### Realm template out of date after a config change
 
 The per-tenant realm is composed from `docker/keycloak/realm-export.base.json`
-(the committed `gremion-ui` + `gremion-admin` base) and the enabled modules'
+(the committed base, which carries five clients: `gremion-ui`, `gremion-admin`,
+`synapse`, `nextcloud` and `gremion-mobile`) and the enabled modules'
 manifests by `buildTenantRealmDoc` at tenant-create time. `make gen-realm` writes
 the module-composed template for a vertical's `config.json` to the gitignored
 `docker/keycloak/realm-export.json`, for inspection only; nothing reads it at
@@ -455,7 +488,7 @@ sudo lsof -i :3001            # macOS/Linux
 
 ```bash
 make ps                                    # exit code
-make logs SERVICE=<service>
+make logs SERVICE=<service>                # control-panel and kernel-api: use `$DA logs -f <service>` (make logs looks for them in the state project)
 docker inspect <container-name> | grep -A 20 Health
 ```
 
@@ -480,7 +513,7 @@ docker system df
 
 docker container prune
 docker image prune -a --filter "until=240h"
-docker volume prune                         # keeps named gremion_* volumes in use
+docker volume prune                         # unused anonymous volumes only; named volumes stay unless you add --all
 ```
 
 > The state project's named volumes are project-scoped (`dev-state_pg-data`,
@@ -507,6 +540,11 @@ bash -x scripts/backup.sh
 # A primary cause is a missing/empty RESTIC_PASSWORD or rclone backend config
 grep -E '^(RESTIC_PASSWORD|RCLONE_)' .env
 ```
+
+`service "postgres" is not running` from `backup.sh` or `restore.sh` on the local
+stack means the script addressed no running compose project: both call a bare
+`docker compose`. Prefix the call with `COMPOSE_PROJECT_NAME=dev-state`
+([OPERATIONS.md](OPERATIONS.md#which-compose-project-the-scripts-address)).
 
 ---
 

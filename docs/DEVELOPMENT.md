@@ -40,11 +40,17 @@ The production profile adds `traefik` + `docker-socket-proxy` (`docker-compose.y
 ```bash
 git clone <this-repo> gremion
 cd gremion
-cp .env.example .env
-./scripts/setup.sh        # or: make setup
+./scripts/setup.sh        # or: make setup — writes .env itself; on a fresh clone it stops at the image build
+echo "TENANT_PROXY_SHARED_SECRET=$(openssl rand -hex 32)" >> .env
+./scripts/setup.sh        # keeps the .env, builds and starts the stack
 ```
 
-`./scripts/setup.sh` (idempotent — it won't overwrite an existing `.env`):
+Do not copy `.env.example` to `.env` first: `setup.sh` skips secret generation when
+the file exists. Why two runs, and how the app on port 3001 is reached afterwards
+(with `curl` and the tenant resolver's headers, not from a browser), is in
+[LOCAL_TESTING.md](./LOCAL_TESTING.md#quick-start).
+
+`./scripts/setup.sh` (it won't overwrite an existing `.env`):
 
 1. Prompts for a domain (press Enter for `localhost`).
 2. Creates `.env` from `.env.example` (mode `600`) and replaces every `CHANGE_ME_` placeholder with a freshly generated secret.
@@ -70,8 +76,14 @@ All credentials live in `.env` — keep it safe.
 The kernel starts empty. Seeding (committees, org-unit tree, members, test users) is done through the one-time HTTP endpoint, gated by `SEED_TOKEN` (in `.env`):
 
 ```bash
-curl -X POST -H "X-Seed-Token: $SEED_TOKEN" http://localhost:3001/api/setup/seed
+curl -X POST -H "X-Seed-Token: $SEED_TOKEN" \
+  -H "Host: <a host bound to a tenant>" -H "X-Forwarded-Host: <the same host>" \
+  -H "x-proxy-trust: $TENANT_PROXY_SHARED_SECRET" \
+  http://localhost:3001/api/setup/seed
 ```
+
+The seed runs in the tenant named by the request, so it needs a bound tenant host
+and the resolver headers ([LOCAL_TESTING.md](./LOCAL_TESTING.md#the-seed-endpoint-test-fixtures)).
 
 Seeded users get the password in `SEED_USER_PASSWORD` (generated into `.env` by `setup.sh`, which prints it once at the end of its run). Set `GREMION_DISABLE_SEEDS=true` to disable seeding entirely (the dev override already sets this; the endpoint remains the explicit seeding path).
 
@@ -96,7 +108,7 @@ make logs                # follow all logs
 make logs SERVICE=gremion-ui   # follow one service
 make build               # build custom images
 make rebuild             # build + up -d --force-recreate
-make health              # service status + endpoint checks (gremion-ui 3001, KC 8082, legal 8083)
+make health              # service status + endpoint checks (KC 8082, legal 8083; its gremion-ui line reads NOT REACHABLE locally, use /healthz)
 ```
 
 ### Shell access

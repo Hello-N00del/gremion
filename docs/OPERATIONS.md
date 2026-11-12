@@ -164,9 +164,24 @@ crontab -e
 0 2 * * * cd /path/to/gremion && ./scripts/backup.sh > /var/log/gremion-backup.log 2>&1
 ```
 
-The script runs `docker compose exec -T postgres` from the repository, so it needs
-a compose project that resolves to the running state project (on a host,
-`gremion-backup` provides it).
+#### Which compose project the scripts address
+
+`scripts/backup.sh`, `scripts/restore.sh` and `scripts/tenant-backup.sh` run a
+bare `docker compose exec -T postgres` from the repository and take no project
+flag. Compose resolves that to the project named by `COMPOSE_PROJECT_NAME`, and
+without it to a project named after the checkout directory, which is not a running
+one: the script then stops with `service "postgres" is not running`. On a host,
+`gremion-backup` provides the project. For the local stack, name the state project
+in the environment of each call to `backup.sh` or `restore.sh`:
+
+```bash
+COMPOSE_PROJECT_NAME=dev-state ./scripts/backup.sh
+COMPOSE_PROJECT_NAME=dev-state ./scripts/restore.sh --snapshot latest gremion
+```
+
+Both scripts also need `restic` on the machine that runs them (and `rclone` once
+`RCLONE_BUCKET` is set). The cron line above needs the same variable when the
+checkout runs the dev projects.
 
 ### Per-tenant backup (`scripts/tenant-backup.sh`)
 
@@ -192,6 +207,13 @@ separate, a later tenant delete can crypto-shred that one key and instantly
 invalidate only that tenant's backups. Requires `CONTROL_DATABASE_URL`,
 `POSTGRES_USER`, `KEYCLOAK_ADMIN`, and `KEYCLOAK_ADMIN_PASSWORD`.
 
+The script reads the registry with `psql` from the machine it runs on, so
+`CONTROL_DATABASE_URL` must be reachable from there (`.env.example` does not carry
+the key), and it exports the realm from `KC_BASE_URL` (default
+`http://localhost:8080/auth`). This guide has no procedure for running it against
+the local dev stack, for which there is no local tenant-creation procedure either
+([LOCAL_TESTING.md](LOCAL_TESTING.md#setting-up-a-tenant)).
+
 ### Restore (`scripts/restore.sh`)
 
 > **WARNING:** Restore DROPS and recreates the target database. Always take a
@@ -209,6 +231,11 @@ invalidate only that tenant's backups. Requires `CONTROL_DATABASE_URL`,
 # Or restore directly from a gzipped dump file
 ./scripts/restore.sh keycloak backups/current/keycloak.sql.gz
 ```
+
+On the local stack, prefix every restoring call with
+`COMPOSE_PROJECT_NAME=dev-state`
+([Which compose project the scripts address](#which-compose-project-the-scripts-address));
+`--list-snapshots` only reads the restic repository and needs no project.
 
 For the governance kernel the restore targets are **`keycloak`, `gremion`, and
 `control`**. The restore process:
@@ -243,6 +270,8 @@ make logs
 make logs SERVICE=gremion-ui          # app project: gremion-ui, gremion-public, migrate, tenant-create
 make logs SERVICE=keycloak            # any other service: the state project
 make logs SERVICE=postgres
+$DA logs -f control-panel             # control-panel and kernel-api are app-project services that
+$DA logs -f kernel-api                # `make logs SERVICE=…` looks for in the state project
 
 # Last 100 lines / since 5 minutes ago / with timestamps (state project; use $DA for the app colour)
 $DS logs -n 100 keycloak
@@ -322,15 +351,21 @@ probe (`200` only once boot completed), see
 ```bash
 make health
 # === Endpoint Checks ===
-#   gremion-ui  (3001): OK
+#   gremion-ui  (3001): NOT REACHABLE     <- expected locally, see below
 #   Keycloak  (8082): OK
 #   Legal     (8083): OK
 ```
 
+The target requests `http://localhost:3001/` without the tenant resolver's
+headers, which answers 403 once `TENANT_PROXY_SHARED_SECRET` is set (the app
+project requires it), so its `gremion-ui` line cannot read `OK` on the local
+stack. Probe `/healthz` instead; a tenant route needs the three headers in
+[LOCAL_TESTING.md](LOCAL_TESTING.md#probing-gremion-ui-by-hand).
+
 Manually:
 
 ```bash
-curl -sf http://localhost:3001/                       # gremion-ui (admin shell)
+curl -sf http://localhost:3001/healthz                # gremion-ui liveness (no headers, no tenant)
 curl -I  http://localhost:8082/auth/health/ready      # Keycloak readiness
 curl -sf http://localhost:8083/impressum              # Legal pages
 # Verify the realm is loaded:
@@ -449,11 +484,15 @@ with a host that is bound to a provisioned tenant (the seed runs in that tenant'
 context; there is no first-run setup wizard and no default tenant):
 
 ```bash
-curl -X POST -H "X-Seed-Token: $SEED_TOKEN" -H "X-Forwarded-Host: <bound host>" \
+curl -X POST -H "X-Seed-Token: $SEED_TOKEN" \
+  -H "Host: <bound host>" -H "X-Forwarded-Host: <bound host>" \
+  -H "x-proxy-trust: $TENANT_PROXY_SHARED_SECRET" \
   http://localhost:3001/api/setup/seed
 ```
 
-`SEED_TOKEN` gates the endpoint; leave it empty in `.env` to disable seeding.
+`SEED_TOKEN` gates the endpoint; leave it empty in `.env` to disable seeding. The
+other three headers are what the tenant resolver needs on the loopback port
+([LOCAL_TESTING.md](LOCAL_TESTING.md#probing-gremion-ui-by-hand)).
 
 ---
 
@@ -462,7 +501,7 @@ curl -X POST -H "X-Seed-Token: $SEED_TOKEN" -H "X-Forwarded-Host: <bound host>" 
 ### A service won't start
 
 ```bash
-make logs SERVICE=<service>
+make logs SERVICE=<service>              # control-panel / kernel-api: $DA logs -f <service>
 $DS config | head -50                    # surface compose syntax errors ($DA for the app project)
 $DS up <service>                         # start in the foreground for verbose output
 ```
@@ -590,7 +629,15 @@ sized to the host.
 On a distribution host the full-system backup and its restore are
 `gremion-backup` and `gremion-restore-into`, and the procedures are
 [ops/runbook/backup.md](ops/runbook/backup.md) and
-[ops/runbook/restore.md](ops/runbook/restore.md). For a local stack:
+[ops/runbook/restore.md](ops/runbook/restore.md).
+
+The rest of this section is the local dev stack, as a development convenience and
+not a host procedure. `scripts/backup.sh` and `scripts/restore.sh` take no project
+flag, so every call below names the state project through `COMPOSE_PROJECT_NAME`
+([Which compose project the scripts address](#which-compose-project-the-scripts-address));
+without it they stop with `service "postgres" is not running`. The unit tests
+`test/backup.bats` and `test/restore.bats` run the two scripts against stubbed
+tools, not against a running stack.
 
 ```bash
 # 1. Back up secrets — CAREFULLY, contains live credentials
@@ -601,13 +648,16 @@ $DS exec keycloak /opt/keycloak/bin/kc.sh export \
   --realm "<realm>" --file /tmp/realm-export.json
 $DS cp keycloak:/tmp/realm-export.json backups/
 
-# 3. Back up the kernel databases (restic + rclone), then every tenant
-./scripts/backup.sh
-./scripts/tenant-backup.sh <slug>
+# 3. Back up the kernel databases (restic, plus rclone when RCLONE_BUCKET is set)
+COMPOSE_PROJECT_NAME=dev-state ./scripts/backup.sh
 
 # 4. Verify the restic repository
 ./scripts/restore.sh --list-snapshots
 ```
+
+`scripts/tenant-backup.sh` is not part of the local sequence: this guide has no
+procedure for running it against the dev stack
+([Per-tenant backup](#per-tenant-backup-scriptstenant-backupsh)).
 
 ### Restore a full system
 
@@ -616,10 +666,10 @@ $DS cp keycloak:/tmp/realm-export.json backups/
 $DA down
 $DS up -d postgres
 
-# Restore each database from the latest snapshot
-./scripts/restore.sh --snapshot latest keycloak
-./scripts/restore.sh --snapshot latest gremion
-./scripts/restore.sh --snapshot latest control
+# Restore each database from the latest snapshot (each call asks for "yes")
+COMPOSE_PROJECT_NAME=dev-state ./scripts/restore.sh --snapshot latest keycloak
+COMPOSE_PROJECT_NAME=dev-state ./scripts/restore.sh --snapshot latest gremion
+COMPOSE_PROJECT_NAME=dev-state ./scripts/restore.sh --snapshot latest control
 
 # Re-import a tenant realm if needed
 $DS cp backups/realm-export.json keycloak:/tmp/
@@ -630,7 +680,7 @@ $DS exec keycloak /opt/keycloak/bin/kc.sh import \
 $DS up -d
 $DA up -d
 make ps
-make health
+curl -sf http://localhost:3001/healthz    # gremion-ui liveness; `make health` cannot report it (see "Endpoint checks")
 ```
 
 The three kernel databases are what `scripts/restore.sh` restores; a pooled stack
@@ -638,30 +688,35 @@ also needs `gremion_platform`, each customer's kernel and governance database an
 each module's database, which only `gremion-backup` stages
 ([ops/runbook/restore.md](ops/runbook/restore.md)).
 
-### Move to a new server
+### Move the local stack to another machine
+
+A distribution host is rebuilt with `infra/host/bootstrap.sh` and restored with
+`gremion-restore-into` ([ops/runbook/restore.md](ops/runbook/restore.md)), not
+with this sequence.
 
 ```bash
-# On the old host
-./scripts/backup.sh                       # ensure a current snapshot exists
-tar -czf gremion-migration.tar.gz .env    # plus restic repo or rclone remote
+# On the old machine
+COMPOSE_PROJECT_NAME=dev-state ./scripts/backup.sh   # ensure a current snapshot exists
+tar -czf gremion-migration.tar.gz .env legal/legal.env   # plus the restic repository (default backups/repo) unless it is on an rclone remote
 
 # Transfer
 scp gremion-migration.tar.gz user@newhost:/tmp/
 
-# On the new host
+# On the new machine, in a fresh checkout
 cd /path/to/gremion
 tar -xzf /tmp/gremion-migration.tar.gz
-make dev-networks
-$DS up -d postgres
-./scripts/restore.sh --snapshot latest keycloak
-./scripts/restore.sh --snapshot latest gremion
-./scripts/restore.sh --snapshot latest control
+./scripts/setup.sh        # keeps the transferred .env (no secret is regenerated), creates the
+                          # certificates, networks and volumes, builds the images and starts both projects
+$DA down                  # stop the app colour before restoring
+COMPOSE_PROJECT_NAME=dev-state ./scripts/restore.sh --snapshot latest keycloak
+COMPOSE_PROJECT_NAME=dev-state ./scripts/restore.sh --snapshot latest gremion
+COMPOSE_PROJECT_NAME=dev-state ./scripts/restore.sh --snapshot latest control
 make up
 ```
 
 ### Disaster recovery checklist
 
-- [ ] Daily backups run (`scripts/backup.sh`)
+- [ ] Daily backups run (`gremion-backup.timer` on a host; `scripts/backup.sh` in a standalone checkout)
 - [ ] restic integrity check passes (`restic check`, run by the pipeline)
 - [ ] Off-site copy present (rclone remote configured: `RCLONE_BUCKET` set)
 - [ ] `.env` backed up securely (contains all secrets)

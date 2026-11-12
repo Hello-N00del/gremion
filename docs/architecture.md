@@ -72,6 +72,11 @@ Internet
   mailpit  — SMTP catcher, dev only (profiles:[dev], port 1025)
 ```
 
+The third arrow is the portal's configured origin (`gremion-public` sets `ORIGIN`
+to `https://public.<domain>`), not a route that exists: no router in this tree
+sends a public host to the portal today
+([runbooks/tenant-edge.md](runbooks/tenant-edge.md#topology)).
+
 State project, started without a profile: `postgres`, `governance-postgres`,
 `nats`, `keycloak`, `legal`, `vector`.
 
@@ -92,7 +97,7 @@ State project, started without a profile: `postgres`, `governance-postgres`,
 | Service (app tier) | Role |
 |---|---|
 | `gremion-ui` | The authenticated SvelteKit app shell — dashboard, settings, system status, and the governance surface (committees, members, protocols, resolutions, portal admin), plus the overlaid module halves |
-| `gremion-public` | The read-only public portal at `public.<domain>` — no auth, no sessions, connects to the governance DB through a read-only role |
+| `gremion-public` | The read-only public portal (configured origin `public.<domain>`; no public router for it in this tree today) — no auth, no sessions, connects to the governance DB through a read-only role |
 | `control-panel` | The operator shell ([`apps/control-panel`](../apps/control-panel)): lists the customers and submits provisioning requests; it mutates nothing itself |
 | `kernel-api` | The kernel API ([`services/kernel-api`](../services/kernel-api)): tenancy resolution and the module registry, spec-first. `kernel-api-migrate` is its migration one-shot (profile `kernel-api-migrate`) |
 | `migrate`, `tenant-create` | One-shots (profiles `migrate` and `tenant-create`): the fleet migration and the customer provisioning run |
@@ -114,11 +119,15 @@ Quick start (see also the [Makefile](../Makefile) targets):
 ```sh
 ./scripts/setup.sh      # creates .env from .env.example, generates secrets, starts services
 make logs               # follow logs
-make health             # check service + endpoint health
+make ps                 # container state; curl -sf http://localhost:3001/healthz for gremion-ui
 ```
 
 `setup.sh` writes `.env` itself and skips secret generation when the file already
-exists, so do not copy `.env.example` by hand first.
+exists, so do not copy `.env.example` by hand first. On a fresh clone the first
+run stops at the image build until `TENANT_PROXY_SHARED_SECRET` is added to that
+`.env`; the two-run sequence, and why the app on port 3001 then answers only
+requests that carry the resolver headers, is in
+[LOCAL_TESTING.md](LOCAL_TESTING.md#quick-start).
 
 ## Authentication flow (OIDC/SSO)
 
@@ -198,7 +207,7 @@ the kernel API through `@gremion/tenancy-core`. The control-plane registry is th
 source of truth for the tenant set and drives fleet migrations across every tenant DB.
 
 The control DB connection (`CONTROL_DATABASE_URL`) deliberately targets
-`postgres:5432` **directly** and is not re-pointed through PgBouncer in the prod
+`postgres-<stack>:5432` **directly** and is not re-pointed through PgBouncer in the prod
 overlay — the registry is the direct term in the connection budget and its reads
 are cached.
 

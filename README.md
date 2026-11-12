@@ -35,11 +35,15 @@ Say this before you plan around the repository, not after:
 ## Quick start (local, Docker Compose)
 
 ```bash
-./scripts/setup.sh        # creates .env and legal/legal.env, generates the secrets and the internal TLS certificates, builds and starts the stack
+./scripts/setup.sh        # creates .env and legal/legal.env, generates the secrets and the internal TLS certificates; on a fresh clone it then stops at the image build
+echo "TENANT_PROXY_SHARED_SECRET=$(openssl rand -hex 32)" >> .env
+./scripts/setup.sh        # keeps the .env, builds and starts the stack
 make logs
 ```
 
 `setup.sh` writes `.env` itself (from `.env.example`, then `chmod 600`) and generates every secret in it, including the seeded fixture password. Do **not** create `.env` by hand first: the script skips generation when the file already exists, and you would be left with the `CHANGE_ME_*` placeholders.
+
+The first run stops because `docker-compose.app.yml` requires `TENANT_PROXY_SHARED_SECRET` and `setup.sh` does not generate it; the second run keeps the `.env` and continues. With the value set, the app on port 3001 answers only requests that carry the tenant resolver's headers (`/healthz` excepted), so on the local stack it is reached with `curl`, not from a browser: see [`docs/LOCAL_TESTING.md`](./docs/LOCAL_TESTING.md#quick-start).
 
 `setup.sh` leaves placeholder imprint data in `legal/legal.env`; fill it in before going live. A Keycloak realm is composed when a tenant is created, not at boot.
 

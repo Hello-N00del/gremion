@@ -1,4 +1,4 @@
-<!-- i18n-sync: source=README.md sha256=db2da784f7996623c84be2b439fbd7475f99d8614bd9e125719c42138c44dc82 -->
+<!-- i18n-sync: source=README.md sha256=60621121e829556dfb480eefa5c928e298ad7b546628f86b023a09f511c82dc9 -->
 [English](./README.md) | **Deutsch**
 
 # Gremion
@@ -36,11 +36,15 @@ Das sollte man wissen, bevor man Planungen auf dieses Repository stützt, nicht 
 ## Schnellstart (lokal, Docker Compose)
 
 ```bash
-./scripts/setup.sh        # creates .env and legal/legal.env, generates the secrets and the internal TLS certificates, builds and starts the stack
+./scripts/setup.sh        # creates .env and legal/legal.env, generates the secrets and the internal TLS certificates; on a fresh clone it then stops at the image build
+echo "TENANT_PROXY_SHARED_SECRET=$(openssl rand -hex 32)" >> .env
+./scripts/setup.sh        # keeps the .env, builds and starts the stack
 make logs
 ```
 
 `setup.sh` schreibt `.env` selbst (aus `.env.example`, danach `chmod 600`) und erzeugt jedes darin enthaltene Secret, einschließlich des vorbelegten Fixture-Passworts. Die `.env` **nicht** vorher von Hand anlegen: Das Skript überspringt die Erzeugung, wenn die Datei bereits existiert, und es blieben die `CHANGE_ME_*`-Platzhalter stehen.
+
+Der erste Lauf bricht ab, weil `docker-compose.app.yml` `TENANT_PROXY_SHARED_SECRET` verlangt und `setup.sh` den Wert nicht erzeugt; der zweite Lauf behält die `.env` und läuft weiter. Ist der Wert gesetzt, beantwortet die App auf Port 3001 nur Anfragen, die die Header des Mandanten-Resolvers tragen (ausgenommen `/healthz`); im lokalen Stack ist sie daher mit `curl` erreichbar, nicht aus einem Browser: siehe [`docs/LOCAL_TESTING.md`](./docs/LOCAL_TESTING.md#quick-start) (englisch).
 
 `setup.sh` lässt in `legal/legal.env` Platzhalter für das Impressum stehen; sie sind vor dem Livegang auszufüllen. Ein Keycloak-Realm entsteht erst beim Anlegen eines Mandanten, nicht beim Start.
 

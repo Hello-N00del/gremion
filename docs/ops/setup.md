@@ -27,10 +27,14 @@ the internal TLS certs, ensures the realm export exists, and starts the core
 services:
 
 ```bash
-./scripts/setup.sh
-# or:
-make setup
+./scripts/setup.sh        # or: make setup — writes .env itself; on a fresh clone it stops at the image build
+echo "TENANT_PROXY_SHARED_SECRET=$(openssl rand -hex 32)" >> .env
+./scripts/setup.sh        # keeps the .env, builds and starts the stack
 ```
+
+Do not copy `.env.example` to `.env` first: the script skips secret generation
+when the file exists. The reason for the two runs is in
+[`../LOCAL_TESTING.md`](../LOCAL_TESTING.md#quick-start).
 
 When it finishes it prints the app and Keycloak URLs and reminds you that all
 credentials now live in `.env`.
@@ -140,9 +144,12 @@ make health    # service status + endpoint checks
 ```
 
 `make health` checks `gremion-ui` (`:3001`), Keycloak (`:8082`), and the legal
-service (`:8083`). For the local dev URLs:
+service (`:8083`). Its `gremion-ui` line reads `NOT REACHABLE` on a healthy local
+stack, because the target requests `/` without the tenant resolver's headers; use
+`curl -sf http://localhost:3001/healthz` for `gremion-ui`. For the local dev URLs:
 
-- App: `http://localhost:3001`
+- App: `http://localhost:3001` (with `curl` and the resolver headers, not from a
+  browser; see [`../LOCAL_TESTING.md`](../LOCAL_TESTING.md#probing-gremion-ui-by-hand))
 - Keycloak: `http://localhost:8082/auth`
 - Mailpit: `http://localhost:8026`
 
@@ -152,11 +159,15 @@ There is no separate seed script — seed via the one-time endpoint, gated by
 `SEED_TOKEN`:
 
 ```bash
-curl -X POST -H "X-Seed-Token: $SEED_TOKEN" http://localhost:3001/api/setup/seed
+curl -X POST -H "X-Seed-Token: $SEED_TOKEN" \
+  -H "Host: <a host bound to a tenant>" -H "X-Forwarded-Host: <the same host>" \
+  -H "x-proxy-trust: $TENANT_PROXY_SHARED_SECRET" \
+  http://localhost:3001/api/setup/seed
 ```
 
 This bootstraps the governance structure (org-unit tree, committees, members)
-for a tenant. See [`../LOCAL_TESTING.md`](../LOCAL_TESTING.md) for the full
+for the tenant the request names; it needs a bound tenant host and the resolver
+headers. See [`../LOCAL_TESTING.md`](../LOCAL_TESTING.md) for the full
 walkthrough.
 
 ## Regenerating the realm template

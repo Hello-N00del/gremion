@@ -56,7 +56,9 @@ There is no skip flag: the only argument is `--only <suite[,suite]>`, and
 
 CI (`.github/workflows/ci.yml`) splits the same suites over the legs
 `verify-static`, `verify-render-ops`, `verify-unit-ui`, `verify-unit-packages`,
-`verify-unit-host` and the two BATS shards, and the `Lint` job fails when a
+`verify-unit-host`, the two BATS shards (`verify-unit-bats-1`,
+`verify-unit-bats-2`), `verify-integration-db`, `verify-integration-brokers`,
+`verify-integration-events-alert` and `verify-census`, and the `Lint` job fails when a
 required suite is run by none of them or by more than one
 (`scripts/check-ci-verify-coverage.mjs`). The `unit:node` part runs
 `scripts/**/*.test.mjs`, which includes the tests of the documentation guards:
@@ -359,7 +361,7 @@ make test-all        # unit + integration + the NATS, nats-auth and events proof
 make lint            # the lint-* targets: shellcheck, yamllint, json, compose and the repository guards
 make lint-js         # oxlint (see docs/lint.md); run by the verify carve-lint suite
 make verify          # the verify gate
-make health          # service status + endpoint reachability
+make health          # service status + Keycloak/legal reachability (its gremion-ui line reads NOT REACHABLE locally, see LOCAL_TESTING.md)
 ```
 
 - **Unit (`make test-unit`):** globbed, not listed: `test/*.bats` (setup,
@@ -369,8 +371,11 @@ make health          # service status + endpoint reachability
   still collects every file under `test/host`.
 - **Integration (`make test-integration`):** `test/integration/health.bats`,
   `test/integration/oidc.bats`, `test/integration/legal.bats` and
-  `test/integration/login-theme.bats` — these need a running stack (`make up`, or
-  `make setup` then `docker compose up -d keycloak`).
+  `test/integration/login-theme.bats` — these need a running stack (`make up`; a
+  bare `docker compose` addresses neither dev project, a single service is
+  started with the `$DS` prefix from
+  [TROUBLESHOOTING.md](TROUBLESHOOTING.md#default-services--host-ports-local-dev),
+  for example `$DS up -d keycloak`).
 - **Windows development box:** `make test-unit` cannot run there; `make
   test-host-docker` runs `test/host/*.bats` in a Linux image.
 - **Lint targets:** `lint-sh` (shellcheck), `lint-yaml` (yamllint against the
