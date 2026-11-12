@@ -26,6 +26,7 @@
  *   4 oracle         promoted-id lookup                   B's promoted item is not reported
  *   5 card create    POST /api/board/{id}/cards           404 on B's board, 404 for B's stack
  *   6 card move      PATCH /api/board/{id}/cards          404 for B's card or B's stack
+ *   6 card edit      the same route, no stackId           404 for B's card; B's member is not assignable
  *   7 promote        POST /api/board/{id}/promote         404 for B's item or B's board
  *   8 stack create   the port (the kernel has no route)   rejected, nothing written to B
  *   9 board create   POST /api/board with B's org unit    403 (scope), nothing written to B
@@ -163,7 +164,8 @@ async function migrate(sql: Sql, part: 'before-role' | 'after-role'): Promise<vo
 
 async function seedTenant(who: Who, sql: Sql): Promise<Seed> {
   const tag = who.toLowerCase()
-  const userId = `user-${tag}`
+  // a user id has the shape the card routes accept for an assignee, so the membership check itself is reached
+  const userId = `0192b0a0-0000-7000-8000-0000000000${tag}1`
   const [ou] = await sql<{ id: string }[]>`
     INSERT INTO org_units (name, kind, visibility, wants_matrix_room, wants_nextcloud_folder)
     VALUES (${`Gremium ${who}`}, 'council', 'all_members', false, false) RETURNING id`
@@ -275,6 +277,9 @@ const apiCreateCard = (who: Who, boardId: string, body: Record<string, unknown>)
   asTenant(who, () => createCard({ params: { id: boardId }, request: json(body), locals: memberOf(who) } as never))
 const apiMoveCard = (who: Who, boardId: string, body: Record<string, unknown>) =>
   asTenant(who, () => moveCard({ params: { id: boardId }, request: patchJson(body), locals: memberOf(who) } as never))
+// the edit is the same PATCH without a stackId
+const apiEditCard = (who: Who, boardId: string, body: Record<string, unknown>) =>
+  asTenant(who, () => moveCard({ params: { id: boardId }, request: patchJson(body), locals: memberOf(who) } as never))
 const apiPromotable = (who: Who, boardId: string) =>
   asTenant(who, () => promotable({ params: { id: boardId }, locals: memberOf(who) } as never))
 const apiPromote = (who: Who, boardId: string, actionItemId: string) =>
@@ -299,6 +304,7 @@ const canariesOf = (who: Who) => {
     `Gremium ${who}`,
     s.boardId,
     s.cardId,
+    s.userId,
     ...s.stackIds,
   ]
 }
@@ -443,6 +449,27 @@ describe('board: two customers on real PostgreSQL', () => {
     expect(inA[0]!.n).toBe('1')
   })
 
+  it('positive control: a card edit made as one customer changes that customer card only', async () => {
+    for (const who of ['A', 'B'] as const) {
+      const other: Who = who === 'A' ? 'B' : 'A'
+      const before = await fingerprint(other)
+      const s = seed[who]
+      const note = `control-edit-${who.toLowerCase()}`
+      const edit = await apiEditCard(who, s.boardId, { cardId: s.cardId, description: note, assigneeKeycloakId: s.userId, dueDate: '2026-12-15' })
+      expect(edit.status).toBe(200)
+      const [own] = await admin[who]<{ description: string | null; assignee_keycloak_id: string | null }[]>`
+        SELECT description, assignee_keycloak_id FROM card WHERE id = ${s.cardId}`
+      expect({ ...own }).toEqual({ description: note, assignee_keycloak_id: s.userId })
+      expect(await fingerprint(other)).toBe(before)
+      const elsewhere = await admin[other]<{ n: string }[]>`SELECT count(*)::text AS n FROM card WHERE description = ${note}`
+      expect(elsewhere[0]!.n).toBe('0')
+      // the page names the customer's own member for the picker, and never the other customer's member
+      const page = await tasksPage(who, s.boardId)
+      expect(JSON.stringify(page.body)).toContain(s.userId)
+      expect(JSON.stringify(page.body)).not.toContain(seed[other].userId)
+    }
+  })
+
   // Every attempt below is made by one customer against what the other owns, in BOTH
   // directions (A on B, then B on A), so a shared pool or a shared database is caught
   // whichever customer's data it happens to serve. The fingerprints are read before and
@@ -519,6 +546,34 @@ describe('board: two customers on real PostgreSQL', () => {
         expect(ownCardIntoVictimStack.status).toBe(404)
         const [stillThere] = await admin[atk]<{ stack_id: string }[]>`SELECT stack_id FROM card WHERE id = ${seed[atk].cardId}`
         expect(stillThere!.stack_id).toBe(seed[atk].stackIds[0])
+      }
+    })
+
+    it('6 card edit: the other card is 404 on either board, and the other customer member cannot be assigned', async () => {
+      for (const [atk, vic] of directions) {
+        const victimCardOnVictimBoard = await apiEditCard(atk, seed[vic].boardId, { cardId: seed[vic].cardId, title: 'intrusion-6u', description: 'intrusion-6u' })
+        expect(victimCardOnVictimBoard.status).toBe(404)
+        expect(leaksNothingOf(victimCardOnVictimBoard, vic)).toEqual([])
+        const victimCardOnOwnBoard = await apiEditCard(atk, seed[atk].boardId, { cardId: seed[vic].cardId, title: 'intrusion-6v', description: 'intrusion-6v' })
+        expect(victimCardOnOwnBoard.status).toBe(404)
+        expect(leaksNothingOf(victimCardOnOwnBoard, vic)).toEqual([])
+        // an own card must not take the other customer's member as its assignee: that person is no member here
+        const foreignAssignee = await apiEditCard(atk, seed[atk].boardId, { cardId: seed[atk].cardId, assigneeKeycloakId: seed[vic].userId })
+        expect(foreignAssignee.status).toBe(400)
+        const foreignAssigneeOnCreate = await apiCreateCard(atk, seed[atk].boardId, {
+          stackId: seed[atk].stackIds[0],
+          title: 'intrusion-6w',
+          assigneeKeycloakId: seed[vic].userId,
+        })
+        expect(foreignAssigneeOnCreate.status).toBe(400)
+      }
+      // none of it was written anywhere: no intrusion text, and no card of one customer assigned to the other's member
+      for (const who of ['A', 'B'] as const) {
+        const other: Who = who === 'A' ? 'B' : 'A'
+        const rows = await admin[who]<{ n: string }[]>`
+          SELECT count(*)::text AS n FROM card
+           WHERE title LIKE 'intrusion-6%' OR description LIKE 'intrusion-6%' OR assignee_keycloak_id = ${seed[other].userId}`
+        expect(rows[0]!.n).toBe('0')
       }
     })
 
