@@ -228,7 +228,10 @@ export function createKernelClient(opts: KernelClientOptions): KernelClient {
       const res = await fetchImpl(`${base}/api/internal/newsletter/resolve-group`, {
         method: 'POST',
         headers: mailHeaders,
-        body: JSON.stringify({ groupId }),
+        // orgUnitOnly: a post is mailed to groups of the customer's org units
+        // only. The kernel knows which groups those are and answers with no
+        // members for any other group.
+        body: JSON.stringify({ groupId, orgUnitOnly: true }),
       })
       if (!res.ok) {
         const snippet = await res.text().catch(() => '')

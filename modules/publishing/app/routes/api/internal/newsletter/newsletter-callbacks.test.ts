@@ -31,6 +31,12 @@ vi.mock('$lib/server/keycloak-admin', () => ({
   })),
 }))
 
+// Mock the org units: only what the resolve-group callback reads.
+const mockListOrgUnitGroupIds = vi.fn()
+vi.mock('$lib/server/governance/org-unit-groups', () => ({
+  listOrgUnitGroupIds: (...args: unknown[]) => mockListOrgUnitGroupIds(...args),
+}))
+
 // Mock tenant-mail
 const mockSendMailForTenant = vi.fn()
 const MockSmtpUnconfiguredError = class extends Error {
@@ -85,6 +91,7 @@ beforeEach(() => {
   mockDownload.mockReset()
   mockConvertOdtToHtml.mockReset()
   mockGetGroupMembers.mockReset()
+  mockListOrgUnitGroupIds.mockReset()
   mockSendMailForTenant.mockReset()
 })
 
@@ -212,6 +219,58 @@ describe('POST /api/internal/newsletter/resolve-group', () => {
     mockGetGroupMembers.mockRejectedValue(new Error('KC down'))
     const res = await resolveGroupModule.POST(makeEvent({ groupId: 'g4' }, TEST_SECRET) as never)
     expect(res.status).toBe(500)
+  })
+
+  // --- orgUnitOnly: the caller asks for the groups of the org units only -------
+
+  it('does not read the org units when the caller does not ask for the rule', async () => {
+    mockGetGroupMembers.mockResolvedValue([])
+    mockListOrgUnitGroupIds.mockRejectedValue(new Error('db down'))
+    const res = await resolveGroupModule.POST(makeEvent({ groupId: 'any-group' }, TEST_SECRET) as never)
+    expect(res.status).toBe(200)
+    expect(mockListOrgUnitGroupIds).not.toHaveBeenCalled()
+  })
+
+  it('orgUnitOnly: returns the members of a group that belongs to an org unit', async () => {
+    mockListOrgUnitGroupIds.mockResolvedValue(new Set(['g-unit']))
+    mockGetGroupMembers.mockResolvedValue([
+      { id: 'u1', username: 'alice', email: 'alice@example.org', firstName: 'Alice', lastName: 'Smith' },
+    ])
+    const res = await resolveGroupModule.POST(
+      makeEvent({ groupId: 'g-unit', orgUnitOnly: true }, TEST_SECRET) as never,
+    )
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ members: [{ email: 'alice@example.org', name: 'Alice Smith' }] })
+  })
+
+  it('orgUnitOnly: returns no member for a group that belongs to no org unit, and does not ask Keycloak', async () => {
+    mockListOrgUnitGroupIds.mockResolvedValue(new Set(['g-unit']))
+    mockGetGroupMembers.mockResolvedValue([
+      { id: 'u9', username: 'op', email: 'operator@example.org', firstName: 'Op', lastName: 'Erator' },
+    ])
+    const res = await resolveGroupModule.POST(
+      makeEvent({ groupId: 'kc-admin', orgUnitOnly: true }, TEST_SECRET) as never,
+    )
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ members: [] })
+    expect(mockGetGroupMembers).not.toHaveBeenCalled()
+  })
+
+  it('orgUnitOnly: answers 503 and does not ask Keycloak when the org units cannot be read', async () => {
+    mockListOrgUnitGroupIds.mockRejectedValue(new Error('db down'))
+    const res = await resolveGroupModule.POST(
+      makeEvent({ groupId: 'g-unit', orgUnitOnly: true }, TEST_SECRET) as never,
+    )
+    expect(res.status).toBe(503)
+    expect(mockGetGroupMembers).not.toHaveBeenCalled()
+  })
+
+  it('orgUnitOnly: refuses a value that is not a boolean', async () => {
+    const res = await resolveGroupModule.POST(
+      makeEvent({ groupId: 'g-unit', orgUnitOnly: 'no' }, TEST_SECRET) as never,
+    )
+    expect(res.status).toBe(400)
+    expect(mockGetGroupMembers).not.toHaveBeenCalled()
   })
 })
 
