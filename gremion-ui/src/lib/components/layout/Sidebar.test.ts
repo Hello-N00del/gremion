@@ -176,6 +176,35 @@ describe('Sidebar brand mark — per-tenant logo (P2.2-data)', () => {
   })
 })
 
+describe('Sidebar brand line — organisation short name and semester', () => {
+  const baseProps = { nav: minimalNav, activeHref: '/', counts: { approvals: 0, liveVotes: 0, unread: 0 } }
+
+  test('shows the short name and the semester as two parts of one line', () => {
+    const { container, getByText } = render(Sidebar, {
+      props: { ...baseProps, brand: { orgShort: 'Muster-HS', term: 'WiSe 26/27' } }
+    })
+    expect(getByText('Muster-HS').classList.contains('org')).toBe(true)
+    expect(getByText('WiSe 26/27').classList.contains('term')).toBe(true)
+    expect(container.querySelector('.brand-line')?.textContent?.replace(/\s+/g, ' ').trim()).toBe('Muster-HS · WiSe 26/27')
+  })
+
+  test('a customer without months keeps its static term text', () => {
+    const { getByText } = render(Sidebar, { props: { ...baseProps, brand: { orgShort: 'MS', term: 'SoSe 26' } } })
+    expect(getByText('SoSe 26')).toBeTruthy()
+  })
+
+  test('a 20-character short name keeps its full text in the title and the semester stays its own whole element', () => {
+    const long = 'Hochschulvertretung1' // 20 characters
+    expect(long).toHaveLength(20)
+    const { getByText, container } = render(Sidebar, { props: { ...baseProps, brand: { orgShort: long, term: 'WiSe 26/27' } } })
+    const org = getByText(long)
+    expect(org.getAttribute('title')).toBe(long)
+    expect(getByText('WiSe 26/27')).toBeTruthy()
+    // the separator is decoration, not read out
+    expect(container.querySelector('.brand-line .sep')?.getAttribute('aria-hidden')).toBe('true')
+  })
+})
+
 describe('Sidebar legal block', () => {
   test('renders Impressum, Datenschutz and Barrierefreiheit links at the sidebar bottom', () => {
     const { getByText } = render(Sidebar, {

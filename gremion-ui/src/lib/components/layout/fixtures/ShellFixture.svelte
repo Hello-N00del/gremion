@@ -6,6 +6,7 @@
   import Icon from '$lib/components/ui/Icon.svelte'
   import type { NavItem } from '../nav-schema'
   import type { Role } from '$lib/auth'
+  import type { Brand } from '$lib/brand'
 
   let {
     nav,
@@ -13,7 +14,8 @@
     roles = [],
     counts = { approvals: 0, liveVotes: 0, unread: 0 },
     wideMain = 0,
-    withModules = false
+    withModules = false,
+    brand = null
   }: {
     nav: NavItem[]
     activeHref?: string
@@ -21,6 +23,7 @@
     counts?: { approvals: number; liveVotes: number; unread: number }
     wideMain?: number
     withModules?: boolean
+    brand?: Partial<Brand> | null
   } = $props()
 </script>
 
@@ -49,7 +52,7 @@
     {activeHref}
     {roles}
     userName="Dev Member"
-    brand={null}
+    {brand}
     sourceUrl="https://example.org/source"
     topbarModules={withModules ? { chips: fixtureChip, bell: fixtureBell, liveCall: fixtureLive } : undefined}
     bodyContext={withModules ? fixtureBody : undefined}

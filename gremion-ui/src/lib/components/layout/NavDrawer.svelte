@@ -12,6 +12,7 @@
   import NavList from './NavList.svelte'
   import NavUser from './NavUser.svelte'
   import LegalMenu from './LegalMenu.svelte'
+  import BrandLine from './BrandLine.svelte'
   import { navDrawer } from './nav-drawer'
   import type { NavItem } from './nav-schema'
   import { resolveBrand, type Brand } from '$lib/brand'
@@ -92,7 +93,7 @@
       </button>
       <div class="drawer-brand">
         <div class="n">{brand.product}</div>
-        <div class="s">{brand.orgShort} · {brand.term}</div>
+        <BrandLine orgShort={brand.orgShort} term={brand.term} />
       </div>
     </div>
 
@@ -200,14 +201,6 @@
     font-family: var(--font-display);
     font-weight: 600;
     font-size: 15px;
-    overflow-wrap: anywhere;
-  }
-  .drawer-brand .s {
-    font-family: var(--font-mono);
-    font-size: 9.5px;
-    letter-spacing: 0.14em;
-    color: var(--ink-muted);
-    text-transform: uppercase;
     overflow-wrap: anywhere;
   }
   .drawer-nav {
