@@ -160,8 +160,17 @@ An optional per-tenant credential lives in the control-DB registry row:
   unauthenticated.
 - A `passwordRef` without a `user` is rejected (it would otherwise authenticate
   with an empty username) — the pair is required.
-- TLS is implicit only on port 465 (`secure: port === 465`); nodemailer
-  auto-STARTTLSes on 587.
+- TLS is implicit on port 465 (`secure: port === 465`). On every other port
+  nodemailer upgrades with STARTTLS; when the tenant has a login (`user` +
+  `passwordRef`) the upgrade is mandatory (`requireTLS`), so a session that does
+  not offer STARTTLS fails before AUTH and the login never goes out in plaintext.
+  A transport without a login (a local mail catcher) keeps the opportunistic
+  upgrade.
+- A refused login (`EAUTH`) stops a send loop at the first attempt: the content
+  publish and the newsletter send fail with a clear status instead of presenting
+  the same login once per recipient (mail servers lock the account after a few
+  refused logins). Recipients after the refused one are not claimed, so the next
+  send after the login is corrected reaches all of them.
 - The built transport is cached per `tenant.id` for `RESOLUTION_CACHE_TTL_MS`.
   A `config.json` SMTP edit becomes visible within that window; a lifecycle
   change (suspend / delete / re-provision) drops it **immediately** via

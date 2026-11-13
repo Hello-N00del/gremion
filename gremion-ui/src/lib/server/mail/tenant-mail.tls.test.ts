@@ -105,7 +105,7 @@ describe('tenant mail on the wire: a login needs an encrypted session', () => {
       passwordRef: 'file:/run/secrets/tenants/relay-smtp-password',
     })
 
-    await expect(runWithTenant(t, () => sendMailForTenant(MESSAGE))).rejects.toThrow()
+    await expect(runWithTenant(t, () => sendMailForTenant(MESSAGE))).rejects.toMatchObject({ code: expect.any(String) })
 
     expect(verbs(smtp)).toContain('STARTTLS')
     expect(verbs(smtp)).not.toContain('AUTH')
@@ -122,7 +122,7 @@ describe('tenant mail on the wire: a login needs an encrypted session', () => {
       passwordRef: 'file:/run/secrets/tenants/relay-smtp-password',
     })
 
-    await expect(runWithTenant(t, () => sendMailForTenant(MESSAGE))).rejects.toThrow()
+    await expect(runWithTenant(t, () => sendMailForTenant(MESSAGE))).rejects.toMatchObject({ code: expect.any(String) })
 
     expect(guard.resolveSmtpTarget).toHaveBeenCalledWith('mail.example.org')
     expect(verbs(smtp)).toContain('STARTTLS')
