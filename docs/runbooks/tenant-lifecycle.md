@@ -717,18 +717,19 @@ without `--verify-only`) repairs, idempotently; a second apply changes nothing:
 | `kernel-api-nats-seed` | the NATS seed `kernel-api/tenant_<slug>.nk` exists, every seed of the customer's current module set exists, **no seed is held for a module outside that set** (the declarative apply would revoke and delete it, so it is reported as drift before apply does it), and the broker serves the customer's account (the kernel API event relay publishes as that identity). The check reads seeds and the accounts file only; it never looks at JetStream streams | the same `nats-auth` ensure the lifecycle verbs use, over the customer's **current** module set read from the registry (`plt.module_enablement`) plus the `kernel-api` identity, then the account reload; a hand-written module list is never needed |
 | `vorstand-role` | the standard realm role `vorstand` exists AND is listed in the `gremion-ui` client's realm-role scope mappings (`fullScopeAllowed` is false, so a role missing there never reaches a token); a realm created before the role was added to the realm template shows it RED | creates the role and the scope mapping; both steps are idempotent |
 
-Two realm checks cover the e-mail change in Settings > Profil. `verify-email` holds when the realm
-has `verifyEmail` on: Keycloak's `UPDATE_EMAIL` action then sends the new address a confirmation
-link and keeps the old one until it is opened, and without it the new address applies at once.
-`update-email-action` holds when the required action `UPDATE_EMAIL` is registered and enabled
-(Keycloak ships it disabled; the Profil page offers the button only while it is enabled).
-A realm created before this change shows both RED. Apply switches verification on first, then
-enables the action on its live representation, so the action is never enabled without
-verification; a realm that does not register the action at all stays RED, since apply cannot
-register it. Customer creation enables the action on every pass, and the realm template carries
-`verifyEmail`. Both repairs need the realm-scoped `manage-realm` role, which the provisioner holds
-on a realm it created or adopted and which `realm-admin` (the `gremion-admin` service account's
-role) contains.
+Two realm checks cover the e-mail change in Settings > Profil. `update-email-action` holds when
+the required action `UPDATE_EMAIL` is registered and enabled (Keycloak ships it disabled; the Profil
+page offers the button only while it is enabled). `update-email-verification` holds when the action's
+own config `verifyEmail` is `true`: Keycloak 26.6.1 then mails the new address a confirmation link
+and keeps the old address until it is opened, and without it (and without a realm-wide `verifyEmail`)
+the new address applies at once. The action's config is used on purpose, not the realm's `verifyEmail`,
+which would send every user with an unverified address through the verify-email step at login.
+A realm created before this change shows both RED. Apply writes the config first, then enables the
+action on its live representation, so the action is never enabled without verification; a realm that
+does not register the action at all stays RED, since apply cannot register it. Customer creation
+does the same on every pass. Both repairs need `manage-realm` in the customer realm, which the
+provisioner holds on a realm it created or adopted and which `realm-admin` (the `gremion-admin`
+service account's role) contains.
 
 A suspended customer is ensured with the empty module set (suspension evicts the
 modules; reconcile does not restore them) and keeps the `kernel-api` identity like the

@@ -34,3 +34,11 @@ export const ADMIN_CLIENT_ID = 'gremion-admin'
  *  is refused (403) granting realm-admin over the Admin API -- so ensureRealm
  *  reads them first and grants only what is missing (adminKc, when supplied). */
 export const GREMION_ADMIN_SA_REALM_ROLES = ['realm-admin'] as const
+
+/** The required action behind the e-mail button of Settings > Profil. Keycloak ships it registered but DISABLED. */
+export const UPDATE_EMAIL_ACTION = 'UPDATE_EMAIL'
+
+/** Its config: Keycloak 26.6.1 UpdateEmail applies a new address only after a confirmation link when the REALM
+ *  verifies e-mail or this config says so. The action's own config is used, so no other login of the realm
+ *  changes (a realm-wide verifyEmail would send every user with an unverified address through VERIFY_EMAIL). */
+export const UPDATE_EMAIL_ACTION_CONFIG: Readonly<Record<string, string>> = { verifyEmail: 'true' }

@@ -467,15 +467,19 @@ describe('updateRealmSmtp — the gremion#6 delta for an ALREADY-CREATED realm (
   })
 })
 
-// The customer realm's e-mail-change action (Settings > Profil offers it only while it is enabled).
+// The customer realm's e-mail-change action (Settings > Profil offers it only while it is enabled). Keycloak
+// 26.6.1 UpdateEmail verifies the new address when the realm verifies e-mail OR the action's own config
+// verifyEmail is "true"; the config lives behind PUT .../required-actions/<alias>/config, not in the action PUT.
 describe('KcProvisionApi.ensureRequiredActionEnabled', () => {
   const PATH = '/admin/realms/verein/authentication/required-actions/UPDATE_EMAIL'
+  const CFG = `${PATH}/config`
   const LIVE = { alias: 'UPDATE_EMAIL', name: 'Update Email', providerId: 'UPDATE_EMAIL', enabled: false, defaultAction: false, priority: 70, config: {} }
+  const VERIFY = { verifyEmail: 'true' }
+  const writes = (calls: Array<{ method: string; path: string; body?: unknown }>) => calls.filter((c) => c.method !== 'GET')
 
   it('PUTs the live representation with only enabled flipped (a partial body would reset name and priority)', async () => {
     const { transport, calls } = fakeTransport({ [`GET ${PATH}`]: LIVE })
-    const r = await new KcProvisionApi(transport).ensureRequiredActionEnabled('verein', 'UPDATE_EMAIL')
-    expect(r).toBe('enabled')
+    expect(await new KcProvisionApi(transport).ensureRequiredActionEnabled('verein', 'UPDATE_EMAIL')).toBe('enabled')
     expect(calls).toEqual([
       { method: 'GET', path: PATH, body: undefined },
       { method: 'PUT', path: PATH, body: { ...LIVE, enabled: true } },
@@ -485,7 +489,33 @@ describe('KcProvisionApi.ensureRequiredActionEnabled', () => {
   it('writes nothing when the action is already enabled', async () => {
     const { transport, calls } = fakeTransport({ [`GET ${PATH}`]: { ...LIVE, enabled: true } })
     expect(await new KcProvisionApi(transport).ensureRequiredActionEnabled('verein', 'UPDATE_EMAIL')).toBe('already')
-    expect(calls.map((c) => c.method)).toEqual(['GET'])
+    expect(writes(calls)).toEqual([])
+  })
+
+  it('with a config: the config is written BEFORE the action is enabled, merged over what is stored', async () => {
+    const { transport, calls } = fakeTransport({ [`GET ${PATH}`]: LIVE, [`GET ${CFG}`]: { config: { 'max_auth_age': '300' } } })
+    expect(await new KcProvisionApi(transport).ensureRequiredActionEnabled('verein', 'UPDATE_EMAIL', VERIFY)).toBe('enabled')
+    expect(writes(calls)).toEqual([
+      { method: 'PUT', path: CFG, body: { config: { max_auth_age: '300', verifyEmail: 'true' } } },
+      { method: 'PUT', path: PATH, body: { ...LIVE, enabled: true } },
+    ])
+  })
+
+  it('a config Keycloak answers 404 for (none stored yet) is written from scratch', async () => {
+    const { transport, calls } = fakeTransport({})
+    const t: KcTransport = async (m, p, b) => {
+      if (`${m} ${p}` === `GET ${CFG}`) throw new Error('Keycloak Admin API error: 404 on GET')
+      if (`${m} ${p}` === `GET ${PATH}`) return { ...LIVE, enabled: true }
+      return transport(m, p, b)
+    }
+    expect(await new KcProvisionApi(t).ensureRequiredActionEnabled('verein', 'UPDATE_EMAIL', VERIFY)).toBe('enabled')
+    expect(writes(calls)).toEqual([{ method: 'PUT', path: CFG, body: { config: VERIFY } }])
+  })
+
+  it('an enabled action whose config already holds the values: nothing is written', async () => {
+    const { transport, calls } = fakeTransport({ [`GET ${PATH}`]: { ...LIVE, enabled: true }, [`GET ${CFG}`]: { config: VERIFY } })
+    expect(await new KcProvisionApi(transport).ensureRequiredActionEnabled('verein', 'UPDATE_EMAIL', VERIFY)).toBe('already')
+    expect(writes(calls)).toEqual([])
   })
 
   it('reports an action the realm does not register (404) instead of throwing or writing', async () => {
@@ -494,7 +524,7 @@ describe('KcProvisionApi.ensureRequiredActionEnabled', () => {
       calls.push(`${method} ${path}`)
       throw new Error('Keycloak Admin API error: 404 on GET')
     }
-    expect(await new KcProvisionApi(transport).ensureRequiredActionEnabled('verein', 'UPDATE_EMAIL')).toBe('absent')
+    expect(await new KcProvisionApi(transport).ensureRequiredActionEnabled('verein', 'UPDATE_EMAIL', VERIFY)).toBe('absent')
     expect(calls).toEqual([`GET ${PATH}`])
   })
 

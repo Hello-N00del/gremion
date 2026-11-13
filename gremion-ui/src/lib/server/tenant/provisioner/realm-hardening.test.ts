@@ -109,17 +109,17 @@ describe('PKCE', () => {
   })
 })
 
-// Settings > Profil offers Keycloak's UPDATE_EMAIL. Keycloak applies the new address at once unless the realm
-// verifies e-mail, so a customer realm carries verifyEmail (reconcile's verify-email check holds live realms to
-// it). The required action itself is enabled by the provisioner (ensureRealm) and reconcile, not by the
-// template: a requiredActions section would REPLACE Keycloak's defaults on import. The ops realm (the control
+// Settings > Profil offers Keycloak's UPDATE_EMAIL. The provisioner (ensureRealm) and reconcile enable it and set its
+// own config verifyEmail=true, so a new address is confirmed by mail. The template deliberately carries neither
+// (1) a requiredActions section, which would REPLACE Keycloak's defaults on import, nor (2) a realm-wide verifyEmail,
+// which would send every user with an unverified address through VERIFY_EMAIL at login. The ops realm (the control
 // panel's operators) is a separate template and is not part of this.
 describe('verified e-mail change', () => {
   it.each([
     ['base', () => base],
     ['tenant', () => tenantDoc() as never],
-  ])('%s: the realm verifies e-mail, and carries no requiredActions section', (_n, doc) => {
-    expect((doc() as any).verifyEmail).toBe(true)
+  ])('%s: no requiredActions section and no realm-wide verifyEmail', (_n, doc) => {
     expect(doc()).not.toHaveProperty('requiredActions')
+    expect((doc() as any).verifyEmail ?? false).toBe(false)
   })
 })

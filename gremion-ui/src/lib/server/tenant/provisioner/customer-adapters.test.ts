@@ -90,7 +90,7 @@ function kcFake(exists: boolean, held: string[][] = [[], ['realm-admin']]) {
     // typed with the parameter it receives, so mock.calls[0][0] type-checks (review B2-HIGH, r2)
     createRealm: vi.fn(async (_doc: Record<string, unknown>) => {}),
     configureStepupFlow: vi.fn(async () => {}),
-    ensureRequiredActionEnabled: vi.fn(async (_realm: string, _alias: string): Promise<'enabled' | 'already' | 'absent'> => 'enabled'),
+    ensureRequiredActionEnabled: vi.fn(async (_realm: string, _alias: string, _config?: Readonly<Record<string, string>>): Promise<'enabled' | 'already' | 'absent'> => 'enabled'),
     assignServiceAccountRealmRoles: vi.fn(async (_realm: string, _client: string, _roles: readonly string[]) => {}),
     getServiceAccountRealmRoleNames: vi.fn(async (_realm: string, _client: string) => (reads.length > 1 ? reads.shift()! : reads[0]!)),
   }
@@ -166,11 +166,11 @@ describe('customerAdapters.realm.ensureRealm', () => {
     expect(reg.markTenantResourceOk).toHaveBeenCalledWith(C.id, 'realm', 'musterstadt')
   })
 
-  it('enables the UPDATE_EMAIL action on a new and on an existing realm (Settings > Profil offers the e-mail change only while it is on)', async () => {
+  it('enables the UPDATE_EMAIL action, with its own address verification, on a new and on an existing realm (Settings > Profil offers the e-mail change only while it is on)', async () => {
     for (const exists of [false, true]) {
       const kc = kcFake(exists)
       await adapters(kc).a.realm.ensureRealm(C)
-      expect(kc.ensureRequiredActionEnabled).toHaveBeenCalledWith('musterstadt', 'UPDATE_EMAIL')
+      expect(kc.ensureRequiredActionEnabled).toHaveBeenCalledWith('musterstadt', 'UPDATE_EMAIL', { verifyEmail: 'true' })
     }
   })
 

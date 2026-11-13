@@ -533,13 +533,14 @@ export class KcProvisionApi {
   }
 
   /**
-   * Enable the required action `alias` (e.g. UPDATE_EMAIL) of a realm as an Admin-API delta.
-   * Keycloak's PUT replaces name, priority, default-action flag and config from the body, so the
-   * LIVE representation is read and only `enabled` flips (a partial body would reset the rest).
-   * 'already' = nothing written; 'absent' = the realm does not register the action (404), which
-   * the caller reports rather than treats as done. Any other failure rejects.
+   * Enable the required action `alias` (e.g. UPDATE_EMAIL) of a realm as an Admin-API delta, optionally with
+   * config values. Keycloak's action PUT replaces name, priority, default-action flag from the body, so the
+   * LIVE representation is read and only `enabled` flips. The action's config is a separate resource
+   * (`.../required-actions/<alias>/config`, merged over what is stored) and is written FIRST, so the action is
+   * never live without it. 'already' = nothing written; 'absent' = the realm does not register the action
+   * (404), which the caller reports rather than treats as done. Any other failure rejects.
    */
-  async ensureRequiredActionEnabled(realm: string, alias: string): Promise<'enabled' | 'already' | 'absent'> {
+  async ensureRequiredActionEnabled(realm: string, alias: string, config?: Readonly<Record<string, string>>): Promise<'enabled' | 'already' | 'absent'> {
     const path = `/authentication/required-actions/${encodeURIComponent(alias)}`
     let live: { enabled?: boolean } | undefined
     try {
@@ -549,9 +550,24 @@ export class KcProvisionApi {
       throw err
     }
     if (!live) return 'absent'
-    if (live.enabled === true) return 'already'
-    await this.realmReq(realm, 'PUT', path, { ...live, enabled: true })
-    return 'enabled'
+    let changed = false
+    if (config) {
+      let stored: Record<string, string> = {}
+      try {
+        stored = (await this.realmGet<{ config?: Record<string, string> } | undefined>(realm, `${path}/config`))?.config ?? {}
+      } catch (err) {
+        if (adminApiStatus(err) !== 404) throw err
+      }
+      if (Object.entries(config).some(([k, v]) => stored[k] !== v)) {
+        await this.realmReq(realm, 'PUT', `${path}/config`, { config: { ...stored, ...config } })
+        changed = true
+      }
+    }
+    if (live.enabled !== true) {
+      await this.realmReq(realm, 'PUT', path, { ...live, enabled: true })
+      changed = true
+    }
+    return changed ? 'enabled' : 'already'
   }
 
   async isRealmEnabled(realm: string): Promise<boolean> {

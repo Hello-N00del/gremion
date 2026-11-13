@@ -60,7 +60,7 @@ import {
 import { getDb } from '$lib/server/db'
 import { KcProvisionApi } from './kc-admin-api'
 import { assertBrandIdentityComplete, materializeConfig } from './materialize'
-import { ADMIN_CLIENT_ID, GREMION_ADMIN_SA_REALM_ROLES } from './pipeline'
+import { ADMIN_CLIENT_ID, GREMION_ADMIN_SA_REALM_ROLES, UPDATE_EMAIL_ACTION, UPDATE_EMAIL_ACTION_CONFIG } from './pipeline'
 import { withKernelAuditCheck, type ReconcileReport } from './reconcile'
 import { buildTenantRealmDoc, issuerForTenant, kcInternalForTenant, PROVISIONER_SECRET_CLIENTS } from './realm-doc'
 
@@ -445,9 +445,10 @@ export function customerAdapters(o: CustomerAdapterOptions): Pick<ProvisioningDe
         }
         await o.kc.configureStepupFlow(c.realm)
         // Settings > Profil offers the e-mail change only while the realm has UPDATE_EMAIL enabled; Keycloak
-        // ships it registered but disabled. Reconcile (update-email-action) repairs realms that predate this.
-        if ((await o.kc.ensureRequiredActionEnabled(c.realm, 'UPDATE_EMAIL')) === 'absent') {
-          log(`realm ${c.realm}: the required action UPDATE_EMAIL is not registered, so the e-mail change stays hidden; reconcile reports it`)
+        // ships it registered but disabled. The new address is verified by mail (the action's own config).
+        // Reconcile (update-email-action, update-email-verification) repairs realms that predate this.
+        if ((await o.kc.ensureRequiredActionEnabled(c.realm, UPDATE_EMAIL_ACTION, UPDATE_EMAIL_ACTION_CONFIG)) === 'absent') {
+          log(`realm ${c.realm}: the required action ${UPDATE_EMAIL_ACTION} is not registered, so the e-mail change stays hidden; reconcile reports it`)
         }
         await ensureAdminSaRoles(c.realm)
         await markTenantResourceOk(c.id, 'realm', c.realm)
