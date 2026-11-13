@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const tenantMock: { current: { id: string; configPath: string } | null } = { current: null }
+// The stubbed readConfig adds brand.term_months when a test sets this.
+const termMonthsMock: { current: { winter: number; summer: number } | null } = { current: null }
 vi.mock('$env/dynamic/private', () => ({ env: { CONFIG_PATH: '/tmp/default-config.json' } }))
 vi.mock('$lib/server/tenant/context', () => ({
   requireTenant: () => {
@@ -14,12 +16,15 @@ vi.mock('./config', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./config')>()),
   readConfig: () => ({
     org: { name: 'Studierendenrat der Musterhochschule', domain: 'stura.example.org' },
-    brand: { product: 'Musterrat', logo_letter: 'S', org_short: 'Muster-HS', term: 'SoSe 26', version: 'v2.4' },
+    brand: {
+      product: 'Musterrat', logo_letter: 'S', org_short: 'Muster-HS', term: 'SoSe 26', version: 'v2.4',
+      ...(termMonthsMock.current ? { term_months: termMonthsMock.current } : {}),
+    },
   }),
 }))
 
 describe('server brand: brandFromConfig + requireBrand', () => {
-  beforeEach(() => { vi.resetModules(); vi.clearAllMocks(); tenantMock.current = null })
+  beforeEach(() => { vi.resetModules(); vi.clearAllMocks(); tenantMock.current = null; termMonthsMock.current = null })
   afterEach(() => vi.restoreAllMocks())
 
   it('brandFromConfig maps a GremionConfig to the canonical Brand (golden)', async () => {
@@ -53,7 +58,7 @@ describe('server brand: brandFromConfig + requireBrand', () => {
 // pin); TenantContext.accent/logoUrl (a distinct, still-inert control-plane
 // field — see tenant/registry.ts) stay null (Track A/S3 populates them).
 describe('gremion#22: per-tenant curated accent palette via config→brand', () => {
-  beforeEach(() => { vi.resetModules(); vi.clearAllMocks(); tenantMock.current = null })
+  beforeEach(() => { vi.resetModules(); vi.clearAllMocks(); tenantMock.current = null; termMonthsMock.current = null })
 
   it('brandFromConfig maps cfg.brand.palette (curated id) + logo_url → palette/logoUrl', async () => {
     const { brandFromConfig } = await import('./brand')
@@ -135,7 +140,7 @@ describe('gremion#22: per-tenant curated accent palette via config→brand', () 
 // (brand.term_months); the label is computed from the clock at read time. A
 // customer without the months keeps the static brand.term string.
 describe('brand.term_months: computed semester label', () => {
-  beforeEach(() => { vi.resetModules(); vi.clearAllMocks(); tenantMock.current = null })
+  beforeEach(() => { vi.resetModules(); vi.clearAllMocks(); tenantMock.current = null; termMonthsMock.current = null })
   const months = { winter: 10, summer: 4 }
 
   it('config schema keeps a valid term_months and a config without it stays without it', async () => {
@@ -185,5 +190,31 @@ describe('brand.term_months: computed semester label', () => {
     const { requireBrand } = await import('./brand')
     // the mocked readConfig carries no term_months: the static term comes through
     expect(requireBrand(tenantMock.current, new Date('2030-01-01T00:00:00Z')).term).toBe('SoSe 26')
+  })
+
+  it('requireBrand computes the label from the config months and the injected clock', async () => {
+    tenantMock.current = { id: 'default', configPath: '/tmp/default-config.json' }
+    termMonthsMock.current = months
+    const { requireBrand } = await import('./brand')
+    // 2027-03-31 23:59 Berlin (CEST, UTC+2) is the last winter instant; one second later is SoSe
+    const before = requireBrand(tenantMock.current, new Date('2027-03-31T21:59:59Z')).term
+    const after = requireBrand(tenantMock.current, new Date('2027-03-31T22:00:00Z')).term
+    expect([before, after]).toEqual(['WiSe 26/27', 'SoSe 27'])
+  })
+
+  it('requireBrand with no clock argument follows the system clock on every call (no cached Brand)', async () => {
+    tenantMock.current = { id: 'default', configPath: '/tmp/default-config.json' }
+    termMonthsMock.current = months
+    vi.useFakeTimers()
+    try {
+      const { requireBrand } = await import('./brand')
+      vi.setSystemTime(new Date('2027-03-31T21:59:59Z'))
+      const before = requireBrand().term
+      vi.setSystemTime(new Date('2027-03-31T22:00:00Z'))
+      const after = requireBrand().term
+      expect([before, after]).toEqual(['WiSe 26/27', 'SoSe 27'])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
