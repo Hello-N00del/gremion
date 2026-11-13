@@ -40,6 +40,10 @@
 //   - A per-recipient SMTP failure likewise leaves a 'claimed' row; the same
 //     15-min window applies before retry. We do NOT release immediately, so a
 //     hard-bouncing address is retried at most once per 15 min, not hammered.
+//   - The one exception is a refused SMTP login (EAUTH): it fails before any
+//     message is transmitted and is the same for every recipient, so the send
+//     stops there and that recipient's claim is released (releaseClaim) — a
+//     re-send after the login is corrected reaches everyone at once.
 //   - Already-'sent' rows are NEVER re-sent (claimRecipient → 'already-sent'),
 //     and a non-stale 'claimed' row is skipped ('in-flight'), so concurrent and
 //     fast sequential re-dispatch send EXACTLY ONCE per recipient.
@@ -56,6 +60,7 @@ import {
   addSendToken,
   isUnsubscribed,
   claimRecipient,
+  releaseClaim,
   markSent,
   claimNewsletterForSending,
   type NewsletterRecipient,
@@ -578,10 +583,12 @@ export async function dispatch(
         // Never the address, message or response: they can echo the recipient.
         console.error(`[dispatch] send (newsletter #${newsletterId}) failed`, mailErrorFields(err))
         // A refused LOGIN is the same for every recipient, and mail servers lock
-        // the account after a few refused logins: stop at the first one. Nobody
-        // after this recipient is claimed, so a send after the login is corrected
-        // reaches all of them.
+        // the account after a few refused logins: stop at the first one. The login
+        // fails before any message is transmitted, so this recipient's claim is
+        // released too: a send right after the login is corrected reaches all of
+        // them, not only the ones that were never tried.
         if (mailErrorFields(err).code === 'EAUTH') {
+          await releaseClaim(sql, newsletterId, email)
           loginRefused = true
           break
         }

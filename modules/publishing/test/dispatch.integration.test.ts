@@ -325,7 +325,7 @@ describe('dispatch — the mail server refuses the login (EAUTH)', () => {
       name: 'MailSendError', code: 'EAUTH', responseCode: 535, command: 'AUTH LOGIN', httpStatus: 500,
     })
 
-  it('stops after the first attempt: nobody after it is claimed, the send fails with a clear reason', async () => {
+  it('stops after the first attempt: nobody is left claimed, the send fails with a clear reason', async () => {
     const { nlId } = await makeNewsletterWithList(['a@x.com', 'b@x.com', 'c@x.com'])
     let calls = 0
     const transport: MailTransport = {
@@ -346,7 +346,7 @@ describe('dispatch — the mail server refuses the login (EAUTH)', () => {
     expect(calls).toBe(1)
     const dels = await sql<{ email: string; status: string }[]>`
       SELECT email, status FROM deliveries WHERE newsletter_id = ${nlId} ORDER BY email`
-    expect(dels).toHaveLength(1)
+    expect(dels).toHaveLength(0)
     expect((await getNewsletter(sql, nlId))!.status).toBe('failed')
     const rows = await outboxRows()
     expect(rows).toHaveLength(1)
@@ -375,7 +375,36 @@ describe('dispatch — the mail server refuses the login (EAUTH)', () => {
     expect(calls).toBe(2)
     const dels = await sql<{ email: string; status: string }[]>`
       SELECT email, status FROM deliveries WHERE newsletter_id = ${nlId} ORDER BY email`
-    expect(dels.map((d) => d.status)).toEqual(['sent', 'claimed'])
+    // The refused recipient's claim is released, not left held: only the delivered one has a row.
+    expect(dels.map((d) => d.status)).toEqual(['sent'])
+  })
+
+  it('a send right after the login is corrected reaches every recipient, including the one that was refused', async () => {
+    const { nlId } = await makeNewsletterWithList(['a@x.com', 'b@x.com', 'c@x.com'])
+    const refusing: MailTransport = {
+      async sendMail() {
+        throw refusedLogin()
+      },
+    }
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      await expect(
+        dispatch(DISPATCH_TENANT, nlId, ACTOR, { sql, kernel: makeFakeKernel(), transport: refusing, origin: 'https://o' }),
+      ).rejects.toThrow(/SMTP login refused/)
+    } finally {
+      spy.mockRestore()
+    }
+    expect((await getNewsletter(sql, nlId))!.status).toBe('failed')
+
+    // Login corrected; the operator sends again at once (well inside the 15-minute stale window).
+    const healthy = makeFakeTransport()
+    await dispatch(DISPATCH_TENANT, nlId, ACTOR, { sql, kernel: makeFakeKernel(), transport: healthy, origin: 'https://o' })
+
+    expect(healthy.sent.map((m) => m.to).sort()).toEqual(['a@x.com', 'b@x.com', 'c@x.com'])
+    const dels = await sql<{ email: string; status: string }[]>`
+      SELECT email, status FROM deliveries WHERE newsletter_id = ${nlId} ORDER BY email`
+    expect(dels.map((d) => d.status)).toEqual(['sent', 'sent', 'sent'])
+    expect((await getNewsletter(sql, nlId))!.status).toBe('sent')
   })
 })
 

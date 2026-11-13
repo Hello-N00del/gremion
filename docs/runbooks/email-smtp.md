@@ -169,8 +169,9 @@ An optional per-tenant credential lives in the control-DB registry row:
 - A refused login (`EAUTH`) stops a send loop at the first attempt: the content
   publish and the newsletter send fail with a clear status instead of presenting
   the same login once per recipient (mail servers lock the account after a few
-  refused logins). Recipients after the refused one are not claimed, so the next
-  send after the login is corrected reaches all of them.
+  refused logins). Recipients after the refused one are not claimed, and the
+  claim on the refused one itself is released (nothing was transmitted), so the
+  next send after the login is corrected reaches all of them at once.
 - The built transport is cached per `tenant.id` for `RESOLUTION_CACHE_TTL_MS`.
   A `config.json` SMTP edit becomes visible within that window; a lifecycle
   change (suspend / delete / re-provision) drops it **immediately** via
