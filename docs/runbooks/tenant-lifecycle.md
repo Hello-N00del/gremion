@@ -124,6 +124,19 @@ and `customer_create` in `infra/host/lib/customer-ops.sh`. The old operator verb
 pipeline are retired (TASK-043); `pipeline.ts` keeps only the provisioner's
 Keycloak constants.
 
+The form's brand fields (product name, organisation short name) and the two
+semester start months ("Wintersemester beginnt im", "Sommersemester beginnt im";
+October and April by default) travel in the request as `brand.product`,
+`brand.orgShort` and the optional `brand.termMonths` (`{winter, summer}`, two
+different months 1 to 12; request-verify checks them again and an older stored
+request without them still verifies). `create.sh` writes them into the tenant
+config as `brand.product`, `brand.org_short` and `brand.term_months`. Only the
+months are stored: the semester label in the sidebar ("WiSe 26/27", "SoSe 27")
+is computed from them and the current date in Europe/Berlin on every request. A
+customer without `brand.term_months` keeps the static `brand.term` text. No
+settings form edits the months of an existing customer yet; set
+`brand.term_months` in its `config.json` by hand until one does.
+
 The order and the ledger live in `@gremion/provisioning` (`steps.ts`,
 `plt.provisioning_step`). Each of the nine steps is ledger-marked, so a retry
 resumes from prior state, and the customer stays non-resolvable until the last
