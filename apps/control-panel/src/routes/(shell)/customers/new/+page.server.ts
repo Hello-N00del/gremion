@@ -20,6 +20,16 @@ function textField(form: FormData, key: string): string {
   return typeof v === 'string' ? v.trim() : ''
 }
 
+/**
+ * A month select, as a number. Absent or empty is undefined (no months: an older client); anything that
+ * is not whole digits is NaN, which validateNewCustomer refuses (never silently turned into a month).
+ */
+function monthField(form: FormData, key: string): number | undefined {
+  const v = textField(form, key)
+  if (v === '') return undefined
+  return /^\d{1,2}$/.test(v) ? Number(v) : Number.NaN
+}
+
 /** The reason "Neuer Mandant" is disabled, read now (heartbeat included), and the modules to offer. */
 async function situation(c: PanelConfig) {
   const p = platformDb(c)
@@ -82,6 +92,8 @@ export const actions: Actions = {
       bodyName: textField(form, 'bodyName'),
       brandProduct: textField(form, 'brandProduct'),
       brandOrgShort: textField(form, 'brandOrgShort'),
+      termWinterMonth: monthField(form, 'termWinterMonth'),
+      termSummerMonth: monthField(form, 'termSummerMonth'),
       enable,
       dpia,
     }

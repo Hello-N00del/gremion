@@ -16,6 +16,7 @@ import { validateCreate } from './customer.ts'
 import { assertEnableList, DEFAULT_DENY } from './operator-gate.ts'
 import { ProvisioningError } from './errors.ts'
 import { isPrintableText } from './printable-text.ts'
+import { isTermMonths, type TermMonths } from './term-months.ts'
 import type { ActorKind } from './ports.ts'
 
 /**
@@ -86,23 +87,6 @@ export interface DpiaDecision {
   reasonCodes: string[]
   /** Required for every decision (brief Q3); never a placeholder. */
   documentRef: string
-}
-
-/** The months (1 to 12, different) in which the winter and the summer semester start. */
-export interface TermMonths {
-  winter: number
-  summer: number
-}
-
-/**
- * Two different integer months 1 to 12, exactly the two keys. Mirrored by the panel
- * (apps/control-panel requests.ts) and by the app's config schema (gremion-ui
- * $lib/semester isTermMonths); the panel's requests.test.ts pins this one equal.
- */
-export function isTermMonths(v: unknown): v is TermMonths {
-  if (!isObject(v)) return false
-  const m = (x: unknown): x is number => typeof x === 'number' && Number.isInteger(x) && x >= 1 && x <= 12
-  return Object.keys(v).length === 2 && m(v.winter) && m(v.summer) && v.winter !== v.summer
 }
 
 /** The normalised args of a `create` request. */

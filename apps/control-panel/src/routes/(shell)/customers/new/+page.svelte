@@ -11,6 +11,10 @@
   const checkedModules = $derived(Array.isArray(values.enable) ? (values.enable as unknown[]).map(String) : [])
   const dpiaValues = $derived((values.dpia ?? {}) as Record<string, { requiresDpia?: boolean | null; documentRef?: string }>)
   const key = $derived(String(form?.key || data.key))
+  // the semester start months: October and April unless a failed submit kept the operator's choice
+  const MONTHS = ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember']
+  const winterMonth = $derived(Number.isInteger(values.termWinterMonth) ? Number(values.termWinterMonth) : 10)
+  const summerMonth = $derived(Number.isInteger(values.termSummerMonth) ? Number(values.termSummerMonth) : 4)
 </script>
 
 <svelte:head><title>Neuer Mandant · Gremion Betrieb</title></svelte:head>
@@ -68,6 +72,24 @@
       Marke: Kurzname der Organisation
       <input name="brandOrgShort" required autocomplete="off" placeholder="MS" value={String(values.brandOrgShort ?? '')} aria-invalid={errors.brandOrgShort ? 'true' : undefined} />
       {#if errors.brandOrgShort}<span class="err">{errors.brandOrgShort}</span>{/if}
+    </label>
+    <label>
+      Wintersemester beginnt im
+      <select name="termWinterMonth" aria-invalid={errors.termMonths ? 'true' : undefined} aria-describedby={errors.termMonths ? 'err-term' : 'term-hint'}>
+        {#each MONTHS as name, i (name)}
+          <option value={String(i + 1)} selected={winterMonth === i + 1}>{name}</option>
+        {/each}
+      </select>
+    </label>
+    <label>
+      Sommersemester beginnt im
+      <select name="termSummerMonth" aria-invalid={errors.termMonths ? 'true' : undefined} aria-describedby={errors.termMonths ? 'err-term' : 'term-hint'}>
+        {#each MONTHS as name, i (name)}
+          <option value={String(i + 1)} selected={summerMonth === i + 1}>{name}</option>
+        {/each}
+      </select>
+      <span id="term-hint" class="muted">Daraus berechnet das Portal die Semesterangabe neben dem Kurznamen (z. B. „WiSe 26/27“ oder „SoSe 27“).</span>
+      {#if errors.termMonths}<span id="err-term" class="err">{errors.termMonths}</span>{/if}
     </label>
     <fieldset class="modules">
       <legend>Module (keine sind voreingestellt)</legend>

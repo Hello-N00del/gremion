@@ -18,6 +18,13 @@ export interface NewCustomerInput {
   bodyName: string
   brandProduct: string
   brandOrgShort: string
+  /**
+   * The months (1 to 12) in which the winter and the summer semester start; the sidebar's semester
+   * label is computed from them. Both set or both absent (an older caller): absent sends no months
+   * and the customer keeps the static label. The form always sets both (October and April).
+   */
+  termWinterMonth?: number
+  termSummerMonth?: number
   enable: string[]
   /** Per enabled module: the operator's DPIA decision (TASK-044 D2); null: no explicit yes/no was given. */
   dpia: Record<string, { requiresDpia: boolean | null; documentRef: string }>
@@ -68,6 +75,9 @@ function printable(v: string, max: number): boolean {
   return v.trim() !== '' && v.length <= max && PRINTABLE.test(v)
 }
 
+/** A whole month 1 to 12. Mirror of @gremion/provisioning's isTermMonths (requests.test.ts runs both over one corpus). */
+const isMonth = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= 12
+
 /** Validates the form and returns the field errors (empty: valid). */
 export function validateNewCustomer(
   input: NewCustomerInput,
@@ -92,6 +102,11 @@ export function validateNewCustomer(
   if (input.bodyName !== '' && !printable(input.bodyName, 80)) errors.bodyName = 'Name des ersten Gremiums: höchstens 80 Zeichen, keine Steuerzeichen.'
   if (!printable(input.brandProduct, 80)) errors.brandProduct = 'Produktname der Marke: 1-80 Zeichen, keine Steuerzeichen.'
   if (!printable(input.brandOrgShort, 20)) errors.brandOrgShort = 'Kurzname der Organisation: 1-20 Zeichen, keine Steuerzeichen.'
+  if (input.termWinterMonth !== undefined || input.termSummerMonth !== undefined) {
+    if (!isMonth(input.termWinterMonth) || !isMonth(input.termSummerMonth) || input.termWinterMonth === input.termSummerMonth) {
+      errors.termMonths = 'Semesterbeginn: Winter- und Sommersemester beginnen in zwei verschiedenen Monaten.'
+    }
+  }
   if (input.enable.some((m) => !MODULE.test(m))) errors.enable = 'Module als Kennungen, z. B. calendar.'
   else {
     const denied = input.enable.find((m) => m in deny)
@@ -133,7 +148,12 @@ export function createArgs(input: NewCustomerInput): Record<string, unknown> {
     host: input.host.toLowerCase(),
     itAdmin: input.itAdmin.toLowerCase(),
     councilAdmin: input.councilAdmin.toLowerCase(),
-    brand: { product: input.brandProduct, orgShort: input.brandOrgShort },
+    brand: {
+      product: input.brandProduct,
+      orgShort: input.brandOrgShort,
+      // optional on the wire: request-verify accepts a create without it (older stored requests, "Fortsetzen")
+      ...(isMonth(input.termWinterMonth) && isMonth(input.termSummerMonth) ? { termMonths: { winter: input.termWinterMonth, summer: input.termSummerMonth } } : {}),
+    },
     enable,
     dpia,
   }
