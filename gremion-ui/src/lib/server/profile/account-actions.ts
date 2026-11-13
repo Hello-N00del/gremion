@@ -159,6 +159,20 @@ export function recordAccountActionReturn(url: URL, cookies: CookieJar): void {
   })
 }
 
+/**
+ * A Set-Cookie header value for the action cookie. Only used where SvelteKit's own cookie
+ * handling cannot reach the response (the Auth.js callback, see kc-action-return-handle).
+ * The value alphabet of this cookie is `[A-Z_.a-z]`, so nothing needs encoding.
+ */
+export function serializeActionCookie(name: string, value: string, opts: Record<string, unknown>): string {
+  const parts = [`${name}=${value}`, `Path=${String(opts.path ?? '/')}`]
+  if (typeof opts.maxAge === 'number') parts.push(`Max-Age=${Math.floor(opts.maxAge)}`)
+  if (opts.httpOnly) parts.push('HttpOnly')
+  if (opts.secure) parts.push('Secure')
+  if (typeof opts.sameSite === 'string') parts.push(`SameSite=${opts.sameSite[0]!.toUpperCase()}${opts.sameSite.slice(1)}`)
+  return parts.join('; ')
+}
+
 export interface AccountActionResult {
   action: KcAction
   status: KcActionStatus
