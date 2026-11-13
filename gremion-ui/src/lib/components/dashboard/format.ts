@@ -71,3 +71,9 @@ export function relativeTime(iso: string | null): string {
   const days = Math.round(hrs / 24)
   return days === 1 ? 'gestern' : `vor ${days} Tagen`
 }
+
+// German noun/verb agreement for a count: the singular form for exactly 1, the plural form for 0
+// and for several ("1 Termin", "2 Termine", "0 Termine").
+export function pluralDe(n: number, singular: string, plural: string): string {
+  return n === 1 ? singular : plural
+}
