@@ -280,7 +280,7 @@
       {:else if activeKey === 'darstellung'}
         <TabAccessibility />
       {:else if activeKey === 'organisation' && data.config}
-        <TabGeneral org={data.config.org} />
+        <TabGeneral org={data.config.org} termMonths={data.config.brand?.term_months ?? null} />
       {:else if activeKey === 'module' && data.isAdmin}
         <TabModules />
       {:else if activeKey === 'dienste' && data.config}
