@@ -6,9 +6,10 @@
 #
 # handle_create <request-id> <slug> <operator-id> <args.json> <workdir>
 #   <args.json> is request-verify's NORMALISED args (never the raw request):
-#   slug, host, itAdmin, councilAdmin, bodyName, brand {product, orgShort},
-#   enable [], dpia {}. The tenant config the engine needs is ONLY the brand
-#   identity (materialize.ts requires brand.product and brand.org_short); it
+#   slug, host, itAdmin, councilAdmin, bodyName, brand {product, orgShort,
+#   termMonths?}, enable [], dpia {}. The tenant config the engine needs is ONLY
+#   the brand identity (materialize.ts requires brand.product and
+#   brand.org_short, plus the optional semester start months); it
 #   is written 0600 into the request's workdir, which the executor removes
 #   after the run. Then the SAME customer_create gremion-tenant create ran
 #   (customer-ops.sh): phase A, the mail step, record-step, phase B, the
@@ -28,7 +29,11 @@ handle_create() {
         [[ "${got_host,,}" == "${want_host,,}" ]] \
             || die "create ${id}: the host ${got_host} is not this install's customer host ${want_host} (PILOT_TENANT_HOST); nothing was created. Request the create again with ${want_host}" "$GREMION_EXIT_ASSERT"
     fi
-    jq -c '{brand: {product: .brand.product, org_short: .brand.orgShort}, modules: {}}' "$args" | atomic_write "$cfg" 600 \
+    # brand.termMonths (the two semester start months, optional: an older stored request has none) becomes
+    # brand.term_months, the key the app computes its semester label from; the label itself is never written.
+    jq -c '{brand: ({product: .brand.product, org_short: .brand.orgShort}
+                    + (if .brand.termMonths then {term_months: {winter: .brand.termMonths.winter, summer: .brand.termMonths.summer}} else {} end)),
+            modules: {}}' "$args" | atomic_write "$cfg" 600 \
         || die "create ${id}: could not write the tenant config" "$GREMION_EXIT_ASSERT"
     local -a argv=("$slug"
         --host "$(jq -r '.host' "$args")"
