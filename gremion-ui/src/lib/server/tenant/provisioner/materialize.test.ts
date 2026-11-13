@@ -23,6 +23,15 @@ describe('materializeConfig (defaults + stored -> fully-merged effective config)
     expect(merged.legal.impressum_html).toContain('per-tenant: set via config')
   })
 
+  it('keeps the semester start months the create handler writes (brand.term_months), and none when the stored config has none', () => {
+    const withMonths = materializeConfig({ brand: { product: 'Musterrat', org_short: 'MS', term_months: { winter: 10, summer: 4 } }, modules: {} })
+    expect(withMonths.brand.term_months).toEqual({ winter: 10, summer: 4 })
+    // an older create wrote no months: the key stays absent and the static term remains
+    const without = materializeConfig({ brand: { product: 'Musterrat', org_short: 'MS' }, modules: {} })
+    expect('term_months' in without.brand).toBe(false)
+    expect(without.brand.term).toBe('—')
+  })
+
   it('materializes an empty/absent stored config to the neutral defaults (no institution literal)', () => {
     const merged = materializeConfig({})
     expect(merged.brand.product).toBe('')
