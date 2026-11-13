@@ -46,17 +46,15 @@ describe('every slot file in the build', () => {
     it(`${f} default-exports only chips / liveCall / bell / overlay (each a component) and bareRoutes (path prefixes)`, async () => {
       const mod = (await import(/* @vite-ignore */ `../../src/lib/modules/slots/${f}`)) as { default: Record<string, unknown> }
       expect(Object.keys(mod.default).length).toBeGreaterThan(0)
-      for (const [key, value] of Object.entries(mod.default)) {
-        expect(ALLOWED.has(key), `unknown slot part "${key}" in ${f}`).toBe(true)
+      const problems = Object.entries(mod.default).flatMap(([key, value]) => {
+        if (!ALLOWED.has(key)) return [`unknown slot part "${key}"`]
         if (key === 'bareRoutes') {
-          expect(Array.isArray(value), `${f}: bareRoutes must be a list`).toBe(true)
-          for (const prefix of value as unknown[]) {
-            expect(typeof prefix === 'string' && prefix.startsWith('/'), `${f}: bareRoutes entry ${JSON.stringify(prefix)} must be a path starting with /`).toBe(true)
-          }
-          continue
+          const ok = Array.isArray(value) && value.every((p) => typeof p === 'string' && p.startsWith('/'))
+          return ok ? [] : ['bareRoutes must be a list of paths starting with /']
         }
-        expect(typeof value, `${f}: ${key} must be a component`).toBe('function')
-      }
+        return typeof value === 'function' ? [] : [`${key} must be a component`]
+      })
+      expect(problems, f).toEqual([])
     })
   }
 })
