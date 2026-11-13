@@ -154,4 +154,15 @@ describe('/messages — the settings panel confirms a rename', () => {
     await waitFor(() => expect(h.toast.success).toHaveBeenCalledWith('Raum in „Vorstand intern“ umbenannt'))
     expect(h.toast.error).not.toHaveBeenCalled()
   })
+
+  it('shows the confirmation after a successful archive, as the room administration page does', async () => {
+    const { getByText, findByTitle } = renderWith('', [FIRST])
+    await findByTitle('Einstellungen')
+    await fireEvent.click(getByText('Einstellungen'))
+    await fireEvent.click(getByText('Archivieren'))
+    await fireEvent.click(getByText('Bestätigen'))
+
+    await waitFor(() => expect(h.toast.success).toHaveBeenCalledWith('Raum archiviert'))
+    expect(h.toast.error).not.toHaveBeenCalled()
+  })
 })

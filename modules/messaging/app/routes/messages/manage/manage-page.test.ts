@@ -19,7 +19,7 @@ vi.mock('svelte-sonner', () => ({ toast: h.toast }))
 import Page from './+page.svelte'
 
 interface UnitRow { unitId: string; unitName: string; state: string; roomId?: string; roomName?: string }
-interface ArchivedRow { roomId: string; unitId: string; unitName: string; roomName?: string; archivedAt?: string; restorable: boolean }
+interface ArchivedRow { roomId: string; unitId: string; unitName: string; roomName?: string; archivedAt?: string; restorable: boolean; restoreBlockedBy?: 'other_room' | 'unreadable' }
 interface Data { matrix: 'reachable' | 'unreachable'; units: UnitRow[]; archivedRooms: ArchivedRow[] }
 
 const VORSTAND = '!vorstand:matrix.test'
@@ -41,7 +41,7 @@ const archiveData: Data = {
   archivedRooms: [
     { roomId: NEWER, unitId: 'ou-2', unitName: 'Plenum', archivedAt: '2026-09-01T12:00:00Z', restorable: true },
     { roomId: OLDER, unitId: 'ou-2', unitName: 'Plenum', roomName: 'Altes Plenum', archivedAt: '2026-01-01T12:00:00Z', restorable: true },
-    { roomId: OF_ACTIVE_UNIT, unitId: 'ou-1', unitName: 'Vorstand', archivedAt: '2025-06-01T12:00:00Z', restorable: false },
+    { roomId: OF_ACTIVE_UNIT, unitId: 'ou-1', unitName: 'Vorstand', archivedAt: '2025-06-01T12:00:00Z', restorable: false, restoreBlockedBy: 'other_room' },
   ],
 }
 
@@ -210,6 +210,32 @@ describe('/messages/manage — archive', () => {
     // the rooms that can be restored carry no such note
     expect(archiveRow(container, NEWER).textContent).not.toContain('hat bereits einen neuen Raum')
     expect(within(archiveRow(container, NEWER)).getByText('Wiederherstellen')).toBeTruthy()
+  })
+
+  // The overview could not read the unit's ledger: that says nothing about another room, so the page
+  // must not claim one.
+  it('says the room status could not be read, not that a new room exists, when the ledger read failed', () => {
+    const data: Data = { ...archiveData, archivedRooms: [{ roomId: OLDER, unitId: 'ou-2', unitName: 'Plenum', restorable: false, restoreBlockedBy: 'unreadable' }] }
+    const { container } = renderPage(data)
+    const row = archiveRow(container, OLDER)
+    expect(within(row).queryByText('Wiederherstellen')).toBeNull()
+    expect(row.textContent).toContain('Der Raumstatus von „Plenum“ konnte nicht gelesen werden')
+    expect(row.textContent).not.toContain('hat bereits einen neuen Raum')
+  })
+
+  it('tells before the click that only members can read the history of an archived room', () => {
+    const { container } = renderPage(archiveData)
+    expect(container.textContent).toContain('Den Verlauf eines archivierten Raums können nur dessen Mitglieder lesen.')
+  })
+
+  it('says so when the restore could not take the unit address back', async () => {
+    h.page.data = { session: { user: { id: 'admin-1', roles: [Role.CouncilAdmin] } } }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ success: true, data: { aliasRestored: false } }) }))
+    const { container } = render(Page, { props: { data: archiveData as never } })
+    await fireEvent.click(within(archiveRow(container, OLDER)).getByText('Wiederherstellen'))
+
+    await waitFor(() => expect(h.toast.success).toHaveBeenCalledWith(expect.stringContaining('Adresse')))
+    expect(h.toast.success).toHaveBeenCalledWith(expect.stringContaining('Raum wiederhergestellt'))
   })
 
   it('a refused restore shows the error, no confirmation, and reloads the overview', async () => {

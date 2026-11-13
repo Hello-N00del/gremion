@@ -463,6 +463,7 @@
       roomStore.update((store) =>
         store[roomId] ? { ...store, [roomId]: { ...store[roomId], archived: true } } : store
       )
+      toast.success('Raum archiviert')
       closeSettings()
     } catch (err) {
       console.error('[messages] confirmArchive threw', { roomId: settingsRoomId, error: err instanceof Error ? err.message : String(err) })

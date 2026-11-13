@@ -96,6 +96,7 @@ import { POST as roomArchive } from '../../../routes/api/messages/rooms/[roomId]
 import { POST as roomUnarchive } from '../../../routes/api/messages/rooms/[roomId]/unarchive/+server'
 import { GET as roomUnit } from '../../../routes/api/messages/rooms/[roomId]/unit/+server'
 import { getMessagesBackend } from './backend'
+import { listOverview } from './admin/room-admin'
 import { __resetMatrixCachesForTests, evictMatrixClient, getMatrixClient } from './matrix-client'
 import { __resetSynapseAdminForTests, getSynapseAdmin } from './synapse-admin'
 
@@ -255,7 +256,11 @@ class FakeSynapses {
       const room = server.rooms.get(m[1]!)
       return room ? json(200, { members: [...room.members], total: room.members.size }) : json(404)
     }
-    if ((m = /^\/_synapse\/admin\/v2\/rooms\/([^/]+)$/.exec(path)) && method === 'DELETE') {
+    if (path === '/_synapse/admin/v1/rooms' && method === 'GET') {
+      if (kind !== 'admin') return json(403)
+      return json(200, { rooms: [...server.rooms].filter(([, r]) => !r.deleted).map(([id, r]) => ({ room_id: id, creator: server.bot, name: r.name })) })
+    }
+    if ((m = /^\/_synapse\/admin\/v[12]\/rooms\/([^/]+)$/.exec(path)) && method === 'DELETE') {
       if (kind !== 'admin') return json(403)
       const room = server.rooms.get(m[1]!)
       if (room) room.deleted = true
@@ -571,6 +576,54 @@ describe("an administration action on B's room as A is refused before any Matrix
     expect(writes(net.since(m))).toEqual([])
     expect(sharedSynapse.rooms.get(ROOM_B)!.state.get('org.gremion.room.archived')!.content).toEqual(marker)
     expect(LEDGER.rooms.get('tid-a')!.get('unit-a')).toBe(ROOM_A)
+  })
+
+  // Two customers on ONE homeserver can have an org unit with the same id (the dev seed migration gives
+  // every fresh tenant database the same fixed unit ids). The archive marker is room state of the
+  // shared homeserver, so the unit id alone does not say whose room it is.
+  describe('an archived room of another customer whose unit has the same id', () => {
+    const MARKER = 'org.gremion.room.archived'
+    const json = { 'Content-Type': 'application/json' }
+    const stamped = { org_unit_id: 'unit-x', tenant_id: 'tid-b', archived_at: '2026-01-01T00:00:00Z', prior: null }
+    const legacy = { org_unit_id: 'unit-x', archived_at: '2026-01-01T00:00:00Z', prior: null }
+    /** Both customers have the unit 'unit-x' and neither has an active room for it (an empty id is no ledger row). */
+    const sameUnit = (marker: Record<string, unknown>) => {
+      LEDGER.rooms.set('tid-a', new Map([['unit-x', '']]))
+      LEDGER.rooms.set('tid-b', new Map([['unit-x', '']]))
+      sharedSynapse.rooms.get(ROOM_B)!.state.set(MARKER, { sender: sharedSynapse.bot, content: marker })
+    }
+
+    for (const [label, marker] of [['stamped with the other customer', stamped], ['written before markers carried a customer', legacy]] as const) {
+      it(`restore as A is a 404 and writes nothing (${label})`, async () => {
+        sameUnit(marker)
+        const m = net.mark()
+        const res = (await route(A_SHARED, roomUnarchive, ev(A_SHARED, ADMIN_A, 'admin-a', { roomId: ROOM_B, method: 'POST', body: JSON.stringify({ orgUnitId: 'unit-x' }), headers: json }))) as Response
+        expect(res.status).toBe(404)
+        expect(net.since(m).filter((r) => r.method !== 'GET' && !r.path.endsWith('/login'))).toEqual([])
+        expect(sharedSynapse.rooms.get(ROOM_B)!.state.get(MARKER)!.content).toEqual(marker)
+      })
+
+      it(`delete as A is a 404 and the room is kept (${label})`, async () => {
+        sameUnit(marker)
+        const res = (await route(A_SHARED, roomDelete, ev(A_SHARED, ADMIN_A, 'admin-a', { roomId: ROOM_B, method: 'DELETE', query: '?orgUnitId=unit-x' }))) as Response
+        expect(res.status).toBe(404)
+        expect(sharedSynapse.rooms.get(ROOM_B)!.deleted).toBe(false)
+      })
+
+      it(`A's archive list does not show it and reads no name of it (${label})`, async () => {
+        sameUnit(marker)
+        const m = net.mark()
+        const overview = await as(A_SHARED, () => listOverview([{ id: 'unit-x', name: 'Gremium unit-x' }]))
+        expect(overview.archivedRooms).toEqual([])
+        expect(net.since(m).some((r) => r.path.includes(ROOM_B) && r.path.endsWith('/state/m.room.name'))).toBe(false)
+      })
+    }
+
+    it('the customer that archived the room still sees it', async () => {
+      sameUnit(stamped)
+      const overview = await as(B_SHARED, () => listOverview([{ id: 'unit-x', name: 'Gremium unit-x' }]))
+      expect(overview.archivedRooms.map((r) => r.roomId)).toEqual([ROOM_B])
+    })
   })
 
   it("delete: B's room as A is a 404, B's room is not deleted, no delete request leaves", async () => {

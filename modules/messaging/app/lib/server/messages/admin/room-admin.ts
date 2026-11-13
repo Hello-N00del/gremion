@@ -23,6 +23,7 @@ import {
   type ArchivePriorPowerLevels, type PowerLevelsContent,
 } from './archive-power-levels'
 import { serviceEnv } from '$lib/server/env/service-env'
+import { currentTenantId } from '$lib/server/tenant/context'
 import { getOrgUnit, listOrgUnits, setSubsystemWanted, type OrgUnit } from '$lib/server/governance/org-units-db'
 import { enqueueResources, getResource, markResourceOk } from '$lib/server/governance/provisioning/ledger'
 import { withUnitLock } from '$lib/server/governance/provisioning/mutex'
@@ -217,7 +218,7 @@ async function archiveMatrixSide(unitId: string, unitName: string, roomId: strin
     ? existing.archive_alias : null
   const archiveAlias = keptAlias ?? freshArchiveAlias(unitName)
   await mc.setRoomState(roomId, ROOM_ARCHIVE_MARKER_TYPE, '', {
-    org_unit_id: unitId, archived_at: (keptPrior && typeof existing?.archived_at === 'string' && existing.archived_at) || new Date().toISOString(), prior,
+    org_unit_id: unitId, tenant_id: currentTenantId(), archived_at: (keptPrior && typeof existing?.archived_at === 'string' && existing.archived_at) || new Date().toISOString(), prior,
     archive_alias: archiveAlias,
   })
   await applyReadOnlyPowerLevels(roomId, current)
@@ -497,6 +498,9 @@ export interface ArchivedRoomEntry {
   archivedAt?: string
   /** False when the unit has another room: unarchiveRoom refuses that restore (RoomConflictError). */
   restorable: boolean
+  /** Why it is not restorable, so the page can say the true reason: the unit has `other_room`, or the
+   *  unit's ledger could not be read (`unreadable`, which says nothing about another room). */
+  restoreBlockedBy?: 'other_room' | 'unreadable'
 }
 
 export interface RoomOverview {
@@ -732,13 +736,15 @@ export async function listOverview(
 
   const archivedRooms: ArchivedRoomEntry[] = ownArchived.map((room) => {
     const ledgerRoom = ledgerRoomByUnit.get(room.unitId)
+    const restorable = ledgerRoom !== undefined && (ledgerRoom === null || ledgerRoom === room.roomId)
     return {
       roomId: room.roomId,
       unitId: room.unitId,
       unitName: unitNames.get(room.unitId) ?? '',
       roomName: names.get(room.roomId),
       archivedAt: room.archivedAt,
-      restorable: ledgerRoom !== undefined && (ledgerRoom === null || ledgerRoom === room.roomId),
+      restorable,
+      ...(restorable ? {} : { restoreBlockedBy: ledgerRoom === undefined ? 'unreadable' as const : 'other_room' as const }),
     }
   })
   const withNames = entries.map((entry) => (entry.roomId ? { ...entry, roomName: names.get(entry.roomId) } : entry))
@@ -753,6 +759,14 @@ export async function probeMatrix(): Promise<boolean> {
 
 export interface RoomArchiveMarker {
   org_unit_id?: string
+  /** The customer (tenant) that archived the room. Org unit ids are not unique across customers (the
+   *  dev seed gives every fresh tenant database the same fixed ids) and the marker is room state of a
+   *  homeserver that several customers can share, so the unit id alone does not say whose room it is. */
+  tenant_id?: string
+  /** Set by getRoomArchiveMarker ONLY, never stored: the room is archived, but not provably by this
+   *  customer (another customer's tenant id, or a marker of a build that did not store one). Such a
+   *  marker carries no org_unit_id here, so nothing matches it to one of this customer's units. */
+  foreign?: true
   archived_at?: string
   /** Karenz (Task 15): the power levels the archive overwrote (see ArchivePriorPowerLevels). Raw Matrix
    *  state, NOT trusted: run it through sanitizePrior before reading a single field. */
@@ -811,6 +825,13 @@ export async function getRoomArchiveMarker(roomId: string): Promise<RoomArchiveM
   // room routes treat the room as active again.
   const unitId = (content as RoomArchiveMarker).org_unit_id
   if (typeof unitId !== 'string' || unitId === '') return null
+  // Whose archive this is. A room archived by another customer on a shared homeserver, or by a build
+  // that stored no customer, is still ARCHIVED (it is not joined, not offered as active), but it is
+  // not this customer's to list, restore or delete: its unit id is withheld, so it matches no unit.
+  if ((content as RoomArchiveMarker).tenant_id !== currentTenantId()) {
+    console.warn('[room-admin] getRoomArchiveMarker: ignoring the unit of an archive marker not stamped by this customer', { roomId })
+    return { foreign: true }
+  }
   return content as RoomArchiveMarker
 }
 

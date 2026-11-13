@@ -341,7 +341,7 @@ describe('messagingKarenz', () => {
     it('a retry of an archive that an older build interrupted (marker without a prior, levels already read-only) stores no prior, so the restore falls back to the createRoom defaults', async () => {
       seed()
       const room = rooms.get('!r1:matrix.test')!
-      room.state.set('org.gremion.room.archived', { org_unit_id: 'u1', archived_at: '2026-10-01T00:00:00Z' })
+      room.state.set('org.gremion.room.archived', { org_unit_id: 'u1', tenant_id: 'default', archived_at: '2026-10-01T00:00:00Z' })
       const closed = {
         ...originalLevels(), events_default: 100, invite: 100, state_default: 100,
         events: { ...Object.fromEntries(CALL_TYPES.map((t) => [t, 100])), 'm.room.name': 50 },
@@ -360,7 +360,7 @@ describe('messagingKarenz', () => {
     it('a failing lookup of the archive alias on a retry is reported as such, the alias PUT is not attempted', async () => {
       seed()
       rooms.get('!r1:matrix.test')!.state.set('org.gremion.room.archived', {
-        org_unit_id: 'u1', archived_at: '2026-10-01T00:00:00Z', archive_alias: '#stura-archiv-vorstand-202610010000:matrix.test',
+        org_unit_id: 'u1', tenant_id: 'default', archived_at: '2026-10-01T00:00:00Z', archive_alias: '#stura-archiv-vorstand-202610010000:matrix.test',
         prior: { events_default: 0, invite: 0, state_default: 50, events: {} },
       })
       aliases.set('#stura-archiv-vorstand-202610010000:matrix.test', '!r1:matrix.test')
@@ -435,7 +435,7 @@ describe('messagingKarenz', () => {
     it('a stale marker of ANOTHER unit on the room never sets the prior this archive stores', async () => {
       seed()
       const stale = { events_default: 77, invite: 77, state_default: 77, events: {} }
-      rooms.get('!r1:matrix.test')!.state.set('org.gremion.room.archived', { org_unit_id: 'someone-else', archived_at: '2020-01-01T00:00:00Z', prior: stale })
+      rooms.get('!r1:matrix.test')!.state.set('org.gremion.room.archived', { org_unit_id: 'someone-else', tenant_id: 'default', archived_at: '2020-01-01T00:00:00Z', prior: stale })
 
       await karenz.messagingKarenz.switchOff(ctx)
 
@@ -448,7 +448,7 @@ describe('messagingKarenz', () => {
     it('a room archived by a council admin BEFORE the switch-off is not recorded, not restored and not deleted', async () => {
       seed()
       const older = addRoom('!old:matrix.test', { alias: '#stura-archiv-alt-202601010000:matrix.test' })
-      older.state.set('org.gremion.room.archived', { org_unit_id: 'u7', archived_at: '2026-01-01T00:00:00Z' })
+      older.state.set('org.gremion.room.archived', { org_unit_id: 'u7', tenant_id: 'default', archived_at: '2026-01-01T00:00:00Z' })
       older.state.set('m.room.power_levels', { ...originalLevels(), events_default: 100 })
 
       await karenz.messagingKarenz.switchOff(ctx)
@@ -686,7 +686,7 @@ describe('messagingKarenz', () => {
     it('never deletes a meeting-linked room even when an item points at it', async () => {
       seed()
       await store.items.upsert({ kind: 'room', externalId: '!meet:matrix.test', state: 'locked', payload: { unitId: 'u1' } })
-      rooms.get('!meet:matrix.test')!.state.set('org.gremion.room.archived', { org_unit_id: 'u1', archived_at: '2026-11-01T00:00:00Z' })
+      rooms.get('!meet:matrix.test')!.state.set('org.gremion.room.archived', { org_unit_id: 'u1', tenant_id: 'default', archived_at: '2026-11-01T00:00:00Z' })
 
       const r = await karenz.messagingKarenz.finalize(ctx, { dryRun: false })
 

@@ -159,7 +159,11 @@
         body: JSON.stringify({ orgUnitId: unitId }),
       })
       if (res.ok) {
-        toast.success('Raum wiederhergestellt')
+        const body = await res.json().catch(() => null)
+        // The room is writable again either way; only its address may be missing.
+        toast.success(body?.data?.aliasRestored === false
+          ? 'Raum wiederhergestellt. Die frühere Adresse gehört inzwischen einem anderen Raum und wurde nicht übernommen.'
+          : 'Raum wiederhergestellt')
       } else {
         const body = await res.json().catch(() => null)
         console.error('[messages/manage] restoreRoom failed', { unitId, roomId, status: res.status, body })
@@ -294,6 +298,7 @@
   {#if archivedRooms.length > 0}
     <section class="rooms-section">
       <h2 class="section-title">Archiv</h2>
+      <p class="confirm-hint section-note">Den Verlauf eines archivierten Raums können nur dessen Mitglieder lesen.</p>
       <div class="rooms-table">
         {#each archivedRooms as room (room.roomId)}
           {@const since = archivedOn(room.archivedAt)}
@@ -328,6 +333,10 @@
             </div>
             {#if confirmKey === room.roomId && confirmAction === 'delete'}
               <p class="confirm-hint">Der Raum wird mit seinem Verlauf endgültig gelöscht. Das lässt sich nicht rückgängig machen.</p>
+            {:else if !room.restorable && room.restoreBlockedBy === 'unreadable'}
+              <p class="confirm-hint">
+                Der Raumstatus von „{room.unitName}“ konnte nicht gelesen werden. Der Raum lässt sich deshalb gerade nicht wiederherstellen; bitte die Seite neu laden.
+              </p>
             {:else if !room.restorable}
               <p class="confirm-hint">
                 „{room.unitName}“ hat bereits einen neuen Raum. Dieser Raum kann deshalb nicht wiederhergestellt werden; sein Verlauf bleibt lesbar.
@@ -429,6 +438,7 @@
     line-height: 1.45;
     color: var(--ink-muted);
   }
+  .section-note { padding: 8px 16px 0; }
   .rename-input {
     font: inherit;
     font-size: 13px;
