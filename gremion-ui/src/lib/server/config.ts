@@ -12,6 +12,8 @@ import { HELD_OFF_MODULE_IDS } from '$lib/modules/held-off'
 // the curated palette registry (pure, client-safe module — no cycle:
 // instance-theme imports nothing).
 import { legacyAccentToPalette } from '$lib/theme/instance-theme'
+// The semester start months (pure, client-safe; the label is computed in brand.ts).
+import type { TermMonths } from '$lib/semester'
 // R29-RETENTION-30-K [D R29-I6]: log-retention defaults, caps and the clamp
 // live in one pure module so the settings API, the Settings tab and the generated
 // Löschkonzept cannot drift from this file. No purge reads these fields (TASK-033-a).
@@ -55,7 +57,14 @@ export interface GremionConfig {
     product: string           // e.g. 'Musterrat' (per-tenant; neutral default)
     logo_letter: string       // e.g. 'S'
     org_short: string         // per-tenant; neutral default
-    term: string              // e.g. 'SoSe 26'
+    term: string              // static label, e.g. 'SoSe 26'; the default dash. Used only when term_months is absent.
+    // The months (1 to 12, different) in which the winter and the summer semester
+    // start at this institution, chosen when the customer is created. The sidebar
+    // label ("WiSe 26/27", "SoSe 27") is COMPUTED from them and the current date at
+    // read time (lib/server/brand.ts brandFromConfig; $lib/semester) — the label
+    // itself is never stored. Absent (every config that predates it) = the static
+    // `term` string above, unchanged.
+    term_months?: TermMonths
     version: string           // e.g. 'v2.4'
     // per-tenant accent color + logo, shipped through the existing
     // config→brand→layout SSR path. NULL (the default — StuRa tenant #1 and
@@ -308,6 +317,13 @@ const brandSchema = z
     logo_letter: z.string(),
     org_short: z.string(),
     term: z.string(),
+    // The two semester start months: both integers 1 to 12 and different (the
+    // same rule as $lib/semester isTermMonths, which the panel and the request
+    // verifier apply as well). Absent = the static `term` label.
+    term_months: z
+      .object({ winter: z.number().int().min(1).max(12), summer: z.number().int().min(1).max(12) })
+      .refine((m) => m.winter !== m.summer, { message: 'winter and summer must start in different months' })
+      .optional(),
     version: z.string(),
     // gremion#22: nullable curated palette id. `.optional()` is implied by
     // `.partial()` but kept explicit — absent keys are normalized to null in
