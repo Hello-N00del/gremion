@@ -20,6 +20,7 @@
     "ssl": "__SMTP_SSL__"
   },
   "editUsernameAllowed": false,
+  "verifyEmail": true,
   "bruteForceProtected": true,
   "permanentLockout": false,
   "maxFailureWaitSeconds": 900,
