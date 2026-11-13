@@ -4,7 +4,7 @@
 import { describe, expect, test, vi } from 'vitest'
 import { isActionFailure } from '@sveltejs/kit'
 import { parseNameForm, saveOwnName, NAME_MAX, type OwnNameDeps } from './own-name'
-import { Role } from '$lib/auth/types'
+import { Role, type SessionUser } from '$lib/auth/types'
 
 const member = { id: 'kc-uuid-1', email: 'anna@example.org', name: 'Anna Alt', roles: [Role.Member], groups: [], loa: 1, authTime: 0 }
 
@@ -17,7 +17,7 @@ function form(fields: Record<string, string>): FormData {
 function event(fields: Record<string, string>, user: unknown = member) {
   return {
     request: new Request('https://pilot.test/settings?/profileName', { method: 'POST', body: new URLSearchParams(fields) }),
-    locals: { user },
+    locals: { user: user as SessionUser | null },
   }
 }
 

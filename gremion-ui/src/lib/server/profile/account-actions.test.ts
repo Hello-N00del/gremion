@@ -14,7 +14,7 @@ import {
   startAccountAction,
   type StartAccountActionDeps,
 } from './account-actions'
-import { Role } from '$lib/auth/types'
+import { Role, type SessionUser } from '$lib/auth/types'
 
 const member = { id: 'kc-uuid-1', email: 'a@example.org', name: 'A', roles: [Role.Member], groups: [], loa: 1, authTime: 0 }
 
@@ -36,7 +36,7 @@ function event(fields: Record<string, string>, user: unknown = member, jar = new
       }),
       url: new URL('https://pilot.test/settings?/accountAction'),
       cookies: jar,
-      locals: { user },
+      locals: { user: user as SessionUser | null },
     },
   }
 }
