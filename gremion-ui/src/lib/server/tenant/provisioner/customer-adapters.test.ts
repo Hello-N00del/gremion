@@ -90,6 +90,7 @@ function kcFake(exists: boolean, held: string[][] = [[], ['realm-admin']]) {
     // typed with the parameter it receives, so mock.calls[0][0] type-checks (review B2-HIGH, r2)
     createRealm: vi.fn(async (_doc: Record<string, unknown>) => {}),
     configureStepupFlow: vi.fn(async () => {}),
+    ensureRequiredActionEnabled: vi.fn(async (_realm: string, _alias: string): Promise<'enabled' | 'already' | 'absent'> => 'enabled'),
     assignServiceAccountRealmRoles: vi.fn(async (_realm: string, _client: string, _roles: readonly string[]) => {}),
     getServiceAccountRealmRoleNames: vi.fn(async (_realm: string, _client: string) => (reads.length > 1 ? reads.shift()! : reads[0]!)),
   }
@@ -163,6 +164,24 @@ describe('customerAdapters.realm.ensureRealm', () => {
     expect(kc.assignServiceAccountRealmRoles).toHaveBeenCalledWith('musterstadt', 'gremion-admin', ['realm-admin'])
     expect(written.length).toBeGreaterThan(0)
     expect(reg.markTenantResourceOk).toHaveBeenCalledWith(C.id, 'realm', 'musterstadt')
+  })
+
+  it('enables the UPDATE_EMAIL action on a new and on an existing realm (Settings > Profil offers the e-mail change only while it is on)', async () => {
+    for (const exists of [false, true]) {
+      const kc = kcFake(exists)
+      await adapters(kc).a.realm.ensureRealm(C)
+      expect(kc.ensureRequiredActionEnabled).toHaveBeenCalledWith('musterstadt', 'UPDATE_EMAIL')
+    }
+  })
+
+  it('a realm that does not register UPDATE_EMAIL does not fail the create; the step says so in its log', async () => {
+    const kc = kcFake(false)
+    kc.ensureRequiredActionEnabled.mockResolvedValueOnce('absent')
+    const lines: string[] = []
+    const { a } = adapters(kc, undefined, '/secrets', { log: (m: string) => void lines.push(m) })
+    await a.realm.ensureRealm(C)
+    expect(reg.markTenantResourceOk).toHaveBeenCalledWith(C.id, 'realm', 'musterstadt')
+    expect(lines.join(', ')).toMatch(/UPDATE_EMAIL.*not registered/)
   })
 
   it('routes the SA grant through adminKc when given, never the least-privilege provisioner (admin-assist)', async () => {

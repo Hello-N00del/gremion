@@ -444,6 +444,11 @@ export function customerAdapters(o: CustomerAdapterOptions): Pick<ProvisioningDe
           await o.kc.createRealm(doc as Record<string, unknown>)
         }
         await o.kc.configureStepupFlow(c.realm)
+        // Settings > Profil offers the e-mail change only while the realm has UPDATE_EMAIL enabled; Keycloak
+        // ships it registered but disabled. Reconcile (update-email-action) repairs realms that predate this.
+        if ((await o.kc.ensureRequiredActionEnabled(c.realm, 'UPDATE_EMAIL')) === 'absent') {
+          log(`realm ${c.realm}: the required action UPDATE_EMAIL is not registered, so the e-mail change stays hidden; reconcile reports it`)
+        }
         await ensureAdminSaRoles(c.realm)
         await markTenantResourceOk(c.id, 'realm', c.realm)
       },
