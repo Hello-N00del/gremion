@@ -486,6 +486,49 @@ describe('KcProvisionApi.ensureRequiredActionEnabled', () => {
     ])
   })
 
+  // Keycloak 26.6.1 stores the action and its config in ONE entity: the action PUT replaces the stored config
+  // with body.config (AuthenticationManagementResource.updateRequiredAction -> RealmAdapter
+  // updateRequiredActionProvider), the /config PUT writes into that same entity, and the action GET returns it.
+  function keycloakActionEntity(initial: { enabled: boolean; config: Record<string, string> }) {
+    const entity = { ...LIVE, ...initial }
+    const transport: KcTransport = async (method, path, body) => {
+      if (method === 'GET' && path === PATH) return { ...entity, config: { ...entity.config } }
+      if (method === 'GET' && path === CFG) return { config: { ...entity.config } }
+      if (method === 'PUT' && path === CFG) {
+        entity.config = { ...((body as { config: Record<string, string> }).config ?? {}) }
+        return undefined
+      }
+      if (method === 'PUT' && path === PATH) {
+        const b = body as { enabled?: boolean; config?: Record<string, string> }
+        entity.enabled = b.enabled === true
+        entity.config = { ...(b.config ?? {}) }
+        return undefined
+      }
+      throw new Error(`unexpected ${method} ${path}`)
+    }
+    return { entity, transport }
+  }
+
+  it('enabling a fresh (disabled, empty-config) action leaves the verification config STORED, not wiped by the action PUT', async () => {
+    const { entity, transport } = keycloakActionEntity({ enabled: false, config: {} })
+    expect(await new KcProvisionApi(transport).ensureRequiredActionEnabled('verein', 'UPDATE_EMAIL', VERIFY)).toBe('enabled')
+    expect(entity.enabled).toBe(true)
+    expect(entity.config.verifyEmail).toBe('true')
+  })
+
+  it('keeps the other stored config values when it enables the action', async () => {
+    const { entity, transport } = keycloakActionEntity({ enabled: false, config: { max_auth_age: '300' } })
+    await new KcProvisionApi(transport).ensureRequiredActionEnabled('verein', 'UPDATE_EMAIL', VERIFY)
+    expect(entity.config).toEqual({ max_auth_age: '300', verifyEmail: 'true' })
+  })
+
+  it('a second call is a no-op (the first converged)', async () => {
+    const { transport } = keycloakActionEntity({ enabled: false, config: {} })
+    const api = new KcProvisionApi(transport)
+    await api.ensureRequiredActionEnabled('verein', 'UPDATE_EMAIL', VERIFY)
+    expect(await api.ensureRequiredActionEnabled('verein', 'UPDATE_EMAIL', VERIFY)).toBe('already')
+  })
+
   it('writes nothing when the action is already enabled', async () => {
     const { transport, calls } = fakeTransport({ [`GET ${PATH}`]: { ...LIVE, enabled: true } })
     expect(await new KcProvisionApi(transport).ensureRequiredActionEnabled('verein', 'UPDATE_EMAIL')).toBe('already')
@@ -497,7 +540,8 @@ describe('KcProvisionApi.ensureRequiredActionEnabled', () => {
     expect(await new KcProvisionApi(transport).ensureRequiredActionEnabled('verein', 'UPDATE_EMAIL', VERIFY)).toBe('enabled')
     expect(writes(calls)).toEqual([
       { method: 'PUT', path: CFG, body: { config: { max_auth_age: '300', verifyEmail: 'true' } } },
-      { method: 'PUT', path: PATH, body: { ...LIVE, enabled: true } },
+      // the action PUT replaces the stored config with its body, so the merged config rides along
+      { method: 'PUT', path: PATH, body: { ...LIVE, enabled: true, config: { max_auth_age: '300', verifyEmail: 'true' } } },
     ])
   })
 

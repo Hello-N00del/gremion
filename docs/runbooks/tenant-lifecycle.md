@@ -725,7 +725,9 @@ and keeps the old address until it is opened, and without it (and without a real
 the new address applies at once. The action's config is used on purpose, not the realm's `verifyEmail`,
 which would send every user with an unverified address through the verify-email step at login.
 A realm created before this change shows both RED. Apply writes the config first, then enables the
-action on its live representation, so the action is never enabled without verification; a realm that
+action on its live representation with the merged config in the same body (Keycloak's action PUT replaces
+the stored config with its body, so a body without it would erase the verification), so the action is
+never enabled without verification; a realm that
 does not register the action at all stays RED, since apply cannot register it. Customer creation
 does the same on every pass. These repairs need `manage-realm` in the customer realm, which the
 provisioner holds on a realm it created or adopted and which `realm-admin` (the `gremion-admin`

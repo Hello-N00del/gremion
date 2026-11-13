@@ -1307,12 +1307,12 @@ describe('reconcileRealm — the verified e-mail change (update-email-action, up
     expect(report.applied).toEqual(['update-email-verification'])
   })
 
-  it('apply, only the action disabled -> ONE PUT of the live representation with only enabled flipped', async () => {
+  it('apply, only the action disabled -> ONE PUT of the live representation with only enabled flipped (the stored config rides along, the PUT replaces it)', async () => {
     const routes = greenRoutes()
     routes[UPDATE_EMAIL_GET] = { ...UPDATE_EMAIL_LIVE, priority: 65 }
     const { transport, calls } = scriptedTransport(routes)
     const report = await reconcileRealm(transport, { ...opts, verifyOnly: false })
-    expect(writesOf(calls)).toEqual([{ method: 'PUT', path: UPDATE_EMAIL_PATH, body: { ...UPDATE_EMAIL_LIVE, priority: 65, enabled: true } }])
+    expect(writesOf(calls)).toEqual([{ method: 'PUT', path: UPDATE_EMAIL_PATH, body: { ...UPDATE_EMAIL_LIVE, priority: 65, enabled: true, config: { verifyEmail: 'true' } } }])
     expect(report.applied).toEqual(['update-email-action'])
   })
 
@@ -1324,6 +1324,34 @@ describe('reconcileRealm — the verified e-mail change (update-email-action, up
     const report = await reconcileRealm(transport, { ...opts, verifyOnly: false })
     expect(writesOf(calls).map((c) => `${c.method} ${c.path}`)).toEqual([`PUT ${UPDATE_EMAIL_CFG_PATH}`, `PUT ${UPDATE_EMAIL_PATH}`])
     expect(report.applied).toEqual(['update-email-action', 'update-email-verification'])
+  })
+
+  // Keycloak 26.6.1 keeps the action's config in the action entity: the action PUT replaces it with body.config,
+  // the /config PUT writes into it, both GETs read it. A static route table cannot show the wipe.
+  it('apply, both drifted, against Keycloak semantics -> the re-verify is GREEN and the stored config holds verifyEmail', async () => {
+    const routes = greenRoutes()
+    const entity = { ...UPDATE_EMAIL_LIVE, config: {} as Record<string, string> }
+    const { transport: base } = scriptedTransport(routes)
+    const transport: KcTransport = async (method, path, body) => {
+      if (method === 'GET' && path === UPDATE_EMAIL_PATH) return { ...entity, config: { ...entity.config } }
+      if (method === 'GET' && path === UPDATE_EMAIL_CFG_PATH) return { config: { ...entity.config } }
+      if (method === 'PUT' && path === UPDATE_EMAIL_CFG_PATH) {
+        entity.config = { ...((body as { config?: Record<string, string> }).config ?? {}) }
+        return undefined
+      }
+      if (method === 'PUT' && path === UPDATE_EMAIL_PATH) {
+        const b = body as { enabled?: boolean; config?: Record<string, string> }
+        entity.enabled = b.enabled === true
+        entity.config = { ...(b.config ?? {}) }
+        return undefined
+      }
+      return base(method, path, body)
+    }
+    const report = await reconcileRealm(transport, { ...opts, verifyOnly: false })
+    expect(entity.enabled).toBe(true)
+    expect(entity.config.verifyEmail).toBe('true')
+    expect(failed(report)).toEqual([])
+    expect(report.ok).toBe(true)
   })
 
   it('apply, UPDATE_EMAIL not registered -> no write, and nothing is recorded as applied', async () => {
