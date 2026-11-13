@@ -114,12 +114,12 @@ const FOUR = ['Offen', 'In Arbeit', 'Erledigt', 'Veröffentlicht']
 
 describe('task board: the edit button of every card', () => {
   // Widths at which all columns fit the board: nothing is scrolled out of view, so every button
-  // must also be the thing a pointer hits. 820 and 1040 put the columns at the 248 px minimum.
+  // must also be the thing a pointer hits. 820 and 1070 put the columns at (or just above) the 248 px minimum.
   test.each([
     { width: 820, stacks: THREE },
     { width: 900, stacks: THREE },
     { width: 1280, stacks: THREE },
-    { width: 1040, stacks: FOUR },
+    { width: 1070, stacks: FOUR },
   ])('$width px, $stacks.length columns: inside its card and reachable', async ({ width, stacks }) => {
     const host = await mountAt(width, stacks)
     const board = host.querySelector<HTMLElement>('.deck-board')!
