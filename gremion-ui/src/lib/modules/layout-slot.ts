@@ -22,4 +22,6 @@ export interface ModuleLayoutSlot {
   bell?: Component
   /** Mounted once beside the shell for a signed-in user (e.g. the call picture-in-picture). */
   overlay?: Component<{ user: SessionUser | undefined }>
+  /** Path prefixes the module renders full-viewport WITHOUT the app shell (e.g. a document editor). Each starts with `/`. */
+  bareRoutes?: readonly string[]
 }

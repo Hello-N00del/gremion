@@ -17,7 +17,7 @@ vi.mock('$lib/components/VideoCallPip.svelte', () => ({ default: function VideoC
 
 const UI_ROOT = resolve(process.cwd())
 const SLOTS_DIR = join(UI_ROOT, 'src', 'lib', 'modules', 'slots')
-const ALLOWED = new Set(['chips', 'liveCall', 'bell', 'overlay'])
+const ALLOWED = new Set(['chips', 'liveCall', 'bell', 'overlay', 'bareRoutes'])
 
 describe('the root layout consumes the module slots', () => {
   const layout = readFileSync(join(UI_ROOT, 'src', 'routes', '+layout.svelte'), 'utf8')
@@ -43,11 +43,18 @@ describe('every slot file in the build', () => {
   })
 
   for (const f of files) {
-    it(`${f} default-exports only chips / liveCall / bell / overlay, each a component`, async () => {
+    it(`${f} default-exports only chips / liveCall / bell / overlay (each a component) and bareRoutes (path prefixes)`, async () => {
       const mod = (await import(/* @vite-ignore */ `../../src/lib/modules/slots/${f}`)) as { default: Record<string, unknown> }
       expect(Object.keys(mod.default).length).toBeGreaterThan(0)
       for (const [key, value] of Object.entries(mod.default)) {
         expect(ALLOWED.has(key), `unknown slot part "${key}" in ${f}`).toBe(true)
+        if (key === 'bareRoutes') {
+          expect(Array.isArray(value), `${f}: bareRoutes must be a list`).toBe(true)
+          for (const prefix of value as unknown[]) {
+            expect(typeof prefix === 'string' && prefix.startsWith('/'), `${f}: bareRoutes entry ${JSON.stringify(prefix)} must be a path starting with /`).toBe(true)
+          }
+          continue
+        }
         expect(typeof value, `${f}: ${key} must be a component`).toBe('function')
       }
     })
