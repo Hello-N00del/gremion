@@ -65,11 +65,11 @@
     {/if}
 
     <label class="flex items-center gap-2 text-sm">
-      <input type="checkbox" name="wantsMatrixRoom" checked />
+      <input type="checkbox" name="wantsMatrixRoom" aria-label="Matrix-Raum anlegen" checked />
       Matrix-Raum anlegen
     </label>
     <label class="flex items-center gap-2 text-sm">
-      <input type="checkbox" name="wantsNextcloudFolder" checked />
+      <input type="checkbox" name="wantsNextcloudFolder" aria-label="Nextcloud-Ordner anlegen" checked />
       Nextcloud-Ordner anlegen
     </label>
 

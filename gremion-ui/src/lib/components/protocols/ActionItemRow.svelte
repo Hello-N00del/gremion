@@ -36,6 +36,7 @@
   <div class="flex items-center gap-3 rounded-md border px-3 py-2">
     <input
       type="checkbox"
+      aria-label={`Erledigt: ${item.text}`}
       checked={item.completed}
       onchange={() => item.id && onToggle(item.id, !item.completed)}
       class="h-4 w-4"

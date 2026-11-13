@@ -98,6 +98,7 @@
           <label class="toggle">
             <input
               type="checkbox"
+              aria-label={`${$t('members.accountActive')}: ${m.name}`}
               checked={m.enabled}
               onchange={(e) => toggleEnabled(m.id, (e.currentTarget as HTMLInputElement).checked)}
             />

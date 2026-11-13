@@ -163,6 +163,7 @@
       <label class="flex items-center gap-2 text-sm cursor-pointer">
         <input
           type="checkbox"
+          aria-label="Gastbearbeitung erlaubt"
           checked={data.protocol.guest_edit_enabled}
           onchange={async (e) => {
             const target = e.target as HTMLInputElement

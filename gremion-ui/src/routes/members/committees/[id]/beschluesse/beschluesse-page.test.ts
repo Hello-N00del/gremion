@@ -15,9 +15,13 @@ vi.mock('$app/stores', async () => {
   }
 })
 
+// The committee comes from the parent layout's load; <PageTitle> reads the brand from $app/state.
+vi.mock('$app/state', () => ({ page: { data: {} } }))
+
 import Page from './+page.svelte'
 
 const DATA = {
+  committee: { id: 'c1', name: 'Finanzausschuss' },
   committeeId: 'c1',
   entries: [
     { global_nr: 1, type: 'beschluss', text: 'Haushalt 2026', meeting_date: '2026-03-01', result: 'passed', protocol_id: 'p1' },
@@ -33,5 +37,10 @@ describe('Beschlussregister page (K2#5)', () => {
   it('still lists the register entries', () => {
     render(Page, { props: { data: DATA } as never })
     expect(screen.getByText('Haushalt 2026')).toBeTruthy()
+  })
+
+  it('sets a browser title that names the committee', () => {
+    render(Page, { props: { data: DATA } as never })
+    expect(document.title).toBe('Beschlüsse – Finanzausschuss – Portal')
   })
 })

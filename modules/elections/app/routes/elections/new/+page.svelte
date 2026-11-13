@@ -446,14 +446,14 @@
           </div>
         {/if}
         <label class="wiz-voter wiz-checkbox-card">
-          <input type="checkbox" bind:checked={createCalendarEvents} />
+          <input type="checkbox" aria-label="Kalendereintrag für das Gremium erstellen" bind:checked={createCalendarEvents} />
           <div>
             <div class="nm">Kalendereintrag für das Gremium erstellen</div>
             <div class="em" style="font-family:var(--font-body)">Beginn und Ende werden im Gremiumskalender eingetragen.</div>
           </div>
         </label>
         <label class="wiz-voter wiz-checkbox-card">
-          <input type="checkbox" bind:checked={freeze} />
+          <input type="checkbox" aria-label="Sofort einfrieren und starten" bind:checked={freeze} />
           <div>
             <div class="nm">Sofort einfrieren &amp; starten</div>
             <div class="em" style="font-family:var(--font-body)">Ohne Häkchen bleibt die Wahl ein Entwurf im Helios-Admin.</div>

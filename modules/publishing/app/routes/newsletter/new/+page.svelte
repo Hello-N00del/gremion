@@ -68,6 +68,7 @@
         <label class="flex items-center gap-2 text-sm mb-1">
           <input
             type="checkbox"
+            aria-label={list.name}
             value={list.id}
             checked={selectedListIds.includes(list.id)}
             onchange={(e) => {
