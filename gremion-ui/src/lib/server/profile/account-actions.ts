@@ -4,37 +4,46 @@
 //
 //   password -> UPDATE_PASSWORD     totp -> CONFIGURE_TOTP     email -> UPDATE_EMAIL
 //
-// WHICH PARAMETERS, AND WHY (Keycloak 26.1 source, services module):
+// WHICH PARAMETERS, AND WHY (MEASURED on Keycloak 26.6.1, the pinned image, with the
+// repo's realm-export.base.json; every line below was seen on the wire, not cited):
 //
 //  * kc_action=<ACTION>   starts the action after authentication.
-//  * prompt=login         OIDCLoginProtocol.requireReauthentication() is true for
-//                         prompt=login, so CookieAuthenticator ignores the SSO cookie,
-//                         resets the level of authentication to NO_LOA and sets
-//                         FORCED_REAUTHENTICATION. AcrStore.isLevelAuthenticatedInPreviousAuth()
-//                         then returns false for every level: nothing authenticated
-//                         earlier (password, OTP, a loa2 inside its 300 s window) is
-//                         reused, the user presents each credential again.
-//  * acr_values=loa2      (only for a user who HAS an OTP credential) requests level 2, so
-//                         the realm's stepup-2fa subflow asks for the existing one-time code
-//                         after the password. Together with prompt=login it means: password
-//                         AND existing OTP, fresh, before the action form opens. A user
-//                         WITHOUT an OTP is not sent loa2: the realm's second-factor subflow
-//                         is OTP-or-deny and would refuse them, and enrolling the first
-//                         authenticator is exactly what they came for (they still re-enter
-//                         the password, level 1).
-//  * No max_age: prompt=login already forces the full re-authentication; a window would
-//                         only add a way to reuse an older one.
+//  * prompt=login         ignores the SSO cookie: the password is asked again even inside
+//                         a live session. Measured: a user with a live loa2 session (OTP
+//                         entered seconds before) was asked password AND one-time code again.
+//  * acr_values=loa2      (only for a user who HAS an OTP credential) adds the realm's
+//                         stepup-2fa subflow: password, then the EXISTING one-time code,
+//                         before the action form opens. It is what protects UPDATE_PASSWORD
+//                         (and UPDATE_EMAIL, measured only with all parameters: password,
+//                         one-time code, e-mail form): on a loa1 session, kc_action=UPDATE_PASSWORD
+//                         with no parameters opened the new-password form straight away; with
+//                         prompt=login alone it asked the password only; with both it asked
+//                         password, one-time code, then the form (acr loa2).
+//                         A user WITHOUT an OTP is not sent loa2: the realm's second-factor
+//                         subflow is OTP-or-deny and answers "Zugriff verweigert" (measured),
+//                         and enrolling the first authenticator is what they came for. They
+//                         re-enter the password (prompt=login) and enrol.
+//  * No max_age: prompt=login already forces the full re-authentication.
 //
-// Defence in depth that does not depend on this code: for CONFIGURE_TOTP Keycloak itself
-// raises the requested level to the level of the `otp` credential type in the realm flow
-// (AcrStore.getRequestedLevelOfAuthenticationByKcAction: UpdateTotp is a CredentialAction),
-// when the user has an OTP credential. And every AIA re-authenticates once the last login
-// is older than the action's max auth age (default 300 s).
+// Defence in depth that does not depend on this code (measured, a loa1 SSO session of a user
+// with an OTP, kc_action=CONFIGURE_TOTP with NO prompt and NO acr_values): Keycloak itself
+// asked for the existing one-time code before the setup form. That holds for CONFIGURE_TOTP
+// only; UPDATE_PASSWORD got nothing from Keycloak (above), so for it these parameters are
+// the protection.
 //
-// THE ROUND TRIP DOES NOT RAISE THE SESSION BY ITSELF: no flow here enrols and then grants
-// loa2 (the realm has no REQUIRED OTP form, see docs/auth.md). A user with an OTP gets loa2
-// only because they just entered it. A user without one comes back at loa1: enrolling a
-// first authenticator through kc_action does not mint an acr of loa2.
+// WRONG CODE = NO SETUP FORM (measured): password right, one-time code wrong -> the code
+// form again with "Ungueltiger One-time Code"; the setup form never appeared, and a fresh
+// plain kc_action request in the same browser started at the password form (no half session).
+//
+// THE ROUND TRIP DOES NOT RAISE THE SESSION BY ITSELF (measured acr of the exchanged token):
+//   user WITH an OTP, any of the three actions:  loa2, because they typed the code a moment
+//     ago (earned; the realm has no REQUIRED OTP form, see docs/auth.md);
+//   user WITHOUT an OTP, CONFIGURE_TOTP:         loa1, although a second factor was enrolled
+//     in that very round trip (enrolling through kc_action does not mint loa2);
+//   cancelled setup form:                        the callback still carries a code, the
+//     session is intact, kc_action_status=cancelled.
+// A residual that remains: the FIRST authenticator of a user without one is protected by the
+// password alone. There is no second factor to ask for yet.
 //
 // The server decides every parameter. The form contributes one allowlisted key; whatever
 // else a client posts (authorizationParams-*, redirectTo, providerId) never reaches Auth.js.
