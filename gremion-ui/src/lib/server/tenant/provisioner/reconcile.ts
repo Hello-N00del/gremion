@@ -21,6 +21,9 @@
 // re-import is the operator's answer. The one exception among the sub checks is
 // `bearer-clients-sub` (TASK-033-a): it adds the missing sub mapper / scope. `vorstand-role`
 // (Karenz phase 1) is repaired too: apply creates the realm role and its gremion-ui scope mapping.
+// `verify-email` and `update-email-action` (the verified e-mail change of Settings > Profil) are repaired as well:
+// a partial realm PUT, then the required action enabled on its live representation (an action the realm does not
+// register at all stays reported).
 import {
   adminApiStatus,
   KcProvisionApi,
@@ -60,6 +63,8 @@ export const RECONCILE_CHECK_NAMES = [
   'smtp-server', // TASK-043 R-E5b: the realm sends as its OWN kc-<token>@ principal, no sentinel
   'frontend-url', // TASK-043 r4: attributes.frontendUrl == https://<tenant host>/auth (mailed links, iss)
   'vorstand-role', // Karenz phase 1: the standard realm role `vorstand` exists AND sits in the gremion-ui scope mappings (fullScopeAllowed is false, so a role absent there never reaches a token)
+  'verify-email', // realm verifyEmail == true: Keycloak's UPDATE_EMAIL only verifies the new address before it applies it while the realm verifies e-mail
+  'update-email-action', // the required action UPDATE_EMAIL is registered AND enabled (Keycloak ships it disabled): Settings > Profil offers the e-mail change only then
 ] as const
 
 /** Failed checks only the HOST can repair (TASK-043 Q7): the realm's sender is
@@ -216,6 +221,7 @@ export interface ReconcileOptions {
 // ── KC Admin-API shapes (the subset reconcile reads) ──────────────────────────
 interface RealmRep {
   sslRequired?: string
+  verifyEmail?: boolean
   browserFlow?: string
   otpPolicyType?: string
   otpPolicyAlgorithm?: string
@@ -256,6 +262,9 @@ interface RoleRep {
   name?: string
   description?: string
 }
+
+/** The Keycloak required action behind the e-mail button of Settings > Profil. */
+const UPDATE_EMAIL_ALIAS = 'UPDATE_EMAIL'
 
 /** The standard Vorstand realm role (Karenz phase 1): added to the realm template, repaired here on realms that predate it. */
 const VORSTAND_ROLE = 'vorstand'
@@ -797,6 +806,21 @@ export async function reconcileRealm(rawTransport: KcTransport, opts: ReconcileO
   if (realmRep.attributes?.frontendUrl === wantFrontend) pass('frontend-url')
   else fail('frontend-url', `attributes.frontendUrl is ${JSON.stringify(realmRep.attributes?.frontendUrl)} (expected ${wantFrontend}: mailed links would name another address)`)
 
+  // ── the verified e-mail change (Settings > Profil) ────────────────────────────
+  // Keycloak's UPDATE_EMAIL changes the address AT ONCE when the realm does not verify e-mail, and sends the
+  // new address a confirmation link when it does. The action itself ships registered but DISABLED.
+  if (realmRep.verifyEmail === true) pass('verify-email')
+  else fail('verify-email', `verifyEmail is ${JSON.stringify(realmRep.verifyEmail)} (expected true: the UPDATE_EMAIL action would apply a new e-mail address without being verified)`)
+  let updateEmail: { enabled?: boolean } | undefined
+  try {
+    updateEmail = (await get<{ enabled?: boolean } | undefined>(`/authentication/required-actions/${UPDATE_EMAIL_ALIAS}`)) ?? undefined
+  } catch (err) {
+    if (adminApiStatus(err) !== 404) throw err
+  }
+  if (!updateEmail) fail('update-email-action', `the required action ${UPDATE_EMAIL_ALIAS} is not registered in this realm (apply cannot register it; Settings > Profil hides the e-mail change)`)
+  else if (updateEmail.enabled !== true) fail('update-email-action', `the required action ${UPDATE_EMAIL_ALIAS} is disabled (Keycloak's default; Settings > Profil hides the e-mail change)`)
+  else pass('update-email-action')
+
   // ── (A) gremion-admin SA realm-management roles ───────────────────────────────
   // KC 26's import does NOT carry service-account role mappings reliably, so a
   // provisioned realm's gremion-admin SA can do client_credentials but every Admin
@@ -860,6 +884,17 @@ export async function reconcileRealm(rawTransport: KcTransport, opts: ReconcileO
       passwordPolicy: REALM_PASSWORD_POLICY,
     })
     applied.push('password-policy')
+  }
+
+  // The verified e-mail change: verification FIRST (one partial realm PUT, only this field), then the action
+  // itself on its live representation, so the action is never enabled without the verification it relies on.
+  if (failedNames.has('verify-email')) {
+    await transport('PUT', `/admin/realms/${realmSeg(realm)}`, { realm, verifyEmail: true })
+    applied.push('verify-email')
+  }
+  if (failedNames.has('update-email-action')) {
+    // 'absent' is not repairable here: it stays red in the re-verify below and is not recorded as applied.
+    if ((await new KcProvisionApi(transport).ensureRequiredActionEnabled(realm, UPDATE_EMAIL_ALIAS)) !== 'absent') applied.push('update-email-action')
   }
 
   // Security sweep 2 #6: PKCE S256 on gremion-ui, a partial client PUT that merges

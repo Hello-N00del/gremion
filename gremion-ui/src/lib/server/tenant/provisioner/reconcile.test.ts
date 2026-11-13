@@ -76,6 +76,11 @@ const UI_MAPPERS = 'GET /admin/realms/verein/clients/uuid-ui/protocol-mappers/mo
 const VORSTAND_ROLE_GET = 'GET /admin/realms/verein/roles/vorstand'
 const UI_SCOPE_MAPPINGS = 'GET /admin/realms/verein/clients/uuid-ui/scope-mappings/realm'
 
+const UPDATE_EMAIL_GET = 'GET /admin/realms/verein/authentication/required-actions/UPDATE_EMAIL'
+const UPDATE_EMAIL_PUT = 'PUT /admin/realms/verein/authentication/required-actions/UPDATE_EMAIL'
+/** The shape of Keycloak's answer for the action in a realm that has not enabled it (enabled=false is measured on 26.6.1; name and priority are illustrative). */
+const UPDATE_EMAIL_LIVE = { alias: 'UPDATE_EMAIL', name: 'Update Email', providerId: 'UPDATE_EMAIL', enabled: false, defaultAction: false, priority: 70, config: {} }
+
 /** A GREEN live realm: every §4 contract element present + correct. Built as a
  *  route map keyed by `${method} ${path}` for a scriptable transport. */
 function greenRoutes(): Record<string, unknown> {
@@ -84,6 +89,8 @@ function greenRoutes(): Record<string, unknown> {
     [`GET /admin/realms/${REALM}`]: {
       realm: REALM,
       sslRequired: 'all',
+      // The e-mail change must verify the new address before it takes effect (UPDATE_EMAIL follows verifyEmail).
+      verifyEmail: true,
       browserFlow: 'browser-stepup',
       otpPolicyType: 'totp',
       otpPolicyAlgorithm: 'HmacSHA1',
@@ -151,6 +158,8 @@ function greenRoutes(): Record<string, unknown> {
     ],
     // Karenz phase 1 (Task 7): the standard realm role `vorstand` exists in the realm
     [VORSTAND_ROLE_GET]: { id: 'role-vorstand', name: 'vorstand', description: 'Vorstand' },
+    // The e-mail change action of Settings > Profil: registered by Keycloak, enabled by the provisioner.
+    [UPDATE_EMAIL_GET]: { ...UPDATE_EMAIL_LIVE, enabled: true },
     // realm users — service accounts only (#239)
     [`GET /admin/realms/${REALM}/users?max=2000`]: [
       { username: 'service-account-gremion-admin', serviceAccountClientId: 'gremion-admin' },
@@ -1206,6 +1215,107 @@ describe('reconcileRealm — apply replays ONLY the failed checks (§4-2), nothi
 })
 
 // ── #48: a realm the provisioner SA did not create ──────────────────────────
+// Settings > Profil starts Keycloak's UPDATE_EMAIL only while the realm has it enabled, and Keycloak applies the new
+// address at once unless the realm has verifyEmail on. Two checks, both repaired by apply, verification first.
+describe('reconcileRealm — the verified e-mail change (verify-email, update-email-action)', () => {
+  it('is named in the contract', () => {
+    expect(RECONCILE_CHECK_NAMES).toContain('verify-email')
+    expect(RECONCILE_CHECK_NAMES).toContain('update-email-action')
+  })
+
+  it.each([
+    ['false', false],
+    ['absent', undefined],
+  ])('verifyEmail %s -> only verify-email fails, naming the unverified address', async (_w, value) => {
+    const routes = greenRoutes()
+    ;(routes[`GET /admin/realms/${REALM}`] as any).verifyEmail = value
+    const { transport } = scriptedTransport(routes)
+    const report = await reconcileRealm(transport, { ...opts, verifyOnly: true })
+    expect(report.checks.filter((c) => !c.ok).map((c) => c.name)).toEqual(['verify-email'])
+    expect(report.checks.find((c) => c.name === 'verify-email')!.detail).toMatch(/new e-mail address.*without being verified/)
+  })
+
+  it('UPDATE_EMAIL registered but disabled (Keycloak default) -> only update-email-action fails', async () => {
+    const routes = greenRoutes()
+    routes[UPDATE_EMAIL_GET] = UPDATE_EMAIL_LIVE
+    const { transport } = scriptedTransport(routes)
+    const report = await reconcileRealm(transport, { ...opts, verifyOnly: true })
+    expect(report.checks.filter((c) => !c.ok).map((c) => c.name)).toEqual(['update-email-action'])
+    expect(report.checks.find((c) => c.name === 'update-email-action')!.detail).toMatch(/disabled/)
+  })
+
+  it('UPDATE_EMAIL not registered (a 404 or an empty answer) -> only update-email-action fails and says so', async () => {
+    for (const answer of ['404', 'empty'] as const) {
+      const inner = scriptedTransport(greenRoutes())
+      const transport: KcTransport = async (m, p, b) => {
+        if (answer === '404' && `${m} ${p}` === UPDATE_EMAIL_GET) throw new Error('Keycloak Admin API error: 404 on GET')
+        if (answer === 'empty' && `${m} ${p}` === UPDATE_EMAIL_GET) return undefined
+        return inner.transport(m, p, b)
+      }
+      const report = await reconcileRealm(transport, { ...opts, verifyOnly: true })
+      expect(report.checks.filter((c) => !c.ok).map((c) => c.name)).toEqual(['update-email-action'])
+      expect(report.checks.find((c) => c.name === 'update-email-action')!.detail).toMatch(/not registered/)
+    }
+  })
+
+  it('verify-only writes nothing for either drift', async () => {
+    const routes = greenRoutes()
+    ;(routes[`GET /admin/realms/${REALM}`] as any).verifyEmail = false
+    routes[UPDATE_EMAIL_GET] = UPDATE_EMAIL_LIVE
+    const { transport, calls } = scriptedTransport(routes)
+    await reconcileRealm(transport, { ...opts, verifyOnly: true })
+    expect(calls.every((c) => c.method === 'GET')).toBe(true)
+  })
+
+  it('apply, verifyEmail off -> ONE partial realm PUT with verifyEmail true and nothing else', async () => {
+    const routes = greenRoutes()
+    ;(routes[`GET /admin/realms/${REALM}`] as any).verifyEmail = false
+    const { transport, calls } = scriptedTransport(routes)
+    const report = await reconcileRealm(transport, { ...opts, verifyOnly: false })
+    expect(calls.filter((c) => c.method !== 'GET')).toEqual([{ method: 'PUT', path: `/admin/realms/${REALM}`, body: { realm: REALM, verifyEmail: true } }])
+    expect(report.applied).toEqual(['verify-email'])
+  })
+
+  it('apply, UPDATE_EMAIL disabled -> ONE PUT of the live representation with only enabled flipped', async () => {
+    const routes = greenRoutes()
+    routes[UPDATE_EMAIL_GET] = { ...UPDATE_EMAIL_LIVE, priority: 65 }
+    const { transport, calls } = scriptedTransport(routes)
+    const report = await reconcileRealm(transport, { ...opts, verifyOnly: false })
+    expect(calls.filter((c) => c.method !== 'GET')).toEqual([
+      { method: 'PUT', path: UPDATE_EMAIL_PUT.slice('PUT '.length), body: { ...UPDATE_EMAIL_LIVE, priority: 65, enabled: true } },
+    ])
+    expect(report.applied).toEqual(['update-email-action'])
+  })
+
+  it('apply, both drifted -> verification is switched on BEFORE the action, so the action is never live without it', async () => {
+    const routes = greenRoutes()
+    ;(routes[`GET /admin/realms/${REALM}`] as any).verifyEmail = false
+    routes[UPDATE_EMAIL_GET] = UPDATE_EMAIL_LIVE
+    const { transport, calls } = scriptedTransport(routes)
+    const report = await reconcileRealm(transport, { ...opts, verifyOnly: false })
+    const writes = calls.filter((c) => c.method !== 'GET').map((c) => `${c.method} ${c.path}`)
+    expect(writes).toEqual([`PUT /admin/realms/${REALM}`, UPDATE_EMAIL_PUT])
+    expect(report.applied).toEqual(['verify-email', 'update-email-action'])
+  })
+
+  it('apply, UPDATE_EMAIL not registered -> no write, and it is NOT recorded as applied', async () => {
+    const routes = greenRoutes()
+    delete routes[UPDATE_EMAIL_GET]
+    const { transport, calls } = scriptedTransport(routes)
+    const report = await reconcileRealm(transport, { ...opts, verifyOnly: false })
+    expect(calls.filter((c) => c.method !== 'GET')).toEqual([])
+    expect(report.applied).toEqual([])
+    expect(report.ok).toBe(false)
+  })
+
+  it('a green realm needs neither: no write at all in apply mode', async () => {
+    const { transport, calls } = scriptedTransport(greenRoutes())
+    const report = await reconcileRealm(transport, { ...opts, verifyOnly: false })
+    expect(report.ok).toBe(true)
+    expect(calls.every((c) => c.method === 'GET')).toBe(true)
+  })
+})
+
 describe('(#48) reconcileRealm on a realm the provisioner SA did not create', () => {
   // Keycloak's answer to a create-realm-only SA on a realm it did not create (an
   // imported realm, or one that predates the SA), in the CLI transport's format.
