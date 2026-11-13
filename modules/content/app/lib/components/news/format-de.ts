@@ -35,3 +35,8 @@ export function parseDateTimeDe(text: string): string | null {
 export function countLabel(n: number, singular: string, plural: string): string {
   return `${n} ${n === 1 ? singular : plural}`
 }
+
+/** German label for how a list member was added: "manuell" (typed in) or "CSV" (imported). */
+export function sourceLabel(source: string): string {
+  return source === 'csv' ? 'CSV' : 'manuell'
+}
