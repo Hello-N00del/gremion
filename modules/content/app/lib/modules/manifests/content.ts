@@ -20,6 +20,8 @@ const G = {
 
 export const contentManifest: ModuleManifest = {
   id: 'content',
+  // Display name: the Systemstatus catalog reads it (never the raw id).
+  status: { label: 'Inhalte', note: 'Beiträge für E-Mail, Portal und Instagram.' },
   order: 40,
   toggleable: true,
   // Authoring surface view gate matches finance/elections: a basic Mitglied

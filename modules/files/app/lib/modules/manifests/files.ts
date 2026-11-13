@@ -16,6 +16,8 @@ import type { ModuleManifest } from '../types'
 // independent env flag, orthogonal to this.
 export const filesManifest: ModuleManifest = {
   id: 'files',
+  // Display name: the Systemstatus catalog reads it (never the raw id).
+  status: { label: 'Dateien', note: 'Dokumente und Ordner der Gremien.' },
   order: 80,
   toggleable: true,
   // #194: /files is member-gated — guests get no Nextcloud account, so every

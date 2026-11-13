@@ -11,6 +11,8 @@ import type { NavItem } from '$lib/components/layout/nav-schema'
 // Task 23: served entirely by the extracted leaf service; the kernel routes proxy to it via the backend port.
 export const newsletterManifest: ModuleManifest = {
   id: 'newsletter',
+  // Display name: the Systemstatus catalog reads it (never the raw id).
+  status: { label: 'Newsletter', note: 'Newsletter und Verteilerlisten.' },
   order: 50,
   toggleable: true,
   pages: [{ segment: 'newsletter', minRole: Role.Finance }],
