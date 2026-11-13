@@ -18,6 +18,7 @@
   import TabBackups from './tabs/TabBackups.svelte'
   import TabAccessibility from './tabs/TabAccessibility.svelte'
   import TabDangerZone from './tabs/TabDangerZone.svelte'
+  import ProfileSection from './ProfileSection.svelte'
   // Datenschutz inline form (lifted from compliance/+page.svelte)
   import { Button } from '$lib/components/ui/button'
   import { Input } from '$lib/components/ui/input'
@@ -120,8 +121,13 @@
   function chipClass(kind: ScopeKind): '' | 'admin' {
     return kind === 'admin' ? 'admin' : ''
   }
+  // The name just saved in Settings > Profil (read from Keycloak) wins over the session's name, which
+  // only changes at the next sign-in.
+  const shownName = $derived(
+    [data.profile?.firstName, data.profile?.lastName].filter(Boolean).join(' ') || (data.user?.name ?? ''),
+  )
   const initials = $derived(
-    (data.user?.name ?? '')
+    shownName
       .split(/\s+/)
       .filter(Boolean)
       .slice(0, 2)
@@ -254,8 +260,8 @@
         <div class="card card-pad user-card">
           <div class="user-avatar">{initials}</div>
           <div class="user-body">
-            <div class="display user-name">{data.user?.name ?? '—'}</div>
-            <div class="mono user-email">{data.user?.email ?? '—'}</div>
+            <div class="display user-name">{shownName || '—'}</div>
+            <div class="mono user-email">{data.profile?.email || data.user?.email || '—'}</div>
             <div class="user-chips">
               {#each scopes as s (s.label)}
                 <span class="scope-chip {chipClass(s.kind)}">{s.label}</span>
@@ -267,12 +273,12 @@
               {/if}
             </div>
           </div>
-          {#if data.accountUrl}
-            <a class="btn user-account-btn" href={data.accountUrl} target="_blank" rel="noopener noreferrer">
-              Profil bearbeiten <Icon name="settings" size={13} />
-            </a>
-          {/if}
         </div>
+        <ProfileSection
+          profile={data.profile}
+          emailActionAvailable={data.emailActionAvailable}
+          accountActionResult={data.accountActionResult}
+        />
         <div class="profil-note">
           Sprache der Oberfläche finden Sie unter
           <b>Darstellung &amp; Barrierefreiheit</b>.
@@ -483,9 +489,6 @@
     margin-top: 10px;
     flex-wrap: wrap;
     align-items: center;
-  }
-  .user-account-btn {
-    flex-shrink: 0;
   }
 
   .scope-chip {
