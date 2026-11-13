@@ -26,15 +26,21 @@ export function platformHeldOffModules(tenantId: string): string[] {
   return [...(held.get(tenantId) ?? [])]
 }
 
+/** getTenant()'s own error for "no active tenant context" (tenant/context.ts); nothing else counts as "no tenant". */
+const isNoTenantContext = (err: unknown): boolean => err instanceof Error && err.message.startsWith('No tenant context:')
+
 /**
  * The same for the tenant of the current request. Outside a tenant scope nothing is held (the settings
- * routes cannot run there anyway: reading the config needs the tenant).
+ * routes cannot run there anyway: reading the config needs the tenant). Only that case answers empty; any
+ * other failure is logged and rethrown, so a broken lookup never reads as "the platform holds nothing".
  */
 export function platformHeldOffForCurrentTenant(): string[] {
   try {
     return platformHeldOffModules(getTenant().id)
-  } catch {
-    return []
+  } catch (err) {
+    if (isNoTenantContext(err)) return []
+    console.error('[module-switch] platform-held: reading the modules the platform holds off for the current tenant failed:', err instanceof Error ? err.message : String(err))
+    throw err
   }
 }
 
