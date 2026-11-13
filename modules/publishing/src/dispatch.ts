@@ -551,6 +551,7 @@ export async function dispatch(
     let delivered = 0
     let failed = 0
     let lastError: unknown
+    let loginRefused = false
     for (const { email } of recipients) {
       const claim = await claimRecipient(sql, newsletterId, email)
       if (claim !== 'fresh') continue // already-sent or in-flight → skip (the gate)
@@ -576,7 +577,19 @@ export async function dispatch(
         lastError = err
         // Never the address, message or response: they can echo the recipient.
         console.error(`[dispatch] send (newsletter #${newsletterId}) failed`, mailErrorFields(err))
+        // A refused LOGIN is the same for every recipient, and mail servers lock
+        // the account after a few refused logins: stop at the first one. Nobody
+        // after this recipient is claimed, so a send after the login is corrected
+        // reaches all of them.
+        if (mailErrorFields(err).code === 'EAUTH') {
+          loginRefused = true
+          break
+        }
       }
+    }
+
+    if (loginRefused) {
+      throw new Error(`SMTP login refused, send stopped after the first attempt${mailCauseText(lastError)}`)
     }
 
     if (failed > 0) {

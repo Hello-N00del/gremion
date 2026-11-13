@@ -317,6 +317,68 @@ describe('dispatch — per-recipient SMTP failure', () => {
   })
 })
 
+describe('dispatch — the mail server refuses the login (EAUTH)', () => {
+  // What the kernel-backed transport throws: MailSendError carries the cause fields
+  // the kernel's 500 body named, so a refused login arrives with code EAUTH.
+  const refusedLogin = () =>
+    Object.assign(new Error('kernel send-mail failed: 500'), {
+      name: 'MailSendError', code: 'EAUTH', responseCode: 535, command: 'AUTH LOGIN', httpStatus: 500,
+    })
+
+  it('stops after the first attempt: nobody after it is claimed, the send fails with a clear reason', async () => {
+    const { nlId } = await makeNewsletterWithList(['a@x.com', 'b@x.com', 'c@x.com'])
+    let calls = 0
+    const transport: MailTransport = {
+      async sendMail() {
+        calls += 1
+        throw refusedLogin()
+      },
+    }
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      await expect(
+        dispatch(DISPATCH_TENANT, nlId, ACTOR, { sql, kernel: makeFakeKernel(), transport, origin: 'https://o' }),
+      ).rejects.toThrow(/SMTP login refused, send stopped after the first attempt/)
+    } finally {
+      spy.mockRestore()
+    }
+
+    expect(calls).toBe(1)
+    const dels = await sql<{ email: string; status: string }[]>`
+      SELECT email, status FROM deliveries WHERE newsletter_id = ${nlId} ORDER BY email`
+    expect(dels).toHaveLength(1)
+    expect((await getNewsletter(sql, nlId))!.status).toBe('failed')
+    const rows = await outboxRows()
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.event_type).toBe('send.failed')
+  })
+
+  it('after earlier deliveries in the same pass: those stay sent, the rest is not tried', async () => {
+    const { nlId } = await makeNewsletterWithList(['a@x.com', 'b@x.com', 'c@x.com'])
+    let calls = 0
+    const transport: MailTransport = {
+      async sendMail() {
+        calls += 1
+        if (calls === 1) return { messageId: '<first@test>' }
+        throw refusedLogin()
+      },
+    }
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      await expect(
+        dispatch(DISPATCH_TENANT, nlId, ACTOR, { sql, kernel: makeFakeKernel(), transport, origin: 'https://o' }),
+      ).rejects.toThrow(/SMTP login refused/)
+    } finally {
+      spy.mockRestore()
+    }
+
+    expect(calls).toBe(2)
+    const dels = await sql<{ email: string; status: string }[]>`
+      SELECT email, status FROM deliveries WHERE newsletter_id = ${nlId} ORDER BY email`
+    expect(dels.map((d) => d.status)).toEqual(['sent', 'claimed'])
+  })
+})
+
 // ── kernel send-mail unconfigured (Option B2) → failed + send.failed ────────────
 describe('dispatch — kernel send-mail unconfigured (Option B2)', () => {
   it('a MailUnconfiguredError from the kernel-backed transport → newsletter failed + send.failed outbox (not a crash)', async () => {
