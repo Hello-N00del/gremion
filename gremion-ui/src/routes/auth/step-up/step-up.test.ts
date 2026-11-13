@@ -2,8 +2,9 @@
 // Keycloak never enrols a TOTP inside the step-up; a user without a second factor is REFUSED, and the
 // gremion login theme's error page sends that refusal back here as ?error=no-second-factor
 // (services/kernel-api/test/keycloak/stepup-deny.int.test.ts proves that half on a real Keycloak).
-// The page must then say so plainly, link the Keycloak account console of the user's realm, and
-// NOT bounce into Keycloak again (that would be refused again).
+// The page must then say so plainly, link Settings > Profil (where the app starts the Keycloak
+// one-time-code setup; the Keycloak account console is not used), and NOT bounce into Keycloak
+// again (that would be refused again).
 import { describe, test, expect, vi, beforeEach } from 'vitest'
 import { render } from '@testing-library/svelte'
 
@@ -13,10 +14,9 @@ vi.mock('@auth/sveltekit/client', () => ({ signIn: (...a: unknown[]) => signIn(.
 import Page from './+page.svelte'
 import { load } from './+page.server'
 
-const ACCOUNT = 'https://rat.musterstadt.example/auth/realms/musterstadt/account'
-type Data = { returnTo: string; secondFactorMissing: boolean; accountUrl: string | null }
+type Data = { returnTo: string; secondFactorMissing: boolean }
 const props = (over: Partial<Data> = {}) =>
-  ({ props: { data: { returnTo: '/finance', secondFactorMissing: false, accountUrl: ACCOUNT, ...over } } }) as unknown as { props: never }
+  ({ props: { data: { returnTo: '/finance', secondFactorMissing: false, ...over } } }) as unknown as { props: never }
 const hrefs = (c: HTMLElement) => Array.from(c.querySelectorAll('a')).map((a) => a.getAttribute('href'))
 
 beforeEach(() => signIn.mockReset())
@@ -27,28 +27,26 @@ describe('step-up page', () => {
     expect(signIn).toHaveBeenCalledWith('keycloak', { callbackUrl: '/finance' }, { acr_values: 'loa2', max_age: '300' })
   })
 
-  test('the refusal notice (?error=no-second-factor) is plain, links the account console and does NOT bounce back into Keycloak', () => {
+  test('the refusal notice (?error=no-second-factor) is plain, links Settings > Profil and does NOT bounce back into Keycloak', () => {
     const { container } = render(Page, props({ secondFactorMissing: true }))
     expect(signIn).not.toHaveBeenCalled()
     const text = container.textContent ?? ''
     expect(text).toMatch(/Zweiter Faktor erforderlich/)
     expect(text).toMatch(/Authenticator/)
-    expect(hrefs(container)).toContain(ACCOUNT)
+    expect(text).toMatch(/Zwei-Faktor-Code neu einrichten/)
+    expect(hrefs(container)).toContain('/settings/profil')
     expect(hrefs(container)).toContain('/finance')
   })
 
-  test('without an account url (no resolved tenant) the notice still says what is missing, with no dead link', () => {
-    const { container } = render(Page, props({ secondFactorMissing: true, accountUrl: null }))
-    expect(signIn).not.toHaveBeenCalled()
-    expect(container.textContent).toMatch(/zweiten Faktor/)
-    expect(hrefs(container).filter((h) => h !== '/finance')).toEqual([])
+  test('links nothing of the Keycloak account console', () => {
+    const { container } = render(Page, props({ secondFactorMissing: true }))
+    expect(hrefs(container).filter((h) => /\/account(\/|$|\?)/.test(h ?? ''))).toEqual([])
   })
 })
 
 describe('step-up load', () => {
-  const tenant = { authExternalBase: 'https://rat.musterstadt.example/auth/realms/musterstadt/' }
-  const run = (qs: string, t: unknown = tenant) =>
-    load({ url: new URL(`http://localhost/auth/step-up${qs}`), locals: { tenant: t } } as never) as Promise<Record<string, unknown>>
+  const run = (qs: string) =>
+    load({ url: new URL(`http://localhost/auth/step-up${qs}`), locals: {} } as never) as Promise<Record<string, unknown>>
 
   test('flags the refusal notice only for error=no-second-factor', async () => {
     expect((await run('?error=no-second-factor')).secondFactorMissing).toBe(true)
@@ -56,9 +54,8 @@ describe('step-up load', () => {
     expect((await run('?error=other')).secondFactorMissing).toBe(false)
   })
 
-  test('derives the account console from the request tenant, null without one', async () => {
-    expect((await run('')).accountUrl).toBe(ACCOUNT)
-    expect((await run('', null)).accountUrl).toBeNull()
+  test('hands no account-console url to the page', async () => {
+    expect(await run('')).not.toHaveProperty('accountUrl')
   })
 
   test('keeps the open-redirect guard on returnTo', async () => {

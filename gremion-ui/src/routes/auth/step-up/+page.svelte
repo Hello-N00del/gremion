@@ -31,13 +31,12 @@
         eingerichtet, deshalb wurde die Bestätigung abgelehnt.
       </p>
       <p class="mt-2 text-sm text-ink-muted">
-        Richten Sie ihn zuerst in Ihrem Konto unter „Anmeldung“ ein und versuchen Sie es danach erneut.
+        Richten Sie ihn zuerst unter Einstellungen, Profil mit „Zwei-Faktor-Code neu einrichten“ ein und versuchen Sie
+        es danach erneut.
       </p>
-      {#if data.accountUrl}
-        <a href={data.accountUrl} class="mt-5 inline-flex items-center justify-center text-sm font-medium text-ink hover:underline">
-          Konto öffnen
-        </a>
-      {/if}
+      <a href="/settings/profil" class="mt-5 inline-flex items-center justify-center text-sm font-medium text-ink hover:underline">
+        Zu den Profil-Einstellungen
+      </a>
       <a href={data.returnTo} class="mt-3 block text-sm text-ink-muted hover:underline">Zurück</a>
     </div>
   </main>

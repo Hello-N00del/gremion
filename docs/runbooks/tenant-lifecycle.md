@@ -124,6 +124,20 @@ and `customer_create` in `infra/host/lib/customer-ops.sh`. The old operator verb
 pipeline are retired (TASK-043); `pipeline.ts` keeps only the provisioner's
 Keycloak constants.
 
+The form's brand fields (product name, organisation short name) and the two
+semester start months ("Wintersemester beginnt im", "Sommersemester beginnt im";
+October and April by default) travel in the request as `brand.product`,
+`brand.orgShort` and the optional `brand.termMonths` (`{winter, summer}`, two
+different months 1 to 12; request-verify checks them again and an older stored
+request without them still verifies). `create.sh` writes them into the tenant
+config as `brand.product`, `brand.org_short` and `brand.term_months`. Only the
+months are stored: the semester label in the sidebar ("WiSe 26/27", "SoSe 27")
+is computed from them and the current date in Europe/Berlin on every request. A
+customer without `brand.term_months` keeps the static `brand.term` text. A
+customer created earlier sets the two months in the app under Einstellungen,
+Organisation (an IT administrator; `PATCH /api/settings` with
+`brand.term_months`, the same rule).
+
 The order and the ledger live in `@gremion/provisioning` (`steps.ts`,
 `plt.provisioning_step`). Each of the nine steps is ledger-marked, so a retry
 resumes from prior state, and the customer stays non-resolvable until the last
@@ -702,6 +716,30 @@ without `--verify-only`) repairs, idempotently; a second apply changes nothing:
 | `purger-connect` | the customer's `k_<hex>_purger` role holds `CONNECT` on its kernel database, `USAGE` on schema `public` and `SELECT`, `DELETE` on every kernel purge table that exists (the scheduled purge logs in as it; without `CONNECT` the purge fails with `permission denied for database`, with `CONNECT` alone every table is refused) | `GRANT CONNECT` (exactly `CONNECT`), then the same schema and table grants customer creation gives, then reads all of it back. It never creates a role: a customer without one has no kernel database provisioned |
 | `kernel-api-nats-seed` | the NATS seed `kernel-api/tenant_<slug>.nk` exists, every seed of the customer's current module set exists, **no seed is held for a module outside that set** (the declarative apply would revoke and delete it, so it is reported as drift before apply does it), and the broker serves the customer's account (the kernel API event relay publishes as that identity). The check reads seeds and the accounts file only; it never looks at JetStream streams | the same `nats-auth` ensure the lifecycle verbs use, over the customer's **current** module set read from the registry (`plt.module_enablement`) plus the `kernel-api` identity, then the account reload; a hand-written module list is never needed |
 | `vorstand-role` | the standard realm role `vorstand` exists AND is listed in the `gremion-ui` client's realm-role scope mappings (`fullScopeAllowed` is false, so a role missing there never reaches a token); a realm created before the role was added to the realm template shows it RED | creates the role and the scope mapping; both steps are idempotent |
+
+Two realm checks cover the e-mail change in Settings > Profil. `update-email-action` holds when
+the required action `UPDATE_EMAIL` is registered and enabled (Keycloak ships it disabled; the Profil
+page offers the button only while it is enabled). `update-email-verification` holds when the action's
+own config `verifyEmail` is `true`: Keycloak 26.6.1 then mails the new address a confirmation link
+and keeps the old address until it is opened, and without it (and without a realm-wide `verifyEmail`)
+the new address applies at once. The action's config is used on purpose, not the realm's `verifyEmail`,
+which would send every user with an unverified address through the verify-email step at login.
+A realm created before this change shows both RED. Apply writes the config first, then enables the
+action on its live representation with the merged config in the same body (Keycloak's action PUT replaces
+the stored config with its body, so a body without it would erase the verification), so the action is
+never enabled without verification; a realm that
+does not register the action at all stays RED, since apply cannot register it. Customer creation
+does the same on every pass. These repairs need `manage-realm` in the customer realm, which the
+provisioner holds on a realm it created or adopted and which `realm-admin` (the `gremion-admin`
+service account's role) contains.
+
+A third realm check, `account-console-disabled`, holds when Keycloak's built-in `account-console` client
+is disabled: a customer realm gives it no client scopes, so its page is broken, and the app edits the
+profile itself. Apply disables it (a partial client update; it is never deleted, Keycloak recreates a
+deleted built-in client) and creation does the same. The `account` client is left alone: the default
+role references its roles, and Keycloak's mailed invitation links fall back to it when they name no
+client. Such an invitation (`execute-actions-email` without a client) therefore still works: it runs
+under `account`, and its completion page carries no link into the console.
 
 A suspended customer is ensured with the empty module set (suspension evicts the
 modules; reconcile does not restore them) and keeps the `kernel-api` identity like the

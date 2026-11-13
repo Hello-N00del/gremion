@@ -7,7 +7,7 @@
   // #167: the deep-link alias route renders the SAME unified settings body with
   // the active section pre-selected from the validated `activeSection` param.
   // PageData already merges the settings layout load (config/isITAdmin/
-  // loeschkonzept/user/accountUrl) with this route's `activeSection`.
+  // loeschkonzept/user/profile) with this route's `activeSection`.
   let { data }: { data: PageData } = $props()
 </script>
 

@@ -151,6 +151,15 @@ outcome() { cat "${GREMION_ROOT}/outcome" 2>/dev/null || true; }
     [ ! -e "${GREMION_ROOT}/dpia-seen" ]
 }
 
+@test "the semester start months of the verified args reach the tenant config as brand.term_months, and nothing else is added" {
+    jq -c '.args.brand.termMonths = {winter: 10, summer: 4}' "${FIX}/verdict-create-ok.json" > "${GREMION_ROOT}/verdict.json"
+    queue create
+    run "$EXEC" --once
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    run sed -n 2p "${GREMION_ROOT}/config-seen"
+    [ "$output" = '{"brand":{"product":"Ratsportal","org_short":"AR","term_months":{"winter":10,"summer":4}},"modules":{}}' ] || { echo "$output"; return 1; }
+}
+
 @test "C13: DPIA decisions in the verified args reach both phases as a read-only 0600 file" {
     jq -c '.args.dpia = {votes: {requires_dpia: false, reason_codes: ["no_special_category"], document_ref: null}}' "${FIX}/verdict-create-ok.json" > "${GREMION_ROOT}/verdict.json"
     queue create

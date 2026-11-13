@@ -91,6 +91,27 @@ describe('Neuer Mandant action: validation before any request row', () => {
     expect(submitCreate).not.toHaveBeenCalled()
   })
 
+  it('the two semester start months reach submitCreate as numbers; a form without them submits none', async () => {
+    await post({ ...GOOD, termWinterMonth: '10', termSummerMonth: '4' })
+    expect(submitCreate).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ termWinterMonth: 10, termSummerMonth: 4 }), OP, KEY, expect.anything())
+    submitCreate.mockClear()
+    await post(GOOD)
+    const input = (submitCreate.mock.calls[0] as unknown as [unknown, Record<string, unknown>])[1]
+    expect(input.termWinterMonth).toBeUndefined()
+    expect(input.termSummerMonth).toBeUndefined()
+  })
+
+  it('equal or malformed months are fail(400) on termMonths, the chosen values come back, nothing is submitted', async () => {
+    const equal = failed(await post({ ...GOOD, termWinterMonth: '4', termSummerMonth: '4' }))
+    expect(equal.status).toBe(400)
+    expect(equal.data.errors.termMonths).toMatch(/Semester/)
+    expect((equal as unknown as { data: { values: Record<string, unknown> } }).data.values.termWinterMonth).toBe(4)
+    expect(failed(await post({ ...GOOD, termWinterMonth: '13', termSummerMonth: '4' })).data.errors.termMonths).toBeDefined()
+    expect(failed(await post({ ...GOOD, termWinterMonth: 'oktober', termSummerMonth: '4' })).data.errors.termMonths).toBeDefined()
+    expect(failed(await post({ ...GOOD, termWinterMonth: '10' })).data.errors.termMonths).toBeDefined()
+    expect(submitCreate).not.toHaveBeenCalled()
+  })
+
   it('H1: a non-ASCII (IDN) host is refused with German text, nothing is submitted', async () => {
     const o = failed(await post({ ...GOOD, host: 'rät.müller.de' }))
     expect(o.status).toBe(400)

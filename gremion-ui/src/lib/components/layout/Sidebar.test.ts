@@ -176,6 +176,37 @@ describe('Sidebar brand mark — per-tenant logo (P2.2-data)', () => {
   })
 })
 
+describe('Sidebar brand line — organisation short name and semester', () => {
+  const baseProps = { nav: minimalNav, activeHref: '/', counts: { approvals: 0, liveVotes: 0, unread: 0 } }
+
+  test('shows the short name and the semester as two parts of one line', () => {
+    const { container, getByText } = render(Sidebar, {
+      props: { ...baseProps, brand: { orgShort: 'Muster-HS', term: 'WiSe 26/27' } }
+    })
+    expect(getByText('Muster-HS').classList.contains('bl-org')).toBe(true)
+    expect(getByText('WiSe 26/27').classList.contains('bl-term')).toBe(true)
+    // one row, the short name first, the semester second (the dot between them is drawn by CSS)
+    expect([...(container.querySelectorAll('.brand-line .bl-row > span') as NodeListOf<HTMLElement>)].map((e) => e.textContent)).toEqual(['Muster-HS', 'WiSe 26/27'])
+  })
+
+  test('a customer without months keeps its static term text', () => {
+    const { getByText } = render(Sidebar, { props: { ...baseProps, brand: { orgShort: 'MS', term: 'SoSe 26' } } })
+    expect(getByText('SoSe 26')).toBeTruthy()
+  })
+
+  test('a 20-character short name keeps its full text in the title and the semester stays its own whole element', () => {
+    const long = 'Hochschulvertretung1' // 20 characters
+    expect(long).toHaveLength(20)
+    const { getByText, container } = render(Sidebar, { props: { ...baseProps, brand: { orgShort: long, term: 'WiSe 26/27' } } })
+    const org = getByText(long)
+    expect(org.getAttribute('title')).toBe(long)
+    expect(getByText('WiSe 26/27')).toBeTruthy()
+    // the brand line is one block under the product name, in the expanded column only
+    expect(container.querySelectorAll('.brand-line')).toHaveLength(1)
+    expect(container.querySelector('.sb-brand-txt .brand-line')).toBeTruthy()
+  })
+})
+
 describe('Sidebar legal block', () => {
   test('renders Impressum, Datenschutz and Barrierefreiheit links at the sidebar bottom', () => {
     const { getByText } = render(Sidebar, {

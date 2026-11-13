@@ -60,6 +60,7 @@ export interface TenantContext {
   readonly authExternalBase: string
   readonly authClientId: string
   readonly authClientSecretRef: string
+  /** A snapshot taken when the context was resolved: its `term` (the computed semester label) goes stale past a semester boundary. Render from requireBrand(), which reads config and clock per call. */
   readonly brand: Brand
   readonly config: GremionConfig
   readonly aliasNamespace: string

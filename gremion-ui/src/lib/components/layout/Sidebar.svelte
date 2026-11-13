@@ -10,6 +10,7 @@
   import NavUser from './NavUser.svelte'
   import LegalMenu from './LegalMenu.svelte'
   import RailTooltip from './RailTooltip.svelte'
+  import BrandLine from './BrandLine.svelte'
   import type { NavItem } from './nav-schema'
   import type { NavMode } from './nav-state'
   import { resolveBrand, type Brand } from '$lib/brand'
@@ -75,7 +76,7 @@
     {/if}
     <div class="sb-brand-txt nav-expanded-only">
       <div class="n">{brand.product}</div>
-      <div class="s">{brand.orgShort} · {brand.term}</div>
+      <div class="s"><BrandLine orgShort={brand.orgShort} term={brand.term} /></div>
     </div>
     <NavToggle expanded={mode === null || mode === 'drawer' ? null : mode === 'expanded'} {ontoggle} {labels} />
   </div>
@@ -146,13 +147,7 @@
     overflow-wrap: anywhere;
   }
   .sb-brand-txt .s {
-    font-family: var(--font-mono);
-    font-size: 9.5px;
-    letter-spacing: 0.14em;
-    color: var(--ink-muted);
-    text-transform: uppercase;
     margin-top: 2px;
-    overflow-wrap: anywhere;
   }
   .sb-nav {
     padding: 0 8px 8px;

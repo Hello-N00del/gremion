@@ -6,18 +6,9 @@ import { generateLoeschkonzept } from '$lib/server/loeschkonzept'
 import { buildProcessingActivities, generateVerarbeitungsverzeichnis } from '$lib/server/verarbeitungsverzeichnis'
 import { getDataProvider } from '$lib/server/modules/runtime-registry'
 import { getKeycloakAdminClient } from '$lib/server/keycloak-admin'
-import type { TenantContext } from '$lib/server/tenant/context'
+import { loadProfilePanel, profilePanelDeps } from '$lib/server/profile/profile-panel'
 
-// Keycloak account console for the "Profil in Keycloak" handoff. Derived from
-// the REQUEST tenant's Auth.js external base ({base}/realms/<realm> →
-// {…}/account; TASK-042: per tenant, never a deployment-global env), surfaced
-// as a ready-made absolute URL (or null when there is no resolved tenant).
-function keycloakAccountUrl(tenant: Pick<TenantContext, 'authExternalBase'> | null | undefined): string | null {
-  const base = (tenant?.authExternalBase ?? '').replace(/\/$/, '')
-  return base ? `${base}/account` : null
-}
-
-export const load: LayoutServerLoad = async ({ locals, fetch }) => {
+export const load: LayoutServerLoad = async ({ locals, fetch, url, cookies }) => {
   const session = await locals.auth()
   const user = session?.user as SessionUser | undefined
 
@@ -60,6 +51,13 @@ export const load: LayoutServerLoad = async ({ locals, fetch }) => {
     }
   }
 
+  // Settings > Profil edits the name inside the app: only that section reads the user from Keycloak.
+  const section = url.pathname.replace(/\/+$/, '').split('/')[2]
+  const profilePanel = await loadProfilePanel(
+    { user, cookies, wantsProfile: section === undefined || section === 'profil' },
+    profilePanelDeps(locals.tenant),
+  )
+
   return {
     config,
     isAdmin,
@@ -76,7 +74,9 @@ export const load: LayoutServerLoad = async ({ locals, fetch }) => {
         : null,
     // Minimal user projection for the settings profile card (no tokens).
     user: { name: user.name, email: user.email, groups: user.groups },
-    accountUrl: keycloakAccountUrl(locals.tenant),
+    // Settings > Profil: current names/e-mail from Keycloak, the e-mail-action capability, and the
+    // outcome of an account action the user just came back from (see $lib/server/profile).
+    ...profilePanel,
     // #164: 2FA enrollment state (null = lookup skipped or failed → chip hidden).
     mfaEnrolled,
     stepUpEnforced,
