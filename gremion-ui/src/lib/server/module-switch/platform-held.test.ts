@@ -26,8 +26,8 @@ describe('platformHeldOffForCurrentTenant', () => {
   })
 
   it('returns nothing outside a tenant scope: the real getTenant error is recognised', () => {
-    // no mock override: the real accessor throws its own no-context error, whatever its wording becomes
-    expect(() => real.getTenant()).toThrow()
+    // no mock override: the real accessor's own no-context error (pins the wording platform-held.ts matches on)
+    expect(() => real.getTenant()).toThrow('No tenant context')
     expect(platformHeldOffForCurrentTenant()).toEqual([])
   })
 
@@ -37,7 +37,7 @@ describe('platformHeldOffForCurrentTenant', () => {
       throw boom
     })
     const log = vi.spyOn(console, 'error').mockImplementation(() => {})
-    expect(() => platformHeldOffForCurrentTenant()).toThrow(boom)
+    expect(() => platformHeldOffForCurrentTenant()).toThrow('tenant registry unreachable')
     expect(log).toHaveBeenCalledTimes(1)
     expect(String(log.mock.calls[0]?.[0])).toContain('[module-switch]')
   })
