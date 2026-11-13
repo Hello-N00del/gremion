@@ -256,3 +256,16 @@ describe('create-event dialog: fits the window', () => {
     expect(cap).toBeGreaterThanOrEqual(window.innerHeight - 64)
   })
 })
+
+describe('create-event dialog: checkbox names', () => {
+  test('each committee checkbox is named after its committee, not announced as "on"', async () => {
+    await mountDialog()
+    const named = Array.from(document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')).filter((el) =>
+      /^Gremium \d$/.test(el.getAttribute('aria-label') ?? ''),
+    )
+    expect(named.map((el) => el.getAttribute('aria-label'))).toEqual(
+      Array.from({ length: 8 }, (_, i) => `Gremium ${i + 1}`),
+    )
+    expect(document.getElementById('ce-allday')).not.toBeNull()
+  })
+})
