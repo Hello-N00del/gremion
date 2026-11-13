@@ -81,7 +81,7 @@
     <NavToggle expanded={mode === null || mode === 'drawer' ? null : mode === 'expanded'} {ontoggle} {labels} />
   </div>
 
-  <nav class="sb-nav" aria-label={labels['nav.main']}>
+  <nav class="sb-nav scroll-themed" aria-label={labels['nav.main']}>
     <NavList {nav} {counts} {currentHref} idPrefix="nav-col" />
   </nav>
 

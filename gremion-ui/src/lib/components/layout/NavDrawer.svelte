@@ -77,7 +77,7 @@
   <div class="nav-scrim" aria-hidden="true" onclick={() => onclose('scrim')}></div>
   <div
     {id}
-    class="nav-drawer"
+    class="nav-drawer scroll-themed"
     role="dialog"
     aria-modal="true"
     aria-label={$t('nav.drawer')}
