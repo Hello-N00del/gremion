@@ -467,6 +467,51 @@ describe('updateRealmSmtp — the gremion#6 delta for an ALREADY-CREATED realm (
   })
 })
 
+// The customer realm's e-mail-change action (Settings > Profil offers it only while it is enabled).
+describe('KcProvisionApi.ensureRequiredActionEnabled', () => {
+  const PATH = '/admin/realms/verein/authentication/required-actions/UPDATE_EMAIL'
+  const LIVE = { alias: 'UPDATE_EMAIL', name: 'Update Email', providerId: 'UPDATE_EMAIL', enabled: false, defaultAction: false, priority: 70, config: {} }
+
+  it('PUTs the live representation with only enabled flipped (a partial body would reset name and priority)', async () => {
+    const { transport, calls } = fakeTransport({ [`GET ${PATH}`]: LIVE })
+    const r = await new KcProvisionApi(transport).ensureRequiredActionEnabled('verein', 'UPDATE_EMAIL')
+    expect(r).toBe('enabled')
+    expect(calls).toEqual([
+      { method: 'GET', path: PATH, body: undefined },
+      { method: 'PUT', path: PATH, body: { ...LIVE, enabled: true } },
+    ])
+  })
+
+  it('writes nothing when the action is already enabled', async () => {
+    const { transport, calls } = fakeTransport({ [`GET ${PATH}`]: { ...LIVE, enabled: true } })
+    expect(await new KcProvisionApi(transport).ensureRequiredActionEnabled('verein', 'UPDATE_EMAIL')).toBe('already')
+    expect(calls.map((c) => c.method)).toEqual(['GET'])
+  })
+
+  it('reports an action the realm does not register (404) instead of throwing or writing', async () => {
+    const calls: string[] = []
+    const transport: KcTransport = async (method, path) => {
+      calls.push(`${method} ${path}`)
+      throw new Error('Keycloak Admin API error: 404 on GET')
+    }
+    expect(await new KcProvisionApi(transport).ensureRequiredActionEnabled('verein', 'UPDATE_EMAIL')).toBe('absent')
+    expect(calls).toEqual([`GET ${PATH}`])
+  })
+
+  it('lets any other failure through', async () => {
+    const transport: KcTransport = async () => {
+      throw new Error('Keycloak Admin API error: 500 on GET')
+    }
+    await expect(new KcProvisionApi(transport).ensureRequiredActionEnabled('verein', 'UPDATE_EMAIL')).rejects.toThrow(/500/)
+  })
+
+  it('encodes the realm and the alias as single path segments', async () => {
+    const { transport, calls } = fakeTransport({})
+    await new KcProvisionApi(transport).ensureRequiredActionEnabled('a b', 'x/y').catch(() => undefined)
+    expect(calls[0]!.path).toBe('/admin/realms/a%20b/authentication/required-actions/x%2Fy')
+  })
+})
+
 // Security sweep 2, finding 3: stepup-2fa must be OTP-or-deny, never a REQUIRED
 // OTP form (Keycloak would enroll an authenticator inside the step-up, then
 // grant loa2 to whoever holds the session or the password).

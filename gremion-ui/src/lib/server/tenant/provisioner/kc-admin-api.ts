@@ -532,6 +532,28 @@ export class KcProvisionApi {
     return { host: str('host'), port: str('port'), user: str('user'), from: str('from'), starttls: str('starttls'), passwordSet: str('password') !== null }
   }
 
+  /**
+   * Enable the required action `alias` (e.g. UPDATE_EMAIL) of a realm as an Admin-API delta.
+   * Keycloak's PUT replaces name, priority, default-action flag and config from the body, so the
+   * LIVE representation is read and only `enabled` flips (a partial body would reset the rest).
+   * 'already' = nothing written; 'absent' = the realm does not register the action (404), which
+   * the caller reports rather than treats as done. Any other failure rejects.
+   */
+  async ensureRequiredActionEnabled(realm: string, alias: string): Promise<'enabled' | 'already' | 'absent'> {
+    const path = `/authentication/required-actions/${encodeURIComponent(alias)}`
+    let live: { enabled?: boolean } | undefined
+    try {
+      live = await this.realmGet<{ enabled?: boolean } | undefined>(realm, path)
+    } catch (err) {
+      if (adminApiStatus(err) === 404) return 'absent'
+      throw err
+    }
+    if (!live) return 'absent'
+    if (live.enabled === true) return 'already'
+    await this.realmReq(realm, 'PUT', path, { ...live, enabled: true })
+    return 'enabled'
+  }
+
   async isRealmEnabled(realm: string): Promise<boolean> {
     const rep = await this.realmGet<{ enabled?: boolean }>(realm, '')
     return rep?.enabled === true
