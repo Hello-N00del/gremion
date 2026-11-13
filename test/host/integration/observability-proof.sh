@@ -841,7 +841,7 @@ fp_msg_up() {   # the messaging-postgres stand-in (trust auth: no secret exists)
             --label com.docker.compose.service=messaging-postgres -e POSTGRES_USER=proofmsg -e POSTGRES_HOST_AUTH_METHOD=trust \
             "$PG_IMAGE" >/dev/null || return 1
     fi
-    msg_ready() { docker exec "$C_MSG" pg_isready -U proofmsg -d postgres >/dev/null 2>&1; }
+    msg_ready() { docker exec "$C_MSG" pg_isready -h 127.0.0.1 -U proofmsg -d postgres >/dev/null 2>&1; }
     wait_until 60 msg_ready || return 1
     docker exec "$C_MSG" psql -U proofmsg -d postgres -X -q -tA -c "SELECT 1 FROM pg_database WHERE datname = 'synapse'" | grep -q 1 \
         || docker exec "$C_MSG" psql -U proofmsg -d postgres -X -q -c "CREATE DATABASE synapse" >/dev/null || return 1

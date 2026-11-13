@@ -68,11 +68,14 @@ trap cleanup EXIT
 bounded_s "$RUN_TIMEOUT" 'docker run of the pinned postgres image'   docker run -d --name "$NAME" -p "127.0.0.1:$PORT:5432" -e POSTGRES_PASSWORD="$PW" postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873 </dev/null >/dev/null
 ready=0
 for _ in $(seq 1 60); do
-  if bounded 'pg_isready probe' docker exec "$NAME" pg_isready -U postgres -q </dev/null 2>/dev/null; then ready=1; break; fi
+  if bounded 'pg_isready probe' docker exec "$NAME" pg_isready -h 127.0.0.1 -U postgres -q </dev/null 2>/dev/null; then ready=1; break; fi
   sleep 1
 done
-[ "$ready" = 1 ] || { echo "RESULT: FAIL — postgres answered no pg_isready probe in 60 tries" >&2; exit 1; }
-# pg_isready can answer during the entrypoint's temporary init server; wait for the real one.
+[ "$ready" = 1 ] || { echo "RESULT: FAIL — postgres answered no readiness probe on 127.0.0.1 in 60 tries" >&2; exit 1; }
+# The probe above names 127.0.0.1 because the entrypoint's temporary init server
+# listens on the unix socket only and answers a probe AND a query there; only
+# the final server is on TCP. From here on it is up: one real query over the
+# socket the steps below use.
 ready=0
 for _ in $(seq 1 60); do
   if bounded 'SELECT 1 probe' docker exec "$NAME" psql -U postgres -tAc 'SELECT 1' </dev/null >/dev/null 2>&1; then ready=1; break; fi

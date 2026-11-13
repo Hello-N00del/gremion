@@ -57,11 +57,35 @@
 # 003/004/034 exist AND the ungated kernel DDL that depends on them applied
 # (0010's rename on committee_elections, 0034's FKs, 0058's portal grants).
 # Containers are named ${FRESH_INIT_PROOF_PREFIX:-gremion-fresh-init}-<id>-<pid>.
+#
+# Readiness (wait_ready below): the image starts Postgres twice, and the wait
+# has its own proof, which needs docker and nothing else:
+#   fresh-init-proof.sh --wait-self-check
+# It holds a container in the init phase for as long as it likes (an init
+# script that blocks until released), shows that the wait does NOT report
+# ready there, releases it and shows that the wait then lands on the final
+# server. It applies no migration and never prints "all post-conditions hold".
+#   FRESH_INIT_PROOF_READY_TIMEOUT=<seconds>   bound of the wait (default 90)
+#
+# Measured 2026-11-12 inside a container held in the init phase: over the
+# socket pg_isready said "accepting connections" (exit 0) and `SELECT 1`
+# returned 1, with listen_addresses empty; on 127.0.0.1 pg_isready said "no
+# response" (exit 2) and psql "Connection refused". Watched RED the same day
+# with the probe put back on the socket (`pg_isready -U postgres`, the wait
+# this file had until then):
+#   ok init phase held: the temporary server answers a query over the socket
+#   FAIL the wait reported ready while only the temporary init server was up
+#   [fresh-init] wait self-check FAILED          (exit 1)
+# With the probe on 127.0.0.1 the same run ends "wait self-check passed".
+# scripts/check-postgres-readiness.test.mjs holds every other probe in the
+# tree to the same rule.
 set -euo pipefail
 
 MODULE_OFF="${FRESH_INIT_PROOF_MODULE_OFF:-}"
+WAIT_SELF_CHECK=""
 case "${1:-}" in
   --module-off) MODULE_OFF="${2:?--module-off needs a module id}" ;;
+  --wait-self-check) WAIT_SELF_CHECK=1 ;;
   --each-module-off)
     self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
     base_port="${FRESH_INIT_PROOF_PORT:-15433}"; i=0; rc=0
@@ -84,27 +108,109 @@ PORT="${FRESH_INIT_PROOF_PORT:-15433}"
 # sees and the form a reader greps for.
 DEFAULT_IMAGE="postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873"
 IMAGE="${FRESH_INIT_PROOF_IMAGE:-$DEFAULT_IMAGE}"
-NAME="${FRESH_INIT_PROOF_PREFIX:-gremion-fresh-init}${MODULE_OFF:+-$MODULE_OFF}-$$"
+NAME="${FRESH_INIT_PROOF_PREFIX:-gremion-fresh-init}${MODULE_OFF:+-$MODULE_OFF}${WAIT_SELF_CHECK:+-wait}-$$"
+READY_TIMEOUT="${FRESH_INIT_PROOF_READY_TIMEOUT:-90}"
 OMIT="${FRESH_INIT_PROOF_OMIT:-}"
 MIN_APPLIED="${FRESH_INIT_PROOF_MIN_APPLIED:-28}"
 
 cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
-if docker ps --format '{{.Ports}}' | grep -q ":${PORT}->"; then
-  echo "[fresh-init] port ${PORT} is held by another container; set FRESH_INIT_PROOF_PORT" >&2
-  exit 1
-fi
+# Ready means the FINAL server. The image's entrypoint first runs initdb and the
+# init scripts against a temporary server that listens on the unix socket only
+# (listen_addresses=''), stops it, and only then starts the server the
+# container keeps. A probe over the socket is answered by that temporary
+# server -- pg_isready and a real query alike -- and the next statement then
+# meets a server that is shutting down or a socket that is gone ("connection
+# to server on socket ... failed: No such file or directory"). Nothing but the
+# final server listens on TCP, so the probe names 127.0.0.1. pg_isready, not a
+# query: it does not authenticate, so the wait writes no refused login into
+# the server log the reader probe below reads.
+ready_probe() { docker exec "$NAME" pg_isready -q -h 127.0.0.1 -U postgres >/dev/null 2>&1; }
+wait_ready() {   # <seconds> -- 0 once the final server answers, 1 with the reason on stderr
+  local limit="$1" start=$SECONDS
+  while :; do
+    if ready_probe; then return 0; fi
+    if [ "$(docker inspect -f '{{.State.Running}}' "$NAME" 2>/dev/null)" != "true" ]; then
+      echo "[fresh-init] the postgres container $NAME stopped before it accepted connections; its last log lines:" >&2
+      docker logs --tail 30 "$NAME" >&2 2>&1 || true
+      return 1
+    fi
+    if [ $((SECONDS - start)) -ge "$limit" ]; then
+      echo "[fresh-init] postgres in $NAME accepted no TCP connection within ${limit}s; its last log lines:" >&2
+      docker logs --tail 30 "$NAME" >&2 2>&1 || true
+      return 1
+    fi
+    sleep 1
+  done
+}
+# One query over the socket: the listen_addresses of whichever server answers,
+# empty on the temporary one, "unreachable" when no server answers at all.
+listen_addresses() { docker exec "$NAME" psql -U postgres -X -tAq -c 'SHOW listen_addresses' 2>/dev/null || echo unreachable; }
 
 # --auth-host=scram-sha-256 is load-bearing (T07, 75cffdef): the image's
 # generated pg_hba trusts 127.0.0.1, so the reader-login probe below would never
 # verify a password. log_error_verbosity=verbose puts the SQLSTATE (28P01) of a
 # refused login in the server log, where the probe asserts it.
-docker run -d --name "$NAME" -e POSTGRES_PASSWORD=proof \
-  -e POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256 \
-  -p "127.0.0.1:${PORT}:5432" "$IMAGE" -c log_error_verbosity=verbose >/dev/null
+RUN_ARGS=(-d --name "$NAME" -e POSTGRES_PASSWORD=proof -e POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256)
+
+if [ -n "$WAIT_SELF_CHECK" ]; then
+  # The init script is sourced by the entrypoint while the temporary server is
+  # up and returns only once the release file exists: the init phase lasts
+  # until this script ends it, however slow the host is. No argument starts
+  # with a slash, so Git Bash on Windows rewrites none of them.
+  HOLD='until [ -e /tmp/fresh-init-release ]; do sleep 0.2; done'
+  docker run "${RUN_ARGS[@]}" --entrypoint sh "$IMAGE" -c \
+    'printf "%s\n" "$0" > /docker-entrypoint-initdb.d/00-hold.sh && exec docker-entrypoint.sh postgres' "$HOLD" >/dev/null
+  echo "[fresh-init] wait self-check: holding $NAME in the init phase..."
+  held=""
+  for _ in $(seq 1 60); do
+    la="$(listen_addresses)"
+    if [ -z "$la" ]; then held=1; break; fi
+    if [ "$la" != unreachable ]; then
+      echo "[fresh-init] wait self-check VOID: the final server is already up (listen_addresses='$la'); the init phase was not held" >&2
+      exit 2
+    fi
+    sleep 1
+  done
+  if [ -z "$held" ]; then
+    echo "[fresh-init] wait self-check VOID: the temporary init server never answered; its last log lines:" >&2
+    docker logs --tail 30 "$NAME" >&2 2>&1 || true
+    exit 2
+  fi
+  echo "  ok init phase held: the temporary server answers a query over the socket (listen_addresses is empty)"
+  if wait_ready 5 2>/dev/null; then
+    echo "FAIL the wait reported ready while only the temporary init server was up"
+    echo "[fresh-init] wait self-check FAILED"; exit 1
+  fi
+  echo "  ok the wait does not report ready during the init phase"
+  docker exec "$NAME" sh -c 'touch /tmp/fresh-init-release'
+  wait_ready "$READY_TIMEOUT" || { echo "[fresh-init] wait self-check FAILED"; exit 1; }
+  la="$(listen_addresses)"
+  if [ -z "$la" ] || [ "$la" = unreachable ]; then
+    echo "FAIL the wait returned, but the server that answers is not the final one (listen_addresses='$la')"
+    echo "[fresh-init] wait self-check FAILED"; exit 1
+  fi
+  echo "  ok the wait reports ready on the final server (listen_addresses='$la')"
+  echo "[fresh-init] wait self-check passed"
+  exit 0
+fi
+
+if docker ps --format '{{.Ports}}' | grep -q ":${PORT}->"; then
+  echo "[fresh-init] port ${PORT} is held by another container; set FRESH_INIT_PROOF_PORT" >&2
+  exit 1
+fi
+
+docker run "${RUN_ARGS[@]}" -p "127.0.0.1:${PORT}:5432" "$IMAGE" -c log_error_verbosity=verbose >/dev/null
 echo "[fresh-init] waiting for postgres on ${PORT}..."
-timeout 90 bash -c "until docker exec $NAME pg_isready -U postgres >/dev/null 2>&1; do sleep 2; done"
+wait_ready "$READY_TIMEOUT" || exit 1
+# The wait's own post-condition, on every run: the server the statements below
+# reach is the final one.
+la="$(listen_addresses)"
+if [ -z "$la" ] || [ "$la" = unreachable ]; then
+  echo "[fresh-init] the readiness wait returned, but the server that answers is not the final one (listen_addresses='$la')" >&2
+  exit 1
+fi
 
 PSQL=(docker exec -i "$NAME" psql -v ON_ERROR_STOP=1 -U postgres -X -q)
 # ON_ERROR_STOP here too: without it a broken assertion QUERY returns the empty
