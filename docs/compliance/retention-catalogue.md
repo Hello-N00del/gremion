@@ -79,11 +79,11 @@ deletion mechanism that executes it. It is the single source the Löschkonzept i
   (DB-OPS-RETENTION-WINDOW constraint `retention_window_derived_check`). PRD-REG-013: *a
   window with no derivation shall not be applied.* The rows that are not stored as window
   rows at all are named in §1.4.
-- **It covers the product, not only this repository.** The kernel repository ships the
-  `core` and `governance` manifests; feature modules live in their own repositories
+- **It covers every module, not only the kernel.** The kernel's own manifests are
+  `core` and `governance`; the feature modules live under `modules/` in this repository
   (see `docs/compliance.md`). The categories of every module a hosted council can enable
-  are catalogued here all the same, so one Löschkonzept can name every stored category
-  (TRD-145). A module repository cites the row ids below rather than restating a window.
+  are catalogued here, so one Löschkonzept can name every stored category
+  (TRD-145). A module's documentation cites the row ids below rather than restating a window.
 - **Row ids are stable.** Each row carries an id (`RC-...`) and the retention profile
   (`rp-...`) of DB-OPS-RETENTION-PROFILE it governs. The generator and the TOM annex cite
   row ids; a re-dated row keeps its id.

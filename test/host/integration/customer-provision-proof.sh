@@ -281,8 +281,9 @@ phase_panel_up() {
     # The control registry: gremion-ui's own control chain, one fixture customer,
     # and the least-privilege read role the panel's CONTROL_DATABASE_URL uses.
     local s=0
-    until docker exec "${STACK}-pg" pg_isready -qU postgres 2>/dev/null; do (( s++ < 40 )) || die "postgres never became ready"; sleep 2; done
-    sleep 2
+    # -h 127.0.0.1: the image's temporary init server answers on the unix socket
+    # only, so a probe over TCP is answered by the final server and nothing else.
+    until docker exec "${STACK}-pg" pg_isready -q -h 127.0.0.1 -U postgres 2>/dev/null; do (( s++ < 40 )) || die "postgres never became ready"; sleep 2; done
     docker exec "${STACK}-pg" psql -v ON_ERROR_STOP=1 -qU postgres -c 'CREATE DATABASE control' >/dev/null
     local f
     for f in "$ROOT"/gremion-ui/migrations-control/[0-9]*.sql; do

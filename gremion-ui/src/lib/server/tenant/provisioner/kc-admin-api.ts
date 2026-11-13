@@ -532,6 +532,63 @@ export class KcProvisionApi {
     return { host: str('host'), port: str('port'), user: str('user'), from: str('from'), starttls: str('starttls'), passwordSet: str('password') !== null }
   }
 
+  /**
+   * Enable the required action `alias` (e.g. UPDATE_EMAIL) of a realm as an Admin-API delta, optionally with
+   * config values. Keycloak's action PUT replaces name, priority, default-action flag AND the stored config
+   * from the body (updateRequiredAction -> RealmAdapter.updateRequiredActionProvider clears the entity's config
+   * and puts body.config in), so the LIVE representation is read, only `enabled` flips, and the merged config
+   * rides in the same body: a stale live config would otherwise erase what the config write just stored. The
+   * config is also a separate resource (`.../required-actions/<alias>/config`, merged over what is stored)
+   * and is written FIRST, so the action is never live without it. 'already' = nothing written; 'absent' = the
+   * realm does not register the action (404), which the caller reports rather than treats as done. Any other
+   * failure rejects.
+   */
+  async ensureRequiredActionEnabled(realm: string, alias: string, config?: Readonly<Record<string, string>>): Promise<'enabled' | 'already' | 'absent'> {
+    const path = `/authentication/required-actions/${encodeURIComponent(alias)}`
+    let live: { enabled?: boolean; config?: Record<string, string> } | undefined
+    try {
+      live = await this.realmGet<{ enabled?: boolean; config?: Record<string, string> } | undefined>(realm, path)
+    } catch (err) {
+      if (adminApiStatus(err) === 404) return 'absent'
+      throw err
+    }
+    if (!live) return 'absent'
+    let changed = false
+    let merged: Record<string, string> = { ...live.config }
+    if (config) {
+      let stored: Record<string, string> = {}
+      try {
+        stored = (await this.realmGet<{ config?: Record<string, string> } | undefined>(realm, `${path}/config`))?.config ?? {}
+      } catch (err) {
+        if (adminApiStatus(err) !== 404) throw err
+      }
+      merged = { ...merged, ...stored, ...config }
+      if (Object.entries(config).some(([k, v]) => stored[k] !== v)) {
+        await this.realmReq(realm, 'PUT', `${path}/config`, { config: { ...stored, ...config } })
+        changed = true
+      }
+    }
+    if (live.enabled !== true) {
+      await this.realmReq(realm, 'PUT', path, config ? { ...live, enabled: true, config: merged } : { ...live, enabled: true })
+      changed = true
+    }
+    return changed ? 'enabled' : 'already'
+  }
+
+  /**
+   * Disable the client `clientId` of a realm as an Admin-API delta (a partial client PUT, which Keycloak
+   * merges). A client the realm does not have has nothing to disable ('absent'). Disabled, never deleted:
+   * Keycloak recreates a deleted built-in client.
+   */
+  async ensureClientDisabled(realm: string, clientId: string): Promise<'disabled' | 'already' | 'absent'> {
+    const found = (await this.realmGet<Array<{ id?: string; enabled?: boolean }> | undefined>(realm, `/clients?clientId=${encodeURIComponent(clientId)}`)) ?? []
+    const client = found[0]
+    if (!client?.id) return 'absent'
+    if (client.enabled === false) return 'already'
+    await this.realmReq(realm, 'PUT', `/clients/${encodeURIComponent(client.id)}`, { id: client.id, clientId, enabled: false })
+    return 'disabled'
+  }
+
   async isRealmEnabled(realm: string): Promise<boolean> {
     const rep = await this.realmGet<{ enabled?: boolean }>(realm, '')
     return rep?.enabled === true

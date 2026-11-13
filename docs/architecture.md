@@ -11,19 +11,33 @@ Gremion is the open core carved out of the StuRaOS monorepo. Two app names run
 through the code and the diagrams below: **`gremion-ui`** (the authenticated
 SvelteKit admin shell) and **`gremion-public`** (the read-only public portal).
 Both are a **non-normative reference shell** — what the kernel was extracted
-with, not a ratified UI contract. The kernel ships only identity, multi-tenancy, the governance domain
-(committees, members, the org-unit tree, protocols, resolutions/Beschlüsse, the
-public portal), the governance invariant hooks, and the module SDK. Feature
-modules — elections, newsletter, calendar, files, messages, board,
-users, finance, content, vault, handover — are **not** part of the kernel; each
-lives in its own repository and attaches over the module SDK, as an in-kernel
-manifest or as a separate service over a stable API.
+with, not a ratified UI contract. The kernel itself is identity, multi-tenancy,
+the governance domain (committees, members, the org-unit tree, protocols,
+resolutions/Beschlüsse, the public portal), the governance invariant hooks, and
+the module SDK. Feature modules — elections, votes, newsletter (the `publishing`
+directory), calendar, files, messages (the `messaging` directory), board, content,
+finance, vault, handover — attach over the module SDK, as an in-process app half
+overlaid onto `gremion-ui` at build time and/or as a separate leaf service. This
+tree carries them under [`modules/`](../modules); [`docs/modules.md`](modules.md)
+lists each one with its status. The kernel's own manifests are only `core` and
+`governance`, and the kernel never imports a module by name.
 
-## Component overview (governance-only stack)
+## Component overview
 
-The governance kernel runs as **seven default services**. They are defined in
-[`docker-compose.yml`](../docker-compose.yml); the production profile and the prod
-overlay add the edge.
+The stack is split into **two tiers** that meet only on the external
+`${STACK}_state` and `${STACK}_edge` networks (placement, limits and the guard in
+[`docs/ops/pooled-stack-layout.md`](ops/pooled-stack-layout.md); the deployment
+shape in [`docs/deployment-architecture.md`](deployment-architecture.md)):
+
+- the **state project** (`${STACK}-state`), defined by
+  [`docker-compose.yml`](../docker-compose.yml) plus, in production,
+  [`docker-compose.prod.yml`](../docker-compose.prod.yml): databases, identity,
+  the broker, the edge and the log pipeline. Every persisted volume lives here.
+- the **app tier**, defined by [`docker-compose.app.yml`](../docker-compose.app.yml)
+  and instantiated twice as `${STACK}-app-blue` and `${STACK}-app-green`, so a
+  colour switch never touches a persisted volume. In local dev
+  [`docker-compose.app.dev.yml`](../docker-compose.app.dev.yml) adds the loopback
+  ports.
 
 ```
 Internet
@@ -48,39 +62,74 @@ Internet
         ▼                         ▼                      ▼
 ┌──────────────────────────────────────────────────────────────┐
 │  postgres — control DB (tenant registry + fleet-migration     │
-│             ledger) · per-tenant governance DB(s) · keycloak  │
+│             ledger) · platform DB · keycloak · the kernel DB  │
+│  <id>-postgres — one server per module and per service        │
 └──────────────────────────────────────────────────────────────┘
 
+  nats     — JetStream broker, nkey auth, one account per tenant
   legal    — static legal/portal pages (Impressum, GDPR)
-  mailpit  — SMTP catcher for staging/local dev (port 1025)
   vector   — log pipeline with IP pseudonymisation (tails Traefik logs)
+  mailpit  — SMTP catcher, dev only (profiles:[dev], port 1025)
 ```
 
-| Service        | Role |
-|----------------|------|
-| `postgres`     | All persistent data: the control-plane registry DB, the per-tenant governance DB(s), and the Keycloak DB |
-| `keycloak`     | OIDC/SSO identity provider; starts with `master` only and no realm of ours (B-01: the boot-time realm import is deleted), relative path `/auth` |
-| `gremion-ui`     | The authenticated SvelteKit app shell — dashboard, settings, system status, and the governance surface (committees, members, protocols, resolutions, portal admin) |
-| `gremion-public` | The read-only public portal at `public.<domain>`, or under one host of the customer's own ([runbook](runbooks/public-portal-host.md)) — no auth, no sessions, connects to the governance DB through a read-only role |
-| `legal`        | Static legal/portal pages (Impressum, GDPR) served by a non-root nginx |
-| `vector`       | Log pipeline: tails Traefik access logs, pseudonymises IPs, enforces retention |
-| `mailpit`      | Local/staging SMTP catcher (`:1025`); flipping to a real relay is a pure `.env` change — see [`docs/runbooks/email-smtp.md`](runbooks/email-smtp.md) |
+The third arrow is the portal's configured origin (`gremion-public` sets `ORIGIN`
+to `https://public.<domain>` unless `PUBLIC_PORTAL_HOST` names another host), not
+a route that exists by default: a public host reaches the portal only through the
+hand-placed router file of
+[runbooks/public-portal-host.md](runbooks/public-portal-host.md)
+([runbooks/tenant-edge.md](runbooks/tenant-edge.md#topology)).
+
+State project, started without a profile: `postgres`, `governance-postgres`,
+`nats`, `keycloak`, `legal`, `vector`.
+
+| Service (state project) | Role |
+|---|---|
+| `postgres` | The shared server: the `keycloak`, `gremion` and `control` (tenant registry) databases, the `gremion_platform` database (provisioning ledger plus the access-record and council-request functions), and each customer's kernel database `t_<hex32>__kernel` |
+| `<id>-postgres` | One PostgreSQL 18 server per module, started by that module's compose profile: `board`, `calendar`, `content`, `finance`, `newsletter`, `vault`, `messaging` |
+| `governance-postgres` | The governance service's server: one database per customer, `t_<hex32>__governance`. Not profile-gated |
+| `nats` | The JetStream broker. nkey authentication only, one account per tenant; see "Migrating the wire-subject root" below |
+| `keycloak` | OIDC/SSO identity provider; starts with `master` only and no realm of ours (B-01: the boot-time realm import is deleted), relative path `/auth` |
+| `legal` | Static legal/portal pages (Impressum, GDPR) served by a non-root nginx |
+| `vector` | Log pipeline: tails Traefik access logs, pseudonymises IPs, enforces retention |
+| `mailpit` | Dev-only SMTP catcher (`profiles: [dev]`, `:1025`); a tenant sends to it, or to a real relay, through its own SMTP settings — see [`docs/runbooks/email-smtp.md`](runbooks/email-smtp.md) |
+| `traefik`, `docker-socket-proxy` | The edge, under `profiles: [production]` |
+| `pgbouncer`, `fallback` | Added by `docker-compose.prod.yml` (`fallback` under `profiles: [production]`) |
+| `matrix` (Synapse), `nextcloud` with `nextcloud-postgres` and `nextcloud-redis`, `collabora`, `livekit`, `element-call` | The collaboration services behind the `messaging`, `nextcloud`, `collabora` and `video` profiles |
+
+| Service (app tier) | Role |
+|---|---|
+| `gremion-ui` | The authenticated SvelteKit app shell — dashboard, settings, system status, and the governance surface (committees, members, protocols, resolutions, portal admin), plus the overlaid module halves |
+| `gremion-public` | The read-only public portal (configured origin `public.<domain>`, or one host of the customer's own with a hand-placed router file, [runbook](runbooks/public-portal-host.md)) — no auth, no sessions, connects to the governance DB through a read-only role |
+| `control-panel` | The operator shell ([`apps/control-panel`](../apps/control-panel)): lists the customers and submits provisioning requests; it mutates nothing itself |
+| `kernel-api` | The kernel API ([`services/kernel-api`](../services/kernel-api)): tenancy resolution and the module registry, spec-first. `kernel-api-migrate` is its migration one-shot (profile `kernel-api-migrate`) |
+| `migrate`, `tenant-create` | One-shots (profiles `migrate` and `tenant-create`): the fleet migration and the customer provisioning run |
+| `calendar-service`, `content-service`, `newsletter-service` | The module leaf services, one profile each |
+
+A new customer adds databases, a realm and a broker account — never a container.
 
 The **production profile** (`profiles: [production]` in `docker-compose.yml`) adds
 `traefik` and `docker-socket-proxy`; the prod overlay
-([`docker-compose.prod.yml`](../docker-compose.prod.yml)) further adds `pgbouncer`
-and `cloudflared`, and enables internal Keycloak TLS. In local dev these are
+([`docker-compose.prod.yml`](../docker-compose.prod.yml)) adds `pgbouncer` and
+`fallback` (the latter under the same profile) and enables internal Keycloak TLS. `cloudflared` is gone: it is not in the
+topology, and `scripts/check-pooled-stack.mjs` fails a render that carries it. In local dev these are
 skipped and services are reached on direct `127.0.0.1` ports
-([`docker-compose.override.yml`](../docker-compose.override.yml)).
+([`docker-compose.override.yml`](../docker-compose.override.yml),
+[`docker-compose.app.dev.yml`](../docker-compose.app.dev.yml)).
 
 Quick start (see also the [Makefile](../Makefile) targets):
 
 ```sh
-cp .env.example .env
-./scripts/setup.sh      # generate secrets, start services
+./scripts/setup.sh      # creates .env from .env.example, generates secrets, starts services
 make logs               # follow logs
-make health             # check service + endpoint health
+make ps                 # container state; curl -sf http://localhost:3001/healthz for gremion-ui
 ```
+
+`setup.sh` writes `.env` itself and skips secret generation when the file already
+exists, so do not copy `.env.example` by hand first. On a fresh clone the first
+run stops at the image build until `TENANT_PROXY_SHARED_SECRET` is added to that
+`.env`; the two-run sequence, and why the app on port 3001 then answers only
+requests that carry the resolver headers, is in
+[LOCAL_TESTING.md](LOCAL_TESTING.md#quick-start).
 
 ## Authentication flow (OIDC/SSO)
 
@@ -112,40 +161,55 @@ login works without per-developer CA trust.
 
 The kernel keeps the full Keycloak **LoA/ACR step-up** plumbing — a fresh
 elevation is valid for `STEPUP_FRESHNESS_SECONDS` (default 300) before a re-prompt.
-The enforcement *flag* that drove four-eyes finance actions left with the finance
-module; the step-up machinery itself is kernel auth.
+Kernel actions use it too: the module switch and the erasure orchestrator both
+require a fresh LoA 2 (`gremion-ui/src/lib/server/module-switch/step-up.ts`,
+`gremion-ui/src/lib/server/erasure/step-up.ts`).
 
 ## Database layout
 
-All data lives in one PostgreSQL instance, partitioned into the control plane, the
-per-tenant data plane, and the Keycloak store.
+All data lives in PostgreSQL, partitioned into the control plane, the platform
+database, the per-tenant data plane, and the Keycloak store. Module data and the
+governance service's data sit on their own servers (below).
 
 | Database / scope         | Owner            | Contents |
 |--------------------------|------------------|----------|
-| `control`                | `control` user   | Tenant registry + fleet-migration ledger (`gremion-ui/migrations-control/` — `001_tenant_registry.sql`, `002_tenant_migration_runs.sql`, `003_tenant_uniques.sql`) |
-| per-tenant governance DB | `gremion` user     | The governance domain for one tenant: committees, members, the org-unit tree, protocols, resolutions/Beschlüsse, portal content, plus the hash-chained audit log (INV-1) |
+| `control`                | `control` user   | Tenant registry + fleet-migration ledger (`gremion-ui/migrations-control/` — `001_tenant_registry.sql` (`tenant`, `tenant_provisioning_resource`), `002_tenant_migration_runs.sql`, `003_tenant_uniques.sql`, `004_tenant_domain.sql` (the host → tenant binding), `006_boundary_ids_uuidv7.sql`) |
+| `gremion_platform`       | the platform owner | The provisioning ledger (`plt.*`) and the narrow functions the apps call (`oac.list_access_records`, the council request functions); its migrations are `packages/tenant-store/src/lifecycle/platform-migrations/` |
+| per-customer kernel DB `t_<hex32>__kernel` | its own owner, app and purger roles | The kernel/governance data of one customer: committees, members, the org-unit tree, protocols, resolutions/Beschlüsse, portal content, plus the hash-chained audit log (INV-1) |
+| per-customer module DBs `t_<hex32>__<module>` | per module | One database per (customer, module) on that module's own server (D13, `packages/tenant-store/src/names.ts`) |
+| per-customer governance DB `t_<hex32>__governance` | per customer | On `governance-postgres`, created by `tenant-create` |
 | `keycloak`               | `keycloak` user  | Realms, users, sessions, tokens |
+
+`<hex32>` is the customer's UUIDv7 without hyphens. A customer's data plane is
+its set of databases, a Keycloak realm and a broker account; it costs no
+container.
 
 The `gremion-public` portal reads the governance DB through a dedicated **read-only
 role** (`gremion_public_reader`, `GREMION_PUBLIC_DB_URL`), created by
 `docker/postgres/init-databases.sh` because the migration that would otherwise
 create it runs as the `gremion` user, which lacks `CREATEROLE`.
 
-There is no Nextcloud database and no separate finance database — those are not in
-the kernel. The only application data Keycloak holds is its own realm/session
+The module servers (`<id>-postgres`) and `nextcloud-postgres` start only under
+their compose profile. Keycloak's only application data is its own realm/session
 state.
 
 ### Multi-tenancy
 
-`gremion-ui` is multi-tenant. Each tenant is served on its own host
-(`<slug>.<domain>`, with the apex as the default tenant). The **tenant resolver**
-fails closed: a request lacking an `x-forwarded-host` is 404'd, and — once
-`TENANT_PROXY_SHARED_SECRET` is set — a request lacking the edge-injected
-`x-proxy-trust` is 403'd. The control-plane registry is the source of truth for the
-tenant set and drives fleet migrations across every tenant DB.
+`gremion-ui` is multi-tenant. A tenant is selected by the **whole host** the edge
+forwards: `x-forwarded-host` is looked up in the control registry's `tenant_domain`
+table (host is its primary key; custom domains are supported, and nothing is derived
+from the leftmost label or from an apex default). The kernel boots with zero tenants.
+The **tenant resolver** fails closed: an absent or unparseable `x-forwarded-host`,
+a host that disagrees with the edge `Host`, an unbound host and a deleting/deleted
+tenant are all 404; a suspended tenant gets the branded 503; an unreachable control
+DB is a 503 with `Retry-After`. Once `TENANT_PROXY_SHARED_SECRET` is set, a request
+lacking the edge-injected `x-proxy-trust` is 403'd before any registry lookup
+(`gremion-ui/src/lib/server/tenant/resolve.ts`). The host normaliser is shared with
+the kernel API through `@gremion/tenancy-core`. The control-plane registry is the
+source of truth for the tenant set and drives fleet migrations across every tenant DB.
 
 The control DB connection (`CONTROL_DATABASE_URL`) deliberately targets
-`postgres:5432` **directly** and is not re-pointed through PgBouncer in the prod
+`postgres-<stack>:5432` **directly** and is not re-pointed through PgBouncer in the prod
 overlay — the registry is the direct term in the connection budget and its reads
 are cached.
 
@@ -155,7 +219,9 @@ are cached.
 a process-global singleton. `getDb()`
 ([`gremion-ui/src/lib/server/db.ts`](../gremion-ui/src/lib/server/db.ts)) resolves the
 canonical tenant from `AsyncLocalStorage` and returns that tenant's pool from a
-bounded, draining LRU registry:
+bounded, draining LRU registry
+([`db/pool-registry.ts`](../gremion-ui/src/lib/server/db/pool-registry.ts),
+`POOL_REGISTRY_MAX` pools):
 
 ```ts
 export function getDb(): Sql {
@@ -205,9 +271,10 @@ filename order. Two guards harden it:
 
 The same loop is **module-aware**: a disabled toggleable module's migrations are
 skipped on a fresh DB, and an OFF→ON re-enable on an initialised tenant is planned
-as a catch-up. In the governance-only kernel only `core` and `governance` ship and
-neither is toggleable, so every kernel migration always applies. (Dev `*_seed.sql`
-files are skipped in production via `GREMION_DISABLE_SEEDS`.)
+as a catch-up. `core` and `governance` are not toggleable, so their migrations
+always apply. (Dev `*_seed.sql` files are skipped in production via
+`GREMION_DISABLE_SEEDS`.) Module data that lives in a module's own database is
+migrated by the one `@gremion/tenant-store` runner instead.
 
 ## Module SDK and the dependency-direction boundary
 
@@ -216,9 +283,11 @@ schema, routes, nav fragment, and self-registered runtime contributions.
 
 ### Manifests and the generated registry
 
-A module declares a `ModuleManifest` (`id`, `order`, `toggleable`, `pages`,
-`routePrefixes`, optional `groups` and `nav`). The kernel ships **exactly two**,
-both always-on:
+A module declares a `ModuleManifest`
+([`types.ts`](../gremion-ui/src/lib/modules/types.ts): `id`, `order`, `toggleable`,
+`pages`, `routePrefixes`, and optionally `defaultEnabled`, `groups`, `capabilities`,
+`migrations`, `realm`, `status`, `processing` and `nav`). The kernel's own tracked
+`manifests/` directory holds **exactly two**, both always-on:
 
 - `core` (id `'core'`, `toggleable: false`,
   [`manifests/core.ts`](../gremion-ui/src/lib/modules/manifests/core.ts)) — the
@@ -229,22 +298,30 @@ both always-on:
   — the governance flagship: `members`, `committees`, `portal`, `protokolle`,
   `beschluesse`.
 
-No finance / votes / content / calendar / files / messaging manifest exists in the
-kernel.
+The other manifests are not part of `gremion-ui/src`. Each in-tree module keeps its
+in-process half under `modules/<id>/app/`, mirroring `gremion-ui/src`, and
+`gremion-ui/scripts/interim-module-overlay.mjs` copies every enabled module's half
+onto `gremion-ui/src` (the copies are gitignored build output; a module listed in
+`modules/disabled.json` is refused in build mode). Its manifest then lands in
+`manifests/` before the codegen runs. In the default build that composes ten
+manifests: `core`, `governance`, then `elections`, `votes`, `content`, `newsletter`,
+`calendar`, `files`, `messages` and `board`, as pinned by `registry.test.ts`.
 
 `MODULE_MANIFESTS` is **not** a hand-written array. `scripts/build-module-manifest.mjs`
 scans `manifests/*.ts` and emits `index.generated.ts` sorted by each manifest's
 `order`. Adding or removing a manifest file and re-running the codegen updates the
 registry with zero hand edits; the committed barrel is byte-pinned by
 `registry.test.ts`. The barrel is re-exported through
-[`manifests/index.ts`](../gremion-ui/src/lib/modules/manifests/index.ts).
+[`manifests/index.ts`](../gremion-ui/src/lib/modules/manifests/index.ts). The
+`prebuild` script runs the overlay, both codegen scripts and the two
+migration-manifest builds.
 
 ### The runtime-registry seam (dependency inversion)
 
 So the kernel never statically imports a module's server internals, modules
 **self-register** their runtime contributions at import time into
 [`gremion-ui/src/lib/server/modules/runtime-registry.ts`](../gremion-ui/src/lib/server/modules/runtime-registry.ts).
-The kernel composition roots invoke the aggregate. Six kinds of contribution:
+The kernel composition roots invoke the aggregate. Ten kinds of contribution:
 
 1. **Server-init hooks** — boot-time workers (schedulers, consumers, drains); run
    by `hooks.server.ts` via `runServerInitHooks()`.
@@ -260,10 +337,20 @@ The kernel composition roots invoke the aggregate. Six kinds of contribution:
    drive (`getProtocolDocumentPort()`), undefined when no files module is present.
 6. **Setup-wizard health probes** — per-module credential probes the setup-health
    route iterates (`getSetupHealthProbes()`).
+7. **Role-assignment group grants** — flat Keycloak groups a module wants for
+   holders of a governance role (`registerRoleGroupGrantResolver()`,
+   `resolveRoleGroupGrants()`).
+8. **Decision-rule strategies** — module-contributed rule ids for the INV-5 engine
+   (`registerDecisionRule()`); the core rule ids are reserved and an unknown id
+   throws, it never falls back to `simple`.
+9. **Second-locus strategies** (`registerSecondLocusStrategy()`).
+10. **Erasure hooks** — one per module that holds personal data
+    (`registerErasureHook()`); the erasure orchestrator calls the hook of every
+    enabled module and reports a module without one as `skipped`.
 
 A module's `register.server.ts` is loaded for its side effects by the generated
-server-init barrel (`scripts/build-module-server-init.mjs`). In a governance-only
-kernel these registries are simply empty, and each kernel caller degrades to its
+server-init barrel (`scripts/build-module-server-init.mjs`). With no module
+present these registries are simply empty, and each kernel caller degrades to its
 absent-module path.
 
 ### The boundary enforcer
@@ -280,9 +367,12 @@ engine under
   key in the migration set that is not explicitly listed. In the carved kernel the
   allowlist is empty (the finance→`org_units` FKs left with the finance module), so
   the scan guards the governance-only schema for free.
-- **`kernel-clean.test.ts`** is the comprehensive backstop: it asserts the kernel
-  has no residual import into a carved-out module. This backstop, not a
+- **`kernel-clean.test.ts`** is the comprehensive backstop: it walks every kernel
+  file (module-owned directories and the composition roots are exempt as
+  importers) and asserts none imports module code. This backstop, not a
   per-surface rule, is what catches stragglers a manual map would miss.
+- The `boundary-lint` suite of `make verify` runs the engine over the full tree
+  with a scanned-file floor (`scripts/verify/boundary-lint/`).
 
 Changing `rules.ts` — especially adding an allow entry — is a reviewable design
 decision; the engine additionally flags *unused* allow entries so stale exceptions
@@ -299,12 +389,13 @@ through the composed `CAPABILITIES` map.
 
 Capabilities are **contributed by modules**. The finance-specific predicates
 (`canApproveAny`, `canEditBudget`, `canApproveBudget`, `canConfigureFints`,
-`canManageSubOrgs`) look up `finance.*` capability ids. In the governance-only
-kernel those ids are absent from the composed map, so each predicate degrades to
-`false` (the capability is simply ungranted) rather than throwing — they light back
-up automatically when the finance module is present. The kernel's own gates use
+`canManageSubOrgs`) look up `finance.*` capability ids. When no composed manifest
+declares those ids (finance is in `modules/disabled.json`, so the default build
+has none), each predicate degrades to `false` (the capability is simply ungranted)
+rather than throwing — they light back up automatically when the finance module is
+present. The kernel's own gates use
 `hasAny('admin', 'it-admin', …)` against the always-on `core`/`governance` groups.
-Full catalog in [`docs/auth.md`](auth.md) §8.
+Full catalog in [`docs/auth.md`](auth.md) §7.
 
 ## Sidebar navigation schema (`needs[]` filtering)
 
@@ -312,14 +403,16 @@ The sidebar is a declarative, module-composable schema, not hard-coded per-role
 markup
 ([`gremion-ui/src/lib/components/layout/nav-schema.ts`](../gremion-ui/src/lib/components/layout/nav-schema.ts)).
 
-- `baseNavSchema` is the **module-neutral base template**: the Arbeitsbereich
-  overview, the Gremien section (committees + protokolle/beschlüsse, both
-  guest-readable), the Öffentlichkeit portal admin, and the Verwaltung section
-  (Mitglieder, Einstellungen, Systemstatus). It declares no feature-module rail
-  entries.
+- `baseNavSchema` is the base template: the Arbeitsbereich section (overview, plus
+  the calendar, tasks, files and messages entries, each carrying a `moduleId`), the
+  Gremien section (committees + protokolle/beschlüsse, both guest-readable), the
+  Öffentlichkeit section (portal admin and the content entry), and the Verwaltung
+  section (Mitglieder, Einstellungen, Systemstatus). Module entries carry a
+  `moduleId`, so a deselected module's entry is hidden instead of dangling.
 - `composeNavSchema(base, MODULE_MANIFESTS)` weaves each module's owned `nav`
-  fragment in at its `{ slot: 'module', moduleId }` anchor. A kernel with no
-  feature modules simply has no anchors to fill, so `navSchema` is the base alone.
+  fragment in at its `{ slot: 'module', moduleId }` anchor (the votes entry in
+  Gremien, the messages entry in Verwaltung). A slot whose module declares no `nav`
+  resolves to nothing.
 - `filterNavForSession(schema, helpers, roles, disabledModules)` hides items whose
   `role`/`needs` the session fails (and a deselected module's entries outright),
   pruning sections left empty.
@@ -328,23 +421,37 @@ markup
   Gemeinderat); a tenant with no override resolves to the built-in literal.
 
 Hiding a nav link is **cosmetic, not an access boundary** — every gated page
-enforces its own server-side check (the canonical example is the `/members` 403 in
-`gremion-ui/src/routes/members/+page.server.ts`). Filtering/reterming are applied in
+enforces its own server-side check (the canonical example is the `/portal` 403 in
+`gremion-ui/src/routes/portal/+page.server.ts`). Filtering/reterming are applied in
 `gremion-ui/src/routes/+layout.server.ts`. `composeNavSchema` and the predicates are
 pinned by the deep golden test (`nav-schema.test.ts`). See [`docs/auth.md`](auth.md)
-§8.4–§8.5.
+§7.4–§7.5.
 
 ## Shared packages
 
-- **`@gremion/db`** ([`packages/db`](../packages/db)) — pure shared types and the
-  `Sql` type, with zero feature references. `gremion-ui/src/lib/server/db.ts`
-  re-exports the governance types (`Committee`, `Protocol`, `ProtocolResolution`,
-  …) from here so existing `$lib/server/db` imports keep working.
+- **`@gremion/db`** ([`packages/db`](../packages/db)) — the Postgres client factory
+  (`createDb`), the `Sql` type and the shared row types, with zero feature
+  references. `gremion-ui/src/lib/server/db.ts` re-exports the governance types
+  (`Committee`, `Protocol`, `ProtocolResolution`, …) from here so existing
+  `$lib/server/db` imports keep working.
 - **`@gremion/ports`** ([`packages/ports`](../packages/ports)) — the inter-service
   contracts for the module-over-API boundary: `BrokerPort` (NATS/JetStream,
   subject grammar `gremion.{tenantId}.{domain}.{event}`), `TracerPort`
-  (`x-correlation-id`), anti-corruption callbacks, and the transactional
-  outbox + saga primitives.
+  (`x-correlation-id`) and the erasure-hook contract.
+- **`@gremion/tenant-store`** — per-(tenant, module) database access and the one
+  migration runner; the customer lifecycle (enable, disable, Karenz, purge).
+- **`@gremion/events`** — the transactional outbox, idempotent inbox, relay,
+  consumer and dead-letter handling.
+- **`@gremion/nats-auth`** — per-tenant NATS accounts and per-module nkey users.
+- **`@gremion/provisioning`** — the ledger-driven step machine behind customer
+  create, suspend, resume and reconcile.
+- **`@gremion/tenancy-core`** — the host normaliser and the `tenant_domain`
+  accessors the app and the kernel API share.
+- **`@gremion/edge-routers`**, **`@gremion/authz-client`**,
+  **`@gremion/module-catalogue`**, **`@gremion/member-import`**,
+  **`@gremion/retention`**, **`@gremion/storage`**, **`@gremion/tokens`**,
+  **`@gremion/fastify-service-template`** and the two generated-client packages —
+  one purpose each, named in the `description` of its `package.json`.
 
 ### Migrating the wire-subject root
 
@@ -458,10 +565,12 @@ them, so drain first:
      returns normally; the refusal arrives as a rejected `ready`/`closed`
      (`StreamCoverError`) plus one `[nats-broker]` error line on the console,
      and the process stays up holding a subscription that will never deliver
-     unless the caller awaits `ready`. In this repo nothing outside the test
-     suites calls `ensureStream()` or `subscribe()` — the kernel ships the
-     class, its callers live downstream — so "boot fails loudly" is a property
-     of the consuming process, not of the kernel.
+     unless the caller awaits `ready`. The callers are the module leaf
+     services and the module audit consumers under `modules/` (for example
+     `modules/calendar/src/index.ts` calls `ensureStream()`, and
+     `modules/calendar/app/lib/server/events/calendar-audit-consumer.ts` calls
+     `subscribe()`), so "boot fails loudly" is a property of the consuming
+     process, not of `@gremion/ports`.
    - `publish()` from a process on the new code throws `NoStreamError` for
      every event until step 4; the outbox retains them.
    Either signal confirms the stream is the one you think it is, and both are
@@ -499,8 +608,7 @@ A module passes its identity as `NatsBroker.connect(url, STREAMS.X.name,
 natsConnectOptionsFor(tenant, module))`; wiring the modules is TASK-079's, the
 audit consumers' move TASK-205's. Accounts hide the global account's streams:
 the `nats stream ...` commands above run as a tenant's admin
-(`_admin/tenant_<t>.nk` in the seeds volume), not anonymously. The StuRaOS test
-environment's broker stays open until its re-init. Known residual (R1, open):
+(`_admin/tenant_<t>.nk` in the seeds volume), not anonymously. Known residual (R1, open):
 NATS checks publish permission on a message's subject, not its reply subject,
 so within ONE tenant a module can make the server write a JetStream API
 response into another module's stream by naming it as the reply subject;
@@ -544,12 +652,16 @@ must be migrated **before** the upgrade are in
 
 ## Decision log
 
+The dated, numbered decisions (`DL-001` onward) are in
+[`docs/architecture/decision-log.md`](architecture/decision-log.md). The rows below are
+the standing design choices this page describes.
+
 | Decision | Rationale |
 |----------|-----------|
 | Keycloak OIDC for SSO | One identity provider for the app shell (Auth.js) and any module/service; standards-based, supports MFA/step-up, no custom auth code |
-| One PostgreSQL instance, three scopes | Control plane, per-tenant governance data, and Keycloak in a single engine — one StatefulSet/container to operate and back up |
+| One database per (tenant, module) on a shared server per module | The control plane, the platform ledger and Keycloak share the `postgres` server; each module and the governance service get their own server, with one database per customer on it (D13), so a module can be switched off, exported and dropped without touching another's data |
 | Module SDK + dependency-direction boundary | The kernel hosts modules without importing them; the boundary engine enforces the ownership direction so the open-core line is mechanical, not conventional |
 | Codegen'd manifest registry | Adding/removing a module is a file + codegen step, not a hand-edited array — the carve is a clean subtraction |
 | Request-scoped per-tenant DB pool | Fail-closed tenancy: a missing tenant context throws instead of silently reading tenant #1 |
 | Per-tenant Host routing (Traefik) | Each tenant on its own host preserves the CSRF origin check and lets the resolver select the tenant from the inbound Host header |
-| Mailpit for local/staging mail | Traps outbound mail; switching to a real relay is a pure `.env` change, no compose edit |
+| Mailpit for local mail | Dev-only (`profiles: [dev]`): traps the mail a tenant's SMTP settings send to it; switching to a real relay is a change of those settings and the tenant's registry credential, no compose edit |

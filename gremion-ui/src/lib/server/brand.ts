@@ -8,15 +8,22 @@ import type { GremionConfig, ConfigTenant } from './config'
 import { readConfig } from './config'
 import { requireTenant } from '$lib/server/tenant/context'
 import { resolvePaletteId } from '$lib/theme/instance-theme'
+import { semesterLabel } from '$lib/semester'
 
 /** Map a (per-tenant) GremionConfig to the client-safe Brand model. Canonical
- *  mapping previously inlined in routes/+layout.server.ts loadBrand. */
-export function brandFromConfig(cfg: GremionConfig): Brand {
+ *  mapping previously inlined in routes/+layout.server.ts loadBrand.
+ *
+ *  `term` is the COMPUTED semester label when the config carries the two start
+ *  months (brand.term_months), else the static brand.term string exactly as
+ *  before. `now` is the clock, injectable so tests fix the date; callers that
+ *  keep a Brand across requests would keep a stale label past a semester
+ *  boundary, so none does: requireBrand and the layout load run per request. */
+export function brandFromConfig(cfg: GremionConfig, now: Date = new Date()): Brand {
   return {
     product: cfg.brand.product,
     logoLetter: cfg.brand.logo_letter,
     orgShort: cfg.brand.org_short,
-    term: cfg.brand.term,
+    term: cfg.brand.term_months ? semesterLabel(now, cfg.brand.term_months) : cfg.brand.term,
     orgName: cfg.org.name || cfg.brand.org_short,
     domain: cfg.org.domain,
     version: cfg.brand.version,
@@ -33,6 +40,6 @@ export function brandFromConfig(cfg: GremionConfig): Brand {
 }
 
 /** The resolved per-tenant brand. Fail-closed via requireTenant(). */
-export function requireBrand(tenant: ConfigTenant = requireTenant()): Brand {
-  return brandFromConfig(readConfig(tenant))
+export function requireBrand(tenant: ConfigTenant = requireTenant(), now: Date = new Date()): Brand {
+  return brandFromConfig(readConfig(tenant), now)
 }

@@ -22,7 +22,6 @@ const data = (over: Record<string, unknown> = {}) => ({
   isITAdmin: false,
   loeschkonzept: null,
   user: { name: 'E2E Admin', email: 'admin@example.test', groups: [] },
-  accountUrl: null,
   mfaEnrolled: null,
   stepUpEnforced: false,
   ...over,

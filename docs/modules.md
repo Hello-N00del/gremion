@@ -33,10 +33,10 @@ module set a pilot customer starts with and for what is not claimed.
 
 | Module | Purpose | Status | External services it needs | README |
 |---|---|---|---|---|
-| `board` | Task board (stacks and cards) per organisational unit; protocol action items can be promoted to cards. | supported | none beyond the kernel; its own PostgreSQL server (compose profile `board`) only in service mode (`BOARD_BACKEND=service`, test environment), none in the default in-process mode | [modules/board/README.md](../modules/board/README.md) |
+| `board` | Task board (stacks and cards) per organisational unit; protocol action items can be promoted to cards. | supported | none beyond the kernel; its own PostgreSQL server (compose profile `board`) only in service mode (`BOARD_BACKEND=service`, test environment), none in the default in-process mode. A pilot host runs the board in-process on kernel tables and does not start that server ([pilot/module-defaults.md](./pilot/module-defaults.md)) | [modules/board/README.md](../modules/board/README.md) |
 | `calendar` | Events, event types, recurrence and committee calendar settings; pushes events to CalDAV and relays change events over NATS. | supported | Nextcloud (CalDAV), NATS, its own PostgreSQL server (profile `calendar`) | [modules/calendar/README.md](../modules/calendar/README.md) |
 | `content` | Content engine: posts with e-mail, website (portal) and Instagram channels, mailing lists, scheduled publishing. | supported | NATS, SMTP through the kernel, Instagram Graph API (optional channel), its own PostgreSQL server (profile `content`) | [modules/content/README.md](../modules/content/README.md) |
-| `elections` | Optional committee elections run on Helios, with a permanent notice that it does not replace a statutory election. App half only; no leaf service. | supported | Helios (election server) | [modules/elections/README.md](../modules/elections/README.md) |
+| `elections` | Optional committee elections run on Helios, with a permanent notice that it does not replace a statutory election. App half only; no leaf service. Held off in this tree: the app config pins it off ("Turning a module on or off" below). | supported | Helios (election server) | [modules/elections/README.md](../modules/elections/README.md) |
 | `files` | Document browser over Nextcloud WebDAV; in-browser editing through Collabora. | supported | Nextcloud, Collabora | [modules/files/README.md](../modules/files/README.md) |
 | `finance` | Budget plans, projects, expenses, approvals, bookings, bank accounts, SEPA export, FinTS and CSV import. Leaf service only; the app half is not in this tree. | disabled by default | NATS, bank access through FinTS (optional), Nextcloud (optional receipt storage), its own PostgreSQL server (profile `finance`) | [modules/finance/README.md](../modules/finance/README.md) |
 | `handover` | Handover of an organisation's records to its successors. Placeholder: `module.json` and `package.json` only. | manifest only | none yet | [modules/handover/README.md](../modules/handover/README.md) |
@@ -65,13 +65,18 @@ Three separate switches exist; each module README says which of them applies.
    `disable_module` requests described in
    [runbooks/tenant-lifecycle.md](./runbooks/tenant-lifecycle.md). A module that is in
    `modules/disabled.json` cannot be enabled that way. A module can also be turned **on** by
-   the council's admin in Settings > Module (`calendar`, `elections` and `votes`; fresh
-   step-up, no operator approval; see "Module self-service by the council" in the same
-   runbook). The council's admin can turn the same modules **off** there too; see the next
-   section for what that does.
+   the council's admin in Settings > Module (`calendar` and `votes`; the self-service list
+   also names `elections`, which is held off, see item 3; fresh step-up, no operator
+   approval; see "Module self-service by the council" in the same runbook). The council's
+   admin can turn the same modules **off** there too; see the next section for what that
+   does.
 3. **Per instance setting.** `config.modules.<manifest id> = false` makes the module's routes
    answer with the module-disabled surface and hides its navigation entry; data is kept
-   ([playbooks/add-a-module.md](./playbooks/add-a-module.md), section on deselection).
+   ([playbooks/add-a-module.md](./playbooks/add-a-module.md), section on deselection). A
+   module can also be **held off**: `HELD_OFF_MODULE_IDS`
+   (`gremion-ui/src/lib/modules/held-off.ts`, currently `elections`) pins it to `false` on
+   every read and every write of `config.modules`, and the council's module switch neither
+   offers nor enables it.
 
 ### Turning a module off: the 30-day Karenz
 

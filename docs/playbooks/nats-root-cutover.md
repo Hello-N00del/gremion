@@ -12,6 +12,16 @@
 > [`docs/architecture.md` → "Migrating the wire-subject root"](../architecture.md#migrating-the-wire-subject-root);
 > this page does not repeat it.
 >
+> **The broker since TASK-024.** The state project's `nats` service no longer
+> accepts anonymous clients: every client authenticates with an nkey and lands in
+> its tenant's account (`T_<tenant>`), and JetStream lives in those accounts only
+> (`docker/nats/nats.conf`, `packages/nats-auth`). The stream inventory and the
+> repoint below are therefore per account: run each `nats` command with that
+> tenant's admin credential, and a new account gets its streams from `STREAMS`
+> (already on the `gremion` root) through `nats-auth ensure`, so it has nothing to
+> migrate. [runbooks/dead-letter.md](../runbooks/dead-letter.md), section 4, shows
+> the call.
+>
 > **Baseline.** The delta below is measured against `c4f7baa`, the kernel commit
 > immediately before the rename. If your deployment pins something else, confirm
 > what it actually pins before relying on the table — it is a delta, not an
@@ -77,8 +87,10 @@ while the producers are stopped, so the pause loses nothing.
 
 Do this on a staging environment first, in full, and only then on the one that serves users.
 
-0. **Inventory.** For each stream the topology knows — `NEWSLETTER`, `CONTENT`,
-   `CALENDAR`, `ORGUNIT` — record the live filter and the message count:
+0. **Inventory.** For each stream the topology knew at `c4f7baa` — `NEWSLETTER`,
+   `CONTENT`, `CALENDAR`, `ORGUNIT` (the `IDT` stream of the kernel API,
+   `gremion.*.idt.>`, was added afterwards on the `gremion` root and has nothing
+   to migrate) — record the live filter and the message count:
    `nats stream info <NAME> --json | jq '{subjects: .config.subjects, messages: .state.messages}'`.
    Expect the old root everywhere, and expect the non-newsletter streams to
    carry the **newsletter** filter (the old `ensureStream()` default): those

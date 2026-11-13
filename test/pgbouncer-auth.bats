@@ -16,9 +16,10 @@ setup_file() {
     docker run -d --rm --name "$PG_CT" -e POSTGRES_PASSWORD=scratch "$PG_IMAGE" >/dev/null
     local i ready=0
     for i in $(seq 1 60); do
-        # the entrypoint restarts the server once after initdb: require two answers
-        if docker exec "$PG_CT" psql -U postgres -tAc 'SELECT 1' >/dev/null 2>&1 \
-           && sleep 1 && docker exec "$PG_CT" psql -U postgres -tAc 'SELECT 1' >/dev/null 2>&1; then
+        # Over TCP: the entrypoint restarts the server once after initdb, and the
+        # temporary one answers a probe and a query on the unix socket for as
+        # long as init takes. It listens on no address; the final server does.
+        if docker exec "$PG_CT" pg_isready -q -h 127.0.0.1 -U postgres >/dev/null 2>&1; then
             ready=1
             break
         fi

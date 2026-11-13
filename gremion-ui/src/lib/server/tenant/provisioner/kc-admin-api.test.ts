@@ -467,6 +467,159 @@ describe('updateRealmSmtp — the gremion#6 delta for an ALREADY-CREATED realm (
   })
 })
 
+// The customer realm's e-mail-change action (Settings > Profil offers it only while it is enabled). Keycloak
+// 26.6.1 UpdateEmail verifies the new address when the realm verifies e-mail OR the action's own config
+// verifyEmail is "true"; the config lives behind PUT .../required-actions/<alias>/config, not in the action PUT.
+describe('KcProvisionApi.ensureRequiredActionEnabled', () => {
+  const PATH = '/admin/realms/verein/authentication/required-actions/UPDATE_EMAIL'
+  const CFG = `${PATH}/config`
+  const LIVE = { alias: 'UPDATE_EMAIL', name: 'Update Email', providerId: 'UPDATE_EMAIL', enabled: false, defaultAction: false, priority: 70, config: {} }
+  const VERIFY = { verifyEmail: 'true' }
+  const writes = (calls: Array<{ method: string; path: string; body?: unknown }>) => calls.filter((c) => c.method !== 'GET')
+
+  it('PUTs the live representation with only enabled flipped (a partial body would reset name and priority)', async () => {
+    const { transport, calls } = fakeTransport({ [`GET ${PATH}`]: LIVE })
+    expect(await new KcProvisionApi(transport).ensureRequiredActionEnabled('verein', 'UPDATE_EMAIL')).toBe('enabled')
+    expect(calls).toEqual([
+      { method: 'GET', path: PATH, body: undefined },
+      { method: 'PUT', path: PATH, body: { ...LIVE, enabled: true } },
+    ])
+  })
+
+  // Keycloak 26.6.1 stores the action and its config in ONE entity: the action PUT replaces the stored config
+  // with body.config (AuthenticationManagementResource.updateRequiredAction -> RealmAdapter
+  // updateRequiredActionProvider), the /config PUT writes into that same entity, and the action GET returns it.
+  function keycloakActionEntity(initial: { enabled: boolean; config: Record<string, string> }) {
+    const entity = { ...LIVE, ...initial }
+    const transport: KcTransport = async (method, path, body) => {
+      if (method === 'GET' && path === PATH) return { ...entity, config: { ...entity.config } }
+      if (method === 'GET' && path === CFG) return { config: { ...entity.config } }
+      if (method === 'PUT' && path === CFG) {
+        entity.config = { ...(body as { config: Record<string, string> }).config }
+        return undefined
+      }
+      if (method === 'PUT' && path === PATH) {
+        const b = body as { enabled?: boolean; config?: Record<string, string> }
+        entity.enabled = b.enabled === true
+        entity.config = { ...b.config }
+        return undefined
+      }
+      throw new Error(`unexpected ${method} ${path}`)
+    }
+    return { entity, transport }
+  }
+
+  it('enabling a fresh (disabled, empty-config) action leaves the verification config STORED, not wiped by the action PUT', async () => {
+    const { entity, transport } = keycloakActionEntity({ enabled: false, config: {} })
+    expect(await new KcProvisionApi(transport).ensureRequiredActionEnabled('verein', 'UPDATE_EMAIL', VERIFY)).toBe('enabled')
+    expect(entity.enabled).toBe(true)
+    expect(entity.config.verifyEmail).toBe('true')
+  })
+
+  it('keeps the other stored config values when it enables the action', async () => {
+    const { entity, transport } = keycloakActionEntity({ enabled: false, config: { max_auth_age: '300' } })
+    await new KcProvisionApi(transport).ensureRequiredActionEnabled('verein', 'UPDATE_EMAIL', VERIFY)
+    expect(entity.config).toEqual({ max_auth_age: '300', verifyEmail: 'true' })
+  })
+
+  it('a second call is a no-op (the first converged)', async () => {
+    const { transport } = keycloakActionEntity({ enabled: false, config: {} })
+    const api = new KcProvisionApi(transport)
+    await api.ensureRequiredActionEnabled('verein', 'UPDATE_EMAIL', VERIFY)
+    expect(await api.ensureRequiredActionEnabled('verein', 'UPDATE_EMAIL', VERIFY)).toBe('already')
+  })
+
+  it('writes nothing when the action is already enabled', async () => {
+    const { transport, calls } = fakeTransport({ [`GET ${PATH}`]: { ...LIVE, enabled: true } })
+    expect(await new KcProvisionApi(transport).ensureRequiredActionEnabled('verein', 'UPDATE_EMAIL')).toBe('already')
+    expect(writes(calls)).toEqual([])
+  })
+
+  it('with a config: the config is written BEFORE the action is enabled, merged over what is stored', async () => {
+    const { transport, calls } = fakeTransport({ [`GET ${PATH}`]: LIVE, [`GET ${CFG}`]: { config: { 'max_auth_age': '300' } } })
+    expect(await new KcProvisionApi(transport).ensureRequiredActionEnabled('verein', 'UPDATE_EMAIL', VERIFY)).toBe('enabled')
+    expect(writes(calls)).toEqual([
+      { method: 'PUT', path: CFG, body: { config: { max_auth_age: '300', verifyEmail: 'true' } } },
+      // the action PUT replaces the stored config with its body, so the merged config rides along
+      { method: 'PUT', path: PATH, body: { ...LIVE, enabled: true, config: { max_auth_age: '300', verifyEmail: 'true' } } },
+    ])
+  })
+
+  it('a config Keycloak answers 404 for (none stored yet) is written from scratch', async () => {
+    const { transport, calls } = fakeTransport({})
+    const t: KcTransport = async (m, p, b) => {
+      if (`${m} ${p}` === `GET ${CFG}`) throw new Error('Keycloak Admin API error: 404 on GET')
+      if (`${m} ${p}` === `GET ${PATH}`) return { ...LIVE, enabled: true }
+      return transport(m, p, b)
+    }
+    expect(await new KcProvisionApi(t).ensureRequiredActionEnabled('verein', 'UPDATE_EMAIL', VERIFY)).toBe('enabled')
+    expect(writes(calls)).toEqual([{ method: 'PUT', path: CFG, body: { config: VERIFY } }])
+  })
+
+  it('an enabled action whose config already holds the values: nothing is written', async () => {
+    const { transport, calls } = fakeTransport({ [`GET ${PATH}`]: { ...LIVE, enabled: true }, [`GET ${CFG}`]: { config: VERIFY } })
+    expect(await new KcProvisionApi(transport).ensureRequiredActionEnabled('verein', 'UPDATE_EMAIL', VERIFY)).toBe('already')
+    expect(writes(calls)).toEqual([])
+  })
+
+  it('reports an action the realm does not register (404) instead of throwing or writing', async () => {
+    const calls: string[] = []
+    const transport: KcTransport = async (method, path) => {
+      calls.push(`${method} ${path}`)
+      throw new Error('Keycloak Admin API error: 404 on GET')
+    }
+    expect(await new KcProvisionApi(transport).ensureRequiredActionEnabled('verein', 'UPDATE_EMAIL', VERIFY)).toBe('absent')
+    expect(calls).toEqual([`GET ${PATH}`])
+  })
+
+  it('lets any other failure through', async () => {
+    const transport: KcTransport = async () => {
+      throw new Error('Keycloak Admin API error: 500 on GET')
+    }
+    await expect(new KcProvisionApi(transport).ensureRequiredActionEnabled('verein', 'UPDATE_EMAIL')).rejects.toThrow(/500/)
+  })
+
+  it('encodes the realm and the alias as single path segments', async () => {
+    const { transport, calls } = fakeTransport({})
+    await new KcProvisionApi(transport).ensureRequiredActionEnabled('a b', 'x/y').catch(() => undefined)
+    expect(calls[0]!.path).toBe('/admin/realms/a%20b/authentication/required-actions/x%2Fy')
+  })
+})
+
+// Keycloak's built-in account console: a customer realm has no client scopes for it, so its page is broken, and
+// Settings > Profil no longer links to it. Disabled, never deleted (Keycloak recreates a deleted built-in client).
+describe('KcProvisionApi.ensureClientDisabled', () => {
+  const LIST = '/admin/realms/verein/clients?clientId=account-console'
+  const CLIENT = '/admin/realms/verein/clients/uuid-ac'
+  const LIVE = { id: 'uuid-ac', clientId: 'account-console', enabled: true, publicClient: true }
+
+  it('PUTs only id, clientId and enabled=false (a partial client PUT merges)', async () => {
+    const { transport, calls } = fakeTransport({ [`GET ${LIST}`]: [LIVE] })
+    expect(await new KcProvisionApi(transport).ensureClientDisabled('verein', 'account-console')).toBe('disabled')
+    expect(calls.filter((c) => c.method !== 'GET')).toEqual([
+      { method: 'PUT', path: CLIENT, body: { id: 'uuid-ac', clientId: 'account-console', enabled: false } },
+    ])
+  })
+
+  it('writes nothing when the client is already disabled', async () => {
+    const { transport, calls } = fakeTransport({ [`GET ${LIST}`]: [{ ...LIVE, enabled: false }] })
+    expect(await new KcProvisionApi(transport).ensureClientDisabled('verein', 'account-console')).toBe('already')
+    expect(calls.filter((c) => c.method !== 'GET')).toEqual([])
+  })
+
+  it('a realm without the client has nothing to disable and nothing is written', async () => {
+    const { transport, calls } = fakeTransport({ [`GET ${LIST}`]: [] })
+    expect(await new KcProvisionApi(transport).ensureClientDisabled('verein', 'account-console')).toBe('absent')
+    expect(calls.filter((c) => c.method !== 'GET')).toEqual([])
+  })
+
+  it('encodes the realm and the client id', async () => {
+    const { transport, calls } = fakeTransport({})
+    await new KcProvisionApi(transport).ensureClientDisabled('a b', 'x&y')
+    expect(calls[0]!.path).toBe('/admin/realms/a%20b/clients?clientId=x%26y')
+  })
+})
+
 // Security sweep 2, finding 3: stepup-2fa must be OTP-or-deny, never a REQUIRED
 // OTP form (Keycloak would enroll an authenticator inside the step-up, then
 // grant loa2 to whoever holds the session or the password).

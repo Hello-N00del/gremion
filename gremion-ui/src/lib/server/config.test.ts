@@ -108,6 +108,32 @@ describe('ConfigStore', () => {
       expect(result.setup_complete).toBe(true)
     })
 
+    it('brand.term_months survives a write that only touches the organisation name (the brand block is merged, not replaced)', async () => {
+      mockFs.existsSync.mockReturnValue(true)
+      mockFs.readFileSync.mockReturnValue(JSON.stringify({ brand: { product: 'Musterrat', org_short: 'MS', term_months: { winter: 10, summer: 4 } } }))
+
+      const { writeConfig } = await import('./config')
+      const result = writeConfig({ org: { name: 'Neuer Name', domain: 'x.de', logo_path: null } })
+
+      expect(result.brand.term_months).toEqual({ winter: 10, summer: 4 })
+      const written = JSON.parse(String(mockFs.writeFileSync.mock.calls.at(-1)![1] as string)) as { brand: { term_months?: unknown; org_short: string } }
+      expect(written.brand.term_months).toEqual({ winter: 10, summer: 4 })
+      expect(written.brand.org_short).toBe('MS')
+    })
+
+    it('a brand.term_months update replaces the months and keeps the rest of the brand', async () => {
+      mockFs.existsSync.mockReturnValue(true)
+      mockFs.readFileSync.mockReturnValue(JSON.stringify({ brand: { product: 'Musterrat', org_short: 'MS' } }))
+
+      const { writeConfig } = await import('./config')
+      const result = writeConfig({ brand: { term_months: { winter: 9, summer: 3 } } })
+
+      expect(result.brand.term_months).toEqual({ winter: 9, summer: 3 })
+      expect(result.brand.org_short).toBe('MS')
+      // the write chokepoint refuses equal months
+      expect(() => writeConfig({ brand: { term_months: { winter: 4, summer: 4 } } })).toThrow(/term_months/)
+    })
+
     it('writeConfig returns a new object (immutability)', async () => {
       const { readConfig, writeConfig } = await import('./config')
       const before = readConfig()

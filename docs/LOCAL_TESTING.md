@@ -10,12 +10,13 @@ and the repo/product family, read **[about-gremion.md](./about-gremion.md)**.
 For the in-process developer inner loop (Vite dev server, `pnpm` checks, unit
 tests), see **[DEVELOPMENT.md](./DEVELOPMENT.md)**.
 
-> **Governance-only kernel.** This repository ships the kernel and the
-> governance domain only — identity & auth, multi-tenancy, the committee /
-> org-unit / protocol / resolution model, the public portal, and the governance
-> invariants. Feature modules (finance, voting, content, calendar, files,
-> messaging, …) live in **separate repositories** and are not present here, so
-> there are no setup steps, services, or test flows for them in this guide.
+> **Governance walkthrough.** This guide walks the kernel and the governance
+> domain — identity & auth, multi-tenancy, the committee / org-unit / protocol /
+> resolution model, the public portal, and the governance invariants. The feature
+> modules (calendar, content, files, messaging, …) live under `modules/` in this
+> tree ([modules.md](./modules.md)), are switched on per customer and bring their
+> own services only when enabled, so the default local stack runs none of them and
+> this guide has no test flows for them; each module README has its own.
 
 ---
 
@@ -60,30 +61,35 @@ tests), see **[DEVELOPMENT.md](./DEVELOPMENT.md)**.
 ## Architecture Overview
 
 In local development mode each service is bound to a **loopback host port** —
-there is no reverse proxy in front of the stack. The default (non-production)
-profile brings up seven services:
+there is no reverse proxy in front of the stack. `make up` starts two compose
+projects (the pooled stack, TASK-040): the state project `dev-state` and the blue
+app colour `dev-app-blue`:
 
 ```
 Browser
    │
-   ├── http://localhost:3001        →  gremion-ui      (admin shell / governance app)
+   ├── http://localhost:3001        →  gremion-ui      (admin shell; curl with the resolver headers, not a browser)
    ├── http://localhost:3002        →  gremion-public  (read-only public portal)
    ├── http://localhost:8082/auth   →  keycloak      (OIDC identity provider)
    ├── http://localhost:8083        →  legal         (static Impressum / GDPR pages)
    └── http://localhost:8026        →  mailpit       (captured-mail web UI)
 
-Internal Docker network (gremion_net):
-   postgres:5432   ←  keycloak, gremion-ui, gremion-public
-   mailpit:1025    ←  gremion-ui   (SMTP; nothing leaves the host)
-   vector          →  tails Traefik access logs (idle in dev — no Traefik)
+External Docker networks (created by `make dev-networks`):
+   dev_state: postgres-dev:5432 ← keycloak, gremion-ui, gremion-public, kernel-api, control-panel
+              governance-postgres, nats
+              mailpit:1025 ← gremion-ui  (SMTP; nothing leaves the host)
+   dev_edge:  keycloak, legal, gremion-ui, gremion-public
+   vector     → tails Traefik access logs (idle in dev — no Traefik)
 ```
 
 > The admin shell app is **`gremion-ui`**. The Keycloak realm is named by the last
-> path segment of `AUTH_KEYCLOAK_ISSUER` (`<realm>` below), with clients **`gremion-ui`** and
-> **`gremion-admin`**. The **production** profile additionally starts Traefik and
+> path segment of `AUTH_KEYCLOAK_ISSUER` (`<realm>` below). The app uses its clients
+> **`gremion-ui`** and **`gremion-admin`**; the base realm carries five. The **production** profile additionally starts Traefik and
 > a read-only docker-socket-proxy (`docker-compose.yml`, `profiles: [production]`),
-> plus PgBouncer and cloudflared from `docker-compose.prod.yml`. None of those
-> run in local dev.
+> plus PgBouncer and the fallback page from `docker-compose.prod.yml`. None of those
+> run in local dev. The command prefixes used below (`$DS` for the state project,
+> `$DA` for the app colour) are defined in [TROUBLESHOOTING.md](TROUBLESHOOTING.md#default-services--host-ports-local-dev):
+> a bare `docker compose` in the repository addresses neither project.
 
 ---
 
@@ -94,51 +100,77 @@ Internal Docker network (gremion_net):
 git clone <repo-url> gremion
 cd gremion
 
-# 2. Create your env file and run the setup script.
-#    setup.sh copies .env.example → .env if needed, generates all secrets,
-#    builds the images, and starts the core services.
-cp .env.example .env        # optional — setup.sh does this for you if .env is absent
+# 2. Run the setup script. Do NOT create .env yourself first: setup.sh writes it
+#    from .env.example and generates every secret, and it skips that whole step
+#    when the file already exists (you would keep the CHANGE_ME_* placeholders).
 ./scripts/setup.sh          # or: make setup
 # When prompted for a domain, press Enter to use localhost.
+
+# 3. That first run stops before any container starts, with
+#    "required variable TENANT_PROXY_SHARED_SECRET is missing a value":
+#    docker-compose.app.yml requires the value and setup.sh does not generate
+#    it. Add one to the .env the script just wrote, then run the script again.
+#    It keeps the existing .env, builds the images and starts both projects.
+echo "TENANT_PROXY_SHARED_SECRET=$(openssl rand -hex 32)" >> .env
+./scripts/setup.sh
 ```
 
-The script waits for `gremion-ui` to report healthy (~60–90 s on first run) and
-then prints the app URL. Open:
+The second run waits for `gremion-ui` to report healthy (~60–90 s on first run)
+and then prints the app URL. What you can open in a browser:
 
-- **App (admin shell):** http://localhost:3001
 - **Keycloak admin:** http://localhost:8082/auth/admin
 - **Public portal:** http://localhost:3002
+- **Legal pages:** http://localhost:8083/impressum
+- **Captured mail (Mailpit):** http://localhost:8026
 
-A freshly-initialised kernel has no tenant yet, so the app responds with a
-**503 "incomplete brand identity / Setup needed"** until you provision one — see
-[Setting Up a Tenant](#setting-up-a-tenant).
+The app itself (`gremion-ui`, port 3001) is different. With
+`TENANT_PROXY_SHARED_SECRET` set, the tenant resolver's proxy-trust gate is on:
+every path except `/healthz` needs an `x-proxy-trust` header, and without it the
+answer is **403**. A browser cannot send that header and the local stack runs no
+proxy that adds it, so on the stack as shipped the app is reached with `curl`
+only ([Probing `gremion-ui` by hand](#probing-gremion-ui-by-hand)), not from a
+browser.
+
+A freshly-initialised kernel also has no tenant yet, so a request that does carry
+the headers answers **404** (`/healthz` answers `200`) until a tenant is created
+and its host bound — see [Setting Up a Tenant](#setting-up-a-tenant). There is no
+first-run setup wizard.
 
 ---
 
 ## What `setup.sh` Does
 
-`scripts/setup.sh` (or `make setup`) is idempotent on the `.env` file and:
+`scripts/setup.sh` (or `make setup`) never overwrites an existing `.env`, and:
 
 1. Checks for `docker`, `docker compose`, and `openssl`.
 2. Prompts for a **domain** — press **Enter** for `localhost`.
 3. Copies `.env.example` to `.env` (mode `600`) and generates random secrets for
    every `CHANGE_ME_*` placeholder, plus `AUTH_SECRET`, the OIDC client secrets,
-   `SEED_TOKEN`, and `RESTIC_PASSWORD`. (If `.env` already exists it is left
-   untouched — delete it to regenerate.)
+   `SEED_TOKEN`, `SEED_USER_PASSWORD` and `RESTIC_PASSWORD`. (If `.env` already
+   exists it is left untouched and nothing is generated — delete it to
+   regenerate.) It does not set `TENANT_PROXY_SHARED_SECRET`, which the app
+   project requires ([Quick Start](#quick-start), step 3). It creates
+   `legal/legal.env` from its example.
 4. Makes the helper scripts executable.
-5. Mints the internal TLS CA + Keycloak server cert (used only by the production
-   overlay; harmless to pre-generate in dev).
-6. B-01: prepares no realm. Keycloak starts with `master` only; the
-   governance-only realm (the `gremion-ui` and `gremion-admin` clients) is
-   composed from `docker/keycloak/realm-export.base.json` and created at
-   tenant-create time. `CONFIG_PATH=… make gen-realm` writes a vertical's
+5. Mints the internal TLS CA + Keycloak server cert (the app project bind-mounts
+   `internal-ca.pem`, so dev needs it too), renders the PgBouncer userlist, and
+   runs the bind-mount preflight (`scripts/check-bind-sources.sh --all`). It does
+   not create `secrets/ipcrypt_key.txt`, the secret file the `vector` service
+   reads ([DEVELOPMENT.md](DEVELOPMENT.md#generated-bind-mount-sources-and-the-preflight)).
+6. B-01: prepares no realm. Keycloak starts with `master` only; a tenant's
+   realm is composed from `docker/keycloak/realm-export.base.json` (five
+   clients: `gremion-ui`, `gremion-admin`, `synapse`, `nextcloud` and
+   `gremion-mobile`) and created at tenant-create time. `CONFIG_PATH=… make gen-realm` writes a vertical's
    composed template to the gitignored `docker/keycloak/realm-export.json` for
    inspection only.
-7. Builds the images and starts `postgres`, `keycloak`, and `gremion-ui`, then
-   waits for `gremion-ui` to become healthy.
+7. Creates the external networks and shared volumes (`make dev-networks`),
+   builds the images (`make build`) and starts the state project, then the blue
+   app colour (`make up`), then waits for `gremion-ui` to become healthy. There
+   is no cross-project `depends_on`: `gremion-ui`'s own boot retry waits for
+   Postgres.
 
-To start the remaining default services (public portal, legal, mailpit, vector)
-as well, run `make up` after setup.
+`make up` is also the way to start the stack again later (`make down` stops it and
+keeps the volumes).
 
 ---
 
@@ -148,8 +180,11 @@ as well, run `make up` after setup.
 # Container status and ports
 make ps
 
-# Endpoint health checks (gremion-ui :3001, Keycloak :8082, legal :8083)
+# Endpoint checks (Keycloak :8082, legal :8083; see the note on its gremion-ui line)
 make health
+
+# gremion-ui liveness: needs no headers and no tenant
+curl -sf http://localhost:3001/healthz
 
 # Follow logs (all services, or a single one)
 make logs
@@ -157,20 +192,27 @@ make logs SERVICE=gremion-ui
 make logs SERVICE=keycloak
 ```
 
+> **`make health` and `gremion-ui`.** The target probes `http://localhost:3001/`
+> with no headers, which the tenant resolver refuses (403 with the proxy-trust
+> secret set), so its `gremion-ui (3001)` line reads `NOT REACHABLE` on a healthy
+> stack. Read `gremion-ui`'s state from `make ps` (`healthy`) and from `/healthz`
+> instead; the Keycloak and legal lines of `make health` are valid.
+
 Expected from `make ps` — all containers `running`/`healthy`:
 
 ```
-NAME                STATUS          PORTS
-gremion-postgres    healthy         127.0.0.1:5433->5432/tcp
-gremion-keycloak    healthy         127.0.0.1:8082->8080/tcp
-gremion-gremion-ui    healthy         127.0.0.1:3001->3000/tcp
-gremion-gremion-public healthy        127.0.0.1:3002->3000/tcp
-gremion-legal       healthy         127.0.0.1:8083->8080/tcp
-gremion-mailpit     healthy         127.0.0.1:8026->8025/tcp
+NAME                          STATUS          PORTS
+dev-state-postgres-1          healthy         127.0.0.1:5433->5432/tcp
+dev-state-keycloak-1          healthy         127.0.0.1:8082->8080/tcp
+dev-state-legal-1             healthy         127.0.0.1:8083->8080/tcp
+dev-state-mailpit-1           healthy         127.0.0.1:8026->8025/tcp
+dev-app-blue-gremion-ui-1     healthy         127.0.0.1:3001->3000/tcp
+dev-app-blue-gremion-public-1 healthy         127.0.0.1:3002->3000/tcp
 ```
 
-(Container names depend on your compose project name; the ports above are what
-`docker-compose.override.yml` binds.)
+(plus `governance-postgres`, `nats`, `vector`, `control-panel` and `kernel-api`,
+which publish no port. The ports above are what `docker-compose.override.yml` and
+`docker-compose.app.dev.yml` bind, and `docker-compose.yml` for legal.)
 
 Quick endpoint probes:
 
@@ -193,49 +235,96 @@ curl -sf http://localhost:8083/impressum | grep -q Impressum && echo OK
 > token exchange inside the Docker network uses the internal `keycloak:8080`
 > hostname instead (`AUTH_KEYCLOAK_INTERNAL`).
 
+### Probing `gremion-ui` by hand
+
+`/healthz` is the only `gremion-ui` path that answers without headers. Every other
+path goes through the tenant resolver
+(`gremion-ui/src/lib/server/tenant/resolve.ts`), which on the loopback port needs
+three headers together, because no edge proxy is there to set them:
+
+```bash
+SECRET=$(grep '^TENANT_PROXY_SHARED_SECRET=' .env | cut -d= -f2)
+TENANT_HOST='<a host bound to a tenant>'
+
+curl -s -o /dev/null -w '%{http_code}\n' \
+  -H "Host: ${TENANT_HOST}" \
+  -H "X-Forwarded-Host: ${TENANT_HOST}" \
+  -H "x-proxy-trust: ${SECRET}" \
+  http://localhost:3001/
+```
+
+| Answer | Meaning |
+|--------|---------|
+| `403` | `x-proxy-trust` is missing or does not match `TENANT_PROXY_SHARED_SECRET` |
+| `404` | `X-Forwarded-Host` is missing or malformed, `Host` names a different host than `X-Forwarded-Host`, or the host is bound to no active tenant |
+| `503` | the tenant is suspended, not migrated yet, or the control database is unreachable |
+| anything else | the resolver accepted the host and the app answered |
+
+`Host` must be set as well: with the secret configured the resolver compares it
+with `X-Forwarded-Host` and answers 404 on a mismatch, and a plain
+`curl http://localhost:3001/…` sends `Host: localhost:3001`. Every `curl` against
+port 3001 in this guide and in [TROUBLESHOOTING.md](TROUBLESHOOTING.md) uses this
+header set.
+
 ---
 
 ## Setting Up a Tenant
 
 The kernel is multi-tenant and **fail-closed**: with no provisioned tenant the
-resolver returns a Setup-needed response. There are two ways to bring a tenant
-up locally.
+resolver answers **404** on every host. The first-run Setup wizard and the
+`default` tenant are gone (TASK-042, TRD-075); a tenant exists only after a
+`create` request has run and bound its host. On a host that is the control panel's
+"Neuer Mandant" request, run by the host executor
+([runbooks/tenant-lifecycle.md](runbooks/tenant-lifecycle.md), "Create a tenant").
+This guide does not carry a verified local tenant-creation procedure: the
+lifecycle one-shot needs the secret files and environment contract in
+[ops/pooled-stack-layout.md](ops/pooled-stack-layout.md), which `make up` does not
+create.
 
-### Option A — the Setup wizard (interactive)
+### The seed endpoint (test fixtures)
 
-Open **http://localhost:3001** and follow the in-app Setup flow to create the
-default tenant's brand identity, org root, and first administrator. This is the
-path a real operator uses on a fresh deployment.
-
-### Option B — the seed endpoint (test fixtures)
-
-For repeatable smoke tests, seed a governance fixture set (org-unit tree,
-committees, members, and a published protocol / *Beschluss*) via the one-time
-seed endpoint. It is gated by `SEED_TOKEN` from your `.env`:
+For repeatable smoke tests on a stack that has a bound tenant, seed a governance
+fixture set (org-unit tree, committees, members, and a published protocol /
+*Beschluss*) via the one-time seed endpoint. It is gated by `SEED_TOKEN` from
+your `.env` and runs in the tenant context of the request's forwarded host, so it
+takes the same three resolver headers as every other request
+([Probing `gremion-ui` by hand](#probing-gremion-ui-by-hand)):
 
 ```bash
-# Token was generated into .env by setup.sh
+# Both values are in .env (SEED_TOKEN is generated by setup.sh)
 SEED_TOKEN=$(grep '^SEED_TOKEN=' .env | cut -d= -f2)
+SECRET=$(grep '^TENANT_PROXY_SHARED_SECRET=' .env | cut -d= -f2)
+TENANT_HOST='<a host bound to a tenant>'
 
 curl -X POST \
   -H "X-Seed-Token: ${SEED_TOKEN}" \
+  -H "Host: ${TENANT_HOST}" \
+  -H "X-Forwarded-Host: ${TENANT_HOST}" \
+  -H "x-proxy-trust: ${SECRET}" \
   http://localhost:3001/api/setup/seed
 ```
 
-Every seeded user is created in Keycloak with the password from
-`SEED_USER_PASSWORD`. `scripts/setup.sh` generates that value into your `.env`
-and prints it once in its closing summary; re-read it at any time with
-`grep '^SEED_USER_PASSWORD=' .env`. These fixtures are for local and demo use
+It answers `409` when `org_units` is not empty. Every seeded user is created in
+Keycloak with the password from
+`SEED_USER_PASSWORD`. `scripts/setup.sh` generates that value into your `.env`;
+read it with `grep '^SEED_USER_PASSWORD=' .env`. (The script's closing summary
+prints the value only on the run that generated `.env`. In the two-run Quick
+Start that run stops before the summary, and the second run prints the `grep`
+hint instead.) These fixtures are for local and demo use
 only — never seed them into a real deployment (`GREMION_DISABLE_SEEDS=true`,
-which the dev override already sets).
+which `docker-compose.app.yml` already sets).
 
 ---
 
 ## Testing the Governance Surfaces
 
-After seeding (Option B) or completing the wizard (Option A), sign in at
-**http://localhost:3001** with a seeded user (e.g. `dev.admin`) and the
-`SEED_USER_PASSWORD` from your `.env`, then walk the governance domain:
+This walkthrough needs a browser session on a tenant's bound host, which the local
+stack as shipped does not offer (see [Quick Start](#quick-start): the app on port
+3001 answers a browser with 403, and this guide has no local tenant-creation
+procedure). Use it on a deployment that serves the tenant through the edge. There,
+after seeding, sign in on the tenant's bound host with a seeded user (e.g.
+`dev.admin`) and the `SEED_USER_PASSWORD` from your `.env`, then walk the
+governance domain:
 
 | Surface | What to verify |
 |---------|----------------|
@@ -244,15 +333,15 @@ After seeding (Option B) or completing the wizard (Option A), sign in at
 | **Protocols** | A committee's protocols (*Protokolle*) list and open; a draft can be created and saved. |
 | **Resolutions / *Beschlüsse*** | Resolutions attached to a protocol display; publishing a *Beschluss* appends to the **hash-chained audit log (INV-1)** — the chain must stay verifiable. |
 | **Decision rule / quorum (INV-5)** | A resolution records its quorum / decision-rule outcome; the engine rejects a decision that fails its rule. |
-| **Setup wizard** | On a fresh volume (no tenant) the app returns Setup-needed; completing the wizard makes the surfaces above reachable. |
+| **No tenant** | On a fresh volume (no tenant) every host answers 404 and `/healthz` answers `200`; a provisioned tenant makes the surfaces above reachable. |
 
 > Use **governance** examples for any manual test data — committees, members,
-> protocols, resolutions. There are no finance, voting, file, or messaging
-> surfaces in the kernel.
+> protocols, resolutions. The finance, voting, file and messaging surfaces belong
+> to the feature modules, which the default local stack does not run.
 
 The SSO round-trip is part of every surface test: clicking **Sign in** should
-redirect to `http://localhost:8082/auth/realms/<realm>/...`, accept the seeded
-credentials, and return you to the app authenticated.
+redirect to the tenant realm's Keycloak login (`…/auth/realms/<realm>/...`), accept
+the seeded credentials, and return you to the app authenticated.
 
 ---
 
@@ -274,18 +363,18 @@ portal deliberately holds none.
 
 ### Infrastructure
 - [ ] `make ps` shows all default services `healthy`
-- [ ] Postgres reachable: `docker compose exec postgres pg_isready -U postgres`
+- [ ] Postgres reachable: `$DS exec postgres pg_isready -U postgres`
 - [ ] Keycloak ready: `curl -sf http://localhost:8082/auth/health/ready` → `{"status":"UP"}`
-- [ ] `gremion-ui` reachable: `make health` reports `gremion-ui (3001): OK`
+- [ ] `gremion-ui` alive: `curl -sf http://localhost:3001/healthz` answers `200` (the `gremion-ui` line of `make health` cannot pass, see [Verifying the Stack](#verifying-the-stack))
 - [ ] Control-plane and app databases migrated (no boot 503 from missing migrations in `make logs SERVICE=gremion-ui`)
 
 ### Identity
 - [ ] Keycloak admin UI at http://localhost:8082/auth/admin is accessible
-- [ ] The `<realm>` realm exists with the `gremion-ui` and `gremion-admin` clients
-- [ ] SSO login from the app redirects to Keycloak and back
+- [ ] Once a tenant exists: the `<realm>` realm exists and carries the `gremion-ui` and `gremion-admin` clients (two of the base realm's five)
+- [ ] On a deployment behind the edge: SSO login from the app redirects to Keycloak and back
 
-### Governance domain (after Setup / seed)
-- [ ] Tenant provisioned (no Setup-needed 503)
+### Governance domain (needs a tenant and a browser session; not available on the local stack as shipped)
+- [ ] Tenant provisioned (its host no longer answers 404)
 - [ ] Members directory loads and reflects the seeded roles
 - [ ] Committee / org-unit tree renders
 - [ ] A protocol can be opened and a draft saved
@@ -301,13 +390,29 @@ portal deliberately holds none.
 
 ## Common Issues & Fixes
 
-### App returns 503 "incomplete brand identity" / Setup needed
+### Port 3001 answers 403
 
-**Cause:** No tenant has been provisioned on a fresh volume — this is the
-expected fail-closed state, not an error.
+**Cause:** The request carries no `x-proxy-trust` header, or one that does not
+match `TENANT_PROXY_SHARED_SECRET`. A browser pointed at http://localhost:3001
+always gets this.
 
-**Fix:** Complete the Setup wizard at http://localhost:3001, or seed fixtures via
-`POST /api/setup/seed` (see [Setting Up a Tenant](#setting-up-a-tenant)).
+**Fix:** Probe with `curl` and the three resolver headers
+([Probing `gremion-ui` by hand](#probing-gremion-ui-by-hand)).
+
+---
+
+### Every host answers 404
+
+**Cause:** No tenant has been provisioned on a fresh volume, the request's host is
+not bound to one, or `Host` and `X-Forwarded-Host` name different hosts — this is
+the expected fail-closed state, not an error.
+
+**Fix:** Create a tenant and bind its host
+([runbooks/tenant-lifecycle.md](runbooks/tenant-lifecycle.md)), then send that
+host as both `Host` and `X-Forwarded-Host`, together with `x-proxy-trust`
+([Probing `gremion-ui` by hand](#probing-gremion-ui-by-hand)). A tenant whose stored config lacks a brand identity answers a
+tenant-scoped 503 instead, see
+[TROUBLESHOOTING.md](TROUBLESHOOTING.md#a-tenant-answers-503-incomplete-brand-identity).
 
 ---
 
@@ -321,7 +426,7 @@ internal Docker hostname.
 
 **Fix:** Ensure `docker-compose.override.yml` is present (it is auto-loaded) — it
 sets `KC_HOSTNAME=http://localhost:8082/auth` and runs Keycloak in `start-dev`.
-Then `docker compose restart keycloak`.
+Then `$DS restart keycloak`.
 
 ---
 
@@ -342,15 +447,16 @@ the realm.
 ### `gremion-ui` health check times out / boot 503
 
 **Cause:** The control-plane registry database wasn't created, so
-`runControlMigrations()` fails and every request 503s; or Keycloak/Postgres were
-not yet healthy when `gremion-ui` started (it has `depends_on: service_healthy`,
-but a half-initialised volume can still trip it).
+`runControlMigrations()` fails and every request 503s; or Postgres was not yet
+reachable when `gremion-ui` started (it has no `depends_on` on the state project;
+its boot retry waits up to the 60-attempt budget, and a non-transient failure
+restarts the container).
 
 **Fix:**
 ```bash
 make logs SERVICE=gremion-ui            # read the actual boot error
-docker compose exec postgres pg_isready -U postgres
-docker compose restart gremion-ui
+$DS exec postgres pg_isready -U postgres
+$DA restart gremion-ui
 ```
 On an existing Postgres volume that predates the control DB, follow the one-shot
 in `docs/runbooks/tenant-edge.md` to create the `control` database, then restart.
@@ -359,12 +465,13 @@ in `docs/runbooks/tenant-edge.md` to create the `control` database, then restart
 
 ### Port conflicts
 
-**Symptom:** `docker compose up` fails with "port is already allocated".
+**Symptom:** `make up` fails with "port is already allocated".
 
 **Fix:** Free the conflicting port or change the host port in
-`docker-compose.override.yml`. Default loopback bindings: `3001` (gremion-ui),
-`3002` (gremion-public), `8082` (Keycloak), `8083` (legal), `8026` (Mailpit web
-UI), `5433` (Postgres).
+`docker-compose.override.yml` (Keycloak, Mailpit, Postgres) or
+`docker-compose.app.dev.yml` (`gremion-ui`, `gremion-public`). Default loopback
+bindings: `3001` (gremion-ui), `3002` (gremion-public), `8082` (Keycloak), `8083`
+(legal, from `docker-compose.yml`), `8026` (Mailpit web UI), `5433` (Postgres).
 
 ```bash
 # Linux/macOS
@@ -375,10 +482,13 @@ lsof -ti:3001 | xargs kill -9
 
 ### No mail arrives
 
-**Cause:** In local dev all outbound mail is captured by **Mailpit**, not sent.
+**Cause:** The local stack relays nothing to the internet. A tenant sends mail
+only once its Settings → E-Mail are configured, and the mail reaches the
+**Mailpit** catcher only when they name `mailpit` and port `1025`, which the app
+accepts with `SMTP_TEST_ALLOW_PRIVATE=1`.
 
-**Fix:** Read trapped messages at http://localhost:8026. Switching to a real
-relay is a `.env`-only change (see `docs/runbooks/email-smtp.md`).
+**Fix:** Read trapped messages at http://localhost:8026. The catcher and the
+switch to a real relay are described in `docs/runbooks/email-smtp.md`.
 
 ---
 
@@ -386,18 +496,20 @@ relay is a `.env`-only change (see `docs/runbooks/email-smtp.md`).
 
 ### Service lifecycle
 ```bash
-make setup              # First-run: generate secrets + realm, build, start core services
-make up                 # Start all default services
-make down               # Stop services (preserve volumes)
-make build              # Build the custom images
-make rebuild            # Rebuild and force-recreate all services
-make ps                 # Show running containers
-make health             # Endpoint health checks
+make setup              # First-run: generate secrets, build, start both projects
+make up                 # Start the state project, then the blue app colour
+make down               # Stop both projects (preserve volumes)
+make build              # Build the custom images (tagged dev)
+make rebuild            # Rebuild and force-recreate both projects
+make ps                 # Show running containers of both projects
+make health             # Endpoint checks (Keycloak, legal; its gremion-ui line reads NOT REACHABLE, see Verifying the Stack)
+make dev-networks       # Create the external dev networks and shared volumes (idempotent)
+make update-legal       # Rebuild + recreate only the legal service
 ```
 
 ### Logs & shells
 ```bash
-make logs                       # Follow all service logs
+make logs                       # Follow all service logs (both projects)
 make logs SERVICE=gremion-ui      # Follow one service
 make shell-kc                   # bash inside the Keycloak container
 make shell-db                   # psql inside Postgres (as postgres)
@@ -408,7 +520,7 @@ make shell-db                   # psql inside Postgres (as postgres)
 make keycloak-configure   # Sync OIDC client secrets from .env into Keycloak
 make dev-configure        # Patch gremion-ui/.env.local + KC redirect URIs for the Vite dev server
 make dev-ui               # Start the Vite dev server (after dev-configure) — see DEVELOPMENT.md
-make gen-realm            # Regenerate realm-export.json from module manifests (needs a config.json)
+make gen-realm            # Write the module-composed realm template to realm-export.json (needs a config.json; inspection only)
 ```
 
 ### Validation & tests
@@ -416,7 +528,7 @@ make gen-realm            # Regenerate realm-export.json from module manifests (
 make validate-env         # Fail if .env still has CHANGE_ME_ placeholders
 make lint                 # shellcheck + yamllint + JSON + `docker compose config`
 make test                 # bats unit tests (no running stack needed)
-make test-all             # unit + integration tests (requires a running stack)
+make test-all             # unit + integration + NATS/events proofs (the integration part needs a running stack)
 ```
 
 ---
@@ -431,7 +543,7 @@ grep -E '^(KEYCLOAK_ADMIN|POSTGRES_PASSWORD|SEED_TOKEN|SEED_USER_PASSWORD)' .env
 
 | What | URL / Host | Username | Password variable |
 |------|-----------|----------|-------------------|
-| App (gremion-ui) | http://localhost:3001 | seeded users (e.g. `dev.admin`) | `SEED_USER_PASSWORD` |
+| App (gremion-ui) | the tenant's bound host behind an edge (a browser on http://localhost:3001 gets 403) | seeded users (e.g. `dev.admin`) | `SEED_USER_PASSWORD` |
 | Keycloak admin | http://localhost:8082/auth/admin | `admin` | `KEYCLOAK_ADMIN_PASSWORD` |
 | PostgreSQL | localhost:5433 | `postgres` | `POSTGRES_PASSWORD` |
 | Seed endpoint | `POST /api/setup/seed` | — (header) | `SEED_TOKEN` (sent as `X-Seed-Token`) |
@@ -447,36 +559,39 @@ grep -E '^(KEYCLOAK_ADMIN|POSTGRES_PASSWORD|SEED_TOKEN|SEED_USER_PASSWORD)' .env
 # Stop services, keep all data
 make down
 
-# Stop and DELETE all data (full reset of named volumes)
-docker compose down -v
+# Stop and DELETE all data (full reset of the project-scoped volumes)
+make down && $DS down -v && $DA down -v
 
 # Also remove the locally-built images
-docker compose down -v --rmi local
+$DS down -v --rmi local && $DA down -v --rmi local
 
-# Clean slate — then re-run setup
-docker compose down -v --rmi local
+# Clean slate — then re-run setup (both runs of Quick Start steps 2 and 3:
+# the new .env again lacks TENANT_PROXY_SHARED_SECRET)
+make down && $DS down -v --rmi local && $DA down -v --rmi local
 rm .env
 ./scripts/setup.sh
 ```
 
-`down -v` deletes the kernel's named volumes (`gremion_pg_data`,
-`gremion_mailpit_data`, `gremion_config_data`, `gremion_tenant_config_data`, and
-the log volumes). The Docker network is `gremion_net`.
+`down -v` deletes the project-scoped volumes of the state project
+(`dev-state_pg-data`, `dev-state_mailpit-data`, the log volumes and the module
+database volumes). The external volumes (`dev_config_data`,
+`dev_tenant_config_data`, `dev_nats_accounts`, `dev_nats_secrets`,
+`dev_traefik_acme`) and the networks `dev_state` and `dev_edge` stay; remove them
+with `docker volume rm` / `docker network rm` for a full reset. The compose files
+in this repository no longer name the old global `gremion_*` volumes or the
+`gremion_net` network, so data from before the two-project split is not reachable
+(the dev stack re-seeds).
 
 ---
 
 ## Production Deployment
 
-When you are ready to deploy against a real domain, regenerate `.env` with that
-domain and bring the stack up with the production profile:
-
-```bash
-rm .env
-./scripts/setup.sh
-# Enter your domain when prompted, e.g. gov.example.org
-```
-
-The production profile adds Traefik + the docker-socket-proxy, and
-`docker-compose.prod.yml` adds PgBouncer + cloudflared and the internal-TLS
-Keycloak listener. Production wiring (tenant edge routing, internal TLS,
-PgBouncer, SMTP, backups) is covered in `docs/runbooks/`.
+A production host is not set up with `setup.sh`. It is built with
+`infra/host/bootstrap.sh`, its env files are rendered by `gremion-init-secrets`
+for the real domain, and a release is brought up with `gremion-deploy`
+([deployment.md](deployment.md#single-host-production),
+[ops/runbook/install.md](ops/runbook/install.md)). The production profile adds
+Traefik + the docker-socket-proxy, and `docker-compose.prod.yml` adds PgBouncer,
+the fallback page and the internal-TLS Keycloak listener. Production wiring
+(tenant edge routing, internal TLS, PgBouncer, SMTP, backups) is covered in
+`docs/runbooks/` and `docs/ops/runbook/`.

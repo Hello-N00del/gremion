@@ -7,9 +7,9 @@
 
 > This is the operational policy for logs produced by the governance kernel. For
 > the kernel's architecture, services, and design philosophy, see
-> [about-gremion.md](./about-gremion.md). Carved-out feature modules (finance,
-> files, messages, elections, content, etc.) live in their own repositories — one
-> per module — and carry their own retention policies.
+> [about-gremion.md](./about-gremion.md). The feature modules (finance, files,
+> messaging, elections, content, etc.) live under `modules/` in this repository
+> and carry their own retention policies.
 
 ---
 

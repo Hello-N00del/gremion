@@ -1,5 +1,6 @@
 import { handle as authHandle } from './auth'
 import { sessionEndpointGuard } from '$lib/server/security/session-endpoint-guard'
+import { kcActionReturnHandle } from '$lib/server/profile/kc-action-return-handle'
 import { csrfOriginGuard } from '$lib/server/security/csrf-origin-guard'
 import { bodySizeGuard } from '$lib/server/security/body-size-guard'
 import { redirect, type Handle, type HandleFetch, type HandleServerError } from '@sveltejs/kit'
@@ -1015,6 +1016,7 @@ export const handle = sequence(
   tenantResolveHandle,
   tenantBrandStyleHandle,
   sessionEndpointGuard,
+  kcActionReturnHandle,
   authHandleUnlessExempt,
   authGuard,
   i18nHandle,

@@ -1,11 +1,11 @@
-<!-- i18n-sync: source=README.md sha256=064553e5fa669f26359b392fe805dc1fa4717f8b2ba38895cc148bb564898717 -->
+<!-- i18n-sync: source=README.md sha256=60621121e829556dfb480eefa5c928e298ad7b546628f86b023a09f511c82dc9 -->
 [English](./README.md) | **Deutsch**
 
 # Gremion
 
 **Gremion** ist ein offener, selbst betreibbarer **Kernel für digitale Governance** für Räte, Studierendenparlamente (*Studierendenräte*), Vereine und ähnliche beratende Gremien. Er liefert die Grundlage, die jedes solche Gremium braucht: Identität, Mandantenfähigkeit, ein Organisations- und Gremienmodell, Protokolle und Beschlüsse mit hash-verkettetem Audit-Trail sowie eine Entscheidungs-Engine, die das Quorum berücksichtigt. Darauf setzt ein **Modul-SDK** auf, in das sich optionale Funktionen einklinken, ohne dass der Kernel jemals von ihnen abhängt.
 
-> Gremion ist der offene Kern einer größeren Produktfamilie. Funktionsmodule (Wahlen, Newsletter, Kalender, Dateien, Nachrichten, Aufgabenboard, Nutzer:innen, Finanzen, Inhalte, Tresor, Übergabe) liegen in **eigenen Repositories**, eines pro Modul, und docken über das Modul-SDK an. Der Kernel **baut und startet eigenständig, ohne dass ein Modul vorhanden ist**.
+> Gremion ist der offene Kern einer größeren Produktfamilie. Funktionsmodule (Aufgabenboard, Kalender, Inhalte, Wahlen, Dateien, Finanzen, Übergabe, Nachrichten, Veröffentlichung (der Newsletter), Tresor, Abstimmungen) liegen unter [`modules/`](./modules), ein Verzeichnis pro Modul, und docken über das Modul-SDK an; [docs/modules.de.md](./docs/modules.de.md) nennt, welche unterstützt werden und welche standardmäßig deaktiviert sind. Der Kernel **baut und startet eigenständig, ohne dass ein Modul vorhanden ist**.
 
 ## Lizenz
 
@@ -18,7 +18,8 @@ Gremion steht unter der **GNU Affero General Public License v3.0 only** (AGPL-3.
 - **Governance-Domäne**: Gremien, Mitglieder, der Baum der Organisationseinheiten, Protokolle, *Beschlüsse*, das öffentliche Portal.
 - **Governance-Invarianten**: hash-verkettetes Audit-Log (INV-1) und die Engine für Quorum und Entscheidungsregeln (INV-5).
 - **Modul-SDK**: manifestgesteuerte Registrierung (Navigation, Seiten, Capabilities, Migrationen, Realm-Fragmente), Laufzeit-Register (Boot-Hooks, Tenant-Evict-Hooks, Provisioning-Adapter, Datenanbieter) und der Boundary Enforcer, der den Kernel frei von Abhängigkeiten von Funktionsmodulen hält.
-- **Gemeinsame Pakete**: `@gremion/db`, `@gremion/ports` (Broker / Tracer).
+- **Dienste und Betriebswerkzeuge**: das Control Panel (`apps/control-panel`, die Betreiberoberfläche, die Kundenanfragen einreiht und die Kennzahlen des Hosts sowie eine Code-Karte zeigt), die Kernel-API (`services/kernel-api`: Mandantenauflösung, Modulregister, Identitätsdomäne, Autorisierungsentscheidungen), der Governance-Dienst (`services/governance`, bisher sein Schema) und die hostseitigen Werkzeuge in `infra/host`.
+- **Gemeinsame Pakete**: die `@gremion/*`-Workspaces unter `packages/` (zum Beispiel `@gremion/db`, `@gremion/ports` für Broker und Tracer, `@gremion/events`, `@gremion/tenancy-core`, `@gremion/tenant-store`, `@gremion/nats-auth`, `@gremion/provisioning`, `@gremion/retention`).
 
 Ein Funktionsmodul ist alles, was der Kernel über dieses SDK entdeckt; der Kernel importiert keines davon namentlich. Die Abhängigkeitsrichtung (Kernel → nie ein Modul) wird im Code durch `gremion-ui/src/lib/server/boundary/` durchgesetzt.
 
@@ -35,22 +36,30 @@ Das sollte man wissen, bevor man Planungen auf dieses Repository stützt, nicht 
 ## Schnellstart (lokal, Docker Compose)
 
 ```bash
-./scripts/setup.sh        # creates .env, generates secrets + the governance-only Keycloak realm, starts the stack
+./scripts/setup.sh        # creates .env and legal/legal.env, generates the secrets and the internal TLS certificates; on a fresh clone it then stops at the image build
+echo "TENANT_PROXY_SHARED_SECRET=$(openssl rand -hex 32)" >> .env
+./scripts/setup.sh        # keeps the .env, builds and starts the stack
 make logs
 ```
 
 `setup.sh` schreibt `.env` selbst (aus `.env.example`, danach `chmod 600`) und erzeugt jedes darin enthaltene Secret, einschließlich des vorbelegten Fixture-Passworts. Die `.env` **nicht** vorher von Hand anlegen: Das Skript überspringt die Erzeugung, wenn die Datei bereits existiert, und es blieben die `CHANGE_ME_*`-Platzhalter stehen.
 
-Der reine Governance-Stack = **postgres, keycloak, gremion-ui, gremion-public, legal, vector, mailpit** (+ `traefik` und `docker-socket-proxy` unter dem Profil `production` sowie `pgbouncer` / `cloudflared` / `fallback` aus `docker-compose.prod.yml`).
+Der erste Lauf bricht ab, weil `docker-compose.app.yml` `TENANT_PROXY_SHARED_SECRET` verlangt und `setup.sh` den Wert nicht erzeugt; der zweite Lauf behält die `.env` und läuft weiter. Ist der Wert gesetzt, beantwortet die App auf Port 3001 nur Anfragen, die die Header des Mandanten-Resolvers tragen (ausgenommen `/healthz`); im lokalen Stack ist sie daher mit `curl` erreichbar, nicht aus einem Browser: siehe [`docs/LOCAL_TESTING.md`](./docs/LOCAL_TESTING.md#quick-start) (englisch).
+
+`setup.sh` lässt in `legal/legal.env` Platzhalter für das Impressum stehen; sie sind vor dem Livegang auszufüllen. Ein Keycloak-Realm entsteht erst beim Anlegen eines Mandanten, nicht beim Start.
+
+Der lokale Stack besteht aus zwei Compose-Projekten, die `make up` startet. Das State-Projekt (`docker-compose.yml` plus die automatisch geladene `docker-compose.override.yml`) betreibt **postgres, governance-postgres, nats, keycloak, legal, vector** und unter dem Profil `dev` **mailpit**. Die App-Farbe (`docker-compose.app.yml` plus `docker-compose.app.dev.yml`) betreibt **gremion-ui, gremion-public, control-panel, kernel-api**. Modul-Dienste und ihre Datenbanken liegen hinter Compose-Profilen (board, calendar, content, finance, newsletter, vault, messaging, nextcloud, collabora, video). `traefik` und `docker-socket-proxy` kommen unter dem Profil `production` hinzu, `pgbouncer` und `fallback` aus `docker-compose.prod.yml`.
 
 ## Entwicklung
 
 ```bash
-pnpm install
-pnpm -C gremion-ui check     # tenancy/port/domain/secrets guards, then svelte-check
-pnpm -C gremion-public check
-pnpm -C gremion-ui exec vitest run
+pnpm install                 # Node 26, pnpm 10
+pnpm -C gremion-ui check     # i18n compile, tenancy/port/secrets-dir guards, then svelte-check
+pnpm -C gremion-public check # i18n compile, then svelte-check
+pnpm -C gremion-ui test:unit
 pnpm -C gremion-ui build     # adapter-node production build
+make lint                    # the static guards (compose, shell, hygiene, migration register, ...)
+make verify                  # the local gate: typecheck, unit, integration and the other required suites
 ```
 
 ## Dokumentation

@@ -191,7 +191,13 @@ The policy (`grafana/provisioning/alerting/policies.yaml`) groups by
 `[alertname, component]`, `group_wait 30s`, `group_interval 5m`,
 `repeat_interval 8760h`, and the contact point sends a resolve notice: one
 e-mail per breached component, none for a second breach of the same component
-while it fires, one when it clears. Grafana's embedded Alertmanager keeps its
+while it fires, one when it clears. Quiet hours (TRD-205) split it by
+`severity`: a `critical` alert is always sent at once; every other alert is
+muted outside the operator's active hours (`time-intervals.yaml`, default
+Monday to Friday 08:00-20:00 Europe/Berlin, rendered from
+`OPS_ACTIVE_HOURS_TZ`, `_START`, `_END` and `_WEEKDAYS` in `ops.env`), grouped
+by `severity`, and sent as one digest at the first group flush after the window
+opens. Grafana's embedded Alertmanager keeps its
 notification log for a bounded period (about five days), so a condition that
 stays open longer can be notified again once its log entry has expired: a
 named deviation from "never repeated" for the operator [A, Q7, R16-6].
@@ -233,7 +239,7 @@ council and fleet) are still later work, see Deferred.
 
 | Store | Window | Worst case | Where |
 |---|---|---|---|
-| Loki `class=access` | 14 d | 15 d 2 h 10 min | `docker/loki/loki.yaml` |
+| Loki `class=access` | 14 d | 15 d 2 h 10 min | `docker/loki/loki.yaml` (rendered from `packages/retention/src/registry.ts`; never edited by hand) |
 | Loki `class=security`, `finance`, `audit` | 27 d | 28 d 2 h 10 min | idem |
 | Loki `class=application` | 28 d [A] | 29 d 2 h 10 min | idem |
 | Loki, no class | 14 d | 15 d 2 h 10 min | idem |

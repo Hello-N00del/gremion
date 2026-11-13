@@ -8,6 +8,7 @@ import { env } from '$env/dynamic/private'
 import { isAllowedSmtpPort, resolveSmtpTarget } from '$lib/server/mail/smtp-target-guard'
 import { councilSwitchEnablesIn } from '$lib/server/module-switch/direct-writes'
 import { platformHeldOffForCurrentTenant } from '$lib/server/module-switch/platform-held'
+import { isTermMonths } from '$lib/semester'
 
 // G-098: `.strict()` rejects unknown top-level keys (e.g. typos). Per-field
 // constraints below remain tighter than the baseline `configUpdateSchema`
@@ -26,6 +27,16 @@ const settingsPatchSchema = z.strictObject({
       domain: z.union([z.string().min(1).max(253), z.literal('')]).optional(),
       logo_path: z.string().nullable().optional(),
       portal_sections: z.record(z.string(), z.boolean()).optional(),
+    })
+    .optional(),
+  // The semester start months are the only brand field an admin edits here (the product name and short
+  // name are chosen when the customer is created); strict, so no other brand key is silently dropped.
+  brand: z
+    .strictObject({
+      term_months: z
+        .strictObject({ winter: z.number(), summer: z.number() })
+        .refine((m) => isTermMonths(m), { message: 'Winter- und Sommersemester müssen in zwei verschiedenen Monaten (1 bis 12) beginnen.' })
+        .optional(),
     })
     .optional(),
   smtp: z

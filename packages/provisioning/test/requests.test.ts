@@ -79,6 +79,32 @@ describe('create args', () => {
     expect(verify(env({ args: createArgs({ brand: { product: 'X', orgShort: 'MS', logo: 'x' } }) }))).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/unknown field brand\.logo/) })
   })
 
+  it('brand.termMonths is OPTIONAL: an older stored create without it still verifies and normalises to a brand with no months', () => {
+    const r = verify(env({ args: createArgs({ brand: { product: 'Ratsportal', orgShort: 'MS' } }) }))
+    expect(r).toMatchObject({ verdict: 'ok', args: { brand: { product: 'Ratsportal', orgShort: 'MS' } } })
+    expect('termMonths' in (r as { args: { brand: object } }).args.brand).toBe(false)
+  })
+
+  it('brand.termMonths: two different integer months 1-12 are carried; the normalised shape has exactly those two keys', () => {
+    const r = verify(env({ args: createArgs({ brand: { product: 'Ratsportal', orgShort: 'MS', termMonths: { winter: 10, summer: 4 } } }) }))
+    expect(r).toMatchObject({ verdict: 'ok', args: { brand: { product: 'Ratsportal', orgShort: 'MS', termMonths: { winter: 10, summer: 4 } } } })
+    expect(verify(env({ args: createArgs({ brand: { product: 'X', orgShort: 'MS', termMonths: { winter: 3, summer: 9 } } }) }))).toMatchObject({ verdict: 'ok', args: { brand: { termMonths: { winter: 3, summer: 9 } } } })
+  })
+
+  it.each([
+    ['equal months', { winter: 4, summer: 4 }],
+    ['month 0', { winter: 0, summer: 4 }],
+    ['month 13', { winter: 10, summer: 13 }],
+    ['a fraction', { winter: 10.5, summer: 4 }],
+    ['strings', { winter: '10', summer: '4' }],
+    ['only one month', { winter: 10 }],
+    ['a null', null],
+    ['an array', [10, 4]],
+    ['an extra key', { winter: 10, summer: 4, label: 'WiSe 99/00' }],
+  ])('brand.termMonths with %s is refused', (_name, termMonths) => {
+    expect(verify(env({ args: createArgs({ brand: { product: 'X', orgShort: 'MS', termMonths } }) }))).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/brand\.termMonths must be/) })
+  })
+
   it('args.slug must be the request slug', () => {
     expect(verify(env({ customerSlug: 'anderstadt' }))).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/args\.slug musterstadt is not the request's slug anderstadt/) })
   })

@@ -25,9 +25,10 @@ Run (from the kernel civitas repo root, after `pnpm install --frozen-lockfile
 pnpm --dir gremion-ui exec vitest run --config ../test/f1-defect/vitest.config.ts
 ```
 
-Current result (2026-09-24, this session): **2 test files, 4 tests, all
-GREEN** — both fixes (item 1 in this session; 715c829/008372e already on
-this branch) are in place.
+Result when written (2026-09-24): **2 test files, 4 tests, all GREEN** — both
+fixes (item 1 in that session; 715c829/008372e already on the branch) were in
+place. That figure is a record of that run, not of the current tree; run the
+command above to check it.
 
 ## RED-before-the-fix proof
 

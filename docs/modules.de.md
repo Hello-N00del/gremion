@@ -1,4 +1,4 @@
-<!-- i18n-sync: source=modules.md sha256=c1b61e4875a1bf3b36bb3568cee1c7b0658de0ead9c0ac21a4f9a0a4613162dd -->
+<!-- i18n-sync: source=modules.md sha256=f06258029b60350e3fd51e68af854bc2d515cab7bfd0618fb0dae99093bb3a69 -->
 [English](./modules.md) | **Deutsch**
 
 # Unterstützte Module
@@ -37,10 +37,10 @@ bekommt und was nicht behauptet wird, steht in
 
 | Modul | Zweck | Status | Benötigte externe Dienste | README |
 |---|---|---|---|---|
-| `board` | Aufgabenboard (Stacks und Karten) je Organisationseinheit; Aktionspunkte aus Protokollen lassen sich in Karten umwandeln. | unterstützt | außer dem Kernel nichts; ein eigener PostgreSQL-Server (Compose-Profil `board`) nur im Service-Modus (`BOARD_BACKEND=service`, Testumgebung), im Standardmodus im Prozess keiner | [modules/board/README.de.md](../modules/board/README.de.md) |
+| `board` | Aufgabenboard (Stacks und Karten) je Organisationseinheit; Aktionspunkte aus Protokollen lassen sich in Karten umwandeln. | unterstützt | außer dem Kernel nichts; ein eigener PostgreSQL-Server (Compose-Profil `board`) nur im Service-Modus (`BOARD_BACKEND=service`, Testumgebung), im Standardmodus im Prozess keiner. Ein Pilot-Host betreibt das Board im Prozess auf den Kernel-Tabellen und startet diesen Server nicht ([pilot/module-defaults.md](./pilot/module-defaults.md)) | [modules/board/README.de.md](../modules/board/README.de.md) |
 | `calendar` | Termine, Terminarten, Wiederholungen und Kalendereinstellungen der Gremien; überträgt Termine an CalDAV und leitet Änderungsereignisse über NATS weiter. | unterstützt | Nextcloud (CalDAV), NATS, ein eigener PostgreSQL-Server (Profil `calendar`) | [modules/calendar/README.de.md](../modules/calendar/README.de.md) |
 | `content` | Content-Engine: Beiträge mit den Kanälen E-Mail, Website (Portal) und Instagram, Mailinglisten, zeitgesteuerte Veröffentlichung. | unterstützt | NATS, SMTP über den Kernel, Instagram Graph API (optionaler Kanal), ein eigener PostgreSQL-Server (Profil `content`) | [modules/content/README.de.md](../modules/content/README.de.md) |
-| `elections` | Optionale Gremienwahlen über Helios, mit einem dauerhaften Hinweis, dass das Modul keine satzungsgemäße Wahl ersetzt. Nur App-Hälfte; kein Leaf-Service. | unterstützt | Helios (Wahlserver) | [modules/elections/README.de.md](../modules/elections/README.de.md) |
+| `elections` | Optionale Gremienwahlen über Helios, mit einem dauerhaften Hinweis, dass das Modul keine satzungsgemäße Wahl ersetzt. Nur App-Hälfte; kein Leaf-Service. In diesem Tree zurückgehalten: Die App-Konfiguration hält es ausgeschaltet („Ein Modul ein- oder ausschalten“ unten). | unterstützt | Helios (Wahlserver) | [modules/elections/README.de.md](../modules/elections/README.de.md) |
 | `files` | Dokumentenbrowser über Nextcloud-WebDAV; Bearbeitung im Browser über Collabora. | unterstützt | Nextcloud, Collabora | [modules/files/README.de.md](../modules/files/README.de.md) |
 | `finance` | Haushaltspläne, Projekte, Ausgaben, Freigaben, Buchungen, Bankkonten, SEPA-Export, FinTS- und CSV-Import. Nur Leaf-Service; die App-Hälfte liegt nicht in diesem Tree. | standardmäßig deaktiviert | NATS, Bankzugang über FinTS (optional), Nextcloud (optionale Belegablage), ein eigener PostgreSQL-Server (Profil `finance`) | [modules/finance/README.de.md](../modules/finance/README.de.md) |
 | `handover` | Übergabe der Unterlagen einer Organisation an ihre Nachfolger:innen. Platzhalter: nur `module.json` und `package.json`. | nur Manifest | noch keine | [modules/handover/README.de.md](../modules/handover/README.de.md) |
@@ -73,7 +73,8 @@ Es gibt drei getrennte Schalter; im README jedes Moduls steht, welche davon zutr
    [runbooks/tenant-lifecycle.md](./runbooks/tenant-lifecycle.md) (englisch). Ein Modul, das
    in `modules/disabled.json` steht, lässt sich auf diesem Weg nicht aktivieren. Ein Modul
    kann auch von der Gremiumsverwaltung unter Einstellungen > Module **eingeschaltet** werden
-   (`calendar`, `elections` und `votes`; mit frischer Zwei-Faktor-Prüfung, ohne Freigabe durch
+   (`calendar` und `votes`; die Selbstbedienungsliste nennt auch `elections`, das aber
+   zurückgehalten wird, siehe Punkt 3; mit frischer Zwei-Faktor-Prüfung, ohne Freigabe durch
    den Betreiber; siehe „Module self-service by the council“ im selben Runbook). Dieselben
    Module kann die Gremiumsverwaltung dort auch **ausschalten**; was das bewirkt, steht im
    nächsten Abschnitt.
@@ -81,6 +82,10 @@ Es gibt drei getrennte Schalter; im README jedes Moduls steht, welche davon zutr
    Moduls mit der Oberfläche für deaktivierte Module antworten und blendet seinen
    Navigationseintrag aus; die Daten bleiben erhalten
    ([playbooks/add-a-module.md](./playbooks/add-a-module.md), Abschnitt zur Abwahl; englisch).
+   Ein Modul kann außerdem **zurückgehalten** werden: `HELD_OFF_MODULE_IDS`
+   (`gremion-ui/src/lib/modules/held-off.ts`, derzeit `elections`) setzt es bei jedem Lesen
+   und jedem Schreiben von `config.modules` auf `false`, und der Modulschalter des Gremiums
+   bietet es weder an noch schaltet er es ein.
 
 ### Ein Modul ausschalten: die 30-Tage-Karenz
 

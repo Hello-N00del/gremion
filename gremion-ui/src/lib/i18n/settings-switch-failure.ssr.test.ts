@@ -35,7 +35,6 @@ const data = {
   isITAdmin: false,
   loeschkonzept: null,
   user: { name: 'E2E Locale', email: 'e2e-locale@example.test', groups: [] },
-  accountUrl: null,
   mfaEnrolled: null,
   stepUpEnforced: false
 }

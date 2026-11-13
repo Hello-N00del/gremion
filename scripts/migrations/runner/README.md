@@ -93,7 +93,7 @@ unknown class). Four classes:
 
 | class | chains | who dumps |
 |---|---|---|
-| `tenant-store` | `platform` | `packages/tenant-store/src/dump/cli.ts migrate --chain <id> --release <R>`: `composePreApply(chainPreApply, dumpHook)` |
+| `tenant-store` | `platform`, `kernel-api` | `platform`: `packages/tenant-store/src/dump/cli.ts migrate --chain <id> --release <R>`: `composePreApply(chainPreApply, dumpHook)`. `kernel-api`: its own migrate runner (`services/kernel-api/src/migrate/migrate.ts`) composes the same `chainPreApply` and dump hook once per customer database |
 | `legacy-boot` | `kernel-data`, `control` | `gremion-migration-dump preflight --release <T>` (gremion-deploy step 5) takes the host-side dump when a chain's `dirs[]` gains a file (Q11) |
 | `unadopted` | `module-*`, `mail` | nobody yet: a new file must carry `-- gremion:manual-dump <runbook step>` |
 | `fresh-only` | `governance` | applied by the tenant-store runner through `migrateGovernanceDatabase`, only on a database created in the same step: nothing to lose, no dump, no marker. Flips to `tenant-store` together with the `governance-migrate` runner, before any `0002`: the suite refuses a second file in a `fresh-only` chain (TASK-084-a) |

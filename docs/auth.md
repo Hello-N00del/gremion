@@ -8,13 +8,16 @@ This is the operational/technical layer. For the vision, the open-core boundary,
 and where the auth slice sits in the kernel architecture, see
 [`about-gremion.md`](./about-gremion.md).
 
-> **Carved-out modules.** The kernel ships only the always-on `core` and
-> `governance` modules. Finance, files, messaging, calendar, voting/elections,
-> content/newsletter, the task board, and the mobile app live in the separate
-> private module repos. Where a hook or helper has a seam for those modules
-> (e.g. the module-disable gate, or the finance-named capability helpers in
-> `group-helpers.ts`), this doc describes the kernel behaviour — the seam is
-> present and inert until such a module is installed.
+> **Modules.** The kernel's own manifests are the always-on `core` and
+> `governance` modules. The feature modules in this tree (`modules/`, listed in
+> [modules.md](./modules.md)) contribute their manifests at build time: the
+> default build composes ten (`core`, `governance`, `elections`, `votes`,
+> `content`, `newsletter`, `calendar`, `files`, `messages`, `board`); `finance`
+> and `vault` are in `modules/disabled.json` and contribute none. Where a hook
+> or helper has a seam for those modules (the module-disable gate, the
+> finance-named capability helpers in `group-helpers.ts`), this doc describes
+> the kernel behaviour and names the module-contributed part as such. The tables
+> of page segments and capabilities below list the kernel's own entries.
 
 ---
 
@@ -68,12 +71,12 @@ holders of the notice roles (`council-admin` and `vorstand`, de-duplicated) for 
 The string values (`guest`, `member`, …) are the exact realm-role names expected
 from Keycloak. `sessionUserFromPayload`
 ([`gremion-ui/src/hooks.server.ts`](../gremion-ui/src/hooks.server.ts)) filters
-`realm_access.roles` through the resolved tenant's role vocabulary (the default
-tenant resolves to the `Role` enum values); any realm role not in the
-vocabulary is dropped silently, and a user left with no recognised role defaults
-to `[Guest]`.
+`realm_access.roles` through the resolved tenant's role vocabulary (a tenant
+with no `config.roles` override resolves to the `Role` enum values); any realm
+role not in the vocabulary is dropped silently, and a user left with no
+recognised role defaults to `[Guest]`.
 
-Coarser-grained distinctions that the four-role chain cannot express (e.g.
+Coarser-grained distinctions that the role hierarchy cannot express (e.g.
 council-admin vs. it-admin, or any group a feature module contributes) are
 handled by the parallel, non-hierarchical group/capability layer in §7.
 
@@ -86,9 +89,11 @@ handled by the parallel, non-hierarchical group/capability layer in §7.
 segment 1 (`/committees/anything` → `committees`) to the minimum required role.
 It is **composed from the per-module manifests** via `composePageAccess()` — each
 segment is declared by its owning module under `$lib/modules/manifests/*`, where
-the per-segment rationale lives. In the kernel that is two manifests:
+the per-segment rationale lives. The kernel's own manifests are
 [`core.ts`](../gremion-ui/src/lib/modules/manifests/core.ts) and
-[`governance.ts`](../gremion-ui/src/lib/modules/manifests/governance.ts).
+[`governance.ts`](../gremion-ui/src/lib/modules/manifests/governance.ts); the
+enabled modules' manifests are overlaid next to them at build time (see
+[architecture.md](./architecture.md), "Manifests and the generated registry").
 
 `authGuard` extracts the segment via `path.split('/')[1] || 'dashboard'` and
 calls `canAccess(roles, segment, pageAccessForTenant(tenant))`. **Segments not in
@@ -102,6 +107,7 @@ The kernel's composed entries, verbatim from the manifests:
 | Page segment | Minimum role | Owning manifest | Notes |
 |--------------|-------------|-----------------|-------|
 | `dashboard`   | `Guest`        | core       | Default landing for any authenticated user. |
+| `module-off`  | `Guest`        | core       | The "Modul nicht aktiv" notice a disabled module's page request is answered with. |
 | `settings`    | `Member`       | core       | Reachable by every signed-in member (Konto sections); the Verwaltung/System admin sections are gated inside the page by `isITAdmin` and each `/api/settings*` endpoint keeps its own it-admin gate. |
 | `systemstatus`| `ITAdmin`      | core       | Provisioning-convergence page (control-plane vs. silo data-plane + active-module catalog); retry/repair actions gate further inside the page. |
 | `members`     | `Member`       | governance | Members directory. |
@@ -114,13 +120,13 @@ When adding a top-level route, add its segment to the owning module's manifest
 `pages` list (not to a literal map). A build-time coverage test
 (`page-access-coverage.test.ts`) compares the composed `Object.keys(PAGE_ACCESS)`
 against `src/routes/*` and fails CI on drift; `PAGE_ACCESS_PUBLIC_SEGMENTS`
-(`auth`, `legal`, `setup`, `api`) lists the directories intentionally allowed to
-lack an entry.
+(`auth`, `legal`, `setup`, `livekit`, `element-call`, `api`, `healthz`) lists the
+directories intentionally allowed to lack an entry.
 
 ### Per-tenant page access
 
-`pageAccessForTenant(ctx)` is what the guard and nav consume. The default tenant
-(no `config.roles` override) resolves to the same golden `PAGE_ACCESS` object, so
+`pageAccessForTenant(ctx)` is what the guard and nav consume. A tenant with no
+`config.roles` override resolves to the same golden `PAGE_ACCESS` object, so
 its behaviour is byte-identical to the composed literal. An override tenant
 delegates to the vocabulary-arg compose seam; only an **absent** `config.roles`
 means "default" — an explicit `[]` is a narrowing override.
@@ -131,23 +137,30 @@ means "default" — an explicit `[]` is a narrowing override.
 
 [`gremion-ui/src/hooks.server.ts`](../gremion-ui/src/hooks.server.ts) exports
 `authGuard`, composed in
-`sequence(correlationHandle, tenantResolveHandle, tenantBrandStyleHandle, authHandle, authGuard, cspGuard)`.
-Per-request flow, top to bottom:
+`sequence(correlationHandle, cspGuard, requestPathHandle, bodySizeGuard, csrfOriginGuard, tenantResolveHandle, tenantBrandStyleHandle, sessionEndpointGuard, authHandleUnlessExempt, authGuard, i18nHandle)`.
+The correlation id comes first, the CSP guard wraps everything after it, the
+request path is decoded (a bad encoding is a 400), the body-size and CSRF-origin
+guards (`lib/server/security/`) run before the tenant is resolved, and Auth.js
+(`authHandleUnlessExempt`) is skipped for the boot-and-resolve exempt paths when
+no tenant was resolved. Per-request flow of `authGuard`, top to bottom:
 
 ### 3.1 Boot-503 short-circuit (G-014, T4.1)
 
 `boot()` runs once on cold start. It waits for the database, runs the
-control-plane migrations, registers the default tenant, then runs the data-plane
-**fleet** migrations over every active tenant and only then sets
-`_bootComplete = true`. A **control-plane** failure populates `_bootError` and
-sets `process.exitCode = 1` so an orchestrator can recycle the container. A
-single **tenant's** data-plane migration failure no longer fails boot: it lands
-in the per-tenant readiness map and that tenant is served a tenant-scoped 503
-with a lazy re-migration retry, while every other tenant serves normally.
+control-plane migrations, then runs the data-plane **fleet** migrations over
+every active tenant (an empty fleet is a complete run: boot writes nothing into
+the tenant registry and the kernel starts with zero tenants) and only then sets
+`_bootComplete = true`. A **control-plane** failure populates `_bootError`; a
+transient database start-up error is re-attempted up to a ceiling, and any other
+failure (or the ceiling) sets `process.exitCode = 1` so an orchestrator can
+recycle the container. A single **tenant's** data-plane migration failure no
+longer fails boot: it lands in the per-tenant readiness map and that tenant is
+served a tenant-scoped 503 with a lazy re-migration retry, while every other
+tenant serves normally.
 
 `authGuard` checks `_bootComplete` first:
 
-- `_bootError` set → permanent `503 Service Unavailable: boot failed`.
+- `_bootError` set and not retryable → permanent `503 Service Unavailable: boot failed`.
 - Still booting → `503` with `Retry-After: 5` and a German HTML waiting page that reloads itself (`lib/server/waiting-page.ts`).
 - Complete → fall through.
 
@@ -163,17 +176,29 @@ than calling `locals.auth()` again, avoiding a race-prone double-invocation.
 
 ### 3.3 Public paths bypass
 
-These prefixes skip the session lookup and call `resolve(event)` directly (the
-correlation + tenant-resolve handles ahead of `authGuard` still run):
+These entries (`PUBLIC_PATHS` in `hooks.server.ts`) skip the session lookup and
+call `resolve(event)` directly (the handles ahead of `authGuard` still run). The
+`/api` entries are exact routes, nothing below them is public:
 
 ```
-/auth/                       Sign-in / sign-out / callback
-/legal/                      Datenschutz, Impressum, Barrierefreiheit
-/setup                       First-run setup wizard
-/api/setup/seed              One-shot prod seed — guarded by X-Seed-Token + empty-DB
-/api/health                  Unauthenticated boot-status probe (no secrets)
-/api/public/protocols/       Published-protocol PDF download — self-enforces published + public visibility
+/auth/                                     Sign-in / sign-out / callback
+/legal/                                    Datenschutz, Impressum, Barrierefreiheit
+/livekit/, /element-call/, /element-call   Messaging module: the LiveKit proxy and the Element Call widget host; their own handlers authorise
+/newsletter/unsubscribe, /api/newsletter/unsubscribe, /content/unsubscribe
+                                           Unsubscribe links opened by a recipient with no session; single-use token
+/api/internal/newsletter/render, /resolve-group, /send-mail, /api/internal/content/portal-publish
+                                           Leaf callbacks: each handler refuses without its x-internal-auth secret
+/api/setup/seed                            One-shot prod seed — guarded by X-Seed-Token + empty-DB
+/api/health                                Unauthenticated boot-status probe (no secrets)
+/api/public/protocols/*/pdf                Published-protocol PDF download — self-enforces published + public visibility
 ```
+
+The first-run setup wizard (`/setup`, `/api/setup/{admins,config,health}`) is
+gone: the first administrator of a customer is created by the platform
+operator, and `/api/setup/seed` and `/api/setup/test-smtp` are the only
+`/api/setup` routes left. `/healthz` and `/api/internal/` are answered earlier,
+by the boot-and-resolve exemption described in
+[deployment-architecture.md](./deployment-architecture.md).
 
 ### 3.4 Bearer JWT path (`/api/**` only)
 
@@ -184,9 +209,10 @@ For `/api/` paths, `authGuard` inspects the `Authorization` header. If
    ([`gremion-ui/src/lib/server/jwt-verify.ts`](../gremion-ui/src/lib/server/jwt-verify.ts))
    validates against the resolved tenant's Keycloak JWKS, issuer, and `exp`.
 2. `sessionUserFromPayload(payload, vocabulary)` builds a `SessionUser`
-   (`sub` / `preferred_username` / `jti` fallback for the user id;
-   `realm_access.roles` filtered through the tenant role vocabulary; `groups`,
-   `loa`, and `authTime` carried through for §6/§7).
+   (the user id is `sub` and nothing else: a token without `sub` has no
+   session and is answered with a machine-readable 401, because the id is the
+   audit actor; `realm_access.roles` filtered through the tenant role
+   vocabulary; `groups`, `loa`, and `authTime` carried through for §6/§7).
 3. **iss-match backstop:** the token verified against *some* realm, but it must be
    *this* host's tenant realm — `bearerTenantMatches` compares the token `iss`
    against the resolved tenant issuer. A mismatch returns `403 TenantMismatch`
@@ -197,6 +223,13 @@ For `/api/` paths, `authGuard` inspects the `Authorization` header. If
    the server-side handlers.
 5. The module-disable gate (§4) runs, then `resolve(event)` returns — the cookie
    path is skipped.
+
+Two further rules of this branch: an `internalFetch` self-call carries the
+process's `INTERNAL_PUSH_SECRET` as its Bearer and is honoured only on an exact
+allow-list of (method, path) pairs and only on the internal hop (otherwise a
+distinct 401 `internal_bearer_not_allowed`); and an `Authorization` header that
+does not authenticate never falls back to the cookie session (401), because the
+CSRF origin guard exempts requests that carry one.
 
 External / service clients authenticate this way; the web frontend never does.
 
@@ -227,10 +260,12 @@ External / service clients authenticate this way; the web frontend never does.
 
 The kernel composes its route map and module toggles from the manifests. Both
 kernel manifests (`core`, `governance`) are `toggleable: false`, and
-`REQUIRED_MODULES` is empty, so `defaultModulesConfig()` is `{}` — **the kernel
-has no toggleable modules and nothing is gated off by default**. The gate machinery
-nonetheless ships, because a feature module installed on top of the kernel is
-toggleable per tenant.
+`REQUIRED_MODULES` is empty. `defaultModulesConfig()` therefore contains exactly
+the toggleable modules of the composed manifests: each defaults to `true` unless
+its manifest declares `defaultEnabled: false`. A module can also be **held off**:
+`config.modules` pins it to `false` on every read and every write, so the rail,
+the pages and the API answer with the module-disabled surface. The held-off set
+is currently `elections` (`HELD_OFF_MODULE_IDS`, `gremion-ui/src/lib/modules/held-off.ts`).
 
 [`gremion-ui/src/lib/server/module-gate.ts`](../gremion-ui/src/lib/server/module-gate.ts)
 exposes:
@@ -244,11 +279,16 @@ exposes:
 
 `authGuard` calls `moduleGateResponse` for `/api/*` paths on **both** the Bearer
 and cookie branches (#256-1: a Bearer caller must pass the same gate as a cookie
-session). A disabled-module **page** deep link is handled in
-`+layout.server.ts` instead — the layout load throws so SvelteKit can render the
-styled "Modul nicht aktiv" surface (a throw from this hook would render only the
-bare static error template). Disabling a module never removes a role grant; it
-just makes that module's routes 403 until it is re-enabled in `/settings`.
+session). A disabled-module **page** deep link is answered by
+`moduleOffPageResponse` (`gremion-ui/src/lib/server/module-off-response.ts`): it
+fetches the real `/module-off/<id>` route in-process and returns it with a 403
+status, so the styled "Modul nicht aktiv" notice renders inside the shell and the
+disabled module's own page and layout loads never run. Disabling a module never
+removes a role grant; it just makes that module's routes 403 until it is
+re-enabled. The council's admin switches the self-service modules in Settings >
+Module (`SWITCHABLE_CATALOGUE_IDS`: `calendar`, `elections`, `votes`; a held-off
+module is never offered), and the operator's requests switch the others;
+switching off starts the 30-day Karenz ([modules.md](./modules.md)).
 
 ---
 
@@ -308,9 +348,35 @@ both phases against a real Keycloak 26.6.1 (`enrolment` then `flow` in
 `kc2661-token-claims.json`).
 
 Residual: a user must enroll their OTP *outside* a step-up (imported members get
-only `UPDATE_PASSWORD`, TASK-031 D-5); an attacker holding only the password can
-still enroll through the account console before the legitimate user does, so
-mandatory first-login enrollment for members remains a product decision.
+only `UPDATE_PASSWORD`, TASK-031 D-5). For a member who has no OTP credential yet, the
+password is not the only way in: measured on Keycloak 26.6.1 with the base realm, a
+request made by hand with `kc_action=CONFIGURE_TOTP` and neither `prompt` nor `acr_values`
+inside a live SSO session opens the setup form without asking for the password
+(callback `kc_action_status=success`, one OTP credential added); a step-up (`acr_values=loa2`)
+in the same browser then asks only for the code just enrolled and returns `loa2`. So whoever
+holds an unlocked session of a member without a second factor, or the password alone, can
+enrol their own authenticator and reach `loa2` before the legitimate user does, by going
+around the app's own button (which asks for the password, see below). Measured only seconds
+after sign-in; whether Keycloak's per-action `max_auth_age` (default 300 s) forces a fresh
+authentication for an older session was NOT measured. This is a property of the realm, not
+of the app: closing it needs a `max_auth_age` setting on the actions or mandatory first-login
+enrollment for members, which remains a product decision (realm work, not part of Settings > Profil).
+
+**Profile and account actions inside the app (members).** Settings > Profil no longer
+links to the Keycloak account console (its first API call is refused on a customer realm,
+which has no client scopes for it). A member edits their own first and last name in the app
+(saved through the admin client for the session's own Keycloak user id, nothing else about the
+user changes), and three buttons start Keycloak application-initiated actions through the
+normal `gremion-ui` sign-in: UPDATE_PASSWORD, CONFIGURE_TOTP and UPDATE_EMAIL (the last one
+only while the realm has that required action enabled; customer creation and reconcile enable
+it, with the action's own `verifyEmail` config so that Keycloak confirms the new address by mail
+before it applies it, see `docs/runbooks/tenant-lifecycle.md`). Every one sends `kc_action`,
+`prompt=login` and, for a user who has an OTP credential, `acr_values=loa2`, so the password
+and the existing one-time code are asked again before the action form opens. A user without
+an OTP is not sent `loa2` (the OTP-or-deny flow would refuse them) and re-enters the password
+only. Measured on Keycloak 26.6.1 and recorded in the header of
+`gremion-ui/src/lib/server/profile/account-actions.ts`; the return `kc_action_status`
+(success, cancelled, error) is read once and shown as a notice, the session stays intact.
 
 The realm also carries `passwordPolicy` (`length(12) and notUsername and
 notEmail and passwordHistory(3)`) and PKCE S256 on `gremion-ui` (Auth.js sends
@@ -330,9 +396,11 @@ test that two concurrent refreshes with the same token both end in a good
 session.
 
 The kernel ships the LoA primitive and threads `loa` / `authTime` onto every
-session. The concrete protected actions that *call* `evaluateStepUp` are owned by
-the surfaces that need them (governance and feature modules); a fresh kernel with
-no such action has no live caller.
+session. The module switch (`lib/server/module-switch/step-up.ts`) and the
+erasure orchestrator (`lib/server/erasure/step-up.ts`) call `evaluateStepUp`
+with `STEPUP_FRESHNESS_SECONDS` (default 300); `/auth/step-up` is the page that
+sends the user through the LoA-2 flow. Other protected actions are owned by the
+surfaces that need them.
 
 ---
 
@@ -370,7 +438,7 @@ Typed error values produced by the `jwt` callback, all of which force re-login:
 
 ## 7. Group-based capabilities
 
-The four-role enum in §1 is a coarse, strictly-nested containment chain. Finer,
+The role enum in §1 is coarse, and its main rungs are a strictly-nested containment chain. Finer,
 non-hierarchical distinctions — and any capability a feature module contributes —
 ride on a parallel **group/capability** layer.
 
@@ -395,8 +463,8 @@ any feature module:
   unions narrow it inside the owning module.
 - `CAPABILITIES` is built by the registry's `composeCapabilities()` — the single
   composition point. Every installed module contributes its own
-  `{ capabilityId → groups[] }` map. In the kernel only `core` contributes,
-  exposing the platform group literals.
+  `{ capabilityId → groups[] }` map. The kernel's own `core` manifest contributes
+  the platform group literals; the other composed manifests contribute theirs.
 - `PLATFORM_GROUPS` is sourced from the always-on `core` manifest:
 
   | Constant | Group string | Meaning |
@@ -409,7 +477,8 @@ any feature module:
   returns the any-of group set that grants a capability.
 
 A feature module (finance, etc.) brings its own group literals and capability
-ids — those are absent from a kernel-only build.
+ids — those are absent from a build that does not compose that module (finance is
+in `modules/disabled.json`).
 
 ### 7.3 The role-helper API
 
@@ -426,15 +495,15 @@ The helpers are pure `hasAny(...)` checks over the group set:
 |--------|----------------------------------------------------|------------------|
 | `hasGroup(g)` | exactly `g` | always available — low-level membership test |
 | `hasAny(...gs)` | any of `gs` | always available — building block |
-| `canApproveAny()` | `finance.approve.any` | the finance feature contributes this capability; **absent in the kernel → `false`** |
+| `canApproveAny()` | `finance.approve.any` | the finance feature contributes this capability; **absent unless finance is composed → `false`** |
 | `canEditBudget()` | `finance.budget.edit` | as above → `false` |
 | `canApproveBudget()` | `finance.budget.approve` | as above → `false` |
 | `canConfigureFints()` | `finance.fints.configure` | as above → `false` |
 | `canManageSubOrgs()` | `finance.suborgs.manage` | as above → `false` |
 
 The finance-named helpers are part of the seam, not the kernel feature set. Each
-looks up a capability id the **finance module** contributes; in a kernel-only
-build those ids are absent from the composed `CAPABILITIES` map, so the helper
+looks up a capability id the **finance module** contributes; in a build that
+does not compose finance those ids are absent from the composed `CAPABILITIES` map, so the helper
 resolves an empty group list and degrades to `false` (the capability is simply
 ungranted) rather than crashing. They light back up automatically when the
 finance module is installed.
@@ -449,19 +518,22 @@ finance module is installed.
 [`gremion-ui/src/lib/components/layout/nav-schema.ts`](../gremion-ui/src/lib/components/layout/nav-schema.ts)
 declares the sidebar as a `navSchema: NavItem[]`. Each `item` or `section` may
 carry an optional **`needs: string[]`** — the list of groups, **any** of which
-grants visibility (OR semantics). Items with no `needs` are visible to everyone.
+grants visibility (OR semantics), an optional `role`, and an optional `moduleId`.
+Items with no `needs` and no `role` are visible to everyone.
 
-`filterNavForSession(navSchema, helpers)` (same module) applies the helpers:
+`filterNavForSession(navSchema, helpers, roles, disabledModules)` (same module)
+applies the helpers:
 
-- An item is hidden when it has `needs` and `helpers.hasAny(...needs)` is false.
+- An item is hidden when its `moduleId` is in `disabledModules`, when its `role`
+  is not held, or when it has `needs` and `helpers.hasAny(...needs)` is false.
 - A `section` collapses entirely when **all** of its children are hidden — empty
   sections are pruned so no dangling header renders.
 
 It is wired in
 [`gremion-ui/src/routes/+layout.server.ts`](../gremion-ui/src/routes/+layout.server.ts):
 the layout load builds the helpers from `session.user.groups` (via
-`capabilitiesForTenant(tenant)`), calls `filterNavForSession`, and returns the
-filtered `nav` plus any badge counts.
+`capabilitiesForTenant(tenant)`), calls `filterNavForSession` and then
+`retermNav`, and returns the filtered `nav` plus any badge counts.
 
 Some nav items are gated by **role** (`Role.*`) rather than `needs[]` groups — in
 particular Portal-Verwaltung (`/portal`) is gated by `Role.CouncilAdmin` (see
@@ -514,7 +586,7 @@ environment (see [`.env.example`](../.env.example)):
 | `AUTH_KEYCLOAK_ID` | OIDC client id for the app shell (`gremion-ui`). |
 | `AUTH_KEYCLOAK_SECRET` | OIDC client secret (set after the realm is created by tenant-create). |
 | `AUTH_KEYCLOAK_ISSUER` | Not read by gremion-ui: the issuer comes from the tenant row. Only the dev realm-consistency check reads it from `.env`. |
-| `KEYCLOAK_ISSUER_URL` | Issuer used by the server-side JWKS / Bearer verification. |
+| `KEYCLOAK_ISSUER_URL` | Listed in `.env.example`; `gremion-ui` does not read it. Bearer verification takes the JWKS URL and issuer from the resolved tenant (`kcInternal` or `issuer`). |
 | `KEYCLOAK_ADMIN_CLIENT_SECRET` | Service-account secret for `gremion-ui` → Keycloak admin API calls. |
 | `KC_ADMIN_ALLOWLIST_CIDRS` | CIDR allowlist for the Keycloak admin console / Admin REST API. |
 
@@ -522,5 +594,5 @@ OIDC client secrets are placed into the composed per-tenant realm document by
 `buildTenantRealmDoc` at tenant-create time (B-01: nothing is substituted at
 container start, and no realm is imported at boot).
 The Keycloak realm encodes the LoA mapping (`acr.loa.map`) that §5's `ACR_TO_LOA`
-mirrors. Keycloak runs as one of the kernel's default services (see
-[`about-gremion.md`](./about-gremion.md) for the governance-only service set).
+mirrors. Keycloak runs in the state project (see
+[`architecture.md`](./architecture.md) for the service set).

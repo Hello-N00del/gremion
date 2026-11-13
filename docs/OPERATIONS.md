@@ -26,35 +26,46 @@ layer: how to run, back up, monitor, and recover a deployment.
 
 ## Services & Databases
 
-The governance-only stack runs **seven default services** (`docker-compose.yml`):
+The stack is two kinds of compose project, the **state** project (databases,
+Keycloak, NATS, legal, vector and, in production, the edge) and one **app** project
+per colour (`gremion-ui`, `gremion-public`, `control-panel`, `kernel-api`, the
+enabled leaf services and the `migrate` / `tenant-create` one-shots). The service
+tables, images and compose profiles are in
+[deployment.md](deployment.md#what-gets-deployed); the placement and limits are in
+[ops/pooled-stack-layout.md](ops/pooled-stack-layout.md).
 
-| Service | Purpose |
-|---------|---------|
-| `postgres` | PostgreSQL 16 — backs Keycloak, the governance kernel, and the control plane |
-| `keycloak` | Identity provider (OIDC/SSO), the tenant's realm |
-| `gremion-ui` | SvelteKit admin shell — governance domain (committees, members, org-unit tree, protocols, resolutions) |
-| `gremion-public` | Read-only public portal (no auth, no sessions) served at `public.${DOMAIN}` |
-| `legal` | Static legal/Impressum pages (nginx) |
-| `vector` | Log pipeline — tails Traefik access logs, pseudonymises IPs, enforces retention |
-| `mailpit` | SMTP catcher for staging/local dev |
+**Local dev.** `make up` runs both projects with `STACK=dev` (state project
+`dev-state`, app project `dev-app-blue`), so a bare `docker compose` in the
+repository addresses neither. This guide writes the two command prefixes once:
 
-The **production profile** adds the edge and pooling tier
-(`docker compose -f docker-compose.yml -f docker-compose.prod.yml`):
-`traefik` + `docker-socket-proxy` (in `docker-compose.yml`, `profiles: [production]`)
-and `pgbouncer`, `cloudflared`, `fallback` (in `docker-compose.prod.yml`).
+```bash
+DS="env STACK=dev IMAGE_TAG=dev docker compose -p dev-state"
+DA="env STACK=dev COLOUR=blue IMAGE_TAG=dev docker compose -f docker-compose.app.yml -f docker-compose.app.dev.yml -p dev-app-blue"
+```
 
-PostgreSQL hosts **three databases**, created once by
-`docker/postgres/init-databases.sh` on first init (mirrored in
-`k8s/base/postgres/configmap.yaml` for Kubernetes):
+`$DS` is the Makefile's `DEV_STATE` and `$DA` its `DEV_APP`; `make ps`,
+`make logs`, `make shell-db`, `make shell-kc`, `make health` and `make rebuild`
+already use them. **On a distribution host** every command is
+`docker compose --env-file /opt/gremion/etc/env/<project>.env <verb>` run from the
+release tree, and the operating procedures are
+[ops/runbook/](ops/runbook/README.md).
+
+PostgreSQL 18 (`postgres:18-alpine`) hosts **three databases** from the init
+script, created once by `docker/postgres/init-databases.sh` on first init
+(mirrored in `k8s/base/postgres/configmap.yaml` for Kubernetes):
 
 | Database | Owner | Contents | Impact if lost |
 |----------|-------|----------|----------------|
 | `keycloak` | `keycloak` | User accounts, sessions, OIDC config, realm | All users locked out |
-| `gremion` | `gremion` | Governance kernel data — committees, members, org-unit tree, protocols, resolutions/Beschlüsse, the hash-chained audit log (INV-1), tenant config | Admin shell + portal data unavailable |
+| `gremion` | `gremion` | Governance kernel data in the pre-pooled layout — committees, members, org-unit tree, protocols, resolutions/Beschlüsse, the hash-chained audit log (INV-1); a customer's own kernel database is `t_<tenant id hex>__kernel` | Admin shell + portal data unavailable |
 | `control` | `control` | Control-plane registry — tenant registry + fleet-migration ledger (`gremion-ui/migrations-control/`) | Tenant resolution fails; every request 503s |
 
-A read-only login role `gremion_public_reader` is also created (used by
-`gremion-public`); it is granted SELECT on app tables by migration 008.
+Besides these, the same server holds `gremion_platform` (the platform schema,
+created by `gremion-tenant init`) and every customer's kernel database. Each
+enabled module has its own PostgreSQL server (`<id>-postgres`) and the governance
+databases live on `governance-postgres`. A read-only login role
+`gremion_public_reader` is also created by the init script (used by
+`gremion-public`); it is granted SELECT on app tables by migration 0058.
 
 ---
 
@@ -69,8 +80,10 @@ Task-specific operator runbooks live under [`docs/runbooks/`](runbooks/) and
 | [runbooks/tenant-edge.md](runbooks/tenant-edge.md) | Tenant edge routing (whole-host resolution, per-host Traefik routers, control-DB bootstrap) |
 | [runbooks/tenant-lifecycle.md](runbooks/tenant-lifecycle.md) | Provisioning, suspending, and deleting tenants |
 | [runbooks/pgbouncer.md](runbooks/pgbouncer.md) | PgBouncer transaction-pooling front (production overlay) — deploy / verify / rollback |
+| [runbooks/dead-letter.md](runbooks/dead-letter.md) | Dead letters: find, replay, requeue, rebuild after a JetStream loss |
 | [runbooks/public-portal-host.md](runbooks/public-portal-host.md) | The public portal under a customer's own host: DNS, the three env keys, the hand-placed router file, live checks |
 | [ops/runbook/README.md](ops/runbook/README.md) | The four-procedure operations runbook: install, upgrade, backup and restore (supersedes ops/restore-runbook.md) |
+| [ops/host-tooling.md](ops/host-tooling.md) | The `gremion-*` host programs and the `/opt/gremion` layout |
 | [ops/setup.md](ops/setup.md) | First-time setup |
 
 ---
@@ -79,14 +92,25 @@ Task-specific operator runbooks live under [`docs/runbooks/`](runbooks/) and
 
 ### What is backed up
 
-The backup system covers the three PostgreSQL databases — `keycloak`, `gremion`,
-and `control` — plus, for tenant-scoped backups, each tenant's Keycloak realm
-export. The Keycloak DB holds all accounts and sessions; the `gremion` DB holds all
-governance data and the audit log; the `control` DB holds the tenant registry and
-fleet-migration ledger (without it the stack cannot resolve tenants and every
-request 503s).
+The kernel scripts below cover the three init-script databases — `keycloak`,
+`gremion`, and `control` — plus, for tenant-scoped backups, each tenant's
+Keycloak realm export. The Keycloak DB holds all accounts and sessions; the
+`gremion` DB holds the kernel-level governance data and the audit log; the
+`control` DB holds the tenant registry and fleet-migration ledger (without it the
+stack cannot resolve tenants and every request 503s).
 
-### Global backup (`scripts/backup.sh`)
+**On a distribution host the whole-system backup is `gremion-backup`**
+(`infra/host/bin/gremion-backup`, run by `gremion-backup.timer`), which enumerates
+the artefact set from the running system: every PostgreSQL server of the state
+project (listed in `BACKUP_POSTGRES_SERVICES`; a running server missing from the
+list refuses the run), the state volumes and `/opt/gremion/etc` without the
+per-tenant backup keys, into one restic snapshot that it mirrors off-site and
+reads back. It runs this repository's `scripts/backup.sh` for the kernel zone
+(`keycloak`, `gremion`, `control`). The pilot posture is "installed, verified
+once, then off": see [ops/runbook/backup.md](ops/runbook/backup.md) and
+[ops/runbook/restore.md](ops/runbook/restore.md).
+
+### Kernel backup (`scripts/backup.sh`)
 
 `scripts/backup.sh` is a **restic + rclone** pipeline (not a plain `pg_dump`
 dropper):
@@ -124,15 +148,41 @@ credentials follow rclone's `RCLONE_CONFIG_<REMOTE>_<KEY>` convention
 
 > `.env.example` ships restic/rclone settings under the **Backup** section:
 > `RESTIC_PASSWORD`, `RCLONE_BACKEND_TYPE`, `RCLONE_ENDPOINT`,
-> `RCLONE_ACCESS_KEY_ID`, `RCLONE_SECRET_ACCESS_KEY`, `RCLONE_BUCKET`.
+> `RCLONE_ACCESS_KEY_ID`, `RCLONE_SECRET_ACCESS_KEY`, `RCLONE_BUCKET`. The host
+> template `state.env` carries `RESTIC_REPOSITORY`, `RESTIC_PASSWORD`,
+> `RCLONE_REMOTE`, `RCLONE_BUCKET`, `RCLONE_REMOTE_PATH` and the
+> `RCLONE_CONFIG_BACKUP_*` keys instead.
 
-**Recommended:** daily automated backups. Schedule with cron:
+**Recommended:** daily automated backups. On a host the schedule is
+`gremion-backup.timer` (`infra/host/templates/systemd/`), installed disabled for the
+pilot posture and enabled with `systemctl enable --now gremion-backup.timer`
+([ops/runbook/backup.md](ops/runbook/backup.md), "Turning it back on"). A
+standalone checkout can schedule the kernel script with cron:
 
 ```bash
 crontab -e
 # Run the backup pipeline at 02:00 daily:
 0 2 * * * cd /path/to/gremion && ./scripts/backup.sh > /var/log/gremion-backup.log 2>&1
 ```
+
+#### Which compose project the scripts address
+
+`scripts/backup.sh`, `scripts/restore.sh` and `scripts/tenant-backup.sh` run a
+bare `docker compose exec -T postgres` from the repository and take no project
+flag. Compose resolves that to the project named by `COMPOSE_PROJECT_NAME`, and
+without it to a project named after the checkout directory, which is not a running
+one: the script then stops with `service "postgres" is not running`. On a host,
+`gremion-backup` provides the project. For the local stack, name the state project
+in the environment of each call to `backup.sh` or `restore.sh`:
+
+```bash
+COMPOSE_PROJECT_NAME=dev-state ./scripts/backup.sh
+COMPOSE_PROJECT_NAME=dev-state ./scripts/restore.sh --snapshot latest gremion
+```
+
+Both scripts also need `restic` on the machine that runs them (and `rclone` once
+`RCLONE_BUCKET` is set). The cron line above needs the same variable when the
+checkout runs the dev projects.
 
 ### Per-tenant backup (`scripts/tenant-backup.sh`)
 
@@ -158,6 +208,13 @@ separate, a later tenant delete can crypto-shred that one key and instantly
 invalidate only that tenant's backups. Requires `CONTROL_DATABASE_URL`,
 `POSTGRES_USER`, `KEYCLOAK_ADMIN`, and `KEYCLOAK_ADMIN_PASSWORD`.
 
+The script reads the registry with `psql` from the machine it runs on, so
+`CONTROL_DATABASE_URL` must be reachable from there (`.env.example` does not carry
+the key), and it exports the realm from `KC_BASE_URL` (default
+`http://localhost:8080/auth`). This guide has no procedure for running it against
+the local dev stack, for which there is no local tenant-creation procedure either
+([LOCAL_TESTING.md](LOCAL_TESTING.md#setting-up-a-tenant)).
+
 ### Restore (`scripts/restore.sh`)
 
 > **WARNING:** Restore DROPS and recreates the target database. Always take a
@@ -176,6 +233,11 @@ invalidate only that tenant's backups. Requires `CONTROL_DATABASE_URL`,
 ./scripts/restore.sh keycloak backups/current/keycloak.sql.gz
 ```
 
+On the local stack, prefix every restoring call with
+`COMPOSE_PROJECT_NAME=dev-state`
+([Which compose project the scripts address](#which-compose-project-the-scripts-address));
+`--list-snapshots` only reads the restic repository and needs no project.
+
 For the governance kernel the restore targets are **`keycloak`, `gremion`, and
 `control`**. The restore process:
 
@@ -184,8 +246,11 @@ For the governance kernel the restore targets are **`keycloak`, `gremion`, and
 3. terminates connections, drops and recreates the database with the correct owner
 4. restores from the gzipped SQL dump
 
-A full incident walkthrough lives in
-[docs/ops/restore-runbook.md](ops/restore-runbook.md).
+The current restore procedures (the provider host backup, the platform restore
+into a non-production stack, the reboot measurement) are in
+[ops/runbook/restore.md](ops/runbook/restore.md); the older walkthrough in
+[ops/restore-runbook.md](ops/restore-runbook.md) is superseded and kept as a
+historical reference.
 
 ### Backup retention
 
@@ -201,22 +266,21 @@ a mirror via `rclone sync`. Per-tenant bundles are pruned by
 ### Container logs (Docker Compose)
 
 ```bash
-# All services
-docker compose logs -f
+# All services of both projects, or one service
+make logs
+make logs SERVICE=gremion-ui          # app project: gremion-ui, gremion-public, migrate, tenant-create
+make logs SERVICE=keycloak            # any other service: the state project
+make logs SERVICE=postgres
+$DA logs -f control-panel             # control-panel and kernel-api are app-project services that
+$DA logs -f kernel-api                # `make logs SERVICE=…` looks for in the state project
 
-# Specific service
-docker compose logs -f gremion-ui
-docker compose logs -f keycloak
-docker compose logs -f postgres
-
-# Last 100 lines / since 5 minutes ago / with timestamps
-docker compose logs -n 100 gremion-ui
-docker compose logs --since 5m keycloak
-docker compose logs -t gremion-ui
-
-# Or via the Makefile (pass SERVICE=…)
-make logs SERVICE=gremion-ui
+# Last 100 lines / since 5 minutes ago / with timestamps (state project; use $DA for the app colour)
+$DS logs -n 100 keycloak
+$DS logs --since 5m keycloak
+$DA logs -t gremion-ui
 ```
+
+(`$DS` and `$DA` are defined under [Services & Databases](#services--databases).)
 
 ### Container logs (Kubernetes)
 
@@ -231,7 +295,9 @@ kubectl logs -n gremion-system <pod-name> -f --timestamps=true
 In production, Traefik writes JSON access logs to the `traefik-logs` volume and
 the **`vector`** service tails them, pseudonymises client IPs (ipcrypt-nd, key in
 the `ipcrypt_key` secret), and enforces retention before writing the processed
-stream to `vector-processed-logs` (`/logs/processed/security.log`). Retention is
+stream to `vector-processed-logs` (`/logs/processed/security.log`); both volumes
+are project-scoped (`${STACK}-state_traefik-logs`,
+`${STACK}-state_vector-processed-logs`). Retention is
 driven by `LOG_ACCESS_RETENTION_SECONDS` (passed in as `LOG_RETENTION_SECONDS`),
 with the policy documented in [docs/log-retention-policy.md](log-retention-policy.md).
 GDPR-safe defaults and hard caps live in `.env.example`:
@@ -252,8 +318,8 @@ through the vector container) and Keycloak's event store already obey the ceilin
 see the "Upper bound" section of the policy.
 
 ```bash
-docker compose logs -f vector             # pipeline diagnostics
-docker compose exec vector ls -lh /logs/processed/   # processed output
+make logs SERVICE=vector                  # pipeline diagnostics
+$DS exec vector ls -lh /logs/processed/   # processed output
 ```
 
 The pseudonymisation key is rotated with
@@ -262,20 +328,22 @@ The pseudonymisation key is rotated with
 ### Container health
 
 ```bash
-# Docker Compose
-docker compose ps        # or: make ps
+# Docker Compose (both projects)
+make ps
 
 # Shows health status, e.g.:
-# NAMES        STATUS
-# postgres     Up 2 days (healthy)
-# keycloak     Up 2 days (healthy)
-# gremion-ui     Up 2 days (healthy)
+# NAMES                       STATUS
+# dev-state-postgres-1        Up 2 days (healthy)
+# dev-state-keycloak-1        Up 2 days (healthy)
+# dev-app-blue-gremion-ui-1   Up 2 days (healthy)
 ```
 
-Health checks are defined per service in `docker-compose.yml`. The `gremion-ui`
-probe deliberately sends an `X-Forwarded-Host: default.${DOMAIN}` header (and the
-proxy-trust header when set) because the fail-closed tenant resolver 404s any
-request lacking a forwarded host — a bare probe would report a false negative.
+Health checks are defined per service in `docker-compose.yml` and
+`docker-compose.app.yml`. The `gremion-ui` and `control-panel` probes call
+`/healthz`, which is exempt from tenant resolution and answers `200` as soon as
+the process listens, even while it is still booting; `/api/health` is the boot
+probe (`200` only once boot completed), see
+[deployment-architecture.md](deployment-architecture.md#healthz-and-the-boot-and-resolve-exemption).
 
 ### Endpoint checks
 
@@ -284,15 +352,21 @@ request lacking a forwarded host — a bare probe would report a false negative.
 ```bash
 make health
 # === Endpoint Checks ===
-#   gremion-ui  (3001): OK
+#   gremion-ui  (3001): NOT REACHABLE     <- expected locally, see below
 #   Keycloak  (8082): OK
 #   Legal     (8083): OK
 ```
 
+The target requests `http://localhost:3001/` without the tenant resolver's
+headers, which answers 403 once `TENANT_PROXY_SHARED_SECRET` is set (the app
+project requires it), so its `gremion-ui` line cannot read `OK` on the local
+stack. Probe `/healthz` instead; a tenant route needs the three headers in
+[LOCAL_TESTING.md](LOCAL_TESTING.md#probing-gremion-ui-by-hand).
+
 Manually:
 
 ```bash
-curl -sf http://localhost:3001/                       # gremion-ui (admin shell)
+curl -sf http://localhost:3001/healthz                # gremion-ui liveness (no headers, no tenant)
 curl -I  http://localhost:8082/auth/health/ready      # Keycloak readiness
 curl -sf http://localhost:8083/impressum              # Legal pages
 # Verify the realm is loaded:
@@ -317,14 +391,15 @@ kubectl get events -n gremion-system --sort-by='.lastTimestamp'
 The kernel's three databases are maintained with standard PostgreSQL tooling.
 
 ```bash
-# Vacuum (reclaim space, refresh stats)
-docker compose exec postgres vacuumdb -U postgres -d gremion
-docker compose exec postgres vacuumdb -U postgres -d keycloak
-docker compose exec postgres vacuumdb -U postgres -d control
+# Vacuum (reclaim space, refresh stats); add -d gremion_platform and each
+# customer's t_<hex>__kernel database on a pooled stack
+$DS exec postgres vacuumdb -U postgres -d gremion
+$DS exec postgres vacuumdb -U postgres -d keycloak
+$DS exec postgres vacuumdb -U postgres -d control
 
 # Reindex
-docker compose exec postgres reindexdb -U postgres -d gremion
-docker compose exec postgres reindexdb -U postgres -d keycloak
+$DS exec postgres reindexdb -U postgres -d gremion
+$DS exec postgres reindexdb -U postgres -d keycloak
 
 # Kubernetes
 kubectl exec -n gremion-system <postgres-pod> -- vacuumdb -U postgres -d gremion
@@ -332,16 +407,19 @@ kubectl exec -n gremion-system <postgres-pod> -- vacuumdb -U postgres -d gremion
 
 ### Keycloak realm export
 
-Back up the realm configuration (clients, groups, roles) as JSON. `<realm>` is the
-last path segment of `AUTH_KEYCLOAK_ISSUER`:
+Back up a tenant's realm configuration (clients, groups, roles) as JSON.
+`<realm>` is the tenant's realm name (the slug); a per-tenant realm backup is also
+part of `scripts/tenant-backup.sh`. Do not copy the export over
+`docker/keycloak/realm-export.json`: that file is the gitignored generator output
+below, not a backup:
 
 ```bash
-docker compose exec keycloak /opt/keycloak/bin/kc.sh export \
+$DS exec keycloak /opt/keycloak/bin/kc.sh export \
   --realm "<realm>" \
   --file /tmp/realm-export.json
 
-docker compose cp keycloak:/tmp/realm-export.json \
-  docker/keycloak/realm-export.json
+$DS cp keycloak:/tmp/realm-export.json \
+  backups/realm-<realm>.json
 ```
 
 > B-01: **no realm is imported at boot.** `docker/keycloak/realm-export.json` is
@@ -354,13 +432,18 @@ docker compose cp keycloak:/tmp/realm-export.json \
 
 ### Update services
 
-Gremion builds **five** first-party images, all from this repository and all
-named `ghcr.io/hello-n00del/gremion-<service>`: `gremion-ui`, `gremion-public`,
-`gremion-legal`, `gremion-vector`, and — in the production profile —
-`gremion-fallback`. Each carries a `build:` section in `docker-compose.yml` or
-`docker-compose.prod.yml`, and CI fails the build if one ever loses it. Pulled:
-Keycloak, Postgres, Mailpit, PgBouncer, Traefik, the Docker-socket proxy, and
-`cloudflared`.
+Gremion builds its first-party images from this repository, all named
+`ghcr.io/hello-n00del/gremion-<service>`: `gremion-ui`, `gremion-public`,
+`gremion-control-panel`, `gremion-migrate`, `gremion-kernel-api`,
+`gremion-calendar`, `gremion-content`, `gremion-newsletter`, `gremion-legal`,
+`gremion-vector`, `gremion-fallback`, `gremion-synapse`, `gremion-nextcloud`,
+`gremion-collabora` and `gremion-element-call`. Each carries a `build:` section in
+`docker-compose.yml`, `docker-compose.app.yml` or `docker-compose.prod.yml`;
+`.github/workflows/release-images.yml` builds and pushes them for a release.
+Pulled: Keycloak, Postgres, NATS, Mailpit, PgBouncer, Traefik, the Docker-socket
+proxy, Redis, LiveKit. A host never builds: `gremion-deploy` pulls the digests
+pinned by the release layers ([ops/runbook/upgrade.md](ops/runbook/upgrade.md)).
+The commands below are the local-stack forms.
 
 Vector is **not** pulled. `docker/vector/Dockerfile` compiles `libipcrypt2`
 into the image for the `ipcrypt-nd` IP pseudonymisation (see `NOTICE`), so a
@@ -371,19 +454,19 @@ unqualified `gremion/<service>` resolves to `docker.io/<that same string>`, a
 Docker Hub namespace this project does not own.
 
 ```bash
-# gremion-ui (admin shell) — database migrations run automatically on startup
-docker compose build gremion-ui
-docker compose up -d gremion-ui
-docker compose logs -f gremion-ui          # watch migrations apply
+# gremion-ui (admin shell) — control-plane and fleet migrations run on startup
+$DA build gremion-ui
+$DA up -d gremion-ui
+make logs SERVICE=gremion-ui               # watch migrations apply
 
 # Log pipeline (built here — see above)
-docker compose build vector
-docker compose up -d vector
+$DS build vector
+$DS up -d vector
 
 # Keycloak
-docker compose pull keycloak
-docker compose up -d keycloak
-curl http://localhost:8082/auth/realms/<realm>   # verify realm still loads
+$DS pull keycloak
+$DS up -d keycloak
+curl http://localhost:8082/auth/realms/<tenant realm>   # verify the realm still loads
 
 # Legal pages (picks up legal/legal.env)
 make update-legal                        # Compose
@@ -391,19 +474,26 @@ make update-legal-k8s                    # Kubernetes (re-applies the Secret fir
 ```
 
 > **`.env` changes need a recreate, not a restart.** `docker compose restart`
-> does **not** reload `.env`. Use `docker compose up -d --force-recreate <service>`
-> (or `make rebuild` for the whole stack) and verify the value inside the
-> container before declaring it live.
+> does **not** reload `.env` (or a host's env file). Use
+> `… up -d --force-recreate <service>` (or `make rebuild` for the whole local
+> stack) and verify the value inside the container before declaring it live.
 
 ### Seeding
 
-`make fresh-start` is retired. After `make up`, seed via the one-time endpoint:
+`make fresh-start` is retired. After `make up`, seed through the one-time endpoint
+with a host that is bound to a provisioned tenant (the seed runs in that tenant's
+context; there is no first-run setup wizard and no default tenant):
 
 ```bash
-curl -X POST -H "X-Seed-Token: $SEED_TOKEN" http://localhost:3001/api/setup/seed
+curl -X POST -H "X-Seed-Token: $SEED_TOKEN" \
+  -H "Host: <bound host>" -H "X-Forwarded-Host: <bound host>" \
+  -H "x-proxy-trust: $TENANT_PROXY_SHARED_SECRET" \
+  http://localhost:3001/api/setup/seed
 ```
 
-`SEED_TOKEN` gates the endpoint; leave it empty in `.env` to disable seeding.
+`SEED_TOKEN` gates the endpoint; leave it empty in `.env` to disable seeding. The
+other three headers are what the tenant resolver needs on the loopback port
+([LOCAL_TESTING.md](LOCAL_TESTING.md#probing-gremion-ui-by-hand)).
 
 ---
 
@@ -412,15 +502,15 @@ curl -X POST -H "X-Seed-Token: $SEED_TOKEN" http://localhost:3001/api/setup/seed
 ### A service won't start
 
 ```bash
-docker compose logs <service>
-docker compose config | head -50         # surface compose syntax errors
-docker compose up <service>              # start in the foreground for verbose output
+make logs SERVICE=<service>              # control-panel / kernel-api: $DA logs -f <service>
+$DS config | head -50                    # surface compose syntax errors ($DA for the app project)
+$DS up <service>                         # start in the foreground for verbose output
 ```
 
 ### Database connection issues
 
 ```bash
-docker compose ps postgres
+make ps
 
 make shell-db            # psql -U postgres
 \l                       # list databases — expect keycloak, gremion, control
@@ -435,8 +525,10 @@ migrations against `CONTROL_DATABASE_URL`; if the `control` database or role is
 missing, boot fails and all requests 503. On a fresh volume the database is
 created by `init-databases.sh`; on an existing volume run the one-shot in
 [runbooks/tenant-edge.md](runbooks/tenant-edge.md) step 3. Note `control` is
-always reached **directly** at `postgres:5432` — never through the production
-PgBouncer overlay.
+always reached **directly** at `postgres-<stack>:5432` — never through the
+production PgBouncer. A non-transient boot failure makes the container exit and
+restart, so a wrong password shows as a rising restart count
+([deployment-architecture.md](deployment-architecture.md#boot-determinism)).
 
 ### A tenant host 404s (production)
 
@@ -454,27 +546,29 @@ make shell-db
 SELECT COUNT(*) FROM user_entity;
 SELECT COUNT(*) FROM realm;
 
-docker compose exec postgres vacuumdb  -U postgres -d keycloak
-docker compose exec postgres reindexdb -U postgres -d keycloak
-docker compose restart keycloak
+$DS exec postgres vacuumdb  -U postgres -d keycloak
+$DS exec postgres reindexdb -U postgres -d keycloak
+$DS restart keycloak
 ```
 
 ### OIDC / SSO authentication failures
 
 ```bash
 # Confirm OIDC discovery is served
-curl http://localhost:8082/auth/realms/<realm>/.well-known/openid-configuration
+curl http://localhost:8082/auth/realms/<tenant realm>/.well-known/openid-configuration
 
 # In the Keycloak admin console (Clients → gremion-ui):
-#  - Valid Redirect URIs match your domain
+#  - Valid Redirect URIs match the tenant's host
 #  - the client secret matches AUTH_KEYCLOAK_SECRET in .env
 ```
 
-In production the realm runs with `sslRequired=all` and `gremion-ui` reaches
-Keycloak over internal TLS at `https://keycloak:8443` (trust anchor injected via
-`NODE_EXTRA_CA_CERTS`). The dev override drops both back to plain HTTP on
-`:8080`. A mismatch between these and the realm's `sslRequired` setting is a
-common cause of login failures.
+Every realm the provisioner composes is pinned to `sslRequired=all`, and in
+production `gremion-ui` reaches Keycloak over internal TLS at
+`https://keycloak:8443` (trust anchor injected via `NODE_EXTRA_CA_CERTS`). The
+dev layers (`docker-compose.override.yml`, `docker-compose.app.dev.yml`) drop the
+transport back to plain HTTP on `:8080`. A mismatch between these and the realm's
+`sslRequired` setting is a common cause of login failures
+([TROUBLESHOOTING.md](TROUBLESHOOTING.md#keycloak--oidc)).
 
 ### Out of disk space
 
@@ -487,25 +581,25 @@ docker volume prune
 ./scripts/backup.sh
 ```
 
+`docker volume prune` removes only volumes no container references; the stack's
+named volumes are project-scoped (`${STACK}-state_pg-data` and the like), and the
+external ones (`${STACK}_traefik_acme`, `${STACK}_config_data`,
+`${STACK}_tenant_config_data`, `${STACK}_nats_accounts`) are created outside
+compose so a `down -v` never takes them. On a host, `docker system prune --volumes`
+is not a cleanup step.
+
 ---
 
 ## Performance Tuning
 
 ### Container resource limits (Docker Compose)
 
-```yaml
-gremion-ui:
-  deploy:
-    resources:
-      limits:
-        cpus: '2'
-        memory: 2G
-      reservations:
-        cpus: '1'
-        memory: 1G
-```
-
-Then `docker compose up -d`.
+Every container declares `deploy.resources.limits` (sizes `s`, `m`, `l` and
+Keycloak's own, see [ops/pooled-stack-layout.md](ops/pooled-stack-layout.md)),
+which compose applies outside swarm. A limit is changed in the compose file (the
+anchors at the top of `docker-compose.yml` and `docker-compose.app.yml`), not by
+a local override, and `make lint-pooled-stack` fails when a service loses its
+limits. `gremion-ui`, for example, is `l` (1G, 1 CPU).
 
 ### Kubernetes resource requests/limits
 
@@ -514,12 +608,12 @@ Configured in `k8s/base/*/deployment.yaml`; customise per environment in
 
 ### Database connection pooling
 
-`gremion-ui` reaches PostgreSQL through a single lazy connection-pool singleton; the
-data plane goes through **PgBouncer** (transaction pooling, `pgbouncer:6432`) in
-the production overlay, while dev/CI keep the direct `postgres:5432` URL. The
-control plane is deliberately **never** routed through PgBouncer — it is the
-direct term in the connection budget (`max_connections=100`, pinned in
-`docker-compose.prod.yml`). Deploy/verify/rollback: [runbooks/pgbouncer.md](runbooks/pgbouncer.md).
+`gremion-ui` keeps a draining LRU of per-tenant pools; the data plane goes through
+**PgBouncer** (transaction pooling, `pgbouncer-<stack>:6432`) on a host, while dev/CI
+keep the direct `postgres-<stack>:5432` URL. The control plane is deliberately
+**never** routed through PgBouncer — it is the direct term in the connection
+budget (`max_connections=100`, pinned in `docker-compose.prod.yml`).
+Deploy/verify/rollback: [runbooks/pgbouncer.md](runbooks/pgbouncer.md).
 
 ### PostgreSQL tuning (Kubernetes)
 
@@ -533,80 +627,104 @@ sized to the host.
 
 ### Full system backup
 
+On a distribution host the full-system backup and its restore are
+`gremion-backup` and `gremion-restore-into`, and the procedures are
+[ops/runbook/backup.md](ops/runbook/backup.md) and
+[ops/runbook/restore.md](ops/runbook/restore.md).
+
+The rest of this section is the local dev stack, as a development convenience and
+not a host procedure. `scripts/backup.sh` and `scripts/restore.sh` take no project
+flag, so every call below names the state project through `COMPOSE_PROJECT_NAME`
+([Which compose project the scripts address](#which-compose-project-the-scripts-address));
+without it they stop with `service "postgres" is not running`. The unit tests
+`test/backup.bats` and `test/restore.bats` run the two scripts against stubbed
+tools, not against a running stack.
+
 ```bash
 # 1. Back up secrets — CAREFULLY, contains live credentials
 cp .env backups/.env.backup
 
-# 2. Export the Keycloak realm
-docker compose exec keycloak /opt/keycloak/bin/kc.sh export \
+# 2. Export each tenant realm (see "Keycloak realm export")
+$DS exec keycloak /opt/keycloak/bin/kc.sh export \
   --realm "<realm>" --file /tmp/realm-export.json
-docker compose cp keycloak:/tmp/realm-export.json backups/
+$DS cp keycloak:/tmp/realm-export.json backups/
 
-# 3. Back up all databases (restic + rclone)
-./scripts/backup.sh
+# 3. Back up the kernel databases (restic, plus rclone when RCLONE_BUCKET is set)
+COMPOSE_PROJECT_NAME=dev-state ./scripts/backup.sh
 
 # 4. Verify the restic repository
 ./scripts/restore.sh --list-snapshots
 ```
 
+`scripts/tenant-backup.sh` is not part of the local sequence: this guide has no
+procedure for running it against the dev stack
+([Per-tenant backup](#per-tenant-backup-scriptstenant-backupsh)).
+
 ### Restore a full system
 
 ```bash
-# Stop services
-docker compose down
+# Stop the app colour, keep the state project (postgres must be healthy before restore)
+$DA down
+$DS up -d postgres
 
-# Bring the stack back up (postgres must be healthy before restore)
-docker compose up -d postgres
+# Restore each database from the latest snapshot (each call asks for "yes")
+COMPOSE_PROJECT_NAME=dev-state ./scripts/restore.sh --snapshot latest keycloak
+COMPOSE_PROJECT_NAME=dev-state ./scripts/restore.sh --snapshot latest gremion
+COMPOSE_PROJECT_NAME=dev-state ./scripts/restore.sh --snapshot latest control
 
-# Restore each database from the latest snapshot
-./scripts/restore.sh --snapshot latest keycloak
-./scripts/restore.sh --snapshot latest gremion
-./scripts/restore.sh --snapshot latest control
-
-# Re-import the Keycloak realm if needed
-docker compose cp backups/realm-export.json keycloak:/tmp/
-docker compose exec keycloak /opt/keycloak/bin/kc.sh import \
+# Re-import a tenant realm if needed
+$DS cp backups/realm-export.json keycloak:/tmp/
+$DS exec keycloak /opt/keycloak/bin/kc.sh import \
   --realm "<realm>" --file /tmp/realm-export.json --override true
 
 # Bring up the rest and verify
-docker compose up -d
-docker compose ps
-make health
+$DS up -d
+$DA up -d
+make ps
+curl -sf http://localhost:3001/healthz    # gremion-ui liveness; `make health` cannot report it (see "Endpoint checks")
 ```
 
-The detailed incident walkthrough is in
-[docs/ops/restore-runbook.md](ops/restore-runbook.md).
+The three kernel databases are what `scripts/restore.sh` restores; a pooled stack
+also needs `gremion_platform`, each customer's kernel and governance database and
+each module's database, which only `gremion-backup` stages
+([ops/runbook/restore.md](ops/runbook/restore.md)).
 
-### Move to a new server
+### Move the local stack to another machine
+
+A distribution host is rebuilt with `infra/host/bootstrap.sh` and restored with
+`gremion-restore-into` ([ops/runbook/restore.md](ops/runbook/restore.md)), not
+with this sequence.
 
 ```bash
-# On the old host
-./scripts/backup.sh                       # ensure a current snapshot exists
-tar -czf gremion-migration.tar.gz .env    # plus restic repo or rclone remote
+# On the old machine
+COMPOSE_PROJECT_NAME=dev-state ./scripts/backup.sh   # ensure a current snapshot exists
+tar -czf gremion-migration.tar.gz .env legal/legal.env   # plus the restic repository (default backups/repo) unless it is on an rclone remote
 
 # Transfer
 scp gremion-migration.tar.gz user@newhost:/tmp/
 
-# On the new host
+# On the new machine, in a fresh checkout
 cd /path/to/gremion
 tar -xzf /tmp/gremion-migration.tar.gz
-docker compose up -d postgres
-./scripts/restore.sh --snapshot latest keycloak
-./scripts/restore.sh --snapshot latest gremion
-./scripts/restore.sh --snapshot latest control
-docker compose up -d
+./scripts/setup.sh        # keeps the transferred .env (no secret is regenerated), creates the
+                          # certificates, networks and volumes, builds the images and starts both projects
+$DA down                  # stop the app colour before restoring
+COMPOSE_PROJECT_NAME=dev-state ./scripts/restore.sh --snapshot latest keycloak
+COMPOSE_PROJECT_NAME=dev-state ./scripts/restore.sh --snapshot latest gremion
+COMPOSE_PROJECT_NAME=dev-state ./scripts/restore.sh --snapshot latest control
+make up
 ```
 
 ### Disaster recovery checklist
 
-- [ ] Daily backups run (`scripts/backup.sh`)
+- [ ] Daily backups run (`gremion-backup.timer` on a host; `scripts/backup.sh` in a standalone checkout)
 - [ ] restic integrity check passes (`restic check`, run by the pipeline)
 - [ ] Off-site copy present (rclone remote configured: `RCLONE_BUCKET` set)
 - [ ] `.env` backed up securely (contains all secrets)
 - [ ] Keycloak realm exported
 - [ ] Per-tenant backups run for every active tenant (`scripts/tenant-backup.sh`)
 - [ ] DNS records, `DOMAIN` and every bound tenant host documented
-- [ ] TLS certificate / Cloudflare tunnel renewal verified
+- [ ] TLS certificates renewing (`gremion-verify`'s certificate check, `CERT_MIN_DAYS`)
 - [ ] Restore drill performed (test-restore monthly)
 
 ---
@@ -621,7 +739,7 @@ docker compose up -d
 | PostgreSQL vacuum | Weekly | `vacuumdb -d gremion` / `keycloak` / `control` |
 | Keycloak realm export | Monthly | `kc.sh export --realm "<realm>"` |
 | Rotate the log pseudonymisation key | Per policy | `scripts/rotate-ipcrypt-key.sh` |
-| Security image updates | As released | rebuild/pull service images |
+| Security image updates | As released | a new release through `gremion-deploy` (or rebuild the local images) |
 | Capacity planning | Monthly | check disk, CPU, memory |
 | Disaster-recovery drill | Quarterly | practice a full restore |
 
@@ -629,7 +747,7 @@ docker compose up -d
 
 ## Support & Escalation
 
-- **Logs:** `docker compose logs` (Compose) or `kubectl logs` (K8s); processed
+- **Logs:** `make logs` (Compose) or `kubectl logs` (K8s); processed
   access logs in the `vector-processed-logs` volume
 - **Configuration:** `.env` (keep secure); see [docs/ENVIRONMENT.md](ENVIRONMENT.md)
 - **Database shell:** `make shell-db` (`\c gremion` / `keycloak` / `control`)

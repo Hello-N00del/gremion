@@ -1,4 +1,4 @@
-<!-- i18n-sync: source=log-retention-policy.md sha256=ca4d11ee363947a6566acdb28b8f691ac330acf69458e8d3bcb52d6d9ed4f24c -->
+<!-- i18n-sync: source=log-retention-policy.md sha256=b9b2aa4a0025cf3522a978131dda3be6c7570c0c7462cf568f03c35a6a5340aa -->
 [English](./log-retention-policy.md) | **Deutsch**
 
 # Richtlinie zur Aufbewahrung von Logs
@@ -8,9 +8,9 @@
 
 > Dies ist die operative Richtlinie für die Logs, die der Governance-Kernel erzeugt. Zu
 > Architektur, Diensten und Entwurfsprinzipien des Kernels siehe
-> [about-gremion.de.md](./about-gremion.de.md). Ausgelagerte Funktionsmodule (Finanzen,
-> Dateien, Nachrichten, Wahlen, Inhalte usw.) liegen in eigenen Repositories, eines je
-> Modul, und haben eigene Aufbewahrungsrichtlinien.
+> [about-gremion.de.md](./about-gremion.de.md). Die Funktionsmodule (Finanzen, Dateien,
+> Nachrichten, Wahlen, Inhalte usw.) liegen unter `modules/` in diesem Repository und
+> haben eigene Aufbewahrungsrichtlinien.
 
 ---
 

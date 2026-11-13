@@ -128,6 +128,34 @@ describe('validateNewCustomer', () => {
   })
 })
 
+describe('semester start months (brand.termMonths)', () => {
+  const months = (winter: unknown, summer: unknown) => ({ ...GOOD, termWinterMonth: winter as number, termSummerMonth: summer as number })
+
+  it('a form without months stays valid (an older caller); with two different whole months 1-12 it is valid', () => {
+    expect(validateNewCustomer(GOOD).termMonths).toBeUndefined()
+    expect(validateNewCustomer(months(10, 4))).toEqual({})
+    expect(validateNewCustomer(months(3, 9))).toEqual({})
+  })
+  it('equal, out-of-range, fractional, NaN and one-sided months are a termMonths field error, in German', () => {
+    for (const [w, s] of [[4, 4], [0, 4], [10, 13], [10.5, 4], [Number.NaN, 4], [10, Number.NaN], [10, undefined], [undefined, 4], [-1, 4]]) {
+      const e = validateNewCustomer(months(w, s))
+      expect(e.termMonths, `${w}/${s}`).toMatch(/Semester/)
+    }
+  })
+  it('the panel rule is the provisioning rule (same verdict on one corpus; the panel image has no such dependency)', async () => {
+    const { isTermMonths } = await import('../../../../../packages/provisioning/src/term-months')
+    const corpus: Array<[unknown, unknown]> = [[10, 4], [4, 10], [1, 12], [12, 1], [4, 4], [0, 4], [10, 13], [10.5, 4], ['10', 4], [10, '4'], [10, null], [-1, 4], [13, 1], [Number.NaN, 4], [Infinity, 4]]
+    for (const [w, s] of corpus) {
+      const panel = validateNewCustomer(months(w, s)).termMonths === undefined
+      expect(panel, `${String(w)}/${String(s)}`).toBe(isTermMonths({ winter: w, summer: s }))
+    }
+  })
+  it('createArgs carries brand.termMonths in the verifier wire shape, and omits it when no months were given', () => {
+    expect(createArgs(months(10, 4)).brand).toEqual({ product: 'Rat', orgShort: 'MS', termMonths: { winter: 10, summer: 4 } })
+    expect(createArgs(GOOD).brand).toEqual({ product: 'Rat', orgShort: 'MS' })
+  })
+})
+
 describe('createArgs: the args request-verify accepts', () => {
   it('lower-cases the identities, sorts and dedupes the modules, carries brand and the DPIA decisions, and no host path', () => {
     const a = createArgs(GOOD)

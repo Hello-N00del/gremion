@@ -325,6 +325,40 @@ export class KeycloakAdminClient {
     return this.request<void>('PUT', `/users/${seg(id)}`, data)
   }
 
+  /**
+   * Change ONLY firstName and lastName of one user. A Keycloak user PUT replaces
+   * the user from the body it is given: omitted e-mail, username, attributes or
+   * required actions can be blanked or reset. So this reads the stored user and
+   * writes it back whole (what the admin console does) with the two names
+   * replaced. A user that cannot be read is never written (getUser throws
+   * 'User not found' on a 404). Read-then-write is not atomic: a concurrent
+   * admin edit between the two calls is overwritten; acceptable for a person's
+   * own name.
+   */
+  async updateUserNames(id: string, names: { readonly firstName: string; readonly lastName: string }): Promise<void> {
+    const stored = await this.getUser(id)
+    return this.request<void>('PUT', `/users/${seg(id)}`, {
+      ...stored,
+      firstName: names.firstName,
+      lastName: names.lastName,
+    })
+  }
+
+  /**
+   * Is the required action `alias` (e.g. UPDATE_EMAIL) registered AND enabled in
+   * this realm? A realm that does not know the action (404) answers false; any
+   * other failure rejects so the caller picks its own default.
+   */
+  async isRequiredActionEnabled(alias: string): Promise<boolean> {
+    try {
+      const action = await this.request<{ enabled?: boolean }>('GET', `/authentication/required-actions/${seg(alias)}`)
+      return action?.enabled === true
+    } catch (err) {
+      if (err instanceof KcAdminError && err.status === 404) return false
+      throw err
+    }
+  }
+
   async deleteUser(id: string): Promise<void> {
     return this.request<void>('DELETE', `/users/${seg(id)}`)
   }

@@ -1,4 +1,4 @@
-# Runbook — Tenant lifecycle (provision · backup · suspend/resume · crypto-shred delete)
+# Runbook — Tenant lifecycle (create · backup · suspend/resume · crypto-shred delete)
 
 Operator mechanics for the per-tenant lifecycle of a Gremion multi-tenant
 deployment: provisioning a new tenant, taking a per-tenant backup, suspending /
@@ -9,16 +9,28 @@ the per-tenant silo, fleet migrations) and the governance domain a tenant runs,
 see [About Gremion](../about-gremion.md). This runbook is the operational layer:
 the commands, the ordering invariants, and the manual residuals.
 
-All subcommands run **operator-side**, never inside the app container, so the
-least-privilege provisioner credential is never reachable from any tenant
-data-plane:
+The lifecycle verbs run in the **`tenant-create` one-shot** of the app project
+(`docker-compose.app.yml`, profile `tenant-create`, never in the `gremion-ui` or
+`gremion-public` containers), so the least-privilege provisioner credential is
+never reachable from any tenant data-plane. The one-shot runs
+`gremion-ui/scripts/tenant-provision.ts` under `tsx`; on a host it is started by
+`gremion-tenant` and the executor handlers, which load `tc()` from
+`infra/host/lib/customer-ops.sh`. A source checkout can run the same file with
+the environment contract of the one-shot (see
+[docs/ops/pooled-stack-layout.md](../ops/pooled-stack-layout.md)):
 
 ```bash
 pnpm -C gremion-ui exec tsx scripts/tenant-provision.ts <subcommand> …
 ```
 
-`<subcommand>` is one of `provision | suspend | resume | delete |
-bootstrap-provisioner | reconcile | materialize-config`.
+`<subcommand>` is one of `init | phase-a | record-step | phase-b | activate |
+render-router | suspend | resume | status | operator-add | reconcile | delete |
+bootstrap-provisioner | materialize-config | request-verify`, plus the module-gate,
+import, purge, Karenz and export verbs (`enable-module`, `disable-module`,
+`dpia-record`, `isolation-record`, `gate-status`, `regate`, `import-validate`,
+`import-apply`, `seed-vertical`, `purge-run`, `karenz-run`, `karenz-status`,
+`export`, `export-verify`); `--help` lists them. `provision` is retired and
+exits with a usage error.
 
 <!-- gremion-tenant decommission note (R31-I4) -->
 ## Decommission note: `gremion-tenant` no longer creates customers
@@ -48,12 +60,15 @@ issuer, secret refs, brand ref and `backup_key_ref`. The tenant resolver only
 ever resolves a row whose `status='active'`, so any non-active row (provisioning,
 suspended, deleting, deleted) is structurally non-resolvable.
 
-A tenant's data plane is a **dedicated** governance database `t_<slug>` (the
-`default` bootstrap tenant uses the shared `gremion` DB) plus a dedicated Keycloak
-realm. Per-tenant secrets (DB connection URL, confidential-client secrets, the
-backup key) live as host files under `TENANT_SECRETS_DIR` (default
-`./secrets/tenants`), bind-mounted read-only into `gremion-ui` at
-`/run/secrets/tenants`.
+A tenant's data plane is a **dedicated** kernel database `t_<tenant id hex>__kernel`
+on the kernel's `postgres` server, a dedicated governance database
+`t_<tenant id hex>__governance` on `governance-postgres`, one database per enabled
+module on that module's own server, plus a dedicated Keycloak realm. There is no
+`default` tenant: a fresh platform has no tenant row and serves none
+([tenant-edge.md](./tenant-edge.md)). Per-tenant secrets (DB connection URL,
+confidential-client secrets, the backup key) live as host files under
+`TENANT_SECRETS_DIR` (default `./secrets/tenants`), bind-mounted read-only into
+`gremion-ui` at `/run/secrets/tenants`.
 
 ## One-time: bootstrap the provisioner service account
 
@@ -98,50 +113,68 @@ still missing; it touches only master, never the SA's secret, and refuses
 > credential resolves *inside* `TENANT_SECRETS_DIR`. Keep that directory a
 > dedicated leaf holding only per-tenant secret files.
 
-## Provision a tenant
+## Create a tenant
 
-```bash
-pnpm -C gremion-ui exec tsx scripts/tenant-provision.ts provision <slug> \
-  --config <file> [--realm <name>] [--blueprint <ref>]
-```
+A customer is created by a `create` request (the control panel's "Neuer Mandant";
+break-glass: `gremion-tenant request create --args-file <0600 json> --operator
+<uuid> --reason <text>`), which the host executor claims, verifies
+(`request-verify`) and runs through `infra/host/lib/executor/handlers/create.sh`
+and `customer_create` in `infra/host/lib/customer-ops.sh`. The old operator verb
+`tenant-provision.ts provision <slug> --config <file>` and its single-process
+pipeline are retired (TASK-043); `pipeline.ts` keeps only the provisioner's
+Keycloak constants.
 
-The idempotent, registry-row-driven pipeline (`provisioner/pipeline.ts`) runs a
-fail-closed ordering, each step ledger-marked so a retry resumes from prior
-state:
+The form's brand fields (product name, organisation short name) and the two
+semester start months ("Wintersemester beginnt im", "Sommersemester beginnt im";
+October and April by default) travel in the request as `brand.product`,
+`brand.orgShort` and the optional `brand.termMonths` (`{winter, summer}`, two
+different months 1 to 12; request-verify checks them again and an older stored
+request without them still verifies). `create.sh` writes them into the tenant
+config as `brand.product`, `brand.org_short` and `brand.term_months`. Only the
+months are stored: the semester label in the sidebar ("WiSe 26/27", "SoSe 27")
+is computed from them and the current date in Europe/Berlin on every request. A
+customer without `brand.term_months` keeps the static `brand.term` text. A
+customer created earlier sets the two months in the app under Einstellungen,
+Organisation (an IT administrator; `PATCH /api/settings` with
+`brand.term_months`, the same rule).
 
-1. **Slug guard + multi-tenant gate** — the slug must match `^[a-z0-9-]{1,30}$`;
-   the deployment's default config must have multi-tenancy enabled.
-2. **Tombstone refusal (§7.8)** — a `deleted`/`deleting` slug is a permanent
-   tombstone; provisioning over it is refused before any write (subdomain-takeover
-   defence — identifier reuse is forbidden on delete).
-3. **Registry INSERT-FIRST as `status='provisioning'`** — never `active`, so a
-   half-provisioned tenant is structurally non-resolvable.
-4. **Data plane** — `CREATE DATABASE t_<slug>` + role, write the generated DB
-   connection URL and the per-tenant **backup key** to host files under
-   `TENANT_SECRETS_DIR`.
-5. **Realm** — compose the per-tenant realm (identity / issuer / exact redirect
-   URIs / confidential-client secrets / `sslRequired:'all'`), `POST
-   /admin/realms`; an existing realm reconciles.
-6. **Step-up flow apply** + grant the admin service account its
-   realm-management role(s) (Keycloak imports do not carry SA role mappings
-   reliably).
-7. **Activate** — flip `status='active'` (which also evicts the runtime so the
-   next resolution rebuilds cleanly).
+The order and the ledger live in `@gremion/provisioning` (`steps.ts`,
+`plt.provisioning_step`). Each of the nine steps is ledger-marked, so a retry
+resumes from prior state, and the customer stays non-resolvable until the last
+step has run:
 
-`--blueprint <ref>` stamps the row's `blueprint_ref` so the per-tenant seed path
-feeds this tenant its own governance blueprint (committees / org-unit tree /
-roles). Omitted, the pipeline default is used.
-
-### Required environment
-
-| Var | Purpose |
+| Phase | Steps (`EXECUTION_ORDER`) |
 |---|---|
-| `DOMAIN` | deployment apex domain — issuer/host derivation |
-| `DATABASE_URL` | app DB URL — its scheme + host:port authority is reused to build each tenant's runtime DB URL |
-| `ADMIN_DATABASE_URL` | postgres superuser / CREATEDB connection for `CREATE`/`DROP DATABASE` |
-| `AUTH_KEYCLOAK_INTERNAL` | in-cluster Keycloak base persisted as the tenant's `kc_internal` (default internal-TLS `https://keycloak:8443/auth`) |
-| `KC_ADMIN_URL` | operator-reachable KC admin REST base (default `https://$DOMAIN/auth`) |
-| `TENANT_SECRETS_DIR` | host root for per-tenant secret files (default `./secrets/tenants`) |
+| container, phase A (`tenant-create phase-a`) | `realm_created`, `database_created` (kernel database), `governance_database_created`, `domain_bound`, `storage_prefix_reserved`, `first_body_created`, `broker_account_created` |
+| host | `mail_principal_issued` (the vendor mail principal and the realm's sender; the one-shot is then told with `record-step`) |
+| container, phase B (`tenant-create phase-b`) | `first_accounts_created`, the `--enable` modules through the gate; the customer stays `provisioning` |
+| host | the customer's router file `etc/edge/tenant-<slug>.yml` (`render-router`), then `activate` flips `status='active'` once all nine steps are done |
+
+Properties the pipeline keeps:
+
+1. **Slug and host guard.** The slug must match `^[a-z0-9-]{1,30}$`; the host is
+   validated, and on a single-customer install it must equal `PILOT_TENANT_HOST`.
+2. **Tombstone refusal (§7.8).** A `deleted`/`deleting` slug is a permanent
+   tombstone; creating over it is refused before any write (subdomain-takeover
+   defence: identifier reuse is forbidden on delete).
+3. **Registry row first as `status='provisioning'`**, never `active`, so a
+   half-provisioned tenant is structurally non-resolvable.
+4. **Data plane.** `ensureKernelDatabase` creates `t_<hex32>__kernel` with its
+   roles (and the `pgbouncer.get_auth` lookup stays in place); the governance
+   database and its credential file follow. The generated connection URL and the
+   per-tenant **backup key** are written as host files under `TENANT_SECRETS_DIR`.
+5. **Realm.** The per-tenant realm is composed (identity, issuer, exact redirect
+   URIs, confidential-client secrets, `sslRequired:'all'`) and created over the
+   Admin API; an existing realm reconciles. The step-up flow is applied and the
+   `gremion-admin` service account gets its realm-management role.
+6. **No container, no compose project.** `create` takes the container count and
+   every project's `config --services` before and after and fails if either moved
+   (TRD-440).
+
+The environment contract of the one-shot (every variable is checked before it
+connects anywhere; a missing one is a named exit-2 failure) is the table in
+[docs/ops/pooled-stack-layout.md](../ops/pooled-stack-layout.md), section "The
+tenant-create environment contract".
 
 ## Per-tenant backup
 
@@ -149,8 +182,11 @@ roles). Omitted, the pipeline default is used.
 ./scripts/tenant-backup.sh <slug>
 ```
 
-`scripts/backup.sh` is the **whole-stack** backup (all DBs into one restic repo,
-one password) — it cannot crypto-shred a single tenant. The silo model needs each
+`scripts/backup.sh` is the **whole-stack** backup of the three kernel databases
+into one restic repo with one password (a distribution host runs it through
+`gremion-backup`, which adds every other database and volume; see
+[docs/ops/runbook/backup.md](../ops/runbook/backup.md)) — it cannot crypto-shred
+a single tenant. The silo model needs each
 tenant's data encrypted under **its own** key so a later `delete` can destroy that
 one key and instantly void **only that tenant's** backups.
 
@@ -283,8 +319,8 @@ The library commands below are what the container verbs run.
 
 
 ```bash
-pnpm -C gremion-ui exec tsx scripts/tenant-provision.ts suspend <slug>
-pnpm -C gremion-ui exec tsx scripts/tenant-provision.ts resume  <slug>
+pnpm -C gremion-ui exec tsx scripts/tenant-provision.ts suspend <slug> --operator <ops-realm user uuid>
+pnpm -C gremion-ui exec tsx scripts/tenant-provision.ts resume  <slug> --operator <ops-realm user uuid>
 ```
 
 Both are control-row status flips that route through the **one lifecycle seam**
@@ -311,7 +347,7 @@ Both are control-row status flips that route through the **one lifecycle seam**
 >   — which filters only on `status!=='active'` — would resolve the shredded
 >   tenant live again.)
 > - `resume <provisioning-slug>` is **refused** — a half-provisioned row must
->   finish the provision pipeline (which flips it to `active` itself).
+>   finish the create (whose final step flips it to `active` itself).
 
 ### Cross-process eviction is fleet-wide and immediate
 
@@ -336,8 +372,14 @@ Suspend/resume never touch the DB, realm or secret files — only `delete` does.
 pnpm -C gremion-ui exec tsx scripts/tenant-provision.ts delete <slug>
 ```
 
-The pure ordering lives in `provisioner/lifecycle.ts` (`deleteTenant`); the CLI
-supplies the live shredder, DB-drop executor, KC realm-delete and registry deps.
+The pure ordering lives in `gremion-ui/src/lib/server/tenant/provisioner/lifecycle.ts`
+(`deleteTenant`); the CLI supplies the live shredder, DB-drop executor, KC
+realm-delete and registry deps. `delete` has no control-panel request: it is an
+operator verb in the one-shot. It refuses, before shredding anything, while the
+customer still has the pre-TASK-043 database `t_<slug>` (drop it and its role by
+hand first) or any live module database, a **blocked** one inside its Karenz
+included (a module database is dropped only by the day-30 `karenz-run`, see
+"Module Karenz"); it needs `PLATFORM_DATABASE_URL` for that proof.
 The sequence is **crypto-shred FIRST** so an interrupted delete can never leave a
 recoverable backup:
 
@@ -350,8 +392,8 @@ recoverable backup:
    (`tenant_<slug>_backup_key`, `tenant_<slug>_db`,
    `tenant_<slug>_client_<client>`) under `${TENANT_SECRETS_DIR}`. Idempotent: a
    missing file is a no-op.
-3. **Drop the data-plane DB + role** — `DROP DATABASE IF EXISTS "t_<slug>" WITH
-   (FORCE)` + `DROP ROLE IF EXISTS` (idempotent).
+3. **Drop the data-plane DB + roles** — the kernel database `t_<hex32>__kernel`
+   and its roles, dropped by tenant id (`dropKernelDatabase`; idempotent).
    Since TASK-084-a the customer's **governance database**
    `t_<hex32>__governance` and its three roles are dropped in the same step
    (idempotent; a customer made before the governance server existed has neither,
@@ -370,8 +412,8 @@ recoverable backup:
 5. **Delete the realm** — `DELETE /admin/realms/<realm>` (a 404 is tolerated —
    idempotent).
 6. **Tombstone** — `status='deleted'` + evict the runtime. The slug is now a
-   permanent tombstone: **identifier reuse is forbidden** (§7.8) — `provision
-   <slug>` of a deleted/deleting slug is refused, and re-running `delete` on a
+   permanent tombstone: **identifier reuse is forbidden** (§7.8) — a `create` of a
+   deleted/deleting slug is refused, and re-running `delete` on a
    tombstone is a terminal-safe no-op.
 
 **Rolling back past TASK-084-a:** platform migration `0015` adds the ledger step
@@ -385,8 +427,8 @@ by this release.
 `delete <slug>` and it replays from the top — each step is idempotent, so re-runs
 converge on `deleted`.
 
-**The `default` tenant is hard-refused** — it is the bootstrap root (env-keyed
-secrets, the shared stack); `delete default` throws before touching anything.
+**There is no bootstrap tenant** (TRD-042): every tenant is deletable, a slug
+spelled `default` included.
 
 ### Module satellites — manual teardown residual
 
@@ -675,6 +717,30 @@ without `--verify-only`) repairs, idempotently; a second apply changes nothing:
 | `kernel-api-nats-seed` | the NATS seed `kernel-api/tenant_<slug>.nk` exists, every seed of the customer's current module set exists, **no seed is held for a module outside that set** (the declarative apply would revoke and delete it, so it is reported as drift before apply does it), and the broker serves the customer's account (the kernel API event relay publishes as that identity). The check reads seeds and the accounts file only; it never looks at JetStream streams | the same `nats-auth` ensure the lifecycle verbs use, over the customer's **current** module set read from the registry (`plt.module_enablement`) plus the `kernel-api` identity, then the account reload; a hand-written module list is never needed |
 | `vorstand-role` | the standard realm role `vorstand` exists AND is listed in the `gremion-ui` client's realm-role scope mappings (`fullScopeAllowed` is false, so a role missing there never reaches a token); a realm created before the role was added to the realm template shows it RED | creates the role and the scope mapping; both steps are idempotent |
 
+Two realm checks cover the e-mail change in Settings > Profil. `update-email-action` holds when
+the required action `UPDATE_EMAIL` is registered and enabled (Keycloak ships it disabled; the Profil
+page offers the button only while it is enabled). `update-email-verification` holds when the action's
+own config `verifyEmail` is `true`: Keycloak 26.6.1 then mails the new address a confirmation link
+and keeps the old address until it is opened, and without it (and without a realm-wide `verifyEmail`)
+the new address applies at once. The action's config is used on purpose, not the realm's `verifyEmail`,
+which would send every user with an unverified address through the verify-email step at login.
+A realm created before this change shows both RED. Apply writes the config first, then enables the
+action on its live representation with the merged config in the same body (Keycloak's action PUT replaces
+the stored config with its body, so a body without it would erase the verification), so the action is
+never enabled without verification; a realm that
+does not register the action at all stays RED, since apply cannot register it. Customer creation
+does the same on every pass. These repairs need `manage-realm` in the customer realm, which the
+provisioner holds on a realm it created or adopted and which `realm-admin` (the `gremion-admin`
+service account's role) contains.
+
+A third realm check, `account-console-disabled`, holds when Keycloak's built-in `account-console` client
+is disabled: a customer realm gives it no client scopes, so its page is broken, and the app edits the
+profile itself. Apply disables it (a partial client update; it is never deleted, Keycloak recreates a
+deleted built-in client) and creation does the same. The `account` client is left alone: the default
+role references its roles, and Keycloak's mailed invitation links fall back to it when they name no
+client. Such an invitation (`execute-actions-email` without a client) therefore still works: it runs
+under `account`, and its completion page carries no link into the console.
+
 A suspended customer is ensured with the empty module set (suspension evicts the
 modules; reconcile does not restore them) and keeps the `kernel-api` identity like the
 kernel. A customer that is neither active nor suspended has no `kernel-api-nats-seed`
@@ -692,7 +758,7 @@ needs it: nothing purges the chain any more.
 ## Materialize config
 
 ```bash
-pnpm -C gremion-ui exec tsx scripts/tenant-provision.ts materialize-config [<slug>] [--config <path>]
+pnpm -C gremion-ui exec tsx scripts/tenant-provision.ts materialize-config <slug> [--config <path>]
 ```
 
 Reads the tenant's stored `config.json`, merges in the effective defaults, and
