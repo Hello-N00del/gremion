@@ -79,27 +79,42 @@
     votes.find((v) => v.id === selectedId) ?? filtered[0],
   )
 
-  // Lazy-load poll options when a poll is selected.
-  $effect(() => {
-    if (!selected || selected.kind !== 'poll') return
-    if (pollOptionsCache[selected.id] || optionsLoading[selected.id]) return
-    const id = selected.id
-    const numericId = Number(id.split(':')[1])
-    if (!Number.isFinite(numericId)) return
+  // Lazy-load poll options when a poll is selected. A failed load is remembered in `optionsError` and
+  // is NOT retried by this effect (it would re-run the moment `optionsLoading` flips back and hammer a
+  // failing endpoint while the note never left "wird geladen"): only the retry button clears it.
+  function loadOptions(id: string, numericId: number) {
     optionsLoading = { ...optionsLoading, [id]: true }
     fetch(`/api/polls/${numericId}/options`)
       .then(async (res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const body = (await res.json()) as { options: { label: string; votes: number }[] }
+        const body = (await res.json()) as { options?: { label: string; votes: number }[] }
+        if (!Array.isArray(body.options)) throw new Error('Unerwartete Antwort')
         pollOptionsCache = { ...pollOptionsCache, [id]: body.options }
       })
-      .catch((e) => {
-        const msg = e instanceof Error ? e.message : 'Optionen konnten nicht geladen werden'
-        optionsError = { ...optionsError, [id]: msg }
+      .catch(() => {
+        optionsError = { ...optionsError, [id]: 'Die Antwortoptionen konnten nicht geladen werden.' }
       })
       .finally(() => {
         optionsLoading = { ...optionsLoading, [id]: false }
       })
+  }
+
+  function retryOptions(id: string) {
+    const numericId = Number(id.split(':')[1])
+    if (!Number.isFinite(numericId)) return
+    const rest = { ...optionsError }
+    delete rest[id]
+    optionsError = rest
+    loadOptions(id, numericId)
+  }
+
+  $effect(() => {
+    if (!selected || selected.kind !== 'poll') return
+    if (pollOptionsCache[selected.id] || optionsLoading[selected.id] || optionsError[selected.id]) return
+    const id = selected.id
+    const numericId = Number(id.split(':')[1])
+    if (!Number.isFinite(numericId)) return
+    loadOptions(id, numericId)
   })
 
   // Surface the loaded options on the selected item without mutating the
@@ -419,7 +434,12 @@
             {#if optionsLoading[s.id]}
               <div class="poll-note mono">Optionen werden geladen…</div>
             {:else if optionsError[s.id]}
-              <div class="poll-note error">Optionen konnten nicht geladen werden: {optionsError[s.id]}</div>
+              <div class="poll-note error" role="alert" data-testid="poll-options-error">
+                {optionsError[s.id]}
+                <button type="button" class="btn" data-testid="poll-options-retry" onclick={() => retryOptions(s.id)}>
+                  Erneut versuchen
+                </button>
+              </div>
             {:else if s.options && s.options.length > 0}
               {@const tv = totalVotes}
               <div class="poll-options">
@@ -1034,6 +1054,10 @@
   }
   .poll-note.error {
     color: var(--rust-ink);
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
   }
 
   .detail-foot {
