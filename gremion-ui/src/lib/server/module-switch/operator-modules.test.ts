@@ -53,7 +53,8 @@ describe('buildOperatorModules', () => {
 
   it('a module whose platform row says it is not enabled is not listed, even when config.modules still reads on', () => {
     const state = stateOf(row('content', { state: 'disabled', has_row: true }), row('files', { state: 'enabled', has_row: true }))
-    expect(ids(buildOperatorModules(state, pilotConfig))).toEqual(['files'])
+    // the others have no row here: they follow config.modules, which says on
+    expect(ids(buildOperatorModules(state, pilotConfig))).toEqual(['messaging', 'files', 'publishing'])
   })
 
   it('without a platform row the module follows config.modules, and an absent key reads as on', () => {
