@@ -896,6 +896,29 @@ describe('the board follows the platform enablement', () => {
     expect(r.migrated).toEqual([])
   })
 
+  it('after a restart, before the first alignment pass, nothing is held yet, so a settings write may turn the board on; the first pass then puts it back and republishes the hold', async () => {
+    r.platform.state = boardState('disabled')
+    r.config.modules = { board: true }
+    await runModuleSwitchPass(tenant, r.deps())
+    expect(platformHeldOffModules(TENANT_ID)).toEqual(['board'])
+    expect(r.config.modules.board).toBe(false)
+
+    // the process restarts: a fresh reconciler state and an empty held map, the platform row unchanged
+    _clearPlatformHeldForTests()
+    const restarted = rig()
+    restarted.platform.state = boardState('disabled')
+    expect(platformHeldOffModules(TENANT_ID)).toEqual([])
+    // the window: a settings write is not refused (nothing is held yet), so the board is on
+    restarted.config.modules = { board: true }
+    const window = () => ({ modules: { ...restarted.config.modules } }) as GremionConfig
+    expect(disabledModuleForPath('/tasks', window())).toBeNull()
+    // the first pass of the new process aligns it back to the platform state
+    await runModuleSwitchPass(tenant, restarted.deps())
+    expect(restarted.writes).toEqual([{ board: false }])
+    expect(disabledModuleForPath('/tasks', window())).toBe('board')
+    expect(platformHeldOffModules(TENANT_ID)).toEqual(['board'])
+  })
+
   it('the modules the platform holds off are published for the direct settings writes, and released again by an enable', async () => {
     r.platform.state = boardState('disabled')
     r.config.modules = { board: true }

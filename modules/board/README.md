@@ -55,8 +55,17 @@ module database and starts no `board-postgres`. The rest of this section describ
 One database per tenant and board. `migrations/001_init.sql` creates `board`, `stack` and
 `card`. The foreign keys to the kernel tables (organisational units, protocol action items)
 are omitted because they would cross databases. The leaf never creates or migrates a
-database itself; enabling the module for a tenant does that, and a schema gate checks the
-applied files against `migrations/manifest.json` before a tenant database is used.
+database itself. Enabling the module used to do that, but `module.json` now declares no
+`runtime.database`, so `enableModule` opens no module database and nothing provisions
+`t_<hex32>__board` any more. A test environment that runs the leaf (`BOARD_BACKEND=service`)
+therefore has to create each tenant's database on `board-postgres` and apply `migrations/` to
+it by hand (the integration tests do exactly that with `runMigrations` from
+`@gremion/tenant-store`, see `test/support/scratch-pg.ts`; `test/lifecycle.integration.test.ts`
+declares the leaf's database and export itself to keep proving the create, export and block
+lifecycle). Until that is done the leaf answers `404 tenant_not_provisioned` for the tenant.
+A schema gate checks the applied files against `migrations/manifest.json` before a tenant
+database is used. A created customer is not affected: it is served in-process and never
+reaches the leaf.
 The retention profile `rp-brd-module-data` is a provisional profile of the catalogue loader
 (`packages/provisioning/src/catalogue-rows.ts`), not a `module.json` export.
 
@@ -90,6 +99,19 @@ None besides the kernel (and, in service mode, the leaf's PostgreSQL server).
   switch board in its own settings: it is held back there.
 - Instance setting: `config.modules.board = false` makes `/tasks` and `/api/board` answer
   with the module-disabled surface.
+- What hides the board after a platform `disable_module` is the app's module-switch
+  reconciler, which sets `config.modules.board = false` within about a minute. It runs only
+  when `PLATFORM_MODULES_DATABASE_URL` is set; the deploy wiring leaves it empty when
+  `UI_MODULES_DB_PASSWORD` is unset, and the app then logs `module self-service reconciler
+  off`. On such a host a platform disable does not hide the board: it stays reachable until
+  `config.modules.board` is set to false by hand. After an app restart the platform's hold is
+  forgotten until the first alignment pass, so for that short window a settings write can
+  still turn the board on; the pass puts it back.
+- Leaving board unticked at creation does not hide it. The board follows the platform only
+  where a platform enablement exists. A customer created without it is unmanaged and, like
+  every toggleable module except elections, on by default, exactly as with votes, files and
+  calendar; the checkbox only adds the platform enablement. Hiding board for such a customer
+  later needs a platform enablement to disable, or `config.modules.board = false`.
 - Leaf: `docker build -f modules/board/Dockerfile .` from the repository root.
 
 `docs/pilot/module-defaults.md` states that board is part of the pilot create request and passes

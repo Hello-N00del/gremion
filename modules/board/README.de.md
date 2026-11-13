@@ -1,4 +1,4 @@
-<!-- i18n-sync: source=README.md sha256=84368303119f3592e6a224cb7e563af8efcb809cb883966ad0d6c738fe807dad -->
+<!-- i18n-sync: source=README.md sha256=9b8c8ae505a939011bb9d47d7fe1805569fe951a52cef3444a46ceb58579ebf4 -->
 [English](./README.md) | **Deutsch**
 
 # board
@@ -57,9 +57,18 @@ beschreibt den Leaf (`BOARD_BACKEND=service`, nur Testumgebung).
 Je Mandant eine Datenbank für das Modul board. `migrations/001_init.sql` legt `board`, `stack` und
 `card` an. Die Fremdschlüssel auf die Kernel-Tabellen (Organisationseinheiten, Aktionspunkte
 aus Protokollen) fehlen, weil sie Datenbankgrenzen überschreiten würden. Der Leaf legt nie
-selbst eine Datenbank an und migriert auch keine; das übernimmt das Aktivieren des Moduls
-für einen Mandanten, und ein Schema-Gate prüft die angewendeten Dateien gegen
-`migrations/manifest.json`, bevor eine Mandantendatenbank genutzt wird.
+selbst eine Datenbank an und migriert auch keine. Früher übernahm das das Aktivieren des
+Moduls, aber `module.json` deklariert jetzt keine `runtime.database`: `enableModule` öffnet
+keine Moduldatenbank, und nichts legt `t_<hex32>__board` mehr an. Eine Testumgebung, die den
+Leaf betreibt (`BOARD_BACKEND=service`), muss daher die Datenbank jedes Mandanten auf
+`board-postgres` selbst anlegen und `migrations/` von Hand darauf anwenden (die
+Integrationstests tun genau das mit `runMigrations` aus `@gremion/tenant-store`, siehe
+`test/support/scratch-pg.ts`; `test/lifecycle.integration.test.ts` deklariert Datenbank und
+Export des Leaf selbst, damit der Ablauf aus Anlegen, Export und Sperren weiter geprüft wird).
+Solange das nicht geschehen ist, antwortet der Leaf für den Mandanten mit
+`404 tenant_not_provisioned`. Ein Schema-Gate prüft die angewendeten Dateien gegen
+`migrations/manifest.json`, bevor eine Mandantendatenbank genutzt wird. Ein angelegter Kunde
+ist davon nicht betroffen: Er wird im Prozess bedient und erreicht den Leaf nie.
 Das Aufbewahrungsprofil `rp-brd-module-data` ist ein vorläufiges Profil des Katalog-Laders
 (`packages/provisioning/src/catalogue-rows.ts`), kein Export aus `module.json`.
 
@@ -94,6 +103,21 @@ Keine außer dem Kernel (und im Service-Modus dem PostgreSQL-Server des Leaf).
   kann board in den eigenen Einstellungen nicht schalten: Dort ist es zurückgehalten.
 - Instanzeinstellung: Mit `config.modules.board = false` liefern `/tasks` und `/api/board` die
   Antwort für deaktivierte Module aus.
+- Nach einem Plattform-`disable_module` blendet der Modul-Schalt-Reconciler der App das Board
+  aus: Er setzt `config.modules.board = false` innerhalb von etwa einer Minute. Er läuft nur,
+  wenn `PLATFORM_MODULES_DATABASE_URL` gesetzt ist; die Deploy-Verdrahtung lässt sie leer, wenn
+  `UI_MODULES_DB_PASSWORD` nicht gesetzt ist, und die App meldet dann `module self-service
+  reconciler off`. Auf einem solchen Host blendet ein Plattform-Disable das Board nicht aus: Es
+  bleibt erreichbar, bis `config.modules.board` von Hand auf false gesetzt wird. Nach einem
+  Neustart der App ist die Sperre der Plattform bis zum ersten Abgleichlauf vergessen; in
+  diesem kurzen Fenster kann eine Einstellungsänderung das Board noch einschalten, der Lauf
+  schaltet es wieder aus.
+- Wird board beim Anlegen nicht angehakt, ist es dadurch nicht ausgeblendet. Das Board folgt
+  der Plattform nur dort, wo eine Plattform-Aktivierung existiert. Ein ohne sie angelegter
+  Kunde ist ungesteuert und, wie jedes schaltbare Modul außer elections, standardmäßig an,
+  genau wie bei votes, files und calendar; das Häkchen fügt nur die Plattform-Aktivierung
+  hinzu. Das Board eines solchen Kunden später auszublenden erfordert eine Plattform-Aktivierung,
+  die deaktiviert wird, oder `config.modules.board = false`.
 - Leaf: `docker build -f modules/board/Dockerfile .` aus dem Repository-Root.
 
 `docs/pilot/module-defaults.md` hält fest, dass board Teil der Pilot-Anlageanfrage ist und das

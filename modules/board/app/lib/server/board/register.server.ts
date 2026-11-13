@@ -14,6 +14,10 @@ registerErasureHook(boardErasureHook)
 // block: it drops the platform enablement and opens a Karenz row without an export. The module-switch
 // reconciler follows that state and sets config.modules.board false (it follows the platform for the board
 // although a council may not switch it), so every board page and api answers as for a disabled module.
+// PREREQUISITE: that hide exists only while the reconciler runs. gremion-ui module-switch/register.server.ts
+// leaves it off when PLATFORM_MODULES_DATABASE_URL is empty (deploy wiring leaves it empty when
+// UI_MODULES_DB_PASSWORD is unset); there a platform disable does NOT hide the board. A customer created
+// with board unticked has no platform row, so nothing follows and the board stays on by default.
 // A switch-off HIDES the board and deletes nothing: the rows stay in the kernel tables, and a later enable
 // shows the same boards again. No board participant is registered, so the Karenz final step deletes none of
 // them either, and no sealed copy is written. Without the declaration below the retained step fails closed
