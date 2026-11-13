@@ -9,7 +9,7 @@ import Page from './+page.svelte'
 const DATA = { key: '0192f0c4-0000-7000-8000-00000000000a', modules: [], expectedHost: null, disabled: null }
 
 function html(form?: unknown): string {
-  return render(Page as never, { props: { data: DATA, form } }).body
+  return render(Page, { props: { data: DATA, form } as never }).body
 }
 
 /** The `<select name=...>` element with its options, as raw markup. */
