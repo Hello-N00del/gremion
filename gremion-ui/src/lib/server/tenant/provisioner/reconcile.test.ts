@@ -80,6 +80,8 @@ const UPDATE_EMAIL_GET = 'GET /admin/realms/verein/authentication/required-actio
 const UPDATE_EMAIL_PATH = '/admin/realms/verein/authentication/required-actions/UPDATE_EMAIL'
 const UPDATE_EMAIL_CFG_PATH = `${UPDATE_EMAIL_PATH}/config`
 const UPDATE_EMAIL_CFG_GET = `GET ${UPDATE_EMAIL_CFG_PATH}`
+const ACCOUNT_CONSOLE_LIST = 'GET /admin/realms/verein/clients?clientId=account-console'
+const ACCOUNT_CONSOLE_PATH = '/admin/realms/verein/clients/uuid-ac'
 /** The shape of Keycloak's answer for the action in a realm that has not enabled it (enabled=false is measured on 26.6.1; name and priority are illustrative). */
 const UPDATE_EMAIL_LIVE = { alias: 'UPDATE_EMAIL', name: 'Update Email', providerId: 'UPDATE_EMAIL', enabled: false, defaultAction: false, priority: 70, config: {} }
 
@@ -162,6 +164,8 @@ function greenRoutes(): Record<string, unknown> {
     [UPDATE_EMAIL_GET]: { ...UPDATE_EMAIL_LIVE, enabled: true },
     // ... and told to verify the new address by mail (its own config, not the realm's verifyEmail).
     [UPDATE_EMAIL_CFG_GET]: { config: { verifyEmail: 'true' } },
+    // Keycloak's built-in account console has no client scopes in a customer realm (its page is broken), so it is off.
+    [ACCOUNT_CONSOLE_LIST]: [{ id: 'uuid-ac', clientId: 'account-console', enabled: false }],
     // realm users — service accounts only (#239)
     [`GET /admin/realms/${REALM}/users?max=2000`]: [
       { username: 'service-account-gremion-admin', serviceAccountClientId: 'gremion-admin' },
@@ -1337,6 +1341,41 @@ describe('reconcileRealm — the verified e-mail change (update-email-action, up
     const report = await reconcileRealm(transport, { ...opts, verifyOnly: false })
     expect(report.ok).toBe(true)
     expect(writesOf(calls)).toEqual([])
+  })
+})
+
+describe('reconcileRealm — the account console is off (account-console-disabled)', () => {
+  it('is named in the contract', () => {
+    expect(RECONCILE_CHECK_NAMES).toContain('account-console-disabled')
+  })
+
+  it('an enabled account-console client -> only account-console-disabled fails', async () => {
+    const routes = greenRoutes()
+    routes[ACCOUNT_CONSOLE_LIST] = [{ id: 'uuid-ac', clientId: 'account-console', enabled: true }]
+    const { transport, calls } = scriptedTransport(routes)
+    const report = await reconcileRealm(transport, { ...opts, verifyOnly: true })
+    expect(report.checks.filter((c) => !c.ok).map((c) => c.name)).toEqual(['account-console-disabled'])
+    expect(report.checks.find((c) => c.name === 'account-console-disabled')!.detail).toMatch(/no client scopes/)
+    expect(calls.every((c) => c.method === 'GET')).toBe(true)
+  })
+
+  it('a realm without the client passes (nothing to disable)', async () => {
+    const routes = greenRoutes()
+    routes[ACCOUNT_CONSOLE_LIST] = []
+    const report = await reconcileRealm(scriptedTransport(routes).transport, { ...opts, verifyOnly: true })
+    expect(report.ok).toBe(true)
+  })
+
+  it('apply -> ONE partial client PUT (enabled false), and the account client itself is never touched', async () => {
+    const routes = greenRoutes()
+    routes[ACCOUNT_CONSOLE_LIST] = [{ id: 'uuid-ac', clientId: 'account-console', enabled: true }]
+    const { transport, calls } = scriptedTransport(routes)
+    const report = await reconcileRealm(transport, { ...opts, verifyOnly: false })
+    expect(calls.filter((c) => c.method !== 'GET')).toEqual([
+      { method: 'PUT', path: ACCOUNT_CONSOLE_PATH, body: { id: 'uuid-ac', clientId: 'account-console', enabled: false } },
+    ])
+    expect(calls.some((c) => /clientId=account(&|$)/.test(c.path))).toBe(false)
+    expect(report.applied).toEqual(['account-console-disabled'])
   })
 })
 

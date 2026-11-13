@@ -727,9 +727,17 @@ which would send every user with an unverified address through the verify-email 
 A realm created before this change shows both RED. Apply writes the config first, then enables the
 action on its live representation, so the action is never enabled without verification; a realm that
 does not register the action at all stays RED, since apply cannot register it. Customer creation
-does the same on every pass. Both repairs need `manage-realm` in the customer realm, which the
+does the same on every pass. These repairs need `manage-realm` in the customer realm, which the
 provisioner holds on a realm it created or adopted and which `realm-admin` (the `gremion-admin`
 service account's role) contains.
+
+A third realm check, `account-console-disabled`, holds when Keycloak's built-in `account-console` client
+is disabled: a customer realm gives it no client scopes, so its page is broken, and the app edits the
+profile itself. Apply disables it (a partial client update; it is never deleted, Keycloak recreates a
+deleted built-in client) and creation does the same. The `account` client is left alone: the default
+role references its roles, and Keycloak's mailed invitation links fall back to it when they name no
+client. Such an invitation (`execute-actions-email` without a client) therefore still works: it runs
+under `account`, and its completion page carries no link into the console.
 
 A suspended customer is ensured with the empty module set (suspension evicts the
 modules; reconcile does not restore them) and keeps the `kernel-api` identity like the

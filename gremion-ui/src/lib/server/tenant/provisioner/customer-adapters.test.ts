@@ -91,6 +91,7 @@ function kcFake(exists: boolean, held: string[][] = [[], ['realm-admin']]) {
     createRealm: vi.fn(async (_doc: Record<string, unknown>) => {}),
     configureStepupFlow: vi.fn(async () => {}),
     ensureRequiredActionEnabled: vi.fn(async (_realm: string, _alias: string, _config?: Readonly<Record<string, string>>): Promise<'enabled' | 'already' | 'absent'> => 'enabled'),
+    ensureClientDisabled: vi.fn(async (_realm: string, _clientId: string): Promise<'disabled' | 'already' | 'absent'> => 'disabled'),
     assignServiceAccountRealmRoles: vi.fn(async (_realm: string, _client: string, _roles: readonly string[]) => {}),
     getServiceAccountRealmRoleNames: vi.fn(async (_realm: string, _client: string) => (reads.length > 1 ? reads.shift()! : reads[0]!)),
   }
@@ -171,6 +172,14 @@ describe('customerAdapters.realm.ensureRealm', () => {
       const kc = kcFake(exists)
       await adapters(kc).a.realm.ensureRealm(C)
       expect(kc.ensureRequiredActionEnabled).toHaveBeenCalledWith('musterstadt', 'UPDATE_EMAIL', { verifyEmail: 'true' })
+    }
+  })
+
+  it('switches the account console off on a new and on an existing realm, and never the account client', async () => {
+    for (const exists of [false, true]) {
+      const kc = kcFake(exists)
+      await adapters(kc).a.realm.ensureRealm(C)
+      expect(kc.ensureClientDisabled.mock.calls).toEqual([['musterstadt', 'account-console']])
     }
   })
 

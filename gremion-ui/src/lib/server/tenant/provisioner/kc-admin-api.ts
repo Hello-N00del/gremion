@@ -570,6 +570,20 @@ export class KcProvisionApi {
     return changed ? 'enabled' : 'already'
   }
 
+  /**
+   * Disable the client `clientId` of a realm as an Admin-API delta (a partial client PUT, which Keycloak
+   * merges). A client the realm does not have has nothing to disable ('absent'). Disabled, never deleted:
+   * Keycloak recreates a deleted built-in client.
+   */
+  async ensureClientDisabled(realm: string, clientId: string): Promise<'disabled' | 'already' | 'absent'> {
+    const found = (await this.realmGet<Array<{ id?: string; enabled?: boolean }> | undefined>(realm, `/clients?clientId=${encodeURIComponent(clientId)}`)) ?? []
+    const client = found[0]
+    if (!client?.id) return 'absent'
+    if (client.enabled === false) return 'already'
+    await this.realmReq(realm, 'PUT', `/clients/${encodeURIComponent(client.id)}`, { id: client.id, clientId, enabled: false })
+    return 'disabled'
+  }
+
   async isRealmEnabled(realm: string): Promise<boolean> {
     const rep = await this.realmGet<{ enabled?: boolean }>(realm, '')
     return rep?.enabled === true

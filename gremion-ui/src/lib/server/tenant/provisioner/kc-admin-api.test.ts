@@ -542,6 +542,40 @@ describe('KcProvisionApi.ensureRequiredActionEnabled', () => {
   })
 })
 
+// Keycloak's built-in account console: a customer realm has no client scopes for it, so its page is broken, and
+// Settings > Profil no longer links to it. Disabled, never deleted (Keycloak recreates a deleted built-in client).
+describe('KcProvisionApi.ensureClientDisabled', () => {
+  const LIST = '/admin/realms/verein/clients?clientId=account-console'
+  const CLIENT = '/admin/realms/verein/clients/uuid-ac'
+  const LIVE = { id: 'uuid-ac', clientId: 'account-console', enabled: true, publicClient: true }
+
+  it('PUTs only id, clientId and enabled=false (a partial client PUT merges)', async () => {
+    const { transport, calls } = fakeTransport({ [`GET ${LIST}`]: [LIVE] })
+    expect(await new KcProvisionApi(transport).ensureClientDisabled('verein', 'account-console')).toBe('disabled')
+    expect(calls.filter((c) => c.method !== 'GET')).toEqual([
+      { method: 'PUT', path: CLIENT, body: { id: 'uuid-ac', clientId: 'account-console', enabled: false } },
+    ])
+  })
+
+  it('writes nothing when the client is already disabled', async () => {
+    const { transport, calls } = fakeTransport({ [`GET ${LIST}`]: [{ ...LIVE, enabled: false }] })
+    expect(await new KcProvisionApi(transport).ensureClientDisabled('verein', 'account-console')).toBe('already')
+    expect(calls.filter((c) => c.method !== 'GET')).toEqual([])
+  })
+
+  it('a realm without the client has nothing to disable and nothing is written', async () => {
+    const { transport, calls } = fakeTransport({ [`GET ${LIST}`]: [] })
+    expect(await new KcProvisionApi(transport).ensureClientDisabled('verein', 'account-console')).toBe('absent')
+    expect(calls.filter((c) => c.method !== 'GET')).toEqual([])
+  })
+
+  it('encodes the realm and the client id', async () => {
+    const { transport, calls } = fakeTransport({})
+    await new KcProvisionApi(transport).ensureClientDisabled('a b', 'x&y')
+    expect(calls[0]!.path).toBe('/admin/realms/a%20b/clients?clientId=x%26y')
+  })
+})
+
 // Security sweep 2, finding 3: stepup-2fa must be OTP-or-deny, never a REQUIRED
 // OTP form (Keycloak would enroll an authenticator inside the step-up, then
 // grant loa2 to whoever holds the session or the password).

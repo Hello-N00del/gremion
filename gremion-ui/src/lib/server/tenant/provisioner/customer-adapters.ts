@@ -60,7 +60,7 @@ import {
 import { getDb } from '$lib/server/db'
 import { KcProvisionApi } from './kc-admin-api'
 import { assertBrandIdentityComplete, materializeConfig } from './materialize'
-import { ADMIN_CLIENT_ID, GREMION_ADMIN_SA_REALM_ROLES, UPDATE_EMAIL_ACTION, UPDATE_EMAIL_ACTION_CONFIG } from './pipeline'
+import { ADMIN_CLIENT_ID, GREMION_ADMIN_SA_REALM_ROLES, ACCOUNT_CONSOLE_CLIENT_ID, UPDATE_EMAIL_ACTION, UPDATE_EMAIL_ACTION_CONFIG } from './pipeline'
 import { withKernelAuditCheck, type ReconcileReport } from './reconcile'
 import { buildTenantRealmDoc, issuerForTenant, kcInternalForTenant, PROVISIONER_SECRET_CLIENTS } from './realm-doc'
 
@@ -450,6 +450,8 @@ export function customerAdapters(o: CustomerAdapterOptions): Pick<ProvisioningDe
         if ((await o.kc.ensureRequiredActionEnabled(c.realm, UPDATE_EMAIL_ACTION, UPDATE_EMAIL_ACTION_CONFIG)) === 'absent') {
           log(`realm ${c.realm}: the required action ${UPDATE_EMAIL_ACTION} is not registered, so the e-mail change stays hidden; reconcile reports it`)
         }
+        // The built-in account console is broken on a customer realm (no client scopes); the app edits the profile.
+        await o.kc.ensureClientDisabled(c.realm, ACCOUNT_CONSOLE_CLIENT_ID)
         await ensureAdminSaRoles(c.realm)
         await markTenantResourceOk(c.id, 'realm', c.realm)
       },
