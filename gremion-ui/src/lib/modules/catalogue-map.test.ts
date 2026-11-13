@@ -10,6 +10,7 @@ import { MODULE_MANIFESTS } from './registry'
 import {
   DENIED_BY_NAME,
   HELD_BACK_CATALOGUE_IDS,
+  HELD_BACK_MANIFEST_IDS,
   SWITCHABLE_CATALOGUE_IDS,
   TOGGLEABLE_PAIRS,
   catalogueIdOf,
@@ -29,15 +30,6 @@ function shippedCatalogueIds(): string[] {
     .map((e) => (JSON.parse(readFileSync(resolve(MODULES_DIR, e.name, 'module.json'), 'utf8')) as { id: string }).id)
     .filter((id) => !disabled.has(id))
     .sort()
-}
-
-/** The manifest id each HELD-BACK catalogue id registers under (they differ for two). */
-const HELD_BACK_MANIFEST_IDS: Readonly<Record<string, string>> = {
-  content: 'content',
-  files: 'files',
-  messaging: 'messages',
-  publishing: 'newsletter',
-  board: 'board',
 }
 
 describe('SWITCHABLE_CATALOGUE_IDS', () => {
@@ -107,6 +99,29 @@ describe('manifestIdOf / catalogueIdOf', () => {
     for (const [id, reason] of Object.entries(HELD_BACK_CATALOGUE_IDS)) {
       expect(reason.length, id).toBeGreaterThan(20)
     }
+  })
+})
+
+describe('HELD_BACK_MANIFEST_IDS (display only: the settings page lists these modules as the operator\'s)', () => {
+  it('names only held-back catalogue ids, each with a registered toggleable manifest, and never a switchable one', () => {
+    for (const [catalogueId, manifestId] of Object.entries(HELD_BACK_MANIFEST_IDS)) {
+      expect(catalogueId in HELD_BACK_CATALOGUE_IDS, `${catalogueId} must be held back`).toBe(true)
+      expect(SWITCHABLE_CATALOGUE_IDS.has(catalogueId)).toBe(false)
+      expect(SWITCHABLE_CATALOGUE_IDS.has(manifestId)).toBe(false)
+      expect(MODULE_MANIFESTS.find((m) => m.id === manifestId)?.toggleable, `${manifestId} manifest`).toBe(true)
+    }
+  })
+
+  it('does not widen the switch: the id maps the council switch trusts still answer null for every entry', () => {
+    for (const [catalogueId, manifestId] of Object.entries(HELD_BACK_MANIFEST_IDS)) {
+      expect(manifestIdOf(catalogueId)).toBeNull()
+      expect(catalogueIdOf(manifestId)).toBeNull()
+    }
+    expect(TOGGLEABLE_PAIRS.map((p) => p.catalogueId).sort()).toEqual(['calendar', 'elections', 'votes'])
+  })
+
+  it('covers every held-back id that owns a manifest (handover owns none)', () => {
+    expect(Object.keys(HELD_BACK_MANIFEST_IDS).sort()).toEqual(Object.keys(HELD_BACK_CATALOGUE_IDS).filter((id) => id !== 'handover').sort())
   })
 })
 
