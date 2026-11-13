@@ -349,8 +349,23 @@ both phases against a real Keycloak 26.6.1 (`enrolment` then `flow` in
 
 Residual: a user must enroll their OTP *outside* a step-up (imported members get
 only `UPDATE_PASSWORD`, TASK-031 D-5); an attacker holding only the password can
-still enroll through the account console before the legitimate user does, so
+still enroll their own authenticator (Keycloak's account console, or the Settings > Profil
+button below) before the legitimate user does, so
 mandatory first-login enrollment for members remains a product decision.
+
+**Profile and account actions inside the app (members).** Settings > Profil no longer
+links to the Keycloak account console (its first API call is refused on a customer realm,
+which has no client scopes for it). A member edits their own first and last name in the app
+(saved through the admin client for the session's own Keycloak user id, nothing else about the
+user changes), and three buttons start Keycloak application-initiated actions through the
+normal `gremion-ui` sign-in: UPDATE_PASSWORD, CONFIGURE_TOTP and UPDATE_EMAIL (the last one
+only while the realm has that required action enabled). Every one sends `kc_action`,
+`prompt=login` and, for a user who has an OTP credential, `acr_values=loa2`, so the password
+and the existing one-time code are asked again before the action form opens. A user without
+an OTP is not sent `loa2` (the OTP-or-deny flow would refuse them) and re-enters the password
+only. Measured on Keycloak 26.6.1 and recorded in the header of
+`gremion-ui/src/lib/server/profile/account-actions.ts`; the return `kc_action_status`
+(success, cancelled, error) is read once and shown as a notice, the session stays intact.
 
 The realm also carries `passwordPolicy` (`length(12) and notUsername and
 notEmail and passwordHistory(3)`) and PKCE S256 on `gremion-ui` (Auth.js sends
