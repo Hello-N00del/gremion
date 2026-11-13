@@ -32,7 +32,7 @@ beforeEach(() => {
 })
 afterEach(() => cleanup())
 
-const thumbOf = (el: HTMLElement) => getComputedStyle(el).scrollbarColor.split(' ')[0]
+const thumbOf = (el: HTMLElement) => getComputedStyle(el).scrollbarColor
 
 describe('sidebar navigation scrollbar', () => {
   test('is thin and takes its thumb colour from the theme, in light and dark', async () => {
