@@ -36,6 +36,8 @@ function room(id: string, messageCount: number) {
     messages: Array.from({ length: messageCount }, (_, i) => ({
       eventId: `$${id}-${i}`,
       sender: '@a:matrix.test',
+      senderDisplayName: 'A',
+      type: 'm.text',
       body: `Text ${i}`,
       ts: i,
     })),

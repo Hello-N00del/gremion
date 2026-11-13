@@ -32,7 +32,7 @@ describe('Verteilerlisten (content) — new list name', () => {
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled())
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
     expect(url).toBe('/api/content/lists')
-    expect(JSON.parse(String(init.body))).toEqual({ name: 'Fachschaften' })
+    expect(JSON.parse(init.body as string)).toEqual({ name: 'Fachschaften' })
   })
 })
 

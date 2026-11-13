@@ -46,7 +46,7 @@ describe('Verteilerlisten (newsletter) — new list name', () => {
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled())
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
     expect(url).toBe('/api/newsletter/lists')
-    expect(JSON.parse(String(init.body))).toEqual({ name: 'Fachschaften' })
+    expect(JSON.parse(init.body as string)).toEqual({ name: 'Fachschaften' })
   })
 })
 
@@ -75,6 +75,6 @@ describe('Verteilerliste (newsletter) — members', () => {
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled())
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
     expect(url).toBe('/api/newsletter/lists/3/members')
-    expect(JSON.parse(String(init.body))).toEqual({ email: 'a@example.org' })
+    expect(JSON.parse(init.body as string)).toEqual({ email: 'a@example.org' })
   })
 })
