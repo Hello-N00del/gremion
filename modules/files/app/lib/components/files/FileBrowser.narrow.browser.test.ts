@@ -138,6 +138,23 @@ describe('files list below 640 px', () => {
   })
 })
 
+describe('renaming a file on a phone', () => {
+  for (const width of [320, 360, 640]) {
+    test(`${width} px: the rename field is a 44 px touch target and stays inside the viewport`, async () => {
+      const { host } = await mount(width)
+      const name = host.querySelector('.fb-row a.fb-name') as HTMLElement
+      name.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+      await nextFrame()
+      const input = host.querySelector('.fb-row input') as HTMLInputElement
+      expect(input, 'rename field').toBeTruthy()
+      expect(rect(input).height, 'rename field height').toBeGreaterThanOrEqual(44)
+      expect(rect(input).right).toBeLessThanOrEqual(window.innerWidth + 0.5)
+      expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth)
+      asserted++
+    })
+  }
+})
+
 describe('files list at 1280 px (positive control)', () => {
   test('keeps the five-column table: titles shown, date and size beside the name', async () => {
     const { host } = await mount(1280)

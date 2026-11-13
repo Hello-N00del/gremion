@@ -3,7 +3,7 @@
 // The kernel's own bare pages (sign-in, legal, first-run setup) are listed here. A feature module can ask for
 // further bare routes through its layout slot (`bareRoutes`, see $lib/modules/layout-slot.ts) without the kernel
 // naming a module path: the files module asks for its full-viewport document editor.
-const KERNEL_BARE_PREFIXES = ['/auth', '/legal', '/setup'] as const
+export const KERNEL_BARE_PREFIXES = ['/auth', '/legal', '/setup'] as const
 
 /** True when `pathname` is `prefix` itself or lies below it (`/files/edit` matches `/files/edit/a.odt`, not `/files/editor`). */
 function under(pathname: string, prefix: string): boolean {

@@ -90,6 +90,23 @@ describe('document editor page', () => {
     expect(close).toHaveBeenCalledTimes(1)
   })
 
+  it('Schließen works again when the browser did not close the tab (an interrupted close, a refused window.close)', () => {
+    vi.useFakeTimers()
+    try {
+      window.history.replaceState({}, '', '/files/edit/Protokolle/Sitzung.odt?tab=1')
+      const close = vi.spyOn(window, 'close').mockImplementation(() => {})
+      const { getByRole } = mount()
+      getByRole('button', { name: 'Schließen' }).click()
+      expect(close).toHaveBeenCalledTimes(1)
+      // The tab is still open a moment later: the person is not left with an inert button.
+      vi.advanceTimersByTime(5000)
+      getByRole('button', { name: 'Schließen' }).click()
+      expect(close).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('ignores a close request from any other origin', () => {
     mount()
     collaboraSays({ MessageId: 'App_Close_Requested' }, 'https://evil.example.test')

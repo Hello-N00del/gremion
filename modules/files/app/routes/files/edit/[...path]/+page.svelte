@@ -110,11 +110,15 @@
 
   // The tab the app opened for this editor closes itself; any other (a bookmark, a pasted link) goes back to the
   // folder of the file. Schließen and Collabora's own close button both land here, and Schließen makes Collabora
-  // answer with App_Close_Requested too, so the close runs once.
+  // answer with App_Close_Requested too, so the close runs once. The latch is only a debounce: if the tab is
+  // still there after the browser had its say (a refused window.close, a leave-page prompt the person
+  // cancelled), Schließen works again.
+  const CLOSE_LATCH_MS = 2000
   let closing = false
   function closeOnce() {
     if (closing) return
     closing = true
+    setTimeout(() => { closing = false }, CLOSE_LATCH_MS)
     closeEditor({ win: window, backPath: data.backPath, navigate: (path) => void goto(path) })
   }
 
@@ -129,8 +133,10 @@
 <PageTitle title={data.fileName} />
 
 <!-- The route renders without the app shell (files.slot.ts bareRoutes), so this page owns the whole viewport:
-     100dvh follows a phone's visible area as the address bar moves (100vh is taller than what is visible), the
-     env() insets keep the bar and the editor out of a notch or a home indicator. min-height: 0 lets the
+     100dvh follows a phone's visible area as the address bar moves (100vh is taller than what is visible). The
+     env() insets only take effect where the viewport meta asks for viewport-fit=cover (app.html does not, the
+     app shell does not want it); without it the browser already keeps the page out of a notch and the home
+     indicator, and the insets are 0. They are kept so the page stays correct if that changes. min-height: 0 lets the
      iframe fill the remaining flex height on short viewports. -->
 <div
   data-testid="editor-root"

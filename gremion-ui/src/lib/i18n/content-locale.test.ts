@@ -14,10 +14,12 @@
 // codebase is German (UX-015 German-first), so one of them is enough to keep a
 // page German. A part explicitly marked lang="de" is German on purpose (WCAG
 // 3.1.2) and does not count.
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join, relative, sep } from 'node:path'
 import { parse } from 'svelte/compiler'
+import { KERNEL_BARE_PREFIXES, isShellPath } from '$lib/components/layout/shell-route'
+import type { ModuleLayoutSlot } from '$lib/modules/layout-slot'
 import {
   TRANSLATED_ROUTE_IDS,
   UI_LOCALE_ATTRIBUTE,
@@ -27,6 +29,9 @@ import {
   syncDocumentLang,
   uiLocaleOf
 } from './content-locale'
+
+// Loading the module slots pulls in the call picture-in-picture, which reads public env at module load.
+vi.mock('$lib/components/VideoCallPip.svelte', () => ({ default: function VideoCallPipStub() {} }))
 
 const ROUTES = join(__dirname, '..', '..', 'routes')
 const SRC = join(ROUTES, '..')
@@ -293,11 +298,15 @@ describe('every page is declared in the language it renders in (guard)', () => {
     expect(pages.map((p) => p.id)).toContain('/beschluesse')
   })
 
-  // The root layout wraps every page in AppShell (a signed-in person) except
-  // the pages under these prefixes; the chrome is part of the document, so a
-  // page inside the shell is translated only when the shell is too.
-  const OUTSIDE_SHELL = ['/auth', '/legal', '/setup']
-  const insideShell = (pathname: string) => !OUTSIDE_SHELL.some((p) => pathname.startsWith(p))
+  // The root layout wraps every page in AppShell (a signed-in person) except the pages isShellPath() names:
+  // the kernel's bare prefixes (shell-route.ts) and the bare routes a module's layout slot asks for (the
+  // files module's full-viewport document editor). The chrome is part of the document, so a page inside
+  // the shell is translated only when the shell is too. The rule is read from the same sources the layout
+  // reads, not copied here.
+  const moduleBareRoutes = Object.values(
+    import.meta.glob<{ default: ModuleLayoutSlot }>('$lib/modules/slots/*.slot.ts', { eager: true })
+  ).flatMap((m) => m.default.bareRoutes ?? [])
+  const insideShell = (pathname: string) => isShellPath(pathname, moduleBareRoutes)
   const shell = evidenceFor([join(SRC, 'lib', 'components', 'layout', 'AppShell.svelte')])
   const shellWhy = `shell hard-coded text: ${JSON.stringify(shell.literals.slice(0, 5))}`
 
@@ -314,10 +323,17 @@ describe('every page is declared in the language it renders in (guard)', () => {
     expect(isTranslatedRoute(null), `${JSON.stringify(e.literals)}; ${shellWhy}`).toBe(proven(e) && proven(shell))
   })
 
-  it('the shell rule above mirrors the root layout', () => {
+  it('the shell rule above is the one the root layout applies', () => {
+    expect([...KERNEL_BARE_PREFIXES]).toEqual(['/auth', '/legal', '/setup'])
     const src = readFileSync(join(ROUTES, '+layout.svelte'), 'utf8')
-    const prefixes = [...src.matchAll(/!\$page\.url\.pathname\.startsWith\('([^']+)'\)/g)].map((m) => m[1])
-    expect(prefixes.sort()).toEqual([...OUTSIDE_SHELL].sort())
+    // The layout decides through isShellPath, fed with the bare routes of every module slot.
+    expect(src).toMatch(/from '\$lib\/components\/layout\/shell-route'/)
+    expect(src).toMatch(/const bareRoutes = moduleSlots\.flatMap\(\(s\) => s\.bareRoutes \?\? \[\]\)/)
+    expect(src).toMatch(/isShellPath\(\$page\.url\.pathname, bareRoutes\)/)
+    // The editor really is outside the shell: that is what makes its page tree independent of the shell's translation.
+    expect(moduleBareRoutes).toContain('/files/edit')
+    expect(insideShell('/files/edit/[...path]')).toBe(false)
+    expect(insideShell('/files')).toBe(true)
   })
 
   it('every listed route id names a real page (no stale entries)', () => {

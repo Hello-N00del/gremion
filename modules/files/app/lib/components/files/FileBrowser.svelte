@@ -300,7 +300,7 @@
                 onchange={(e) => (renameValue = (e.target as HTMLInputElement).value)}
                 onblur={() => handleRename(entry)}
                 onkeydown={(e) => { e.stopPropagation(); if (e.key === 'Enter') handleRename(entry); if (e.key === 'Escape') renamingHref = null }}
-                class="h-9 w-full sm:h-7 sm:w-48"
+                class="h-11 w-full sm:h-7 sm:w-48"
               />
             {:else if entry.isCollection}
               <button
