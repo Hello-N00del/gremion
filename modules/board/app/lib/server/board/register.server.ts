@@ -15,8 +15,9 @@ registerErasureHook(boardErasureHook)
 // reconciler follows that state and sets config.modules.board false (it follows the platform for the board
 // although a council may not switch it), so every board page and api answers as for a disabled module.
 // PREREQUISITE: that hide exists only while the reconciler runs. gremion-ui module-switch/register.server.ts
-// leaves it off when PLATFORM_MODULES_DATABASE_URL is empty (deploy wiring leaves it empty when
-// UI_MODULES_DB_PASSWORD is unset); there a platform disable does NOT hide the board. A customer created
+// leaves it off when the council requester pool is not configured (the platform modules connection string
+// is empty; the deploy wiring leaves it empty when the modules role password is unset, see
+// modules/board/README.md); there a platform disable does NOT hide the board. A customer created
 // with board unticked has no platform row, so nothing follows and the board stays on by default.
 // A switch-off HIDES the board and deletes nothing: the rows stay in the kernel tables, and a later enable
 // shows the same boards again. No board participant is registered, so the Karenz final step deletes none of
