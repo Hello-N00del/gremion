@@ -1,4 +1,4 @@
-<!-- i18n-sync: source=about-gremion.md sha256=4ef57127e1db1e51735568f42f3410e18f8ae522c62df750c276439f2c13cc90 -->
+<!-- i18n-sync: source=about-gremion.md sha256=29f41bafa99205ab700545570cac4d566c8e774e192d124e036dc19a53ffdbe5 -->
 [English](./about-gremion.md) | **Deutsch**
 
 # Über Gremion
