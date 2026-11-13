@@ -7,6 +7,7 @@
   import type { DavEntry } from '$lib/server/files/nextcloud-client'
   import { goto } from '$app/navigation'
   import { isEditableFile, isViewableFile } from '$lib/files/editable-types'
+  import { editorTabHref } from '$lib/files/editor-close'
   import { isUploadTooLarge } from '$lib/files/upload-limit'
   import { t } from '$lib/i18n'
 
@@ -299,7 +300,7 @@
                 onchange={(e) => (renameValue = (e.target as HTMLInputElement).value)}
                 onblur={() => handleRename(entry)}
                 onkeydown={(e) => { e.stopPropagation(); if (e.key === 'Enter') handleRename(entry); if (e.key === 'Escape') renamingHref = null }}
-                class="h-7 w-48"
+                class="h-9 w-full sm:h-7 sm:w-48"
               />
             {:else if entry.isCollection}
               <button
@@ -319,17 +320,23 @@
               </a>
             {/if}
           </div>
-          <div class="fb-mod">{formatDate(entry.lastModified)}</div>
-          <div class="fb-size">{formatSize(entry.contentLength)}</div>
+          <div class="fb-meta">
+            <div class="fb-mod">{formatDate(entry.lastModified)}</div>
+            <div class="fb-size">{formatSize(entry.contentLength)}</div>
+          </div>
           <div class="fb-actions">
             {#if !entry.isCollection && isEditableFile(entry.displayName) && !readonly}
-              <button
+              <!-- A new tab on every device: the editor takes the whole screen there, and the calendar and the
+                   chat stay open here. noopener empties window.opener, so the tab is marked in the URL. -->
+              <a
+                href={editorTabHref(entry.href)}
+                target="_blank"
+                rel="noopener"
                 class="btn btn-ghost btn-sm"
-                onclick={() => goto('/files/edit/' + entry.href.replace(/^\/+/, ''))}
                 aria-label={$t('files.open')}
               >
-                <Icon name="edit" size={13} /> {$t('files.open')}
-              </button>
+                <Icon name="edit" size={13} /> <span class="fb-open-label">{$t('files.open')}</span>
+              </a>
             {:else if !entry.isCollection && isViewableFile(entry.displayName)}
               <a
                 href={'/api/files/' + entry.href.replace(/^\/+/, '') + '?inline=1'}
@@ -338,7 +345,7 @@
                 class="btn btn-ghost btn-sm"
                 aria-label={$t('files.open')}
               >
-                <Icon name="external" size={13} /> {$t('files.open')}
+                <Icon name="external" size={13} /> <span class="fb-open-label">{$t('files.open')}</span>
               </a>
             {/if}
             {#if !readonly}
@@ -495,6 +502,81 @@
   }
   .fb-delete:hover {
     color: var(--rust);
+  }
+  /* Date and size are two grid cells on a desktop (the wrapper adds no box there). */
+  .fb-meta {
+    display: contents;
+  }
+
+  /* A phone. The five fixed columns (22 + 130 + 100 + 160 px) are wider than the screen, so the row actions sat
+     outside the card, cut off by its overflow. Below 640 px a row is three columns, the type badge, the name
+     with date and size under it, and the actions; text is 16 / 13 px and every target at least 44 px. */
+  @media (max-width: 640px) {
+    .fb-head {
+      display: none;
+    }
+    .fb-row {
+      grid-template-columns: 28px minmax(0, 1fr) auto;
+      column-gap: 10px;
+      row-gap: 0;
+      padding: 6px 12px;
+    }
+    :global(.fb-ext-icon),
+    .fb-ext {
+      grid-column: 1;
+      grid-row: 1 / span 2;
+      align-self: center;
+    }
+    .fb-name-cell {
+      grid-column: 2;
+      grid-row: 1;
+    }
+    .fb-meta {
+      display: flex;
+      flex-wrap: wrap;
+      column-gap: 12px;
+      grid-column: 2;
+      grid-row: 2;
+      padding-bottom: 4px;
+    }
+    .fb-actions {
+      grid-column: 3;
+      grid-row: 1 / span 2;
+      align-self: center;
+    }
+    .fb-name {
+      font-size: 16px;
+      min-height: 44px;
+      line-height: 44px;
+    }
+    .fb-mod,
+    .fb-size {
+      font-size: 13px;
+    }
+    .fb-actions .btn {
+      min-width: 44px;
+      min-height: 44px;
+      justify-content: center;
+      font-size: 14px;
+    }
+    .fb-toolbar .btn {
+      min-height: 44px;
+      font-size: 14px;
+    }
+    .fb-crumb {
+      min-height: 44px;
+      padding: 0 4px;
+      font-size: 14px;
+    }
+    .fb-breadcrumb {
+      gap: 2px;
+    }
+  }
+  /* Narrow phones: the label gives way to the icon (the accessible name stays), so the name keeps its width. */
+  @media (max-width: 420px) {
+    .fb-open-label {
+      display: none;
+    }
   }
 </style>
 
