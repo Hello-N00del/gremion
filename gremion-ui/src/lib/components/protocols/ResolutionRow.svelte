@@ -23,7 +23,7 @@
     decision_rule_params?: { fraction?: number } | null
   }
 
-  let { resolution, isAdmin, protocolId, eligibleVotingCount = 0, onSave, onDelete }: {
+  let { resolution, isAdmin, protocolId, eligibleVotingCount = 0, startEditing = false, error = null, onSave, onDelete, onCancel }: {
     resolution: Resolution
     isAdmin: boolean
     protocolId: string
@@ -31,13 +31,39 @@
     // server is still the authority. Defaults to 0 so the row renders even before
     // the roster is known (only the `absolute` preview depends on it).
     eligibleVotingCount?: number
-    onSave: (r: Resolution) => void
+    // An unsaved draft (no id) opens as the entry form; Abbrechen then discards it
+    // through `onCancel` instead of just closing the editor.
+    startEditing?: boolean
+    // A refusal from the server for the last save, shown inside the form.
+    error?: string | null
+    // May resolve to `false` when the save was refused: the form then stays open
+    // so the typed text is not lost.
+    onSave: (r: Resolution) => void | boolean | Promise<void | boolean>
     onDelete: (id: string) => void
+    onCancel?: () => void
   } = $props()
 
   const uid = $props.id()
-  let editing = $state(false)
+  let editing = $state(startEditing)
   let draft = $state({ ...resolution })
+  // A decision is stored only with its text (the server refuses it too).
+  let textMissing = $state(false)
+
+  async function save() {
+    if (typeof draft.text !== 'string' || draft.text.trim() === '') {
+      textMissing = true
+      return
+    }
+    textMissing = false
+    const ok = await onSave(draft)
+    if (ok !== false) editing = false
+  }
+
+  function cancel() {
+    textMissing = false
+    editing = false
+    onCancel?.()
+  }
 
   const RESULT_LABEL: Record<string, string> = {
     passed: '✓ Angenommen',
@@ -113,7 +139,10 @@
 
 {#if editing && isAdmin}
   <div class="rounded-md border p-3 space-y-2">
-    <Input bind:value={draft.text} placeholder="Beschlusstext" />
+    <Input bind:value={draft.text} placeholder="Beschlusstext" aria-label="Beschlusstext" aria-invalid={textMissing || undefined} />
+    {#if textMissing || error}
+      <p role="alert" class="text-sm text-red-700">{textMissing ? 'Bitte den Beschlusstext eingeben.' : error}</p>
+    {/if}
     <div class="flex flex-wrap items-center gap-2">
       <!-- Visible labels (finding 7): the tally fields were announced only by
            their placeholders, which vanish once a number is typed. -->
@@ -163,8 +192,8 @@
       <div class="text-sm text-ink-muted">Ergebnis: nicht berechenbar ({missingCause})</div>
     {/if}
     <div class="flex gap-2">
-      <Button size="sm" onclick={() => { onSave(draft); editing = false }}>Speichern</Button>
-      <Button size="sm" variant="ghost" onclick={() => editing = false}>Abbrechen</Button>
+      <Button size="sm" onclick={save}>Speichern</Button>
+      <Button size="sm" variant="ghost" onclick={cancel}>Abbrechen</Button>
       {#if resolution.id && draft.result !== 'withdrawn'}
         <Button
           size="sm"

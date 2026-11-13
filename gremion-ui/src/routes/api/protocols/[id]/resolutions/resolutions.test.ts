@@ -551,3 +551,56 @@ describe('resolution PATCH/DELETE — publish committed between the check and th
     await expect(PATCH(makePatchEvent({ text: 'X' }))).rejects.toThrow('connection reset')
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// A decision without text is never stored (IT-admin pass 2026-11-13: the
+// editor's "+ Beschluss hinzufügen" used to POST an empty row at once).
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('resolution write routes — a decision needs its text', () => {
+  it.each([
+    ['empty string', { text: '' }],
+    ['whitespace only', { text: '   \n\t ' }],
+    ['text missing', {}],
+    ['text null', { text: null }],
+    ['text not a string', { text: 42 }],
+  ] as const)('POST tally with %s → 400 with a German message, nothing persisted', async (_label, extra) => {
+    await expect(
+      POST(makePostEvent({ ...extra, votesYes: 0, votesNo: 0, votesAbstain: 0, requiredMajority: 'simple' })),
+    ).rejects.toMatchObject({ status: 400, body: { message: expect.stringContaining('Beschlusstext') } })
+    expect(mockAddResolution).not.toHaveBeenCalled()
+  })
+
+  it('POST acclamation without text → 400, nothing persisted', async () => {
+    await expect(
+      POST(makePostEvent({ text: ' ', adoption_mode: 'acclamation', declared_result: 'passed' })),
+    ).rejects.toMatchObject({ status: 400 })
+    expect(mockAddResolution).not.toHaveBeenCalled()
+  })
+
+  it('POST stores the trimmed text when it has content', async () => {
+    const res = await POST(makePostEvent({ text: '  Antrag A  ', votesYes: 0, votesNo: 0, votesAbstain: 0 }))
+    expect(res.status).toBe(201)
+    const input = mockAddResolution.mock.calls[0][1] as ResolutionInput
+    expect(input.text).toBe('Antrag A')
+  })
+
+  it.each(['', '   '])('PATCH clearing the text (%j) → 400, row untouched', async (blank) => {
+    mockSql.mockResolvedValue([storedTallyRow])
+    await expect(PATCH(makePatchEvent({ text: blank, votesYes: 1, votesNo: 0, votesAbstain: 0 })))
+      .rejects.toMatchObject({ status: 400, body: { message: expect.stringContaining('Beschlusstext') } })
+    expect(mockUpdateResolution).not.toHaveBeenCalled()
+  })
+
+  it('PATCH clearing the text of an acclamation row → 400, row untouched', async () => {
+    mockSql.mockResolvedValue([storedAcclamationRow])
+    await expect(PATCH(makePatchEvent({ text: '', declared_result: 'passed' }))).rejects.toMatchObject({ status: 400 })
+    expect(mockUpdateResolution).not.toHaveBeenCalled()
+  })
+
+  it('PATCH without a text field still edits the tallies (text is COALESCEd, not cleared)', async () => {
+    mockSql.mockResolvedValue([storedTallyRow])
+    const res = await PATCH(makePatchEvent({ votesYes: 3, votesNo: 0, votesAbstain: 0 }))
+    expect(res.status).toBe(200)
+  })
+})

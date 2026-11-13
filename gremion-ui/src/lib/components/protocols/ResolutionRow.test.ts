@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'vitest'
+import { describe, test, expect, vi } from 'vitest'
 import { render, fireEvent } from '@testing-library/svelte'
 import ResolutionRow from './ResolutionRow.svelte'
 
@@ -213,5 +213,85 @@ describe('ResolutionRow — a decision without a vote (finding 7)', () => {
     }
     expect(container.textContent).toMatch(/Stimmen unvollständig/)
     expect(container.textContent).not.toMatch(/noch keine Abstimmung/)
+  })
+})
+
+// IT-admin pass 2026-11-13: "+ Beschluss hinzufügen" stored an empty decision at
+// once. The row now serves as the entry form for an UNSAVED draft (no id): it
+// opens in edit mode, refuses to save without text, and Abbrechen discards it.
+describe('ResolutionRow — unsaved draft (entry form)', () => {
+  const blank = {
+    sequence_nr: 1, global_nr: null, text: '', votes_yes: 0, votes_no: 0, votes_abstain: 0,
+    result: 'rejected' as const, required_majority: 'simple' as const,
+  }
+
+  function renderDraft(onSave: (r: never) => unknown = vi.fn()) {
+    const onCancel = vi.fn()
+    const utils = render(ResolutionRow, {
+      props: {
+        resolution: { ...blank } as never,
+        isAdmin: true,
+        protocolId: 'p-1',
+        startEditing: true,
+        onSave,
+        onDelete: vi.fn(),
+        onCancel,
+      } as never,
+    })
+    return { ...utils, onSave, onCancel }
+  }
+
+  test('opens directly as the entry form, with the rule picker a new decision may still use', () => {
+    const { getByPlaceholderText, getByLabelText } = renderDraft()
+    expect(getByPlaceholderText('Beschlusstext')).toBeTruthy()
+    expect(getByLabelText('Erforderliche Mehrheit')).toBeTruthy()
+  })
+
+  test('Speichern without text does not save and says why', async () => {
+    const { getByText, getByRole, onSave } = renderDraft()
+    await fireEvent.click(getByText('Speichern'))
+    expect(onSave).not.toHaveBeenCalled()
+    expect(getByRole('alert').textContent).toMatch(/Beschlusstext/)
+  })
+
+  test('Speichern with whitespace-only text does not save', async () => {
+    const { getByText, getByPlaceholderText, onSave } = renderDraft()
+    await fireEvent.input(getByPlaceholderText('Beschlusstext'), { target: { value: '   ' } })
+    await fireEvent.click(getByText('Speichern'))
+    expect(onSave).not.toHaveBeenCalled()
+  })
+
+  test('Speichern with text hands the draft to onSave', async () => {
+    const { getByText, getByPlaceholderText, onSave } = renderDraft()
+    await fireEvent.input(getByPlaceholderText('Beschlusstext'), { target: { value: 'Antrag A' } })
+    await fireEvent.click(getByText('Speichern'))
+    expect(onSave).toHaveBeenCalledTimes(1)
+    expect((onSave as ReturnType<typeof vi.fn>).mock.calls[0][0].text).toBe('Antrag A')
+  })
+
+  test('a failed save keeps the form open so the typed text is not lost', async () => {
+    const { getByText, getByPlaceholderText } = renderDraft(vi.fn().mockResolvedValue(false))
+    await fireEvent.input(getByPlaceholderText('Beschlusstext'), { target: { value: 'Antrag A' } })
+    await fireEvent.click(getByText('Speichern'))
+    await new Promise((r) => setTimeout(r, 0))
+    expect((getByPlaceholderText('Beschlusstext') as HTMLInputElement).value).toBe('Antrag A')
+  })
+
+  test('Abbrechen on a draft calls onCancel and saves nothing', async () => {
+    const { getByText, onSave, onCancel } = renderDraft()
+    await fireEvent.click(getByText('Abbrechen'))
+    expect(onCancel).toHaveBeenCalledTimes(1)
+    expect(onSave).not.toHaveBeenCalled()
+  })
+
+  test('an existing row with its text cleared cannot be saved either', async () => {
+    const onSave = vi.fn()
+    const { getByText, getByPlaceholderText } = render(ResolutionRow, {
+      props: { resolution: { ...baseResolution } as never, isAdmin: true, protocolId: 'p-1', onSave, onDelete: noopDelete },
+    })
+    await enterEditMode(getByText)
+    await fireEvent.input(getByPlaceholderText('Beschlusstext'), { target: { value: '' } })
+    await fireEvent.click(getByText('Speichern'))
+    expect(onSave).not.toHaveBeenCalled()
   })
 })
