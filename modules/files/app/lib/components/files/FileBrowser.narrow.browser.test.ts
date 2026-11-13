@@ -155,6 +155,25 @@ describe('renaming a file on a phone', () => {
   }
 })
 
+describe('rename field follows the component breakpoint, not a Tailwind variant', () => {
+  // The phone block ends at 640 px inclusive; one pixel wider the table is back and the field is the compact one.
+  // A Tailwind sm: variant is inclusive at 640 px too, so the field and the layout disagreed exactly there.
+  for (const width of [641, 1280]) {
+    test(`${width} px: the rename field is the compact desktop field`, async () => {
+      const { host } = await mount(width)
+      const name = host.querySelector('.fb-row a.fb-name') as HTMLElement
+      name.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+      await nextFrame()
+      const input = host.querySelector('.fb-row input') as HTMLInputElement
+      expect(input, 'rename field').toBeTruthy()
+      expect(rect(input).height, 'rename field height').toBeLessThanOrEqual(32)
+      expect(rect(input).width, 'rename field width').toBeLessThanOrEqual(12 * 16 + 1)
+      expect(input.className, 'no viewport variant on the field').not.toMatch(/(^|\s)sm:/)
+      asserted++
+    })
+  }
+})
+
 describe('files list at 1280 px (positive control)', () => {
   test('keeps the five-column table: titles shown, date and size beside the name', async () => {
     const { host } = await mount(1280)

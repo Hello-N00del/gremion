@@ -300,7 +300,7 @@
                 onchange={(e) => (renameValue = (e.target as HTMLInputElement).value)}
                 onblur={() => handleRename(entry)}
                 onkeydown={(e) => { e.stopPropagation(); if (e.key === 'Enter') handleRename(entry); if (e.key === 'Escape') renamingHref = null }}
-                class="h-11 w-full sm:h-7 sm:w-48"
+                class="fb-rename"
               />
             {:else if entry.isCollection}
               <button
@@ -508,6 +508,14 @@
     display: contents;
   }
 
+  /* The inline rename field. Its size follows the component's own phone breakpoint below, not a Tailwind
+     sm: variant: sm: is inclusive at 640 px, exactly where this phone block is also still active, so at 640 px
+     the two disagreed and the field dropped to 28 px inside the phone layout. */
+  :global(.fb-rename) {
+    height: 28px;
+    width: 12rem;
+  }
+
   /* A phone. The five fixed columns (22 + 130 + 100 + 160 px) are wider than the screen, so the row actions sat
      outside the card, cut off by its overflow. Below 640 px a row is three columns, the type badge, the name
      with date and size under it, and the actions; text is 16 / 13 px and every target at least 44 px. */
@@ -570,6 +578,10 @@
     }
     .fb-breadcrumb {
       gap: 2px;
+    }
+    :global(.fb-rename) {
+      height: 44px;
+      width: 100%;
     }
   }
   /* Narrow phones: the label gives way to the icon (the accessible name stays), so the name keeps its width. */
