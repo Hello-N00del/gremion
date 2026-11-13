@@ -15,7 +15,7 @@
   }: { profile?: Profile | null; emailActionAvailable?: boolean; accountActionResult?: ActionResult | null } = $props()
 
   const nameForm = $derived(page.form?.profileName as
-    | { saved?: true; error?: 'invalid' | 'not-saved' | 'forbidden'; errors?: { firstName?: string; lastName?: string }; values?: { firstName: string; lastName: string } }
+    | { saved?: true; error?: 'invalid' | 'chars' | 'not-saved' | 'forbidden'; errors?: { firstName?: 'invalid' | 'chars'; lastName?: 'invalid' | 'chars' }; values?: { firstName: string; lastName: string } }
     | undefined)
   const actionError = $derived(page.form?.accountAction?.error as 'invalid' | 'unavailable' | 'unavailable-now' | 'forbidden' | undefined)
 
@@ -85,6 +85,11 @@
     {#if nameForm?.saved}
       <p role="status" class="mt-3 text-xs text-ink-2">
         Gespeichert. In der Kopfzeile und in anderen Bereichen erscheint der neue Name nach Ihrer nächsten Anmeldung.
+      </p>
+    {:else if nameForm?.error === 'chars' || nameForm?.errors?.firstName === 'chars' || nameForm?.errors?.lastName === 'chars'}
+      <p role="alert" class="mt-3 text-xs text-rust-ink">
+        Der Name enthält Zeichen, die nicht erlaubt sind: &lt; &gt; &amp; &quot; $ % ! # ? § ; * ~ / \ | ^ = [ ] &#123; &#125; ( ).
+        Bitte entfernen Sie diese Zeichen.
       </p>
     {:else if nameForm?.error === 'invalid'}
       <p role="alert" class="mt-3 text-xs text-rust-ink">

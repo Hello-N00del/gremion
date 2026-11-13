@@ -58,6 +58,15 @@ describe('Settings > Profil (server-rendered)', () => {
     expect(body).toContain('1 bis 80 Zeichen')
   })
 
+  test('a name with a character Keycloak refuses says which characters, not "try later"', () => {
+    const body = html({}, { profileName: { error: 'invalid', errors: { lastName: 'chars' }, values: { firstName: 'Anna', lastName: 'Alt (Vertretung)' } } })
+    expect(body).toContain('Zeichen, die nicht erlaubt sind')
+    expect(body).toMatch(/<input[^>]*name="lastName"[^>]*value="Alt \(Vertretung\)"/)
+    expect(body).not.toContain('später erneut')
+    const fallback = html({}, { profileName: { error: 'chars', values: { firstName: 'Anna', lastName: 'Neu' } } })
+    expect(fallback).toContain('Zeichen, die nicht erlaubt sind')
+  })
+
   test('a saved name says honestly when the rest of the app shows it', () => {
     const body = html({}, { profileName: { saved: true } })
     expect(body).toContain('Gespeichert.')

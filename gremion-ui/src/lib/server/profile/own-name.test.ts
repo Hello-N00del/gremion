@@ -4,6 +4,7 @@
 import { describe, expect, test, vi } from 'vitest'
 import { isActionFailure } from '@sveltejs/kit'
 import { parseNameForm, saveOwnName, NAME_MAX, type OwnNameDeps } from './own-name'
+import { KcAdminError } from '$lib/server/keycloak-admin'
 import { Role, type SessionUser } from '$lib/auth/types'
 
 const member = { id: 'kc-uuid-1', email: 'anna@example.org', name: 'Anna Alt', roles: [Role.Member], groups: [], loa: 1, authTime: 0 }
@@ -48,6 +49,29 @@ describe('parseNameForm', () => {
     const r = parseNameForm(form(fields))
     expect(r.ok).toBe(false)
     if (!r.ok) expect(Object.keys(r.errors)).toContain(badField)
+  })
+
+  // Keycloak's person-name-prohibited-characters validator (measured on 26.6.1) refuses
+  // these with 400 error-person-name-invalid-character; the form says so up front.
+  test.each([
+    ['round brackets', 'Alt (Vertretung)'],
+    ['semicolon', 'Alt; Neu'],
+    ['ampersand', 'Alt & Neu'],
+    ['exclamation mark', 'Anna!'],
+    ['slash', 'Alt/Neu'],
+    ['angle bracket', 'A<b'],
+    ['hash', 'Alt #1'],
+    ['backslash', 'Alt\\Neu'],
+    ['square bracket', 'Alt [1]'],
+    ['section sign', 'Alt §'],
+  ])('refuses %s as a character error on that field', (_label, bad) => {
+    const r = parseNameForm(form({ firstName: 'Anna', lastName: bad }))
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.errors).toEqual({ lastName: 'chars' })
+  })
+
+  test.each(["O'Brien", 'José-María', 'Müller-Lüdenscheid', 'Anna Maria', 'St. John', 'Jean,Luc'])('accepts %s', (name) => {
+    expect(parseNameForm(form({ firstName: name, lastName: name })).ok).toBe(true)
   })
 
   test('80 characters is the longest accepted', () => {
@@ -121,6 +145,30 @@ describe('saveOwnName', () => {
     expect(isActionFailure(out)).toBe(true)
     expect(out).toMatchObject({ status: 400, data: { profileName: { error: 'invalid', values: { firstName: '', lastName: 'Neu' } } } })
     expect(d.updateUserNames).not.toHaveBeenCalled()
+  })
+
+  test('Alt (Vertretung) is a 400 field error and never reaches Keycloak', async () => {
+    const d = deps()
+    const out = await saveOwnName(event({ firstName: 'Anna', lastName: 'Alt (Vertretung)' }), d)
+    expect(out).toMatchObject({ status: 400, data: { profileName: { error: 'invalid', errors: { lastName: 'chars' } } } })
+    expect(d.updateUserNames).not.toHaveBeenCalled()
+  })
+
+  test('a Keycloak 400 about name characters the form missed is a 400 chars error, not a retry-later 503', async () => {
+    const body = JSON.stringify({ field: 'firstName', errorMessage: 'error-person-name-invalid-character' })
+    const d = deps({ updateUserNames: vi.fn(async () => { throw new KcAdminError(400, body) }) })
+    const warn = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const out = await saveOwnName(event({ firstName: 'Anna', lastName: 'Neu' }), d)
+    expect(out).toMatchObject({ status: 400, data: { profileName: { error: 'chars', values: { firstName: 'Anna', lastName: 'Neu' } } } })
+    warn.mockRestore()
+  })
+
+  test('any other Keycloak 400 stays a 503', async () => {
+    const d = deps({ updateUserNames: vi.fn(async () => { throw new KcAdminError(400, '{"errorMessage":"something-else"}') }) })
+    const warn = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const out = await saveOwnName(event({ firstName: 'A', lastName: 'B' }), d)
+    expect(out).toMatchObject({ status: 503, data: { profileName: { error: 'not-saved' } } })
+    warn.mockRestore()
   })
 
   test('a Keycloak failure is an honest 503, never a success', async () => {
