@@ -535,8 +535,8 @@ hand on the host needs no stdin either.
 
 The button in Settings -> Backups is wired to the same allow-list: the app's
 settings API opens hostd's unix socket and sends the verb `backup` (no new verb,
-no new transport). The socket path comes from `GREMION_HOSTD_SOCKET` (default
-`/run/gremion/hostd.sock`); `GREMION_HOSTD_BACKUP_TIMEOUT_MS` bounds one run
+no new transport). The socket path comes from `GREMION_HOSTD_SOCKET` (no default in the app; the
+host daemon itself listens on `/run/gremion/hostd.sock`); `GREMION_HOSTD_BACKUP_TIMEOUT_MS` bounds one run
 (default 6 h).
 
 - The API answers `started` only after hostd accepted the connection and the
@@ -547,22 +547,28 @@ no new transport). The socket path comes from `GREMION_HOSTD_SOCKET` (default
   line that `gremion-backup` prints before hostd's `EXIT` line says so too. No
   `EXIT` line, a dropped connection or a timeout is `failed`.
 - `config.backups.last_backup_at` is stamped from a finished run only.
-- The host daemon is optional for the app. Three states are told apart:
-  - **not configured**: `GREMION_HOSTD_SOCKET` is unset (or blank) and no socket
-    exists at the default path. The tab says that backups are not managed from
-    the app and that the operator runs them outside it; it offers neither the
-    backup nor the integrity-check action, and the API refuses both with
-    `503` and `code: "not_configured"`. The retention field is not shown
-    either: the tab says that the operator sets retention (on the host,
-    `BACKUP_RETENTION_DAILY/WEEKLY/MONTHLY`).
-  - **unreachable**: `GREMION_HOSTD_SOCKET` is set but the socket is missing, or
-    it refuses connections. This is an error: the tab shows it and disables
-    both actions. The message names no path.
-  - **available**: the socket exists (a socket at the default path counts, with
-    or without the variable).
-  The app container must have the socket mounted for the button to work. An
-  installation that mounts it somewhere other than the default path, or that
-  wants a missing socket reported as an error, sets `GREMION_HOSTD_SOCKET`.
+- The host daemon is optional for the app, and only `GREMION_HOSTD_SOCKET` says
+  that an installation uses it. The app looks at no built-in path, so a daemon
+  that happens to run on the host changes nothing, and a daemon that stops cannot
+  turn an installation that uses it into one that does not. Three states are
+  told apart:
+  - **not configured**: `GREMION_HOSTD_SOCKET` is unset or blank. The tab says
+    that backups are not managed from the app and that the operator runs them
+    outside it; it offers neither the backup nor the integrity-check action, and
+    the API refuses both with `503` and `code: "not_configured"`. The retention
+    field is not shown either: the tab says that the operator sets retention (on
+    the host, `BACKUP_RETENTION_DAILY/WEEKLY/MONTHLY`).
+  - **unreachable**: `GREMION_HOSTD_SOCKET` is set but the socket is missing
+    (the daemon is stopped, or the socket is not mounted into the app
+    container). This is an error: the tab shows it and disables both actions,
+    and the API refuses both with `503` and `code: "unavailable"`. The message
+    names no path. A socket that exists but refuses the connection is only found
+    out when a backup is requested; that request then fails with the same code.
+  - **available**: the named socket exists.
+  The app container must have the socket mounted, and `GREMION_HOSTD_SOCKET` set
+  to where it is mounted (for example `/run/gremion/hostd.sock`), for the button
+  to work. An installation that mounted the socket at that path without setting
+  the variable now reads as not configured: set the variable.
 - A `started` record left by a dead app process is shown as failed (interrupted);
   the host's own `runtime/last-backup.json` remains the record of what really ran.
 

@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { dirname } from 'node:path'
 import { env } from '$env/dynamic/private'
 import { getTenant } from '$lib/server/tenant/context'
-import { backupTimeoutMs, hostdConfigured, hostdSocketPath } from '$lib/server/backup/hostd-client'
+import { backupTimeoutMs, hostdSocketPath } from '$lib/server/backup/hostd-client'
 import {
   BackupTriggerError,
   getBackupStatus,
@@ -105,7 +105,6 @@ function backupDeps(): BackupDeps {
   const tenant = getTenant()
   return {
     socketPath: hostdSocketPath(env),
-    hostdConfigured: hostdConfigured(env),
     runsDir: env.BACKUP_RUNS_DIR ?? `${getConfigDir()}/backup/runs`,
     timeoutMs: backupTimeoutMs(env),
     stampLastBackup: (iso) => {
@@ -131,10 +130,12 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
   if (body.action === 'check') {
     // Where backups are not managed from the app there is no run that could pick
-    // the request up: refuse it instead of recording a request nothing reads.
+    // the request up, and with an unreachable daemon none will start: refuse it
+    // instead of recording a request nothing reads.
     const availability = triggerAvailability(backupDeps())
-    if (availability.state === 'not_configured') {
-      return json({ success: false, error: availability.reason, code: 'not_configured' }, { status: 503 })
+    if (!availability.available) {
+      const code = availability.state === 'not_configured' ? 'not_configured' : 'unavailable'
+      return json({ success: false, error: availability.reason, code }, { status: 503 })
     }
     try {
       const triggerPath = getCheckTriggerPath()

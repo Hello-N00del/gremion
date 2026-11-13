@@ -40,12 +40,8 @@ export class BackupTriggerError extends Error {
 }
 
 export interface BackupDeps {
-  socketPath: string
-  /**
-   * False when the installation names no host daemon. A missing socket then means
-   * "backups are not managed from the app", not "the daemon is down". Default true.
-   */
-  hostdConfigured?: boolean
+  /** The host daemon's socket; null when the installation names none (not managed from the app). */
+  socketPath: string | null
   runsDir: string
   timeoutMs: number
   /** Stamps config.backups.last_backup_at for the request's tenant. */
@@ -123,8 +119,8 @@ export function decideOutcome(
   return { state: 'finished', exitCode: 0, finishedAt }
 }
 
-export function triggerAvailability(deps: Pick<BackupDeps, 'socketPath' | 'hostdConfigured'>): TriggerAvailability {
-  return hostdAvailability(deps.socketPath, deps.hostdConfigured ?? true)
+export function triggerAvailability(deps: Pick<BackupDeps, 'socketPath'>): TriggerAvailability {
+  return hostdAvailability(deps.socketPath)
 }
 
 /**
@@ -138,7 +134,8 @@ export async function startBackup(deps: BackupDeps, opts: { requestedBy: string 
     throw new BackupTriggerError('busy', 'Es läuft bereits ein Backup.')
   }
   const availability = triggerAvailability(deps)
-  if (!availability.available) {
+  const socketPath = deps.socketPath
+  if (!availability.available || socketPath === null) {
     throw new BackupTriggerError(
       availability.state === 'not_configured' ? 'not_configured' : 'unavailable',
       availability.reason ?? 'Der Host-Dienst (hostd) ist nicht erreichbar.',
@@ -146,7 +143,7 @@ export async function startBackup(deps: BackupDeps, opts: { requestedBy: string 
   }
   let sock: net.Socket
   try {
-    sock = await (deps.connect ?? connectHostd)(deps.socketPath)
+    sock = await (deps.connect ?? connectHostd)(socketPath)
   } catch (err) {
     const msg = err instanceof HostdUnreachableError ? err.message : 'Der Host-Dienst (hostd) ist nicht erreichbar.'
     throw new BackupTriggerError('unavailable', msg)

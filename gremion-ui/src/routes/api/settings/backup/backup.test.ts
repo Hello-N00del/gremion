@@ -292,7 +292,8 @@ describe('GET /api/settings/backup trigger availability', () => {
   })
 
   it('no host daemon configured: not_configured, and the reason names neither daemon nor socket', async () => {
-    // GREMION_HOSTD_SOCKET is unset and nothing listens at the built-in default.
+    // GREMION_HOSTD_SOCKET is unset: no path is looked at, so nothing on this
+    // machine (not even a daemon at its usual location) can change the answer.
     const route = await loadRoute()
     const status = await get(route)
     expect(status.trigger.available).toBe(false)
@@ -350,6 +351,20 @@ describe('POST /api/settings/backup without a configured host daemon', () => {
     expect(existsSync(trigger)).toBe(false)
   })
 
+  it('refuses the integrity check too when the daemon is configured but unreachable', async () => {
+    const trigger = join(tmpRoot, `check-${Math.random().toString(36).slice(2)}`)
+    h.env.BACKUP_CHECK_TRIGGER = trigger
+    h.env.GREMION_HOSTD_SOCKET = socketPath() // nothing listens here
+    const route = await loadRoute()
+    const res = await postCheck(route)
+    const body = await res.json()
+    expect(res.status).toBe(503)
+    expect(body.success).toBe(false)
+    expect(body.code).toBe('unavailable')
+    expect(body.error).not.toMatch(/\.sock|\/run\//i)
+    expect(existsSync(trigger)).toBe(false)
+  })
+
   it('still records the integrity check request when the host daemon is available', async () => {
     const trigger = join(tmpRoot, `check-${Math.random().toString(36).slice(2)}`)
     h.env.BACKUP_CHECK_TRIGGER = trigger
@@ -363,24 +378,51 @@ describe('POST /api/settings/backup without a configured host daemon', () => {
 })
 
 describe('hostdAvailability: the three states', () => {
-  it('a present socket is available whether or not the installation names one', async () => {
+  it('a configured path that exists is available', async () => {
     const { hostdAvailability } = await import('$lib/server/backup/hostd-client')
     const present = join(tmpRoot, `present-${Math.random().toString(36).slice(2)}`)
     writeFileSync(present, '')
-    expect(hostdAvailability(present, true)).toEqual({ available: true, state: 'available' })
-    // the documented default path keeps working without the variable
-    expect(hostdAvailability(present, false)).toEqual({ available: true, state: 'available' })
+    expect(hostdAvailability(present)).toEqual({ available: true, state: 'available' })
   })
 
-  it('an absent socket is a fault only where a host daemon is configured', async () => {
+  it('no path named means not configured, whatever exists on this machine', async () => {
+    const { hostdAvailability } = await import('$lib/server/backup/hostd-client')
+    const unnamed = hostdAvailability(null)
+    expect(unnamed.available).toBe(false)
+    expect(unnamed.state).toBe('not_configured')
+    expect(unnamed.reason).toMatch(/außerhalb der App/)
+    expect(unnamed.reason).not.toMatch(/hostd|socket/i)
+  })
+
+  it('a configured path that is absent is a fault, and its reason names no path', async () => {
     const { hostdAvailability } = await import('$lib/server/backup/hostd-client')
     const absent = join(tmpRoot, `absent-${Math.random().toString(36).slice(2)}`)
-    const named = hostdAvailability(absent, true)
+    const named = hostdAvailability(absent)
+    expect(named.available).toBe(false)
     expect(named.state).toBe('unreachable')
     expect(named.reason).not.toContain(absent)
-    const unnamed = hostdAvailability(absent, false)
-    expect(unnamed.state).toBe('not_configured')
-    expect(unnamed.reason).not.toMatch(/hostd|socket/i)
-    expect(unnamed.reason).not.toContain(absent)
+  })
+
+  it('the same installation reads as a fault once its daemon stops, never as not managed', async () => {
+    const path = await startFakeHostd((sock) => sock.end())
+    h.env.GREMION_HOSTD_SOCKET = path
+    const route = await loadRoute()
+    expect((await get(route)).trigger.state).toBe('available')
+    await new Promise<void>((resolve) => server!.close(() => resolve()))
+    server = null
+    if (process.platform !== 'win32') rmSync(path, { force: true })
+    const after = await get(route)
+    expect(after.trigger.available).toBe(false)
+    expect(after.trigger.state).toBe('unreachable')
+  })
+})
+
+describe('hostdSocketPath: only an explicit setting names a host daemon', () => {
+  it('is null when the variable is unset or blank, the trimmed value otherwise', async () => {
+    const { hostdSocketPath } = await import('$lib/server/backup/hostd-client')
+    expect(hostdSocketPath({})).toBeNull()
+    expect(hostdSocketPath({ GREMION_HOSTD_SOCKET: '' })).toBeNull()
+    expect(hostdSocketPath({ GREMION_HOSTD_SOCKET: '   ' })).toBeNull()
+    expect(hostdSocketPath({ GREMION_HOSTD_SOCKET: ' /x/y.sock ' })).toBe('/x/y.sock')
   })
 })
