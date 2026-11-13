@@ -71,7 +71,13 @@
     }
   }
 
+  // True while the create request is on its way: it cannot be repeated (two
+  // POSTs would store two identical decisions) nor cancelled (it is stored
+  // regardless of what the form shows).
+  let creating = false
+
   function cancelNewResolution() {
+    if (creating) return
     newResolution = null
     newResolutionError = null
   }
@@ -88,26 +94,37 @@
   }
 
   async function createResolution(r: ResolutionLike): Promise<boolean> {
+    if (creating) return false
+    creating = true
     newResolutionError = null
-    // INV-5: pick the decision rule up front (default simple) and let the SERVER
-    // compute the result — the client never sends a free-hand `result`.
-    const res = await fetch(`/api/protocols/${data.protocol.id}/resolutions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        text: r.text,
-        votesYes: Number(r.votes_yes) || 0,
-        votesNo: Number(r.votes_no) || 0,
-        votesAbstain: Number(r.votes_abstain) || 0,
-        requiredMajority: r.required_majority,
-      }),
-    })
-    if (res.ok) {
-      resolutions = [...resolutions, (await res.json()).resolution]
-      newResolution = null
-      return true
+    const failed = 'Beschluss konnte nicht hinzugefügt werden.'
+    try {
+      // INV-5: pick the decision rule up front (default simple) and let the SERVER
+      // compute the result — the client never sends a free-hand `result`. The
+      // form refuses a blank count, so the three numbers are stored as typed.
+      const res = await fetch(`/api/protocols/${data.protocol.id}/resolutions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: r.text,
+          votesYes: Number(r.votes_yes),
+          votesNo: Number(r.votes_no),
+          votesAbstain: Number(r.votes_abstain),
+          requiredMajority: r.required_majority,
+        }),
+      })
+      if (res.ok) {
+        resolutions = [...resolutions, (await res.json()).resolution]
+        newResolution = null
+        return true
+      }
+      newResolutionError = await refusalMessage(res, failed)
+    } catch {
+      // network failure: keep the form (and the typed text) so it can be retried
+      newResolutionError = failed
+    } finally {
+      creating = false
     }
-    newResolutionError = await refusalMessage(res, 'Beschluss konnte nicht hinzugefügt werden.')
     return false
   }
 
@@ -125,7 +142,7 @@
       const saved = (await res.json()).resolution as ResolutionLike
       resolutions = resolutions.map((x) => (x.id === saved.id ? saved : x))
     } else {
-      alert('Beschluss konnte nicht gespeichert werden.')
+      alert(await refusalMessage(res, 'Beschluss konnte nicht gespeichert werden.'))
     }
   }
 

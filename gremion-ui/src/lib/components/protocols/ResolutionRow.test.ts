@@ -277,6 +277,31 @@ describe('ResolutionRow — unsaved draft (entry form)', () => {
     expect((getByPlaceholderText('Beschlusstext') as HTMLInputElement).value).toBe('Antrag A')
   })
 
+  test('Speichern is ignored while the first save is still pending', async () => {
+    let settle!: (ok: boolean) => void
+    const onSave = vi.fn(() => new Promise<boolean>((resolve) => { settle = resolve }))
+    const { getByText, getByPlaceholderText } = renderDraft(onSave)
+    await fireEvent.input(getByPlaceholderText('Beschlusstext'), { target: { value: 'Antrag A' } })
+    await fireEvent.click(getByText('Speichern'))
+    await fireEvent.click(getByText('Speichern'))
+    await fireEvent.click(getByText('Abbrechen'))
+    expect(onSave).toHaveBeenCalledTimes(1)
+    settle(false)
+    await new Promise((r) => setTimeout(r, 0))
+    // A refused save re-enables the form.
+    await fireEvent.click(getByText('Speichern'))
+    expect(onSave).toHaveBeenCalledTimes(2)
+  })
+
+  test('a draft with a cleared count is not saved', async () => {
+    const { getByText, getByPlaceholderText, getByLabelText, getByRole, onSave } = renderDraft()
+    await fireEvent.input(getByPlaceholderText('Beschlusstext'), { target: { value: 'Antrag A' } })
+    await fireEvent.input(getByLabelText('Nein'), { target: { value: '' } })
+    await fireEvent.click(getByText('Speichern'))
+    expect(onSave).not.toHaveBeenCalled()
+    expect(getByRole('alert').textContent).toMatch(/Stimmzahlen/)
+  })
+
   test('Abbrechen on a draft calls onCancel and saves nothing', async () => {
     const { getByText, onSave, onCancel } = renderDraft()
     await fireEvent.click(getByText('Abbrechen'))

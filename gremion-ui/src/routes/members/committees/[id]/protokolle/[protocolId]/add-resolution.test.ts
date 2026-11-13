@@ -107,3 +107,89 @@ describe('minutes editor — adding a decision', () => {
     expect((screen.getByPlaceholderText('Beschlusstext') as HTMLInputElement).value).toBe('Antrag A')
   })
 })
+
+// A save that is still on its way must not be repeatable or cancellable: two
+// clicks stored two identical decisions, and Abbrechen during the request closed
+// the form while the decision was stored anyway.
+describe('minutes editor — a save in flight', () => {
+  function pendingCreate() {
+    let settle!: (res: Response) => void
+    fetchMock.mockImplementationOnce(() => new Promise<Response>((resolve) => { settle = resolve }))
+    return { finish: () => settle(new Response(JSON.stringify({ resolution: createdRow }), { status: 201 })) }
+  }
+
+  async function fillAndSave() {
+    await fireEvent.click(screen.getByText('+ Beschluss hinzufügen'))
+    await fireEvent.input(screen.getByPlaceholderText('Beschlusstext'), { target: { value: 'Antrag A' } })
+    await fireEvent.click(screen.getByText('Speichern'))
+  }
+
+  it('a double click on Speichern sends exactly one POST', async () => {
+    const pending = pendingCreate()
+    render(Page, { props: { data: DATA } as never })
+    await fillAndSave()
+    await fireEvent.click(screen.getByText('Speichern'))
+    await fireEvent.click(screen.getByText('Speichern'))
+
+    expect(resolutionPosts()).toHaveLength(1)
+    pending.finish()
+    await waitFor(() => expect(screen.queryByPlaceholderText('Beschlusstext')).toBeNull())
+    expect(resolutionPosts()).toHaveLength(1)
+    expect(screen.getAllByText('Antrag A')).toHaveLength(1)
+  })
+
+  it('Abbrechen while the save is pending does not pretend to cancel', async () => {
+    const pending = pendingCreate()
+    render(Page, { props: { data: DATA } as never })
+    await fillAndSave()
+    await fireEvent.click(screen.getByText('Abbrechen'))
+
+    // The form is still there: the request is on its way and cannot be recalled.
+    expect(screen.getByPlaceholderText('Beschlusstext')).toBeTruthy()
+    pending.finish()
+    await waitFor(() => expect(screen.queryByPlaceholderText('Beschlusstext')).toBeNull())
+    expect(screen.getAllByText('Antrag A')).toHaveLength(1)
+  })
+
+  it('a network failure keeps the form and says so', async () => {
+    fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+    render(Page, { props: { data: DATA } as never })
+    await fillAndSave()
+
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toMatch(/nicht hinzugefügt/))
+    expect((screen.getByPlaceholderText('Beschlusstext') as HTMLInputElement).value).toBe('Antrag A')
+    // And the form can be saved again afterwards.
+    await fireEvent.click(screen.getByText('Speichern'))
+    await waitFor(() => expect(resolutionPosts()).toHaveLength(2))
+  })
+})
+
+describe('minutes editor — a cleared vote count', () => {
+  it('is refused instead of being stored as a counted 0', async () => {
+    render(Page, { props: { data: DATA } as never })
+    await fireEvent.click(screen.getByText('+ Beschluss hinzufügen'))
+    await fireEvent.input(screen.getByPlaceholderText('Beschlusstext'), { target: { value: 'Antrag A' } })
+    await fireEvent.input(screen.getByLabelText('Ja'), { target: { value: '' } })
+    await fireEvent.click(screen.getByText('Speichern'))
+
+    expect(resolutionPosts()).toHaveLength(0)
+    expect(screen.getByRole('alert').textContent).toMatch(/Stimmzahlen/)
+  })
+})
+
+describe('minutes editor — a refused edit shows the server message', () => {
+  it('names why the edit of a decision was refused', async () => {
+    const alertMock = vi.fn()
+    vi.stubGlobal('alert', alertMock)
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ message: 'Der Beschlusstext darf nicht leer sein.' }), { status: 400 }),
+    )
+    const stored = { ...createdRow, text: 'Alt' }
+    render(Page, { props: { data: { ...DATA, resolutions: [stored] } } as never })
+    await fireEvent.click(screen.getByText('Bearbeiten'))
+    await fireEvent.click(screen.getByText('Zurückziehen'))
+
+    await waitFor(() => expect(alertMock).toHaveBeenCalledTimes(1))
+    expect(alertMock.mock.calls[0][0]).toMatch(/Beschlusstext darf nicht leer/)
+  })
+})

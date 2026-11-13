@@ -49,18 +49,40 @@
   // A decision is stored only with its text (the server refuses it too).
   let textMissing = $state(false)
 
+  // A new decision is stored with all three counts; a cleared field is not a 0.
+  let countsMissing = $state(false)
+  // True while onSave is pending: the save cannot be repeated or cancelled.
+  let saving = $state(false)
+
+  const countIsBlank = (v: unknown) => v === null || v === undefined || v === ''
+
   async function save() {
+    if (saving) return
     if (typeof draft.text !== 'string' || draft.text.trim() === '') {
       textMissing = true
       return
     }
     textMissing = false
-    const ok = await onSave(draft)
-    if (ok !== false) editing = false
+    // An unsaved draft is a tally row whose counts are stored as typed, so a
+    // blank one would become a counted 0. Existing rows keep the server's rule.
+    countsMissing =
+      !resolution.id &&
+      draft.adoption_mode !== 'acclamation' &&
+      (countIsBlank(draft.votes_yes) || countIsBlank(draft.votes_no) || countIsBlank(draft.votes_abstain))
+    if (countsMissing) return
+    saving = true
+    try {
+      const ok = await onSave(draft)
+      if (ok !== false) editing = false
+    } finally {
+      saving = false
+    }
   }
 
   function cancel() {
+    if (saving) return
     textMissing = false
+    countsMissing = false
     editing = false
     onCancel?.()
   }
@@ -140,8 +162,12 @@
 {#if editing && isAdmin}
   <div class="rounded-md border p-3 space-y-2">
     <Input bind:value={draft.text} placeholder="Beschlusstext" aria-label="Beschlusstext" aria-invalid={textMissing || undefined} />
-    {#if textMissing || error}
-      <p role="alert" class="text-sm text-red-700">{textMissing ? 'Bitte den Beschlusstext eingeben.' : error}</p>
+    {#if textMissing || countsMissing || error}
+      <p role="alert" class="text-sm text-red-700">{textMissing
+        ? 'Bitte den Beschlusstext eingeben.'
+        : countsMissing
+          ? 'Bitte alle drei Stimmzahlen angeben (0, wenn niemand so gestimmt hat).'
+          : error}</p>
     {/if}
     <div class="flex flex-wrap items-center gap-2">
       <!-- Visible labels (finding 7): the tally fields were announced only by
@@ -192,8 +218,8 @@
       <div class="text-sm text-ink-muted">Ergebnis: nicht berechenbar ({missingCause})</div>
     {/if}
     <div class="flex gap-2">
-      <Button size="sm" onclick={save}>Speichern</Button>
-      <Button size="sm" variant="ghost" onclick={cancel}>Abbrechen</Button>
+      <Button size="sm" onclick={save} disabled={saving}>Speichern</Button>
+      <Button size="sm" variant="ghost" onclick={cancel} disabled={saving}>Abbrechen</Button>
       {#if resolution.id && draft.result !== 'withdrawn'}
         <Button
           size="sm"
