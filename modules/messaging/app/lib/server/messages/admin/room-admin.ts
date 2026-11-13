@@ -30,7 +30,7 @@ import { withUnitLock } from '$lib/server/governance/provisioning/mutex'
 import { attachSubsystem, releaseSubsystem } from '$lib/server/governance/provisioning/orchestrator'
 import { getDb } from '$lib/server/db'
 import type { ProvisioningReport } from '$lib/server/governance/provisioning/types'
-import { writeAuditEntry } from '$lib/server/audit-db'
+import { writeAuditEntry, auditEntryExists } from '$lib/server/audit-db'
 
 /** Thrown when a Matrix/Synapse call fails for a TRANSPORT reason (unreachable,
  *  timed out, or a 502/503/504 from the homeserver) — the caller (route layer)
@@ -197,7 +197,7 @@ async function archiveMatrixSide(unitId: string, unitName: string, roomId: strin
   // overwrite, so unarchiveRoom can put them back exactly. A retry after a partial archive
   // finds the room ALREADY read-only, so the first attempt's marker (when it is a trusted
   // one with a prior) wins: reading the levels again would store the archived ones.
-  const existing = await getRoomArchiveMarker(roomId)
+  const existing = await getRoomArchiveMarker(roomId, { recordedUnitId: unitId })
   // A stale marker of ANOTHER unit (or of an earlier life of the room) never sets this archive's prior or timestamp.
   const keptPrior = existing?.org_unit_id === unitId ? sanitizePrior(existing.prior) : null
   let current: PowerLevelsContent | undefined
@@ -351,13 +351,13 @@ async function unarchiveMatrixSide(
  *  row is failed too, and an archive that died before the marker write leaves nothing to undo). A RoomConflictError means the unit already has another active room; the Matrix side is
  *  not touched then. */
 export async function unarchiveRoom(
-  unitId: string, roomId: string, opts: { userId: string },
+  unitId: string, roomId: string, opts: { userId: string; recordedByCaller?: boolean },
 ): Promise<{ aliasRestored: boolean; priorGuessed: boolean }> {
   const unit = await getOrgUnit(unitId)
   if (!unit) throw new RoomNotFoundError(`org unit not found: ${unitId}`)
 
   return withUnitLock(unitId, async () => {
-    const marker = await getRoomArchiveMarker(roomId)
+    const marker = await getRoomArchiveMarker(roomId, { recordedUnitId: opts.recordedByCaller ? unitId : undefined })
     const resource = await getResource(unitId, 'matrix')
     if (!marker || marker.org_unit_id !== unitId) {
       if (resource?.external_id === roomId) return { aliasRestored: true, priorGuessed: false } // already active
@@ -764,8 +764,9 @@ export interface RoomArchiveMarker {
    *  homeserver that several customers can share, so the unit id alone does not say whose room it is. */
   tenant_id?: string
   /** Set by getRoomArchiveMarker ONLY, never stored: the room is archived, but not provably by this
-   *  customer (another customer's tenant id, or a marker of a build that did not store one). Such a
-   *  marker carries no org_unit_id here, so nothing matches it to one of this customer's units. */
+   *  customer (another customer's tenant id, or a marker of a build that did not store one that
+   *  nothing of this customer records). Such a marker carries no org_unit_id here, so nothing matches
+   *  it to one of this customer's units. */
   foreign?: true
   archived_at?: string
   /** Karenz (Task 15): the power levels the archive overwrote (see ArchivePriorPowerLevels). Raw Matrix
@@ -800,7 +801,9 @@ export const ROOM_ARCHIVE_MARKER_TYPE = 'org.gremion.room.archived'
  *  else returns null — "not archived, not Gremion-managed". A missing marker
  *  (404) is also null; a transport failure propagates so each caller keeps
  *  its own fail-closed/fail-open policy. */
-export async function getRoomArchiveMarker(roomId: string): Promise<RoomArchiveMarker | null> {
+export async function getRoomArchiveMarker(
+  roomId: string, opts: { recordedUnitId?: string } = {},
+): Promise<RoomArchiveMarker | null> {
   const mc = getMatrixClient()
   const bot = mc.getAdminBotUserId()
   const markerEvent = await mc.getRoomStateEvent(roomId, ROOM_ARCHIVE_MARKER_TYPE)
@@ -825,14 +828,40 @@ export async function getRoomArchiveMarker(roomId: string): Promise<RoomArchiveM
   // room routes treat the room as active again.
   const unitId = (content as RoomArchiveMarker).org_unit_id
   if (typeof unitId !== 'string' || unitId === '') return null
-  // Whose archive this is. A room archived by another customer on a shared homeserver, or by a build
-  // that stored no customer, is still ARCHIVED (it is not joined, not offered as active), but it is
-  // not this customer's to list, restore or delete: its unit id is withheld, so it matches no unit.
-  if ((content as RoomArchiveMarker).tenant_id !== currentTenantId()) {
-    console.warn('[room-admin] getRoomArchiveMarker: ignoring the unit of an archive marker not stamped by this customer', { roomId })
+  // Whose archive this is. A room archived by another customer on a shared homeserver is still
+  // ARCHIVED (it is not joined, not offered as active), but it is not this customer's to list, restore
+  // or delete: its unit id is withheld, so it matches no unit.
+  const stamp = (content as RoomArchiveMarker).tenant_id
+  if (stamp !== undefined && stamp !== currentTenantId()) {
+    console.warn('[room-admin] getRoomArchiveMarker: ignoring the unit of an archive marker stamped by another customer', { roomId })
+    return { foreign: true }
+  }
+  // A marker with no stamp was written by a build that stored none (every room archived before the
+  // stamp). It cannot say whose it is, so it is this customer's only when this customer's own records
+  // already name the room for that unit; otherwise it is treated like another customer's.
+  if (stamp === undefined && !(await recordsOwnArchive(unitId, roomId, opts.recordedUnitId))) {
+    console.warn('[room-admin] getRoomArchiveMarker: ignoring the unit of an unstamped archive marker nothing of this customer records', { roomId })
     return { foreign: true }
   }
   return content as RoomArchiveMarker
+}
+
+/** Whether this customer's own records show that `roomId` is archived for `unitId`: the caller's own
+ *  record (`recordedUnitId`, e.g. the Karenz item the messaging Karenz made for it), the unit's ledger
+ *  row naming the room (an archive that has not detached it yet), or the audit trail entry the archive
+ *  wrote. Both are per customer, unlike the room state of a homeserver several customers can share.
+ *  A failing read proves nothing: the marker stays withheld, it never fails the caller. */
+async function recordsOwnArchive(unitId: string, roomId: string, recordedUnitId?: string): Promise<boolean> {
+  if (recordedUnitId === unitId) return true
+  try {
+    if ((await getResource(unitId, 'matrix'))?.external_id === roomId) return true
+    return await auditEntryExists('messages.room.archive', `${unitId}:${roomId}:ok`)
+  } catch (err) {
+    console.error('[room-admin] getRoomArchiveMarker: this customer\'s records of the archive could not be read, treating the marker as not its own', {
+      roomId, error: err instanceof Error ? err.message : 'unknown error',
+    })
+    return false
+  }
 }
 
 /** TASK-009 lane B (row 15): reverse-lookup for the /messages Einstellungen

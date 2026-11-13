@@ -49,7 +49,10 @@ vi.mock('$lib/server/governance/provisioning/orchestrator', () => ({
 }))
 
 const writeAuditEntry = vi.fn()
-vi.mock('$lib/server/audit-db', () => ({ writeAuditEntry }))
+// auditEntryExists: this customer's own audit trail, the proof that an UNSTAMPED archive marker (one a
+// build wrote before markers named their customer) is this customer's.
+const auditEntryExists = vi.fn()
+vi.mock('$lib/server/audit-db', () => ({ writeAuditEntry, auditEntryExists }))
 
 const UNIT = { id: 'u1', name: 'Vorstand' }
 
@@ -70,6 +73,7 @@ describe('room-admin', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    auditEntryExists.mockReset()
     fetchMock = vi.fn(async () =>
       new Response(JSON.stringify({}), { status: 200, headers: { 'content-type': 'application/json' } })
     )
@@ -357,6 +361,32 @@ describe('room-admin', () => {
       const markerBody = JSON.parse((markerPut[1] as RequestInit).body as string)
       expect(markerBody.prior).toEqual(firstPrior)
       expect(markerBody.archived_at).toBe('2026-09-01T00:00:00Z')
+    })
+
+    it('a retry of an archive that an older build interrupted (an UNSTAMPED marker without a prior, levels already read-only) stores no prior, keeps the first alias, and stamps the customer', async () => {
+      getOrgUnit.mockResolvedValue(UNIT)
+      getResource.mockResolvedValue({ status: 'ok', external_id: '!r:matrix.test' })
+      const firstAlias = '#stura-archiv-vorstand-202609010000:matrix.test'
+      routeMatrix(
+        { '!r:matrix.test': { marker: { org_unit_id: 'u1', archived_at: '2026-09-01T00:00:00Z', archive_alias: firstAlias } } },
+        (url) => {
+          if (url.includes('/state/m.room.power_levels/')) {
+            return new Response(JSON.stringify({ events_default: 100, invite: 100, state_default: 100, events: { 'm.call.member': 100 } }), { status: 200 })
+          }
+          return undefined
+        },
+      )
+      mockReleaseInvokesTeardown('ok')
+
+      const { archiveRoom } = await import('./room-admin')
+      await archiveRoom('u1', { userId: 'admin-1' })
+
+      const markerPut = fetchMock.mock.calls.find((c) =>
+        (c[0] as string).includes('/state/org.gremion.room.archived/') && (c[1] as RequestInit).method === 'PUT')!
+      const markerBody = JSON.parse((markerPut[1] as RequestInit).body as string)
+      expect(markerBody.prior).toBeNull() // the read-only levels are never stored as the room's own
+      expect(markerBody.archive_alias).toBe(firstAlias)
+      expect(markerBody.tenant_id).toBe('default')
     })
 
     it('MEDIUM fix (round-1 deferred, r1-kernel-nav-roomsB2): a canonical alias that resolves to a DIFFERENT room is never deleted', async () => {
@@ -730,12 +760,105 @@ describe('room-admin', () => {
       expect(room.aliases.has(ARCHIVE_ALIAS)).toBe(false) // the canonical_alias fallback still removed its own
     })
 
-    it('getRoomArchiveMarker withholds the unit of a marker stamped by ANOTHER customer, or by none (still archived, but no unit of this customer)', async () => {
+    it('getRoomArchiveMarker withholds the unit of a marker stamped by ANOTHER customer, whatever this customer records (still archived, but no unit of this customer)', async () => {
       const { getRoomArchiveMarker } = await import('./room-admin')
       routeMatrix({ [ROOM]: { marker: { org_unit_id: 'u1', tenant_id: 'other-customer', archived_at: '2026-09-01T00:00:00Z' } } })
-      await expect(getRoomArchiveMarker(ROOM)).resolves.toEqual({ foreign: true })
-      routeMatrix({ [ROOM]: { marker: { org_unit_id: 'u1', archived_at: '2026-09-01T00:00:00Z' } } })
-      await expect(getRoomArchiveMarker(ROOM)).resolves.toEqual({ foreign: true })
+      getResource.mockResolvedValue({ status: 'ok', external_id: ROOM })
+      auditEntryExists.mockResolvedValue(true)
+      await expect(getRoomArchiveMarker(ROOM, { recordedUnitId: 'u1' })).resolves.toEqual({ foreign: true })
+    })
+
+    describe('a marker written before markers named their customer (no tenant_id)', () => {
+      const legacy = { org_unit_id: 'u1', archived_at: '2026-09-01T00:00:00Z' }
+
+      it('is withheld while nothing of this customer records the room for that unit', async () => {
+        const { getRoomArchiveMarker } = await import('./room-admin')
+        routeMatrix({ [ROOM]: { marker: legacy } })
+        getResource.mockResolvedValue(null)
+        auditEntryExists.mockResolvedValue(false)
+        await expect(getRoomArchiveMarker(ROOM)).resolves.toEqual({ foreign: true })
+        expect(auditEntryExists).toHaveBeenCalledWith('messages.room.archive', `u1:${ROOM}:ok`)
+      })
+
+      it("is this customer's when the ledger row of that unit names the room", async () => {
+        const { getRoomArchiveMarker } = await import('./room-admin')
+        routeMatrix({ [ROOM]: { marker: legacy } })
+        getResource.mockResolvedValue({ status: 'ok', external_id: ROOM })
+        await expect(getRoomArchiveMarker(ROOM)).resolves.toMatchObject({ org_unit_id: 'u1' })
+      })
+
+      it("is this customer's when its audit trail records the archive of that room for that unit", async () => {
+        const { getRoomArchiveMarker } = await import('./room-admin')
+        routeMatrix({ [ROOM]: { marker: legacy } })
+        getResource.mockResolvedValue(null)
+        auditEntryExists.mockResolvedValue(true)
+        await expect(getRoomArchiveMarker(ROOM)).resolves.toMatchObject({ org_unit_id: 'u1' })
+      })
+
+      it("is this customer's when the caller's own records name the room for that unit", async () => {
+        const { getRoomArchiveMarker } = await import('./room-admin')
+        routeMatrix({ [ROOM]: { marker: legacy } })
+        await expect(getRoomArchiveMarker(ROOM, { recordedUnitId: 'u1' })).resolves.toMatchObject({ org_unit_id: 'u1' })
+        // a record for ANOTHER unit proves nothing about this marker's unit
+        getResource.mockResolvedValue(null)
+        auditEntryExists.mockResolvedValue(false)
+        await expect(getRoomArchiveMarker(ROOM, { recordedUnitId: 'u2' })).resolves.toEqual({ foreign: true })
+      })
+
+      it("stays withheld, and does not throw, when this customer's records cannot be read", async () => {
+        const { getRoomArchiveMarker } = await import('./room-admin')
+        routeMatrix({ [ROOM]: { marker: legacy } })
+        getResource.mockRejectedValue(new Error('db down'))
+        auditEntryExists.mockRejectedValue(new Error('db down'))
+        await expect(getRoomArchiveMarker(ROOM)).resolves.toEqual({ foreign: true })
+      })
+
+      it('is restored when this customer archived it (audit trail)', async () => {
+        getOrgUnit.mockResolvedValue(UNIT)
+        getResource.mockResolvedValue(null)
+        auditEntryExists.mockResolvedValue(true)
+        const room = archivedRoom()
+        room.state.set('org.gremion.room.archived', legacy)
+        const { unarchiveRoom } = await import('./room-admin')
+        await unarchiveRoom('u1', ROOM, { userId: 'admin-1' })
+        expect(markResourceOk).toHaveBeenCalledWith('u1', 'matrix', ROOM, TX)
+        expect((room.state.get('org.gremion.room.archived') as Record<string, unknown>).org_unit_id).toBeUndefined()
+      })
+
+      it('is restored when the caller records the room for the unit (Karenz item), without any audit entry', async () => {
+        getOrgUnit.mockResolvedValue(UNIT)
+        getResource.mockResolvedValue(null)
+        const room = archivedRoom()
+        room.state.set('org.gremion.room.archived', legacy)
+        const { unarchiveRoom } = await import('./room-admin')
+        await unarchiveRoom('u1', ROOM, { userId: 'karenz-service', recordedByCaller: true })
+        expect(markResourceOk).toHaveBeenCalledWith('u1', 'matrix', ROOM, TX)
+      })
+
+      it('is NOT restored when nothing of this customer records it: RoomNotFoundError, nothing written', async () => {
+        getOrgUnit.mockResolvedValue(UNIT)
+        getResource.mockResolvedValue(null)
+        auditEntryExists.mockResolvedValue(false)
+        const room = archivedRoom()
+        room.state.set('org.gremion.room.archived', legacy)
+        const { unarchiveRoom, RoomNotFoundError } = await import('./room-admin')
+        await expect(unarchiveRoom('u1', ROOM, { userId: 'admin-1' })).rejects.toThrow(RoomNotFoundError)
+        expect(markResourceOk).not.toHaveBeenCalled()
+        expect(room.state.get('org.gremion.room.archived')).toEqual(legacy)
+      })
+
+      it('is deleted when this customer archived it (audit trail), and a delete without that proof is a 404', async () => {
+        getResource.mockResolvedValue(null)
+        getOrgUnit.mockResolvedValue(UNIT)
+        routeMatrix({ '!archived:matrix.test': { marker: legacy } })
+        const { deleteRoom, RoomNotFoundError } = await import('./room-admin')
+        auditEntryExists.mockResolvedValue(false)
+        await expect(deleteRoom('u1', '!archived:matrix.test', { userId: 'it-admin-1' })).rejects.toThrow(RoomNotFoundError)
+        expect(deleteCalls()).toEqual([])
+        auditEntryExists.mockResolvedValue(true)
+        await deleteRoom('u1', '!archived:matrix.test', { userId: 'it-admin-1' })
+        expect(deleteCalls()).toHaveLength(1)
+      })
     })
 
     it('getRoomArchiveMarker returns null for marker content without org_unit_id (an unarchived room)', async () => {
@@ -1133,6 +1256,19 @@ describe('room-admin', () => {
       expect(overview.archivedRooms).toEqual([
         expect.objectContaining({ roomId: OLDER, unitId: 'k', restorable: false, restoreBlockedBy: 'unreadable' }),
       ])
+    })
+
+    it("lists an archived room whose marker predates the customer stamp when this customer's audit trail records its archive, and none without that proof", async () => {
+      getResource.mockResolvedValue(null)
+      const legacyFixture = { marker: { org_unit_id: 'k', archived_at: '2026-01-01T00:00:00Z' } }
+      routeMatrix({ [OLDER]: legacyFixture }, fakeListRoomsHandler([{ room_id: OLDER, creator: BOT }]))
+      const { listOverview } = await import('./room-admin')
+      auditEntryExists.mockResolvedValue(false)
+      expect((await listOverview([{ id: 'k', name: 'K' }] as never)).archivedRooms).toEqual([])
+      auditEntryExists.mockResolvedValue(true)
+      const overview = await listOverview([{ id: 'k', name: 'K' }] as never)
+      expect(overview.archivedRooms).toEqual([expect.objectContaining({ roomId: OLDER, unitId: 'k', restorable: true })])
+      expect(overview.units[0]).toMatchObject({ state: 'archiviert', roomId: OLDER })
     })
 
     it('does not list an archived room whose marker names a unit this customer does not have', async () => {

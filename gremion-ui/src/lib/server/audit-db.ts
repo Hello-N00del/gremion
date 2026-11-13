@@ -46,6 +46,19 @@ export async function verifyAuditChain(): Promise<{ ok: true } | { ok: false; br
   return broken == null ? { ok: true } : { ok: false, brokenAtId: Number(broken) }
 }
 
+/**
+ * True when this customer's audit trail holds an entry with exactly this field and new value. Used as
+ * proof that an act happened HERE (the audit log is per customer, unlike state kept on a homeserver
+ * that several customers can share). Read-only; the log is append-only.
+ */
+export async function auditEntryExists(field: string, newValue: string): Promise<boolean> {
+  const sql = getDb()
+  const rows = await sql<{ one: number }[]>`
+    SELECT 1 AS one FROM audit_log WHERE field = ${field} AND new_value = ${newValue} LIMIT 1
+  `
+  return rows.length > 0
+}
+
 export async function readAuditLog(field?: string, limit = 50): Promise<AuditRecord[]> {
   const sql = getDb()
   const rows = field

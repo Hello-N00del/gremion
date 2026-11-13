@@ -54,7 +54,7 @@ vi.mock('$lib/server/db', () => ({
   getDb: () => ({ begin: async (fn: (tx: unknown) => Promise<unknown>) => fn({}) }),
 }))
 const writeAuditEntry = vi.fn()
-vi.mock('$lib/server/audit-db', () => ({ writeAuditEntry }))
+vi.mock('$lib/server/audit-db', () => ({ writeAuditEntry, auditEntryExists: async () => false }))
 
 import type { KarenzContext } from '$lib/server/module-karenz/participants'
 import { KarenzPartialError } from '$lib/server/module-karenz/participants'
@@ -216,6 +216,11 @@ describe('messagingKarenz', () => {
   const stateOf = (item: { externalId: string }) => store.rows.get(`room\u0000${item.externalId}`)?.state
   const levelsOf = (roomId: string) => rooms.get(roomId)!.state.get('m.room.power_levels') as ReturnType<typeof originalLevels>
   const markerOf = (roomId: string) => rooms.get(roomId)!.state.get('org.gremion.room.archived') as Record<string, unknown> | undefined
+  /** The marker as a build wrote it before markers named their customer. */
+  const unstamp = (roomId: string) => {
+    const { tenant_id: _stamp, ...legacy } = markerOf(roomId)!
+    rooms.get(roomId)!.state.set('org.gremion.room.archived', legacy)
+  }
 
   beforeEach(async () => {
     vi.clearAllMocks()
@@ -341,7 +346,7 @@ describe('messagingKarenz', () => {
     it('a retry of an archive that an older build interrupted (marker without a prior, levels already read-only) stores no prior, so the restore falls back to the createRoom defaults', async () => {
       seed()
       const room = rooms.get('!r1:matrix.test')!
-      room.state.set('org.gremion.room.archived', { org_unit_id: 'u1', tenant_id: 'default', archived_at: '2026-10-01T00:00:00Z' })
+      room.state.set('org.gremion.room.archived', { org_unit_id: 'u1', archived_at: '2026-10-01T00:00:00Z' })
       const closed = {
         ...originalLevels(), events_default: 100, invite: 100, state_default: 100,
         events: { ...Object.fromEntries(CALL_TYPES.map((t) => [t, 100])), 'm.room.name': 50 },
@@ -360,7 +365,7 @@ describe('messagingKarenz', () => {
     it('a failing lookup of the archive alias on a retry is reported as such, the alias PUT is not attempted', async () => {
       seed()
       rooms.get('!r1:matrix.test')!.state.set('org.gremion.room.archived', {
-        org_unit_id: 'u1', tenant_id: 'default', archived_at: '2026-10-01T00:00:00Z', archive_alias: '#stura-archiv-vorstand-202610010000:matrix.test',
+        org_unit_id: 'u1', archived_at: '2026-10-01T00:00:00Z', archive_alias: '#stura-archiv-vorstand-202610010000:matrix.test',
         prior: { events_default: 0, invite: 0, state_default: 50, events: {} },
       })
       aliases.set('#stura-archiv-vorstand-202610010000:matrix.test', '!r1:matrix.test')
@@ -479,6 +484,19 @@ describe('messagingKarenz', () => {
       expect(ledger.get('u2')).toEqual({ status: 'ok', external_id: '!r2:matrix.test' })
       expect(stateOf({ externalId: '!r1:matrix.test' })).toBe('restored')
       expect(stateOf({ externalId: '!meet:matrix.test' })).toBe('kept')
+    })
+
+    it('a room archived by an older build (its marker names no customer) is restored: the Karenz item records it for the unit', async () => {
+      seed()
+      await karenz.messagingKarenz.switchOff(ctx)
+      unstamp('!r1:matrix.test')
+
+      await karenz.messagingKarenz.restore(ctx)
+
+      expect(levelsOf('!r1:matrix.test')).toEqual(originalLevels())
+      expect(markerOf('!r1:matrix.test')?.org_unit_id).toBeUndefined()
+      expect(ledger.get('u1')).toEqual({ status: 'ok', external_id: '!r1:matrix.test' })
+      expect(stateOf({ externalId: '!r1:matrix.test' })).toBe('restored')
     })
 
     it('a room that is already unarchived is a no-op (no write reaches the homeserver)', async () => {
@@ -681,6 +699,19 @@ describe('messagingKarenz', () => {
       expect(writeAuditEntry).toHaveBeenCalledWith(
         expect.objectContaining({ userId: 'karenz-service', field: 'messages.room.delete', newValue: 'u1:!r1:matrix.test:ok' })
       )
+    })
+
+    it('deletes a room archived by an older build (its marker names no customer): the Karenz item records it for the unit', async () => {
+      seed()
+      await karenz.messagingKarenz.switchOff(ctx)
+      unstamp('!r1:matrix.test')
+      unstamp('!r2:matrix.test')
+
+      const r = await karenz.messagingKarenz.finalize(ctx, { dryRun: false })
+
+      expect(r).toEqual({ deleted: { rooms: 2 } })
+      expect(rooms.has('!r1:matrix.test')).toBe(false)
+      expect(stateOf({ externalId: '!r1:matrix.test' })).toBe('deleted')
     })
 
     it('never deletes a meeting-linked room even when an item points at it', async () => {

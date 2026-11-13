@@ -59,6 +59,8 @@ const LEDGER = vi.hoisted(() => ({
   rooms: new Map<string, Map<string, string>>(),
   currentTenant: (): string => '',
   audit: [] as string[],
+  /** 'tenant|field|new value' of the audit entries a customer's OWN trail holds (read by auditEntryExists). */
+  ownAudit: new Set<string>(),
 }))
 vi.mock('$lib/server/governance/provisioning/ledger', () => ({
   getResource: async (unitId: string) => {
@@ -84,7 +86,10 @@ vi.mock('$lib/server/governance/provisioning/orchestrator', () => ({
   },
 }))
 vi.mock('$lib/server/db', () => ({ getDb: () => ({ begin: vi.fn() }) }))
-vi.mock('$lib/server/audit-db', () => ({ writeAuditEntry: async (e: { newValue: string }) => void LEDGER.audit.push(e.newValue) }))
+vi.mock('$lib/server/audit-db', () => ({
+  writeAuditEntry: async (e: { newValue: string }) => void LEDGER.audit.push(e.newValue),
+  auditEntryExists: async (field: string, value: string) => LEDGER.ownAudit.has(`${LEDGER.currentTenant()}|${field}|${value}`),
+}))
 
 import { GET as roomsGet } from '../../../routes/api/messages/rooms/+server'
 import { GET as messagesGet, POST as messagesPost } from '../../../routes/api/messages/rooms/[roomId]/messages/+server'
@@ -302,6 +307,7 @@ beforeEach(() => {
   __resetSynapseAdminForTests()
   LEDGER.rooms.clear()
   LEDGER.audit.length = 0
+  LEDGER.ownAudit.clear()
   current = null
   shared()
   vi.stubGlobal('fetch', vi.fn((input: string | URL, init?: RequestInit) => net.handle(String(input), init)))
@@ -618,6 +624,15 @@ describe("an administration action on B's room as A is refused before any Matrix
         expect(net.since(m).some((r) => r.path.includes(ROOM_B) && r.path.endsWith('/state/m.room.name'))).toBe(false)
       })
     }
+
+    it('a room archived before markers named a customer is still shown to the customer whose own audit trail records the archive, and to no other', async () => {
+      sameUnit(legacy)
+      LEDGER.ownAudit.add(`tid-b|messages.room.archive|unit-x:${ROOM_B}:ok`)
+      const own = await as(B_SHARED, () => listOverview([{ id: 'unit-x', name: 'Gremium unit-x' }]))
+      expect(own.archivedRooms.map((r) => r.roomId)).toEqual([ROOM_B])
+      const other = await as(A_SHARED, () => listOverview([{ id: 'unit-x', name: 'Gremium unit-x' }]))
+      expect(other.archivedRooms).toEqual([])
+    })
 
     it('the customer that archived the room still sees it', async () => {
       sameUnit(stamped)

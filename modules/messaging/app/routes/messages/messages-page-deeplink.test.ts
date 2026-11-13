@@ -15,6 +15,7 @@ const h = vi.hoisted(() => ({
   statePage: { url: new URL('http://localhost/messages'), data: { brand: null } },
   roles: [] as string[],
   toast: { success: vi.fn(), error: vi.fn() },
+  replaceState: vi.fn(),
 }))
 
 vi.mock('$app/stores', () => ({
@@ -27,7 +28,7 @@ vi.mock('$app/stores', () => ({
   },
 }))
 vi.mock('$app/state', () => ({ page: h.statePage }))
-vi.mock('$app/navigation', () => ({ invalidate: () => Promise.resolve() }))
+vi.mock('$app/navigation', () => ({ invalidate: () => Promise.resolve(), replaceState: h.replaceState }))
 vi.mock('svelte-sonner', () => ({ toast: h.toast }))
 
 class FakeEventSource {
@@ -91,6 +92,21 @@ describe('/messages?room= opens the room the link names', () => {
     const { container, fetchMock } = renderWith(room(SECOND.roomId), rooms)
     await waitFor(() => expect(openRoomName(container)).toBe('Plenum'))
     expect(fetchMock.mock.calls.some((c) => c[0] === `/api/messages/rooms/${encodeURIComponent(SECOND.roomId)}/read`)).toBe(true)
+  })
+
+  it('takes the link once: the address stops naming the room, so a reload after another room was picked does not jump back to it', async () => {
+    const { container } = renderWith(`${room(ARCHIVED.roomId)}&ou=x`)
+    await waitFor(() => expect(openRoomName(container)).toBe('Altbau-Initiative'))
+    expect(h.replaceState).toHaveBeenCalledTimes(1)
+    const [url] = h.replaceState.mock.calls[0] as [URL]
+    expect(url.searchParams.has('room')).toBe(false)
+    expect(url.searchParams.get('ou')).toBe('x') // nothing else is dropped
+  })
+
+  it('a page without a room link leaves its address alone', async () => {
+    const { container } = renderWith('')
+    await waitFor(() => expect(openRoomName(container)).toBe('Vorstand'))
+    expect(h.replaceState).not.toHaveBeenCalled()
   })
 
   it('the room of the link wins over a room that was open before', async () => {

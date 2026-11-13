@@ -4,7 +4,7 @@
   import { onMount, onDestroy } from 'svelte'
   import { page } from '$app/stores'
   import { page as pageState } from '$app/state'
-  import { invalidate } from '$app/navigation'
+  import { invalidate, replaceState } from '$app/navigation'
   import { roomStore, selectedRoomId, syncStatus } from '$lib/stores/matrix'
   import type { MatrixMessage, RoomState } from '$lib/stores/matrix'
   import { callStore, startRoomCall } from '$lib/stores/call-store.svelte'
@@ -70,6 +70,17 @@
   let linkedRoomPending = true
   let linkedRoomMissing = $state(false)
   const LINKED_ROOM_MISSING = 'Dieser Raum ist in Ihrer Raumliste nicht vorhanden. Den Verlauf können nur Mitglieder des Raums lesen.'
+  // The link is taken once. The address then stops naming the room, so a reload after another room
+  // was picked does not jump back to the linked one. Best effort: the address is not worth failing for.
+  function forgetLinkedRoomParam() {
+    try {
+      const url = new URL(pageState.url)
+      url.searchParams.delete('room')
+      replaceState(url, pageState.state)
+    } catch (err) {
+      console.error('[messages] the room link could not be removed from the address', { error: err instanceof Error ? err.message : 'unknown error' })
+    }
+  }
 
   let totalUnread = $derived(activeRooms.reduce((sum, r) => sum + (r.unreadCount ?? 0), 0))
 
@@ -116,6 +127,7 @@
         const linkedRoomId = linkedRoomPending ? pageState.url.searchParams.get('room') : null
         linkedRoomPending = false
         if (linkedRoomId) {
+          forgetLinkedRoomParam()
           if (loaded[linkedRoomId]) {
             void openRoom(linkedRoomId)
           } else {
