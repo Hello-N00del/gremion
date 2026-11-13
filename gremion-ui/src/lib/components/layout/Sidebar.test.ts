@@ -183,9 +183,10 @@ describe('Sidebar brand line — organisation short name and semester', () => {
     const { container, getByText } = render(Sidebar, {
       props: { ...baseProps, brand: { orgShort: 'Muster-HS', term: 'WiSe 26/27' } }
     })
-    expect(getByText('Muster-HS').classList.contains('org')).toBe(true)
-    expect(getByText('WiSe 26/27').classList.contains('term')).toBe(true)
-    expect(container.querySelector('.brand-line')?.textContent?.replace(/\s+/g, ' ').trim()).toBe('Muster-HS · WiSe 26/27')
+    expect(getByText('Muster-HS').classList.contains('bl-org')).toBe(true)
+    expect(getByText('WiSe 26/27').classList.contains('bl-term')).toBe(true)
+    // one row, the short name first, the semester second (the dot between them is drawn by CSS)
+    expect([...(container.querySelectorAll('.brand-line .bl-row > span') as NodeListOf<HTMLElement>)].map((e) => e.textContent)).toEqual(['Muster-HS', 'WiSe 26/27'])
   })
 
   test('a customer without months keeps its static term text', () => {
@@ -200,8 +201,9 @@ describe('Sidebar brand line — organisation short name and semester', () => {
     const org = getByText(long)
     expect(org.getAttribute('title')).toBe(long)
     expect(getByText('WiSe 26/27')).toBeTruthy()
-    // the separator is decoration, not read out
-    expect(container.querySelector('.brand-line .sep')?.getAttribute('aria-hidden')).toBe('true')
+    // the brand line is one block under the product name, in the expanded column only
+    expect(container.querySelectorAll('.brand-line')).toHaveLength(1)
+    expect(container.querySelector('.sb-brand-txt .brand-line')).toBeTruthy()
   })
 })
 
