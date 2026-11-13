@@ -62,7 +62,10 @@ describe('kcActionReturnHandle', () => {
     ['a POST', '/auth/callback/keycloak?kc_action_status=success', 'POST'],
   ])('does nothing for %s', async (_l, path, method) => {
     const t = run(path, method)
-    await t.run()
+    const res = await t.run()
+    // The handle never writes event.cookies: its only output is a Set-Cookie on the response, so that
+    // is what proves the path and method guard (the store assertion would hold with the guard gone).
+    expect(res.headers.getSetCookie()).toEqual([])
     expect(t.store.get(ACTION_COOKIE)).toBe('UPDATE_PASSWORD')
     expect(t.resolve).toHaveBeenCalledTimes(1)
   })
