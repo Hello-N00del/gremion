@@ -68,8 +68,8 @@
   <section>
     <h3 class="text-sm font-semibold mb-1" style="font-family: var(--font-display);">Farbsehkorrektur</h3>
     <p class="text-xs text-ink-muted mb-4">
-      Passt die Farbpalette der Oberfläche an deine Sehbedingungen an.
-      Die Einstellung wird lokal gespeichert und nur auf deinem Gerät angewendet.
+      Passt die Farbpalette der Oberfläche an Ihre Sehbedingungen an.
+      Die Einstellung wird lokal gespeichert und nur auf Ihrem Gerät angewendet.
     </p>
 
     <div class="space-y-2">
@@ -117,7 +117,7 @@
   <!-- Theme -->
   <section>
     <h3 class="text-sm font-semibold mb-1" style="font-family: var(--font-display);">Erscheinungsbild</h3>
-    <p class="text-xs text-ink-muted mb-4">Wähle zwischen hellem und dunklem Modus.</p>
+    <p class="text-xs text-ink-muted mb-4">Wählen Sie zwischen hellem und dunklem Modus.</p>
     <div class="flex gap-2">
       {#each [
         { key: 'light', label: 'Hell',   icon: 'sun'  },
@@ -161,7 +161,7 @@
   <!-- Motion -->
   <section>
     <h3 class="text-sm font-semibold mb-1" style="font-family: var(--font-display);">Animationen</h3>
-    <p class="text-xs text-ink-muted mb-3">Reduziere Bewegungseffekte, wenn du empfindlich auf Animationen reagierst.</p>
+    <p class="text-xs text-ink-muted mb-3">Reduzieren Sie Bewegungseffekte, wenn Sie empfindlich auf Animationen reagieren.</p>
     <label class="flex items-center gap-3 cursor-pointer">
       <input
         type="checkbox"
