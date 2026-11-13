@@ -116,7 +116,7 @@ describe('ConfigStore', () => {
       const result = writeConfig({ org: { name: 'Neuer Name', domain: 'x.de', logo_path: null } })
 
       expect(result.brand.term_months).toEqual({ winter: 10, summer: 4 })
-      const written = JSON.parse(String(mockFs.writeFileSync.mock.calls.at(-1)![1])) as { brand: { term_months?: unknown; org_short: string } }
+      const written = JSON.parse(String(mockFs.writeFileSync.mock.calls.at(-1)![1] as string)) as { brand: { term_months?: unknown; org_short: string } }
       expect(written.brand.term_months).toEqual({ winter: 10, summer: 4 })
       expect(written.brand.org_short).toBe('MS')
     })

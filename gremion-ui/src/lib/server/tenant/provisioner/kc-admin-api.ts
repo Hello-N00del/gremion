@@ -554,7 +554,7 @@ export class KcProvisionApi {
     }
     if (!live) return 'absent'
     let changed = false
-    let merged: Record<string, string> = { ...(live.config ?? {}) }
+    let merged: Record<string, string> = { ...live.config }
     if (config) {
       let stored: Record<string, string> = {}
       try {

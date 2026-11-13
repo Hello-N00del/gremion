@@ -2,6 +2,7 @@ import { describe, expect, test, vi } from 'vitest'
 import { loadProfilePanel, withTimeout } from './profile-panel'
 import { ACTION_COOKIE } from './account-actions'
 import { Role } from '$lib/auth/types'
+import { KcAdminError } from '$lib/server/keycloak-admin'
 
 const user = { id: 'kc-uuid-1', email: 'a@example.org', name: 'A', roles: [Role.Member], groups: [], loa: 1, authTime: 0 }
 
@@ -49,6 +50,69 @@ describe('loadProfilePanel', () => {
       },
     )
     expect(out.profile).toBeNull()
+    warn.mockRestore()
+  })
+
+  test('a SYNCHRONOUS throw while reading the user hides the form, it does not reject the load', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const out = await loadProfilePanel(
+      { user, cookies: jar(), wantsProfile: true },
+      {
+        getUser: () => {
+          throw new Error('admin secret missing')
+        },
+        emailActionAvailable: async () => true,
+      },
+    )
+    expect(out.profile).toBeNull()
+    expect(out.emailActionAvailable).toBe(true)
+    warn.mockRestore()
+  })
+
+  test('a SYNCHRONOUS throw in the e-mail probe means false, it does not reject the load', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const out = await loadProfilePanel(
+      { user, cookies: jar(), wantsProfile: true },
+      {
+        getUser: async () => kcUser,
+        emailActionAvailable: () => {
+          throw new Error('admin secret missing')
+        },
+      },
+    )
+    expect(out.emailActionAvailable).toBe(false)
+    expect(out.profile).toEqual({ firstName: 'Anna', lastName: 'Alt', email: 'anna@example.org' })
+    warn.mockRestore()
+  })
+
+  test('both reads throwing synchronously: no names, no e-mail action, a result and no rejection', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const boom = () => {
+      throw new Error('admin secret missing')
+    }
+    const out = await loadProfilePanel({ user, cookies: jar(), wantsProfile: true }, { getUser: boom, emailActionAvailable: boom })
+    expect(out).toEqual({ profile: null, emailActionAvailable: false, accountActionResult: null })
+    warn.mockRestore()
+  })
+
+  test('a failed read logs the error class and the Keycloak status, never the body', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    await loadProfilePanel(
+      { user, cookies: jar(), wantsProfile: true },
+      {
+        getUser: async () => {
+          throw new KcAdminError(503, 'secret-body-text')
+        },
+        emailActionAvailable: async () => {
+          throw new KcAdminError(403, 'other-body-text')
+        },
+      },
+    )
+    const logged = JSON.stringify(warn.mock.calls)
+    expect(logged).toContain('KcAdminError')
+    expect(logged).toContain('503')
+    expect(logged).toContain('403')
+    expect(logged).not.toContain('body-text')
     warn.mockRestore()
   })
 

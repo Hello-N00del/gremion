@@ -48,7 +48,7 @@ describe('parseNameForm', () => {
   ])('refuses %s', (_label, fields, badField) => {
     const r = parseNameForm(form(fields))
     expect(r.ok).toBe(false)
-    if (!r.ok) expect(Object.keys(r.errors)).toContain(badField)
+    expect(Object.keys(r.ok ? {} : r.errors)).toContain(badField)
   })
 
   // Keycloak's person-name-prohibited-characters validator (measured on 26.6.1) refuses
@@ -67,7 +67,7 @@ describe('parseNameForm', () => {
   ])('refuses %s as a character error on that field', (_label, bad) => {
     const r = parseNameForm(form({ firstName: 'Anna', lastName: bad }))
     expect(r.ok).toBe(false)
-    if (!r.ok) expect(r.errors).toEqual({ lastName: 'chars' })
+    expect(r.ok ? null : r.errors).toEqual({ lastName: 'chars' })
   })
 
   test.each(["O'Brien", 'José-María', 'Müller-Lüdenscheid', 'Anna Maria', 'St. John', 'Jean,Luc'])('accepts %s', (name) => {
@@ -168,6 +168,9 @@ describe('saveOwnName', () => {
     const warn = vi.spyOn(console, 'error').mockImplementation(() => undefined)
     const out = await saveOwnName(event({ firstName: 'A', lastName: 'B' }), d)
     expect(out).toMatchObject({ status: 503, data: { profileName: { error: 'not-saved' } } })
+    // the log names the class and the status, not the body
+    expect(JSON.stringify(warn.mock.calls)).toContain('"status":400')
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('something-else')
     warn.mockRestore()
   })
 

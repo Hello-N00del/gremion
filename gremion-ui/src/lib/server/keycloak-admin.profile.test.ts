@@ -33,7 +33,7 @@ function client(fetchImpl: (url: string, init?: RequestInit) => Response | Promi
       if (url.includes('/protocol/openid-connect/token')) {
         return new Response(JSON.stringify({ access_token: 't', expires_in: 300 }), { status: 200 })
       }
-      calls.push({ method: init?.method ?? 'GET', url, body: init?.body ? JSON.parse(String(init.body)) : undefined })
+      calls.push({ method: init?.method ?? 'GET', url, body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined })
       return fetchImpl(url, init)
     }),
   )
@@ -67,7 +67,7 @@ describe('KeycloakAdminClient.updateUserNames', () => {
 
   it('refuses an id that cannot be one path segment', async () => {
     const { kc, calls } = client(() => new Response('{}', { status: 200 }))
-    await expect(kc.updateUserNames('..', { firstName: 'A', lastName: 'B' })).rejects.toThrow()
+    await expect(kc.updateUserNames('..', { firstName: 'A', lastName: 'B' })).rejects.toThrow('Invalid Keycloak id')
     expect(calls).toEqual([])
   })
 })

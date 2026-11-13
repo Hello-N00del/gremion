@@ -10,6 +10,7 @@ import {
   type AccountActionResult,
   type StartAccountActionDeps,
 } from './account-actions'
+import { errorFields } from './error-fields'
 import type { OwnNameDeps } from './own-name'
 
 export interface ProfilePanelData {
@@ -51,14 +52,25 @@ export async function loadProfilePanel(
   if (!args.wantsProfile) return { profile: null, emailActionAvailable: false, accountActionResult: null }
   const accountActionResult = readAccountActionResult(args.cookies)
   const [profile, emailActionAvailable] = await Promise.all([
-    withTimeout(deps.getUser(args.user.id), READ_BUDGET_MS).then(
+    // A dependency may throw before it returns a promise (a missing admin secret does):
+    // run it inside a promise so that is a rejection like any other, never a failed load.
+    withTimeout(
+      Promise.resolve().then(() => deps.getUser(args.user.id)),
+      READ_BUDGET_MS,
+    ).then(
       (u) => ({ firstName: u.firstName ?? '', lastName: u.lastName ?? '', email: u.email ?? '' }),
       (err: unknown) => {
-        console.warn('[profile] user read failed', { error: err instanceof Error ? err.name : typeof err })
+        console.warn('[profile] user read failed', errorFields(err))
         return null
       },
     ),
-    withTimeout(deps.emailActionAvailable(), READ_BUDGET_MS).catch(() => false),
+    withTimeout(
+      Promise.resolve().then(() => deps.emailActionAvailable()),
+      READ_BUDGET_MS,
+    ).catch((err: unknown) => {
+      console.warn('[profile] e-mail action probe failed', errorFields(err))
+      return false
+    }),
   ])
   return { profile, emailActionAvailable, accountActionResult }
 }
@@ -69,24 +81,24 @@ const emailCapability = createCapabilityCache()
 
 /** UPDATE_EMAIL availability of one tenant's realm, cached per tenant id for a minute. */
 function emailActionAvailableFor(tenant: TenantContext): () => Promise<boolean> {
-  return () => emailCapability.get(tenant.id, () => getKeycloakAdminClient(tenant).isRequiredActionEnabled('UPDATE_EMAIL'))
+  return async () => emailCapability.get(tenant.id, async () => getKeycloakAdminClient(tenant).isRequiredActionEnabled('UPDATE_EMAIL'))
 }
 
 export function profilePanelDeps(tenant: TenantContext): ProfilePanelDeps {
   return {
-    getUser: (id) => getKeycloakAdminClient(tenant).getUser(id),
+    getUser: async (id) => getKeycloakAdminClient(tenant).getUser(id),
     emailActionAvailable: emailActionAvailableFor(tenant),
   }
 }
 
 export function ownNameDeps(tenant: TenantContext): OwnNameDeps {
-  return { updateUserNames: (id, names) => getKeycloakAdminClient(tenant).updateUserNames(id, names) }
+  return { updateUserNames: async (id, names) => getKeycloakAdminClient(tenant).updateUserNames(id, names) }
 }
 
 export function accountActionDeps(tenant: TenantContext, signIn: StartAccountActionDeps['signIn']): StartAccountActionDeps {
   return {
     signIn,
-    hasOtpCredential: (id) => withTimeout(getKeycloakAdminClient(tenant).hasOtpCredential(id), 5000),
+    hasOtpCredential: async (id) => withTimeout(getKeycloakAdminClient(tenant).hasOtpCredential(id), 5000),
     emailActionAvailable: emailActionAvailableFor(tenant),
   }
 }

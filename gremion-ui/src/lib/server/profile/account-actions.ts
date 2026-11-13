@@ -60,6 +60,7 @@
 import { fail } from '@sveltejs/kit'
 import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
+import { errorFields } from './error-fields'
 
 /** Form value -> Keycloak required-action id. The ONLY actions this route can start. */
 export const ACCOUNT_ACTIONS = {
@@ -129,7 +130,7 @@ export async function startAccountAction(event: StartAccountActionEvent, deps: S
   try {
     hasOtp = await deps.hasOtpCredential(user.id)
   } catch (err) {
-    console.error('[profile] otp lookup failed, account action not started', { error: err instanceof Error ? err.name : typeof err })
+    console.error('[profile] otp lookup failed, account action not started', errorFields(err))
     return fail(503, { accountAction: { error: 'unavailable-now' as const } })
   }
 
@@ -183,8 +184,12 @@ export function recordAccountActionReturn(url: URL, cookies: CookieJar): void {
  * handling cannot reach the response (the Auth.js callback, see kc-action-return-handle).
  * The value alphabet of this cookie is `[A-Z_.a-z]`, so nothing needs encoding.
  */
-export function serializeActionCookie(name: string, value: string, opts: Record<string, unknown>): string {
-  const parts = [`${name}=${value}`, `Path=${String(opts.path ?? '/')}`]
+export function serializeActionCookie(
+  name: string,
+  value: string,
+  opts: { path?: string; maxAge?: number; httpOnly?: boolean; secure?: boolean; sameSite?: string },
+): string {
+  const parts = [`${name}=${value}`, `Path=${opts.path ?? '/'}`]
   if (typeof opts.maxAge === 'number') parts.push(`Max-Age=${Math.floor(opts.maxAge)}`)
   if (opts.httpOnly) parts.push('HttpOnly')
   if (opts.secure) parts.push('Secure')
@@ -228,8 +233,9 @@ export function createCapabilityCache(opts: { ttlMs?: number; failureTtlMs?: num
       try {
         value = await probe()
         ttlMs = ttl
-      } catch {
-        // unknown = unavailable
+      } catch (err) {
+        // unknown = unavailable; say so once per failed probe (the answer is cached shortly)
+        console.warn('[profile] capability probe failed', { key, ...errorFields(err) })
       }
       entries.set(key, { value, expiresAt: now() + ttlMs })
       return value

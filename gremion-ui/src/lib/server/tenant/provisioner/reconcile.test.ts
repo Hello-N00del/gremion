@@ -1336,13 +1336,13 @@ describe('reconcileRealm — the verified e-mail change (update-email-action, up
       if (method === 'GET' && path === UPDATE_EMAIL_PATH) return { ...entity, config: { ...entity.config } }
       if (method === 'GET' && path === UPDATE_EMAIL_CFG_PATH) return { config: { ...entity.config } }
       if (method === 'PUT' && path === UPDATE_EMAIL_CFG_PATH) {
-        entity.config = { ...((body as { config?: Record<string, string> }).config ?? {}) }
+        entity.config = { ...(body as { config?: Record<string, string> }).config }
         return undefined
       }
       if (method === 'PUT' && path === UPDATE_EMAIL_PATH) {
         const b = body as { enabled?: boolean; config?: Record<string, string> }
         entity.enabled = b.enabled === true
-        entity.config = { ...(b.config ?? {}) }
+        entity.config = { ...b.config }
         return undefined
       }
       return base(method, path, body)

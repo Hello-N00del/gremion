@@ -38,12 +38,6 @@ function parts(root: ParentNode) {
   }
 }
 
-/** Left edge of the semester's TEXT (its box starts one separator-width further left, clipped by the line). */
-function textLeft(el: HTMLElement): number {
-  const r = document.createRange()
-  r.selectNodeContents(el)
-  return r.getBoundingClientRect().left
-}
 const textBox = (el: HTMLElement) => {
   const r = document.createRange()
   r.selectNodeContents(el)

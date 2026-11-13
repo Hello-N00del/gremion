@@ -12,6 +12,7 @@ import { fail } from '@sveltejs/kit'
 import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
 import { KcAdminError } from '$lib/server/keycloak-admin'
+import { errorFields } from './error-fields'
 
 export const NAME_MAX = 80
 
@@ -90,7 +91,7 @@ export async function saveOwnName(event: OwnNameEvent, deps: OwnNameDeps) {
       return fail(400, { profileName: { error: 'chars' as const, errors: bad ? { [bad]: 'chars' as const } : {}, values: { firstName: parsed.firstName, lastName: parsed.lastName } } })
     }
     // The error text can carry the Keycloak response body: log the class only, show nothing of it.
-    console.error('[profile] own name not saved', { error: err instanceof Error ? err.name : typeof err })
+    console.error('[profile] own name not saved', errorFields(err))
     return fail(503, { profileName: { error: 'not-saved' as const, values: { firstName: parsed.firstName, lastName: parsed.lastName } } })
   }
   return { profileName: { saved: true as const } }

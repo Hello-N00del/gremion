@@ -15,6 +15,7 @@ import {
   type StartAccountActionDeps,
 } from './account-actions'
 import { Role, type SessionUser } from '$lib/auth/types'
+import { KcAdminError } from '$lib/server/keycloak-admin'
 
 const member = { id: 'kc-uuid-1', email: 'a@example.org', name: 'A', roles: [Role.Member], groups: [], loa: 1, authTime: 0 }
 
@@ -177,6 +178,20 @@ describe('startAccountAction', () => {
     expect(d.signIn).not.toHaveBeenCalled()
   })
 
+  test('an OTP lookup failure is logged with class and status, not the body', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const d = deps({
+      hasOtpCredential: vi.fn(async () => {
+        throw new KcAdminError(500, 'secret-body-text')
+      }),
+    })
+    await run(startAccountAction(event({ action: 'totp' }).event, d))
+    const logged = JSON.stringify(err.mock.calls)
+    expect(logged).toContain('"status":500')
+    expect(logged).not.toContain('body-text')
+    err.mockRestore()
+  })
+
   test('the e-mail action is refused while the capability is off', async () => {
     const d = deps({ emailActionAvailable: vi.fn(async () => false) })
     const out = await run(startAccountAction(event({ action: 'email' }).event, d))
@@ -270,6 +285,23 @@ describe('createCapabilityCache', () => {
     now = 1700
     expect(await cache.get('t2', bad)).toBe(false)
     expect(bad).toHaveBeenCalledTimes(2)
+  })
+
+  test('a failed probe is logged once per failure with the key, class and status, never the body', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const cache = createCapabilityCache({ ttlMs: 1000, failureTtlMs: 100, now: () => 0 })
+    const bad = async () => {
+      throw new KcAdminError(502, 'secret-body-text')
+    }
+    await cache.get('tenant-a', bad)
+    await cache.get('tenant-a', bad)
+    expect(warn).toHaveBeenCalledTimes(1)
+    const logged = JSON.stringify(warn.mock.calls)
+    expect(logged).toContain('tenant-a')
+    expect(logged).toContain('KcAdminError')
+    expect(logged).toContain('502')
+    expect(logged).not.toContain('body-text')
+    warn.mockRestore()
   })
 
   test('tenants do not share an answer', async () => {

@@ -495,13 +495,13 @@ describe('KcProvisionApi.ensureRequiredActionEnabled', () => {
       if (method === 'GET' && path === PATH) return { ...entity, config: { ...entity.config } }
       if (method === 'GET' && path === CFG) return { config: { ...entity.config } }
       if (method === 'PUT' && path === CFG) {
-        entity.config = { ...((body as { config: Record<string, string> }).config ?? {}) }
+        entity.config = { ...(body as { config: Record<string, string> }).config }
         return undefined
       }
       if (method === 'PUT' && path === PATH) {
         const b = body as { enabled?: boolean; config?: Record<string, string> }
         entity.enabled = b.enabled === true
-        entity.config = { ...(b.config ?? {}) }
+        entity.config = { ...b.config }
         return undefined
       }
       throw new Error(`unexpected ${method} ${path}`)
