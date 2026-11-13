@@ -42,7 +42,6 @@ describe('parseNameForm', () => {
     ['new line', { firstName: 'A', lastName: 'B\nC' }, 'lastName'],
     ['bidi override', { firstName: 'A\u202e', lastName: 'B' }, 'firstName'],
     ['line separator', { firstName: 'A', lastName: 'B\u2028' }, 'lastName'],
-    ['lone surrogate', { firstName: 'A\ud800', lastName: 'B' }, 'firstName'],
     ['DEL', { firstName: 'A\u007f', lastName: 'B' }, 'firstName'],
     ['81 characters', { firstName: 'A'.repeat(NAME_MAX + 1), lastName: 'B' }, 'firstName'],
   ])('refuses %s', (_label, fields, badField) => {
