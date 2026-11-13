@@ -62,7 +62,7 @@ function forbidden(asked: string[]) {
 }
 
 const touchesModuleDatabase = (statements: Statement[]) =>
-  statements.filter((s) => /plt\.module_database/.test(s.text) && !/^SELECT export_path AS p FROM plt\.module_database/.test(s.text))
+  statements.filter((s) => /plt\.module_database/.test(s.text) && !s.text.startsWith('SELECT export_path AS p FROM plt.module_database'))
 const destructive = (statements: Statement[]) => statements.filter((s) => /\b(DROP|REVOKE|pg_terminate_backend)\b/i.test(s.text))
 
 describe('disableModule for board (in-process, kernel tenant database)', () => {
@@ -106,7 +106,7 @@ describe('finalizeDueKarenz for board (day 30 of a board switch-off)', () => {
     const asked: string[] = []
     const steps: string[] = []
     const platform = fakePlatform(statements, (s) => {
-      if (/^SELECT k\.karenz_id::text/.test(s.text)) {
+      if (s.text.startsWith('SELECT k.karenz_id::text')) {
         return [
           {
             karenz_id: KARENZ_ROW,
