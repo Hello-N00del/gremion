@@ -348,10 +348,19 @@ both phases against a real Keycloak 26.6.1 (`enrolment` then `flow` in
 `kc2661-token-claims.json`).
 
 Residual: a user must enroll their OTP *outside* a step-up (imported members get
-only `UPDATE_PASSWORD`, TASK-031 D-5); an attacker holding only the password can
-still enroll their own authenticator (Keycloak's account console, or the Settings > Profil
-button below) before the legitimate user does, so
-mandatory first-login enrollment for members remains a product decision.
+only `UPDATE_PASSWORD`, TASK-031 D-5). For a member who has no OTP credential yet, the
+password is not the only way in: measured on Keycloak 26.6.1 with the base realm, a
+request made by hand with `kc_action=CONFIGURE_TOTP` and neither `prompt` nor `acr_values`
+inside a live SSO session opens the setup form without asking for the password
+(callback `kc_action_status=success`, one OTP credential added); a step-up (`acr_values=loa2`)
+in the same browser then asks only for the code just enrolled and returns `loa2`. So whoever
+holds an unlocked session of a member without a second factor, or the password alone, can
+enrol their own authenticator and reach `loa2` before the legitimate user does, by going
+around the app's own button (which asks for the password, see below). Measured only seconds
+after sign-in; whether Keycloak's per-action `max_auth_age` (default 300 s) forces a fresh
+authentication for an older session was NOT measured. This is a property of the realm, not
+of the app: closing it needs a `max_auth_age` setting on the actions or mandatory first-login
+enrollment for members, which remains a product decision (realm work, not part of Settings > Profil).
 
 **Profile and account actions inside the app (members).** Settings > Profil no longer
 links to the Keycloak account console (its first API call is refused on a customer realm,

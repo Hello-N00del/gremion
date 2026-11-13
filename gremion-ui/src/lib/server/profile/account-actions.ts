@@ -42,8 +42,18 @@
 //     in that very round trip (enrolling through kc_action does not mint loa2);
 //   cancelled setup form:                        the callback still carries a code, the
 //     session is intact, kc_action_status=cancelled.
-// A residual that remains: the FIRST authenticator of a user without one is protected by the
-// password alone. There is no second factor to ask for yet.
+// A residual that remains, and it is wider than "the password": the FIRST authenticator of a
+// user without one is not protected by this button's parameters against a crafted request.
+// Measured (26.6.1, base realm, user WITHOUT an OTP): plain sign-in (password, loa1), then in
+// the same browser a hand-made authorize request with kc_action=CONFIGURE_TOTP and NO prompt
+// and NO acr_values opened the setup form with no password prompt (kc_action_status=success,
+// one OTP credential added); a following acr_values=loa2 step-up asked only for that new code
+// and returned acr loa2. So a live, unlocked session of a member without a second factor can
+// enrol a code and reach loa2 around the app, within Keycloak's re-authentication window for
+// an action request (per-action max_auth_age, default 300 s; NOT measured for an older
+// session). This button itself is not that hole: it sends prompt=login and asks the password.
+// The cause is a realm property (no max_auth_age on the actions, no mandatory first-login
+// enrolment), not something this module can close.
 //
 // The server decides every parameter. The form contributes one allowlisted key; whatever
 // else a client posts (authorizationParams-*, redirectTo, providerId) never reaches Auth.js.
