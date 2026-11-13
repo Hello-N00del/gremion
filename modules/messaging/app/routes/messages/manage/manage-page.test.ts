@@ -19,7 +19,7 @@ vi.mock('svelte-sonner', () => ({ toast: h.toast }))
 import Page from './+page.svelte'
 
 interface UnitRow { unitId: string; unitName: string; state: string; roomId?: string; roomName?: string }
-interface ArchivedRow { roomId: string; unitId: string; unitName: string; roomName?: string; archivedAt?: string; restorable: boolean; restoreBlockedBy?: 'other_room' | 'unreadable' }
+interface ArchivedRow { roomId: string; unitId: string; unitName: string; roomName?: string; archivedAt?: string; restorable: boolean; restoreBlockedBy?: 'other_room' | 'unreadable' | 'being_created' }
 interface Data { matrix: 'reachable' | 'unreachable'; units: UnitRow[]; archivedRooms: ArchivedRow[] }
 
 const VORSTAND = '!vorstand:matrix.test'
@@ -220,6 +220,15 @@ describe('/messages/manage — archive', () => {
     const row = archiveRow(container, OLDER)
     expect(within(row).queryByText('Wiederherstellen')).toBeNull()
     expect(row.textContent).toContain('Der Raumstatus von „Plenum“ konnte nicht gelesen werden')
+    expect(row.textContent).not.toContain('hat bereits einen neuen Raum')
+  })
+
+  it('says the unit is getting a new room, not that it has one, while that room is still being created', () => {
+    const data: Data = { ...archiveData, archivedRooms: [{ roomId: OLDER, unitId: 'ou-2', unitName: 'Plenum', restorable: false, restoreBlockedBy: 'being_created' }] }
+    const { container } = renderPage(data)
+    const row = archiveRow(container, OLDER)
+    expect(within(row).queryByText('Wiederherstellen')).toBeNull()
+    expect(row.textContent).toContain('„Plenum“ bekommt gerade einen neuen Raum')
     expect(row.textContent).not.toContain('hat bereits einen neuen Raum')
   })
 

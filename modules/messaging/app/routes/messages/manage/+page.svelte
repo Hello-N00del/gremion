@@ -337,6 +337,10 @@
               <p class="confirm-hint">
                 Der Raumstatus von „{room.unitName}“ konnte nicht gelesen werden. Der Raum lässt sich deshalb gerade nicht wiederherstellen; bitte die Seite neu laden.
               </p>
+            {:else if !room.restorable && room.restoreBlockedBy === 'being_created'}
+              <p class="confirm-hint">
+                „{room.unitName}“ bekommt gerade einen neuen Raum. Dieser Raum kann deshalb gerade nicht wiederhergestellt werden; sein Verlauf bleibt lesbar.
+              </p>
             {:else if !room.restorable}
               <p class="confirm-hint">
                 „{room.unitName}“ hat bereits einen neuen Raum. Dieser Raum kann deshalb nicht wiederhergestellt werden; sein Verlauf bleibt lesbar.

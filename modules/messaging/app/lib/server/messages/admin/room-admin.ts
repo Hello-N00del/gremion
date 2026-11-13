@@ -498,9 +498,11 @@ export interface ArchivedRoomEntry {
   archivedAt?: string
   /** False when the unit has another room: unarchiveRoom refuses that restore (RoomConflictError). */
   restorable: boolean
-  /** Why it is not restorable, so the page can say the true reason: the unit has `other_room`, or the
-   *  unit's ledger could not be read (`unreadable`, which says nothing about another room). */
-  restoreBlockedBy?: 'other_room' | 'unreadable'
+  /** Why it is not restorable, so the page can say the true reason: the unit has `other_room`, a new room
+   *  of the unit is still `being_created` (a pending row without a room: a restore here would race the
+   *  provisioning), or the unit's ledger could not be read (`unreadable`, which says nothing about
+   *  another room). */
+  restoreBlockedBy?: 'other_room' | 'unreadable' | 'being_created'
 }
 
 export interface RoomOverview {
@@ -664,6 +666,10 @@ export async function listOverview(
   // What unarchiveRoom checks before a restore: the room the unit's ledger row names, if any. A
   // unit whose row could not be read is absent, and its archived rooms are not offered for restore.
   const ledgerRoomByUnit = new Map<string, string | null>()
+  // Units whose row is pending without a room: a new room is being created for them. The restore of
+  // the room-admin page is not offered then (unarchiveRoom itself accepts that row, which the Karenz
+  // switch-on relies on, when it re-attaches the room the module switch-on enqueued).
+  const unitsBeingCreated = new Set<string>()
 
   // Parallel per-unit ledger reads (N+1 -> one round-trip batch, MEDIUM,
   // r1-kernel-nav-roomsB2): each read is independent of every other unit's.
@@ -683,7 +689,10 @@ export async function listOverview(
           unitId: unit.id, error: err instanceof Error ? err.message : String(err),
         })
       }
-      if (!readFailed) ledgerRoomByUnit.set(unit.id, resource?.external_id ?? null)
+      if (!readFailed) {
+        ledgerRoomByUnit.set(unit.id, resource?.external_id ?? null)
+        if (resource && !resource.external_id && resource.status === 'pending') unitsBeingCreated.add(unit.id)
+      }
       let state: RoomOverviewState
       let roomId: string | undefined
       let lastError: string | undefined
@@ -736,7 +745,9 @@ export async function listOverview(
 
   const archivedRooms: ArchivedRoomEntry[] = ownArchived.map((room) => {
     const ledgerRoom = ledgerRoomByUnit.get(room.unitId)
-    const restorable = ledgerRoom !== undefined && (ledgerRoom === null || ledgerRoom === room.roomId)
+    const beingCreated = unitsBeingCreated.has(room.unitId)
+    const restorable = ledgerRoom !== undefined && !beingCreated && (ledgerRoom === null || ledgerRoom === room.roomId)
+    const blockedBy = ledgerRoom === undefined ? 'unreadable' as const : beingCreated ? 'being_created' as const : 'other_room' as const
     return {
       roomId: room.roomId,
       unitId: room.unitId,
@@ -744,7 +755,7 @@ export async function listOverview(
       roomName: names.get(room.roomId),
       archivedAt: room.archivedAt,
       restorable,
-      ...(restorable ? {} : { restoreBlockedBy: ledgerRoom === undefined ? 'unreadable' as const : 'other_room' as const }),
+      ...(restorable ? {} : { restoreBlockedBy: blockedBy }),
     }
   })
   const withNames = entries.map((entry) => (entry.roomId ? { ...entry, roomName: names.get(entry.roomId) } : entry))

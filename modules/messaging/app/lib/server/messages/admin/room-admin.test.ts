@@ -1258,6 +1258,18 @@ describe('room-admin', () => {
       ])
     })
 
+    it('a unit whose new room is still being created (a pending row without an external id) offers no restore of its archived room', async () => {
+      getResource.mockResolvedValue({ status: 'pending', external_id: null })
+      routeMatrix({ [OLDER]: olderFixture }, fakeListRoomsHandler([{ room_id: OLDER, creator: BOT }]))
+      const { listOverview } = await import('./room-admin')
+      const overview = await listOverview([{ id: 'k', name: 'K' }] as never)
+
+      expect(overview.units[0]).toMatchObject({ unitId: 'k', state: 'wird_angelegt' })
+      expect(overview.archivedRooms).toEqual([
+        expect.objectContaining({ roomId: OLDER, unitId: 'k', restorable: false, restoreBlockedBy: 'being_created' }),
+      ])
+    })
+
     it("lists an archived room whose marker predates the customer stamp when this customer's audit trail records its archive, and none without that proof", async () => {
       getResource.mockResolvedValue(null)
       const legacyFixture = { marker: { org_unit_id: 'k', archived_at: '2026-01-01T00:00:00Z' } }
