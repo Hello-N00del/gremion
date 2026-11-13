@@ -88,6 +88,23 @@ export interface DpiaDecision {
   documentRef: string
 }
 
+/** The months (1 to 12, different) in which the winter and the summer semester start. */
+export interface TermMonths {
+  winter: number
+  summer: number
+}
+
+/**
+ * Two different integer months 1 to 12, exactly the two keys. Mirrored by the panel
+ * (apps/control-panel requests.ts) and by the app's config schema (gremion-ui
+ * $lib/semester isTermMonths); the panel's requests.test.ts pins this one equal.
+ */
+export function isTermMonths(v: unknown): v is TermMonths {
+  if (!isObject(v)) return false
+  const m = (x: unknown): x is number => typeof x === 'number' && Number.isInteger(x) && x >= 1 && x <= 12
+  return Object.keys(v).length === 2 && m(v.winter) && m(v.summer) && v.winter !== v.summer
+}
+
 /** The normalised args of a `create` request. */
 export interface CreateRequestArgs {
   slug: string
@@ -96,8 +113,13 @@ export interface CreateRequestArgs {
   councilAdmin: string
   /** The first body's name (default Rat in the engine). */
   bodyName: string | null
-  /** The tenant config is ONLY a brand identity (materialize.ts requires both). */
-  brand: { product: string; orgShort: string }
+  /**
+   * The tenant config is ONLY a brand identity (materialize.ts requires both) plus,
+   * optionally, the months the winter and the summer semester start (the sidebar's
+   * semester label is computed from them; create.sh writes them as brand.term_months).
+   * Absent in every request stored before the form asked for them.
+   */
+  brand: { product: string; orgShort: string; termMonths?: TermMonths }
   enable: string[]
   dpia: Record<string, DpiaDecision>
 }
@@ -375,8 +397,13 @@ function verifyCreate(e: RequestEnvelope, ctx: VerifyContext): CreateRequestArgs
   if (a.slug !== e.customerSlug) throw new Refused(`args.slug ${String(a.slug)} is not the request's slug ${e.customerSlug}`)
   if (!Array.isArray(a.enable) || a.enable.some((m) => typeof m !== 'string')) throw new Refused('enable must be a list of module ids')
   if (!isObject(a.brand)) throw new Refused('brand must be an object with product and orgShort')
-  onlyFields(a.brand, new Set(['product', 'orgShort']), 'brand.')
-  const brand = { product: text(a.brand.product, 'brand.product', 80), orgShort: text(a.brand.orgShort, 'brand.orgShort', 20) }
+  onlyFields(a.brand, new Set(['product', 'orgShort', 'termMonths']), 'brand.')
+  const brand: CreateRequestArgs['brand'] = { product: text(a.brand.product, 'brand.product', 80), orgShort: text(a.brand.orgShort, 'brand.orgShort', 20) }
+  // optional: a request stored before the form asked for the months still verifies (and "Fortsetzen" re-sends it as stored)
+  if (a.brand.termMonths !== undefined) {
+    if (!isTermMonths(a.brand.termMonths)) throw new Refused('brand.termMonths must be { winter, summer }: two different whole months, 1 to 12')
+    brand.termMonths = { winter: a.brand.termMonths.winter, summer: a.brand.termMonths.summer }
+  }
   const bodyName = a.bodyName === undefined || a.bodyName === null ? null : text(a.bodyName, 'bodyName', 80)
   if (typeof a.itAdmin !== 'string' || typeof a.councilAdmin !== 'string' || typeof a.host !== 'string') {
     throw new Refused('host, itAdmin and councilAdmin must be strings')
