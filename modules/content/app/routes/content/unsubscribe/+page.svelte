@@ -1,4 +1,5 @@
 <script lang="ts">
+  import PageTitle from '$lib/components/PageTitle.svelte'
   import type { ActionData, PageData } from './$types'
 
   export let data: PageData
@@ -7,6 +8,8 @@
   // K5#19: the GET only shows a confirmation; the POST below consumes the token.
   $: status = form?.status ?? data.status
 </script>
+
+<PageTitle title="Vom Verteiler abmelden" />
 
 <div class="flex min-h-screen items-center justify-center p-8">
   <div class="max-w-md w-full rounded-lg border p-8 text-center">
