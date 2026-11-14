@@ -1,5 +1,5 @@
 {
-  "comment": "The pilot tenant create request as the pilot runbook issues it (gremion-tenant create ... --enable <id>): votes, calendar, content, publishing, files, messaging. Elections, finance, board, vault and handover are deliberately absent (board is served in-process and default-on, elections are held off in the app config). scripts/check-pilot-module-defaults.mjs reads this file (check a).",
+  "comment": "The pilot tenant create request as the pilot runbook issues it (gremion-tenant create ... --enable <id>): votes, calendar, content, publishing, files, messaging and board (board is served in-process from the kernel tenant database and starts no compose profile). Elections, finance, vault and handover are deliberately absent (elections are held off in the app config). scripts/check-pilot-module-defaults.mjs reads this file (check a).",
   "customer": "pilot",
-  "enable": ["votes", "calendar", "content", "publishing", "files", "messaging"]
+  "enable": ["votes", "calendar", "content", "publishing", "files", "messaging", "board"]
 }

@@ -64,7 +64,6 @@ describe('create args', () => {
   })
 
   it.each([
-    ['board', /board cannot be enabled: it is not tenant-isolated/],
     ['vault', /vault cannot be enabled: the password vault stays off/],
     ['nosuchmodule', /not in the catalogue/],
     ['finance', /finance is disabled in this build \(modules\/disabled\.json\)/],
@@ -239,8 +238,9 @@ describe('enable_module / disable_module / record_dpia / reconcile args (TRD-044
     expect(v('disable_module', { slug: 'musterstadt', module: 'nosuchmodule' })).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/not in the catalogue/) })
   })
 
-  it('enable_module refuses board and vault by name; disable_module carries no dpia', () => {
-    expect(v('enable_module', { slug: 'musterstadt', module: 'board' })).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/board cannot be enabled/) })
+  it('enable_module accepts board and refuses vault by name; disable_module carries no dpia', () => {
+    expect(v('enable_module', { slug: 'musterstadt', module: 'board' })).toMatchObject({ verdict: 'ok', args: { slug: 'musterstadt', module: 'board', actorKind: 'operator' } })
+    expect(v('enable_module', { slug: 'musterstadt', module: 'vault' })).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/vault cannot be enabled/) })
     expect(v('disable_module', { slug: 'musterstadt', module: 'votes' })).toEqual({ verdict: 'ok', args: { slug: 'musterstadt', module: 'votes', actorKind: 'operator' } })
     expect(v('disable_module', { slug: 'musterstadt', module: 'votes', dpia })).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/unknown field dpia/) })
   })

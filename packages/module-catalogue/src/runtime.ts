@@ -19,6 +19,15 @@ export const POSTGRES_LABEL = 'org.gremion.postgres'
 /** TASK-084-a: a dedicated service server, e.g. service:governance. */
 const SERVICE_LABEL = /^service:[a-z][a-z0-9_-]*$/
 
+/**
+ * Modules whose PostgreSQL server belongs to a leaf service that only a test environment runs
+ * (BOARD_BACKEND=service) while module.json declares no runtime.database: the default in-process mode keeps the
+ * data in the kernel tenant database (migration 0034), so enabling the module opens no module database (board wave,
+ * 2026-11-11). The server stays a claimed, backed-up server (gremion-backup refuses a running server that is not in
+ * the backup list) and the module may keep its migrations/manifest.json on disk. Module id to compose service.
+ */
+export const LEAF_ONLY_SERVERS: Readonly<Record<string, string>> = Object.freeze({ board: 'board-postgres' })
+
 /** Databases every PostgreSQL server holds from initdb on. */
 export const SERVER_BUILTIN_DATABASES = ['postgres', 'template0', 'template1'] as const
 
@@ -145,7 +154,7 @@ export function platformDatabases(service: string, opts: { compose: ComposeModel
 
 /**
  * BACKUP_POSTGRES_SERVICES, derived: the kernel server first, then each
- * runtime.database.postgresService, then each runtime.platformServer
+ * runtime.database.postgresService (or the leaf-only server of LEAF_ONLY_SERVERS), then each runtime.platformServer
  * .postgresService not already listed, in catalogue order (Amendment R27
  * item 5). A module removed from the catalogue drops out. With `opts.compose`
  * (TASK-084-a), every compose service labelled service:<id> follows, in compose
@@ -154,7 +163,7 @@ export function platformDatabases(service: string, opts: { compose: ComposeModel
 export function deriveBackupServices(catalogue: readonly EntryLike[], opts: { compose?: ComposeModel } = {}): string[] {
   const out: string[] = [KERNEL_POSTGRES_SERVICE]
   for (const m of catalogue) {
-    const svc = m.moduleJson.runtime.database?.postgresService
+    const svc = m.moduleJson.runtime.database?.postgresService ?? LEAF_ONLY_SERVERS[m.id]
     if (svc !== undefined && !out.includes(svc)) out.push(svc)
   }
   for (const m of catalogue) {

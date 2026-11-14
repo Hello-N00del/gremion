@@ -148,7 +148,7 @@ describe('the producer output is the parser input (no database)', () => {
       expect(r.release_tip_sha).toBe(tip)
       expect(r.evidence_ref.startsWith('scratch-fixture:')).toBe(false)
     }
-    for (const banned of ['board', 'elections', 'finance', 'vault', 'handover']) {
+    for (const banned of ['elections', 'finance', 'vault', 'handover']) {
       expect(parsed.results.some((r) => r.module === banned)).toBe(false)
     }
   })

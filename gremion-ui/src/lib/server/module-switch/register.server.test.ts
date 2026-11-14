@@ -35,6 +35,7 @@ beforeEach(() => {
   h.runPass.mockReset()
   vi.useFakeTimers()
   vi.spyOn(console, 'info').mockImplementation(() => {})
+  vi.spyOn(console, 'warn').mockImplementation(() => {})
   vi.spyOn(console, 'error').mockImplementation(() => {})
 })
 afterEach(() => {

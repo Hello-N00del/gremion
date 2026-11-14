@@ -9,7 +9,7 @@
 // Fail closed:
 //   gate ok                           -> the tenant's pool
 //   gate behind | diverged            -> 503 schema_not_current (Retry-After): the
-//                                        leaf never migrates (B21); enableModule does
+//                                        leaf never migrates (B21); the environment does (README.md)
 //   gate unavailable -> classify:     SELECT 1 on the tenant pool
 //     SQLSTATE 3D000 (no database)    -> 404 tenant_not_provisioned (never cached: the
 //     SQLSTATE 42501 at connect       -> 404 tenant_not_provisioned  gate caches no failed check; no

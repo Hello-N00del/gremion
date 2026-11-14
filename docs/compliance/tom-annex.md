@@ -11,10 +11,10 @@
 
 | | |
 |---|---|
-| Version | 2 |
-| Stand | 2026-10-30 |
-| Eingabe-Digest | 6af09b2b47c53a04eb1ef746596013986f5fdb4d593dc682eba170175d48f088 |
-| Massnahmen | 52 |
+| Version | 3 |
+| Stand | 2026-11-14 |
+| Eingabe-Digest | 4622ceb9eb25f6cb187d933ceb4c71e290ace42284da1c469128caf6d6a6c3c9 |
+| Massnahmen | 51 |
 
 Der Digest ist SHA-256 ueber die Liste (Id, Wert, Quelle, Fundstelle) aller Massnahmen unten.
 
@@ -83,7 +83,6 @@ Der Digest ist SHA-256 ueber die Liste (Id, Wert, Quelle, Fundstelle) aller Mass
 
 | Id | Massnahme | Wert | Quelle |
 |---|---|---|---|
-| MOD-BOARD | Modul board: Export bei Deaktivierung | pg_dump, Aufbewahrungsprofil rp-brd-module-data | `modules/board/module.json` |
 | MOD-CALENDAR | Modul calendar: Export bei Deaktivierung | pg_dump, Aufbewahrungsprofil rp-cal-module-data | `modules/calendar/module.json` |
 | MOD-CONTENT | Modul content: Export bei Deaktivierung | pg_dump, Aufbewahrungsprofil rp-pub-module-data | `modules/content/module.json` |
 | MOD-FINANCE | Modul finance: Export bei Deaktivierung | pg_dump, Aufbewahrungsprofil rp-fin-module-data | `modules/finance/module.json` |
@@ -145,7 +144,6 @@ Der Digest ist SHA-256 ueber die Liste (Id, Wert, Quelle, Fundstelle) aller Mass
 | LOG-LOKI-FINANCE | limits_config.retention_stream |
 | LOG-LOKI-SECURITY | limits_config.retention_stream |
 | LOG-TEMPO-BLOCK | compactor.compaction.block_retention |
-| MOD-BOARD | runtime.export |
 | MOD-CALENDAR | runtime.export |
 | MOD-CONTENT | runtime.export |
 | MOD-FINANCE | runtime.export |
@@ -165,3 +163,4 @@ Der Digest ist SHA-256 ueber die Liste (Id, Wert, Quelle, Fundstelle) aller Mass
 |---|---|---|---|
 | 1 | 2026-10-27 | c58de9cf437fac3f72ed3ac2227ae755878a89088c8c9ba330f21ad56e980aba | erste Fassung |
 | 2 | 2026-10-30 | 6af09b2b47c53a04eb1ef746596013986f5fdb4d593dc682eba170175d48f088 | HDR-CACHE-CONTROL, HDR-CSP-SCRIPT-SRC |
+| 3 | 2026-11-14 | 4622ceb9eb25f6cb187d933ceb4c71e290ace42284da1c469128caf6d6a6c3c9 | MOD-BOARD |

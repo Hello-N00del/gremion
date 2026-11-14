@@ -49,6 +49,7 @@ MUTATION_IDS=(
   c-votes
   d-client d-token d-admin
   e-backslash e-dotdot e-dothidden e-uploadid e-bearer e-editpage
+  f-board
 )
 
 die() { printf 'mutation-proof: %s\n' "$*" >&2; exit "${2:-1}"; }
@@ -210,6 +211,12 @@ mut_e_editpage() { # the editor page builds its WebDAV path by hand again, witho
   DESC="files: the editor page skips the shared path guard"
 }
 
+mut_f_board() { # every customer's getDb() is served by ONE pool (the first caller's database)
+  mutate "gremion-ui/src/lib/server/db.ts" "  return getPoolForTenant(requireTenant())" "  return getPoolForTenant({ ...requireTenant(), id: 'shared' })"
+  EXPECT="getDb\(\) under a customer reaches that customer database and no other"
+  DESC="board: getDb() serves every customer from one shared pool"
+}
+
 apply() {
   EXPECT=""; DESC=""
   case "$1" in
@@ -229,6 +236,7 @@ apply() {
     e-uploadid) mut_e_uploadid ;;
     e-bearer) mut_e_bearer ;;
     e-editpage) mut_e_editpage ;;
+    f-board) mut_f_board ;;
     *) die "unknown mutation id: $1" 2 ;;
   esac
 }

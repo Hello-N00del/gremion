@@ -54,9 +54,16 @@ test('module profiles: every catalogue id is classified and nothing else is; pil
     if (!m.pilot) assert.deepEqual([...m.profiles, ...m.postRealm], [], `${id}: an off module renders no profile`)
     else assert.ok(m.profiles.length + m.postRealm.length > 0, `${id}: a pilot module asks for at least one profile`)
   }
-  // the pilot set: sign-in modules and the six the plan's evidence names; finance, vault, board, elections, handover off
+  // the profile-rendering pilot set: sign-in modules and the six the plan's evidence names; finance, vault, board, elections, handover render no profile (board is selectable at create but needs none)
   const pilot = Object.entries(MAP.modules).filter(([, m]) => m.pilot).map(([id]) => id).sort()
   assert.deepEqual(pilot, ['calendar', 'content', 'files', 'messaging', 'publishing', 'votes'])
+})
+
+test('module profiles: board is selectable at create but needs no profile and no leaf (it runs in-process on kernel tables)', () => {
+  const board = MAP.modules.board
+  assert.deepEqual([board.profiles, board.postRealm], [[], []])
+  assert.match(board.reason, /selectable at create/)
+  assert.doesNotMatch(board.reason, /no isolation gate lift/)
 })
 
 test('module profiles: every named profile is known and defined by a compose file, and every module profile a compose file defines is known', () => {

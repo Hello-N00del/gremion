@@ -290,8 +290,8 @@ loa2 sign-in as evidence, exactly like "Neuer Mandant"; the executor runs
 "Module" section for an ACTIVE customer with no queued or running request: the
 enabled modules with "Modul deaktivieren", the available ones with "Modul
 aktivieren" plus the DPIA decision (an explicit erforderlich / nicht erforderlich
-and a document reference, as in "Neuer Mandant"; board and vault are shown
-blocked), a "DPIA-Entscheidung festhalten" form per enabled module and the
+and a document reference, as in "Neuer Mandant"; vault is shown blocked,
+and board is shown as held back, because a council cannot switch it), a "DPIA-Entscheidung festhalten" form per enabled module and the
 "Abgleich" buttons. Each queues one request, handled by the executor:
 
 - `enable_module` {slug, module, dpia}: `tenant-create enable-module` (deny list,
@@ -462,7 +462,7 @@ switch-on, without a new DPIA input.
 
 **Switchable set.** Catalogue ids that own a toggleable manifest and are not denied:
 `calendar`, `elections`, `votes`. Every other id is refused with `MODULE_NOT_SWITCHABLE`
-(`files`, `messaging`, `publishing` and `handover` are held back; `board` and `vault` are
+(`files`, `messaging`, `publishing`, `handover` and `board` are held back (the board as `MODULE_NOT_SWITCHABLE`, like the others); `vault` is
 `MODULE_DENIED` by name; a module in `modules/disabled.json` is `MODULE_NOT_SHIPPED`). The
 refusal comes before anything is queued and again from the executor's `request-verify`.
 
@@ -538,7 +538,8 @@ in the same transaction that turns the enablement off. That row is the only cloc
 
 | Where | At switch-off | Switch-on inside the 30 days | Day 30 |
 |---|---|---|---|
-| Module database (board, calendar, content, finance, publishing, vault) | exported and verified, then BLOCKED: the app role loses CONNECT, the database stays alive | unblocked, the data is back | dropped, and the row's own export is deleted with it |
+| Module database (calendar, content, finance, publishing, vault) | exported and verified, then BLOCKED: the app role loses CONNECT, the database stays alive | unblocked, the data is back | dropped, and the row's own export is deleted with it |
+| `board` (no module database) | hidden through `config.modules.board`; no export is taken | shown again | nothing is deleted (`registerNoRetention`); the rows stay in the customer's kernel database, and how long they may be kept is decided under the module's processing record (`rp-brd-module-data`) |
 | `votes` (Nextcloud Polls) | every open poll is locked by moving its deadline into the past, the remaining time is stored | the deadline becomes "now plus the stored remaining time"; a poll without a deadline gets none again; a poll that had already expired or been closed is never reopened | polls are deleted unless a protocol references them; a poll without a sealed line is kept and reported |
 | `elections` (Helios) | open elections are paused through the pause port | unpaused with the stored remaining time | nothing is deleted in Helios; an election with a sealed result is archived in the tenant table |
 | `messaging` (Matrix) | every org unit's room is archived (read-only) | unarchived | rooms the Karenz archived are deleted, except meeting-linked rooms (RC-MSG-LINK) |

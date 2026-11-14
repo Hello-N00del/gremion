@@ -57,8 +57,8 @@ describe('council origin: enable_module', () => {
     expect(v).toMatchObject({ verdict: 'ok' })
   })
 
-  it('board and vault are refused by name and a module in disabledIds is refused (Review Focus 7)', () => {
-    for (const m of ['board', 'vault']) {
+  it('vault is refused by name and a module in disabledIds is refused (Review Focus 7)', () => {
+    for (const m of ['vault']) {
       expect(verifyRequestArgs(council('enable_module', { slug: 'musterstadt', module: m, dpia }), ctx())).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(new RegExp(`${m} cannot be enabled`)) })
     }
     expect(verifyRequestArgs(council('enable_module', { slug: 'musterstadt', module: 'finance', dpia }), ctx())).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/disabled in this build/) })

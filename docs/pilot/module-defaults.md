@@ -9,8 +9,8 @@
 
 ## 1. The intended pilot set
 
-A pilot customer is created with **votes, calendar, content, publishing, files and
-messaging**. The create request names every module explicitly; naming no module enables
+A pilot customer is created with **votes, calendar, content, publishing, files,
+messaging and board**. The create request names every module explicitly; naming no module enables
 none (`packages/provisioning/test/code-default-off.test.ts`).
 
 | Module | Pilot create request | Why |
@@ -21,12 +21,12 @@ none (`packages/provisioning/test/code-default-off.test.ts`).
 | publishing | enabled | Newsletter |
 | files | enabled | Documents over Nextcloud, editing in Collabora |
 | messaging | enabled | Chat and video |
+| board | enabled | Task board per organisational unit; served in-process from the customer's own database, so enabling it opens no module database and starts no compose profile. It is chosen at creation through the same isolation gate as the other modules (the board isolation case, `scripts/verify/suites/isolation-tenant.mjs`) |
 | elections | not named | Optional, no statutory election ([elections-scope](../compliance/elections-scope.md)); starts off and is held off in the app config (`defaultEnabled: false` on its manifest and a pin on read and write of `config.modules`), so the rail and `/votes` carry no election wording; a permanent notice is mounted on every `/elections` page |
 | finance, vault | not named | Excluded from the default build (`modules/disabled.json`) |
-| board | not named | Not yet tenant-separated; refused by the real provisioning gate. Served in-process and on by default for the pilot (operator ruling 2026-11-09), so it needs no gate row; it has no isolation evidence, which a second customer needs first |
 | handover | not named | Not part of the pilot set |
 
-All six pilot modules are deselectable; they are chosen per customer at creation, and a
+All seven pilot modules are deselectable; they are chosen per customer at creation, and a
 module that is off must leave the kernel working with no dangling link to it (the rail
 entries of calendar, files, messaging and content carry their module id and drop out).
 
@@ -36,10 +36,10 @@ entries of calendar, files, messaging and content carry their module id and drop
 `scripts/check-pilot-module-defaults.test.mjs`:
 
 - (a) `test/host/fixtures/module-defaults/pilot-request.json` enables votes, calendar,
-  content, publishing, files and messaging and none of elections, finance, board, vault,
+  content, publishing, files, messaging and board and none of elections, finance, vault,
   handover; every named id has a `module.json`.
 - (b) no `COMPOSE_PROFILES` line in `infra/host/templates/env/*.env.tmpl` names finance,
-  board, vault or vaultwarden. The profiles of the pilot modules are rendered from
+  board, vault or vaultwarden (board needs no profile: it runs in-process). The profiles of the pilot modules are rendered from
   `infra/host/module-profiles.json`, not written into a template.
 - (c) no `modules/*/module.json` carries a default-enable declaration.
 - (d) the panel create form preselects no module checkbox.
@@ -66,15 +66,23 @@ or demo may say that the running system serves no election page. The other modul
 pilot set, calendar, content, publishing, files and messaging, are on at creation and
 gated per request by the same config only; level 1 per request is still TASK-044-b.
 
-**Board is on by design.** It is not requested through the enable gate, which still
-refuses it by name; it is served in-process on kernel tables and is on by default (operator
-ruling 2026-11-09). It has no tenant-isolation evidence: a second customer needs that first.
+**Board is selectable at creation.** The enable gate no longer refuses it by name (only vault
+stays refused); it passes the gate like every other module, on a passed cross-customer
+isolation result for the release in use. It is served in-process on kernel tables of the
+customer's own database, so it has no module database of its own. A council still cannot
+switch board in its own settings: it stays held back there. The isolation evidence for board
+on a running host is recorded after deployment; until a host has recorded it for the release in
+use, the gate refuses board like any module without evidence.
+
+A customer created with board left unticked has no platform row for it, so the board is still on
+for that customer; to hide it later, use "Modul aktivieren" and then "Modul deaktivieren" on the
+customer page.
 
 ## 4. Hand-offs
 
 | To | What |
 |---|---|
-| TASK-043d (panel create form) | The form lists the toggleable `plt.module` rows (`apps/control-panel/src/lib/server/modules.ts`), so content and publishing appear with the catalogue; tick votes, calendar, content, publishing, files and messaging, each with a DPIA reference. 058 does not edit `apps/control-panel`. |
+| TASK-043d (panel create form) | The form lists the toggleable `plt.module` rows (`apps/control-panel/src/lib/server/modules.ts`), so content and publishing appear with the catalogue; tick votes, calendar, content, publishing, files, messaging and board, each with a DPIA reference. 058 does not edit `apps/control-panel`. |
 | TASK-044-b | Resolve level 1 once per request, fail closed; PATCH to true without level 1 answers 409. Precondition for every "off" row of part B. |
 | TASK-129 | An `ackNotice` field on the enable step, so the elections notice is acknowledged where the module is enabled; the in-app mount is already permanent. |
 | TASK-038 (runbook) | One line: votes plus messaging plus the messaging compose profile, because the chat poll (Matrix MSC3381) needs the messaging profile. |

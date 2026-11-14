@@ -21,7 +21,8 @@ beforeAll(() => {
   execFileSync(process.execPath, [join(UI, 'scripts', 'interim-module-overlay.mjs')], { cwd: UI, stdio: 'pipe' })
 }, 120_000)
 
-const MODULE_SERVERS = ['BOARD', 'CALENDAR', 'CONTENT', 'FINANCE', 'NEWSLETTER', 'VAULT']
+// the modules that declare runtime.database; board is not among them since the board wave of 2026-11-11 (served in-process)
+const MODULE_SERVERS = ['CALENDAR', 'CONTENT', 'FINANCE', 'NEWSLETTER', 'VAULT']
 
 const CONTRACT: Record<string, string> = {
   PLATFORM_DATABASE_URL: 'postgres://gremion_platform:unit@postgres-unitstack:5432/gremion_platform',

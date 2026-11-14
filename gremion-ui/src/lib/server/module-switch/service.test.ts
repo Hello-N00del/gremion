@@ -390,8 +390,9 @@ describe('disable with the flag injected', () => {
 })
 
 describe('enable: refusals before anything is queued (Review Focus 7)', () => {
-  it('board and vault are 422 MODULE_DENIED with the DENY reason', async () => {
-    for (const id of ['board', 'vault']) {
+  it('vault is 422 MODULE_DENIED with the DENY reason, and the deny list is exactly vault (board was lifted)', async () => {
+    expect(Object.keys(MODULE_DENY)).toEqual(['vault'])
+    for (const id of ['vault']) {
       const r = await submitModuleSwitch(ctx(), { moduleId: id, action: 'enable' }, deps())
       expect(r).toMatchObject({ ok: false, status: 422, code: 'MODULE_DENIED' })
       expect((r as { message: string }).message).toContain(MODULE_DENY[id]!)
@@ -414,10 +415,12 @@ describe('enable: refusals before anything is queued (Review Focus 7)', () => {
     expect(submits()).toHaveLength(0)
   })
 
-  it('files, messaging, publishing, handover and an unknown id are 422 MODULE_NOT_SWITCHABLE', async () => {
-    for (const id of ['files', 'messaging', 'publishing', 'handover', 'nope']) {
-      const r = await submitModuleSwitch(ctx(), { moduleId: id, action: 'enable' }, deps())
-      expect(r, id).toMatchObject({ ok: false, status: 422, code: 'MODULE_NOT_SWITCHABLE' })
+  it('board, files, messaging, publishing, handover and an unknown id are 422 MODULE_NOT_SWITCHABLE (a council still cannot switch board)', async () => {
+    for (const id of ['board', 'files', 'messaging', 'publishing', 'handover', 'nope']) {
+      for (const action of ['enable', 'disable'] as const) {
+        const r = await submitModuleSwitch(ctx(), { moduleId: id, action }, deps())
+        expect(r, `${id} ${action}`).toMatchObject({ ok: false, status: 422, code: 'MODULE_NOT_SWITCHABLE' })
+      }
     }
     expect(submits()).toHaveLength(0)
     expect(h.insertSwitch).not.toHaveBeenCalled()

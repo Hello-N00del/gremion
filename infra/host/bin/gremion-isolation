@@ -64,7 +64,7 @@ umask 077
 
 # The modules the producer proves. MUST equal ISOLATION_TENANT_MODULES in
 # scripts/verify/suites/isolation-tenant.mjs (scripts/verify/isolation-tenant.test.mjs pins it).
-PILOT_MODULES="calendar content publishing votes files messaging"
+PILOT_MODULES="calendar content publishing votes files messaging board"
 FIXTURE_PREFIX="scratch-fixture:"
 TOOLCHAIN_CONTEXT="test/isolation/tenant"
 

@@ -17,7 +17,14 @@ import path from 'node:path'
 import { test } from 'node:test'
 import { writeIsolationEvidence } from './lib/isolation-evidence.mjs'
 import { runVitestJson } from './lib/vitest.mjs'
-import { discardIsolationEvidence, ISOLATION_TENANT_MODULES, ISOLATION_TENANT_PART, runIsolationTenantSuite } from './suites/isolation-tenant.mjs'
+import {
+  discardIsolationEvidence,
+  ISOLATION_TENANT_MODULES,
+  ISOLATION_TENANT_PART,
+  isolationTenantCases,
+  runIsolationTenantSuite,
+  throwawayServerProblem,
+} from './suites/isolation-tenant.mjs'
 import { runAll, runVerify } from './verify.mjs'
 
 const REPO_ROOT = path.join(import.meta.dirname, '..', '..')
@@ -142,12 +149,90 @@ test('a passing run writes <sha>.json stamped by verify, one result per declared
   }
 })
 
-test('no module outside the pilot set ever gets a result (board, elections, finance, vault, handover)', () => {
+test('no module outside the pilot set ever gets a result (elections, finance, vault, handover)', () => {
   const { outDir } = verify(suite())
   const ev = JSON.parse(readFileSync(path.join(outDir, `${SHA}.json`), 'utf8'))
-  for (const banned of ['board', 'elections', 'finance', 'vault', 'handover']) {
+  for (const banned of ['elections', 'finance', 'vault', 'handover']) {
     assert.ok(!ev.results.some((r) => r.module === banned), `${banned} must have no result`)
   }
+})
+
+test('the board is one of seven proven modules, with a real-Postgres app case whose file exists', () => {
+  assert.equal(ISOLATION_TENANT_MODULES.length, 7)
+  assert.ok(ISOLATION_TENANT_MODULES.includes('board'))
+  const cases = isolationTenantCases()
+  const byName = (a, b) => a.localeCompare(b)
+  assert.deepEqual(cases.map((c) => c.module).sort(byName), [...ISOLATION_TENANT_MODULES].sort(byName))
+  const board = cases.find((c) => c.module === 'board')
+  assert.equal(board.proofKind, 'real-pg-app')
+  assert.equal(board.needsPg, true)
+  assert.equal(board.prepare, true)
+  assert.equal(board.cwd, 'gremion-ui')
+  assert.deepEqual(board.files, ['gremion-ui/src/lib/server/board/tenant-isolation.integration.test.ts'])
+  // the integration config (the unit project excludes *.integration.test.ts), pointed at the file under its overlaid path
+  assert.ok(board.args.includes('vitest.integration.config.ts'))
+  assert.equal(board.args.at(-1), 'src/lib/server/board/tenant-isolation.integration.test.ts')
+  // the overlay copies this source file there
+  assert.ok(existsSync(path.join(REPO_ROOT, 'modules', 'board', 'app', 'lib', 'server', 'board', 'tenant-isolation.integration.test.ts')))
+})
+
+test('the board case runs with the harness environment derived from the throwaway server, over an ambient production stack', () => {
+  const seen = {}
+  const runVitest = (opts) => {
+    seen[path.basename(opts.keepReportAt, '.vitest.json')] = opts
+    return fakeRunVitest()(opts)
+  }
+  const raw = runIsolationTenantSuite({
+    root: REPO_ROOT,
+    cases: isolationTenantCases(),
+    env: { ...PG_ENV, GREMION_PRODUCTION_STACK: 'a-production-stack' },
+    runVitest,
+    prepare: NO_PREPARE,
+    tmpRoot: tmp('iso-tenant-suite-'),
+  })
+  discardIsolationEvidence(raw.evidence)
+  const env = seen.board.env
+  assert.equal(env.GREMION_PRODUCTION_STACK, 'none')
+  assert.equal(env.ISOLATION_TENANT_PG_URL, PG_ENV.ISOLATION_TENANT_PG_URL)
+  const fixtureDb = new URL(env.DATABASE_URL)
+  const controlDb = new URL(env.CONTROL_DATABASE_URL)
+  assert.equal(fixtureDb.port, '55432')
+  assert.equal(fixtureDb.hostname, '127.0.0.1')
+  assert.match(fixtureDb.pathname, /^\/board_iso_test_/)
+  assert.match(controlDb.pathname, /^\/board_iso_test_/)
+  assert.notEqual(fixtureDb.pathname, controlDb.pathname)
+  // a leaf case is NOT given a production-stack statement
+  assert.equal(seen.calendar.env.GREMION_PRODUCTION_STACK, 'a-production-stack')
+})
+
+test('the board case refuses a server that is not a throwaway one, and never starts vitest for it', () => {
+  const started = []
+  const run = (url) =>
+    runIsolationTenantSuite({
+      root: REPO_ROOT,
+      cases: isolationTenantCases().filter((c) => c.module === 'board'),
+      declaredModules: ['board'],
+      env: { ISOLATION_TENANT_PG_URL: url },
+      runVitest: (opts) => {
+        started.push(opts.label)
+        return fakeRunVitest()(opts)
+      },
+      prepare: NO_PREPARE,
+      tmpRoot: tmp('iso-tenant-suite-'),
+    })
+  const live = run('postgres://postgres@127.0.0.1:5432/postgres')
+  const remote = run('postgres://postgres@db.example.org:55432/postgres')
+  assert.deepEqual(started, [])
+  assert.match(live.detail, /5432/)
+  assert.match(remote.detail, /loopback/)
+  assert.notEqual(live.status, 'pass')
+  assert.notEqual(remote.status, 'pass')
+  discardIsolationEvidence(live.evidence)
+  discardIsolationEvidence(remote.evidence)
+  assert.equal(throwawayServerProblem('postgres://postgres@127.0.0.1:55432/postgres'), null)
+  assert.equal(throwawayServerProblem('postgres://postgres@[::1]:55432/postgres'), null)
+  assert.match(throwawayServerProblem('postgres://postgres@127.0.0.1/postgres'), /5432/)
+  assert.match(throwawayServerProblem('not a url'), /not a URL/)
 })
 
 // ---- every hollow run writes no file ---------------------------------------
@@ -296,7 +381,7 @@ test('the writer refuses a module set that is not exactly the declared one', () 
   const outDir = tmp('iso-tenant-out-')
   const good = { ...passingResult(), status: 'pass' }
   const missing = { ...good, evidence: { ...good.evidence, modules: good.evidence.modules.slice(1) } }
-  const extra = { ...good, evidence: { ...good.evidence, modules: [...good.evidence.modules, { ...good.evidence.modules[0], module: 'board' }] } }
+  const extra = { ...good, evidence: { ...good.evidence, modules: [...good.evidence.modules, { ...good.evidence.modules[0], module: 'finance' }] } }
   assert.throws(() => writeIsolationEvidence({ ...WRITE, result: missing, outDir }), /module/)
   assert.throws(() => writeIsolationEvidence({ ...WRITE, result: extra, outDir }), /module/)
   assert.deepEqual(existsSync(outDir) ? readdirSync(outDir) : [], [])

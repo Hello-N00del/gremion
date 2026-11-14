@@ -7,7 +7,8 @@
 // That handle is ONE tenant's (tenant, board) pool, t_<hex32>__board, opened by
 // @gremion/tenant-store behind the schema gate (./tenant-db.ts, wired once in
 // ../app.ts). Nothing here opens a connection, reads a url or migrates: the
-// database is created and migrated only by enableModule (TASK-021, B21).
+// database is created and migrated outside the leaf: by enableModule while module.json declared a runtime.database
+// (TASK-021, B21), now by the test environment that runs the leaf (see README.md, Migrations).
 
 import type { TenantStore } from '@gremion/tenant-store'
 

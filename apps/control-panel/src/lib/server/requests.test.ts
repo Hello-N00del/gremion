@@ -28,6 +28,7 @@ describe('the panel deny set is the gate deny set (no second list that can drift
     const gate = [...block.matchAll(/^\s*([a-z_]+):/gm)].map((m) => m[1]!).sort()
     expect(gate.length).toBeGreaterThan(0)
     expect(Object.keys(DENY_REASONS).sort()).toEqual(gate)
+    expect(Object.keys(DENY_REASONS)).toEqual(['vault'])
   })
 })
 
@@ -36,7 +37,7 @@ describe('only the modules with isolation evidence can be ticked at creation', (
     const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../../../../../infra/host/bin/gremion-isolation'), 'utf8')
     const line = /^PILOT_MODULES="([^"]+)"/m.exec(src)?.[1] ?? ''
     const proven = line.split(/\s+/).filter(Boolean).sort()
-    expect(proven.length).toBe(6)
+    expect(proven.length).toBe(7)
     expect([...PROVEN_MODULES].sort()).toEqual(proven)
   })
   it('a module outside the set is listed but disabled with a reason, the gate deny reasons keep priority', async () => {
@@ -44,12 +45,12 @@ describe('only the modules with isolation evidence can be ticked at creation', (
     const sql = (async () => rows) as never
     const out = await listModuleChoices(sql)
     const by = Object.fromEntries(out.map((m) => [m.id, m.denied]))
+    expect(by.board).toBeNull()
     expect(by.calendar).toBeNull()
     expect(by.files).toBeNull()
     expect(by.votes).toBeNull()
     expect(by.elections).toMatch(/Isolationspr/)
     expect(by.handover).toMatch(/Isolationspr/)
-    expect(by.board).toBe(DENY_REASONS.board)
     expect(by.vault).toBe(DENY_REASONS.vault)
     expect(out).toHaveLength(rows.length)
   })
@@ -60,8 +61,8 @@ describe('validateNewCustomer', () => {
     expect(validateNewCustomer(GOOD)).toEqual({})
     expect(validateNewCustomer({ ...GOOD, enable: [], dpia: {} })).toEqual({})
   })
-  it('board and vault are refused BY NAME with their reason', () => {
-    expect(validateNewCustomer({ ...GOOD, enable: ['board'] }).enable).toMatch(/board/)
+  it('vault is refused BY NAME with its reason; board is no longer refused', () => {
+    expect(validateNewCustomer({ ...GOOD, enable: ['board'], dpia: { board: { requiresDpia: false, documentRef: 'TOM-4' } } }).enable).toBeUndefined()
     expect(validateNewCustomer({ ...GOOD, enable: ['calendar', 'vault'] }).enable).toMatch(/vault/)
   })
   it('a ticked module without a document reference is a dpia field error (panel-level)', () => {

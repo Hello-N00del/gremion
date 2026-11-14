@@ -8,7 +8,8 @@
 // from ONE createTenantStore() as openTenantDb(tenant.id, 'board'), resolved
 // from GREMION_BOARD_PG_URL (the module server; the path is replaced by
 // t_<hex32>__board), behind ONE schemaGate over this module's migrations. The
-// leaf never creates or migrates a database: enableModule does (B21).
+// leaf never creates or migrates a database. enableModule did (B21) until module.json dropped runtime.database
+// (board wave, 2026-11-11): a test environment running this leaf now creates and migrates the tenant database itself.
 
 import type http from 'node:http'
 import path from 'node:path'

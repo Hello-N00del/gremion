@@ -1,4 +1,4 @@
-<!-- i18n-sync: source=modules.md sha256=8e29fda627455160e50a1a740e0c02e6e2579a2802f61b79bd310311e5a65392 -->
+<!-- i18n-sync: source=modules.md sha256=f06258029b60350e3fd51e68af854bc2d515cab7bfd0618fb0dae99093bb3a69 -->
 [English](./modules.md) | **Deutsch**
 
 # Unterstützte Module
@@ -37,7 +37,7 @@ bekommt und was nicht behauptet wird, steht in
 
 | Modul | Zweck | Status | Benötigte externe Dienste | README |
 |---|---|---|---|---|
-| `board` | Aufgabenboard (Stacks und Karten) je Organisationseinheit; Aktionspunkte aus Protokollen lassen sich in Karten umwandeln. | unterstützt | außer dem Kernel nichts; ein eigener PostgreSQL-Server (Compose-Profil `board`). Ein Pilot-Host betreibt das Board im Prozess auf den Kernel-Tabellen und startet diesen Server nicht ([pilot/module-defaults.md](./pilot/module-defaults.md)) | [modules/board/README.de.md](../modules/board/README.de.md) |
+| `board` | Aufgabenboard (Stacks und Karten) je Organisationseinheit; Aktionspunkte aus Protokollen lassen sich in Karten umwandeln. | unterstützt | außer dem Kernel nichts; ein eigener PostgreSQL-Server (Compose-Profil `board`) nur im Service-Modus (`BOARD_BACKEND=service`, Testumgebung), im Standardmodus im Prozess keiner. Ein Pilot-Host betreibt das Board im Prozess auf den Kernel-Tabellen und startet diesen Server nicht ([pilot/module-defaults.md](./pilot/module-defaults.md)) | [modules/board/README.de.md](../modules/board/README.de.md) |
 | `calendar` | Termine, Terminarten, Wiederholungen und Kalendereinstellungen der Gremien; überträgt Termine an CalDAV und leitet Änderungsereignisse über NATS weiter. | unterstützt | Nextcloud (CalDAV), NATS, ein eigener PostgreSQL-Server (Profil `calendar`) | [modules/calendar/README.de.md](../modules/calendar/README.de.md) |
 | `content` | Content-Engine: Beiträge mit den Kanälen E-Mail, Website (Portal) und Instagram, Mailinglisten, zeitgesteuerte Veröffentlichung. | unterstützt | NATS, SMTP über den Kernel, Instagram Graph API (optionaler Kanal), ein eigener PostgreSQL-Server (Profil `content`) | [modules/content/README.de.md](../modules/content/README.de.md) |
 | `elections` | Optionale Gremienwahlen über Helios, mit einem dauerhaften Hinweis, dass das Modul keine satzungsgemäße Wahl ersetzt. Nur App-Hälfte; kein Leaf-Service. In diesem Tree zurückgehalten: Die App-Konfiguration hält es ausgeschaltet („Ein Modul ein- oder ausschalten“ unten). | unterstützt | Helios (Wahlserver) | [modules/elections/README.de.md](../modules/elections/README.de.md) |

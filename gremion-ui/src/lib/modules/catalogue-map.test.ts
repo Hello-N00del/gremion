@@ -103,6 +103,14 @@ describe('manifestIdOf / catalogueIdOf', () => {
     }
   })
 
+  it('board is held back from the council switch by a held-back reason, not by the deny list', () => {
+    expect(DENIED_BY_NAME.has('board')).toBe(false)
+    expect([...DENIED_BY_NAME]).toEqual(['vault'])
+    expect(SWITCHABLE_CATALOGUE_IDS.has('board')).toBe(false)
+    expect(HELD_BACK_CATALOGUE_IDS.board).toBeDefined()
+    expect(HELD_BACK_CATALOGUE_IDS.board).not.toMatch(/denied by name|not tenant-isolated/)
+  })
+
   it('every held-back id carries a reason', () => {
     for (const [id, reason] of Object.entries(HELD_BACK_CATALOGUE_IDS)) {
       expect(reason.length, id).toBeGreaterThan(20)
