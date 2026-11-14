@@ -131,7 +131,9 @@ dev_pem() {  # <name> -> ${WS}/<name>.pem, the leaf certificate out of the bundl
     run openssl x509 -in "${WS}/alices-laptop.pem" -noout -text
     [[ "$output" == *"CA:FALSE"* ]]
     [[ "$output" == *"TLS Web Client Authentication"* ]]
-    [[ "$output" == *"CN = alices-laptop"* ]]
+    # openssl prints "CN = name" or "CN=name" depending on its version
+    local cn_re='CN ?= ?alices-laptop'
+    [[ "$output" =~ $cn_re ]]
     [[ "$output" == *"Digital Signature"* ]]
     # 90 days: still valid at 89, gone by 91
     run openssl x509 -in "${WS}/alices-laptop.pem" -noout -checkend $(( 89 * 86400 ))
