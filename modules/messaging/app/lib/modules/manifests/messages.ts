@@ -16,6 +16,8 @@ import type { ModuleManifest } from '../types'
 // The MESSAGES_BACKEND inprocess->service cutover is an independent env flag, orthogonal to this.
 export const messagesManifest: ModuleManifest = {
   id: 'messages',
+  // Display name: the Systemstatus catalog reads it (never the raw id).
+  status: { label: 'Nachrichten', note: 'Chat und Gremienräume.' },
   order: 90,
   toggleable: true,
   pages: [{ segment: 'messages', minRole: Role.Member }],

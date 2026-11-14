@@ -4,7 +4,7 @@
   import Icon from '$lib/components/ui/Icon.svelte'
   import { themeMode } from '$lib/stores/theme'
   import { resolveBrand, type Brand } from '$lib/brand'
-  import { termFor } from '$lib/terms'
+  import { crumbsFor, type CrumbOverrides } from './crumbs'
   import { INSTANCE_STATE_META, instanceReady, type InstanceState } from '$lib/instance-status'
   import CommandPalette from '$lib/components/CommandPalette.svelte'
   import type { NavItem } from './nav-schema'
@@ -55,49 +55,10 @@
     return () => window.removeEventListener('keydown', onGlobalKeydown)
   })
 
-  const CRUMB_LABELS: Record<string, string> = {
-    calendar: 'Kalender',
-    files: 'Dokumente',
-    finance: 'Finanzen',
-    votes: 'Abstimmungen',
-    elections: 'Wahlen',
-    polls: 'Umfragen',
-    members: 'Mitglieder',
-    committees: 'Gremien',
-    messages: 'Nachrichten',
-    settings: 'Einstellungen',
-    portal: 'Portal-Verwaltung',
-    news: 'Neuigkeiten',
-    users: 'Nutzer',
-    editor: 'Editor',
-    protokolle: 'Protokolle',
-    beschluesse: 'Beschlüsse',
-    new: 'Neu',
-    // Finance sub-pages
-    budget: 'Haushaltsplan',
-    projects: 'Projekte',
-    expenses: 'Ausgaben',
-    bookings: 'Buchungen',
-    'bank-accounts': 'Konten',
-    approvals: 'Freigaben',
-    'sub-organisations': 'Suborganisationen',
-    // Settings sub-pages
-    general: 'Allgemein',
-    email: 'E-Mail',
-    services: 'Dienste',
-    legal: 'Rechtliches',
-    backups: 'Sicherungen',
-    retention: 'Löschfristen',
-    compliance: 'Datenschutz',
-    accessibility: 'Barrierefreiheit',
-    danger: 'Gefahrenzone',
-  }
-
   // Pages can supply per-segment overrides (typically to substitute a UUID
   // segment with a friendly entity name) by returning `crumbOverrides` from
   // their server load. A `null`/empty value drops the segment entirely.
   // Example: `crumbOverrides: { [params.id]: committee.name, committees: null }`
-  type CrumbOverrides = Readonly<Record<string, string | null>>
   let overrides = $derived(
     (page.data as { crumbOverrides?: CrumbOverrides }).crumbOverrides ?? {}
   )
@@ -118,16 +79,16 @@
   let instanceMeta = $derived(INSTANCE_STATE_META[instanceState] ?? INSTANCE_STATE_META.ready)
   let showInstanceBadge = $derived(!instanceReady(instanceState))
 
+  // The section names: German folder names, the page's overrides, and never a
+  // raw id (see ./crumbs.ts).
   let crumbs = $derived(
-    page.url.pathname
-      .split('/')
-      .filter(Boolean)
-      .map((seg) => {
-        if (seg in overrides) return overrides[seg]
-        if (seg === 'committees') return termFor(terms, 'gremien', CRUMB_LABELS.committees)
-        return CRUMB_LABELS[seg] ?? seg
-      })
-      .filter((label): label is string => !!label)
+    crumbsFor({
+      pathname: page.url.pathname,
+      routeId: page.route?.id,
+      params: page.params,
+      overrides,
+      terms,
+    })
   )
 </script>
 

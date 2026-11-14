@@ -1,4 +1,5 @@
 <script lang="ts">
+  import PageTitle from '$lib/components/PageTitle.svelte'
   import { page } from '$app/stores'
 
   // The mailed link lands here. Mail-security scanners and prefetchers GET every
@@ -38,6 +39,8 @@
     }
   }
 </script>
+
+<PageTitle title="Newsletter abmelden" />
 
 <div class="flex min-h-screen items-center justify-center p-8">
   <div class="max-w-md w-full rounded-lg border p-8 text-center">

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import PageTitle from '$lib/components/PageTitle.svelte'
   import { goto } from '$app/navigation'
   import type { PageData } from './$types'
 
@@ -41,6 +42,8 @@
   }
 </script>
 
+<PageTitle title="Neuer Newsletter" />
+
 <div class="p-6 max-w-xl mx-auto">
   <h1 class="text-2xl font-semibold mb-6">Neuer Newsletter</h1>
 
@@ -65,6 +68,7 @@
         <label class="flex items-center gap-2 text-sm mb-1">
           <input
             type="checkbox"
+            aria-label={list.name}
             value={list.id}
             checked={selectedListIds.includes(list.id)}
             onchange={(e) => {

@@ -503,6 +503,7 @@
         <label class="toggle">
           <input
             type="checkbox"
+            aria-label={ch.label}
             checked={enabled[ch.id]}
             onchange={() => toggleChannel(ch.id)}
           />
@@ -555,6 +556,7 @@
                   <label class="pick">
                     <input
                       type="checkbox"
+                      aria-label={l.name}
                       checked={selectedRecipients.has(`list:${l.id}`)}
                       onchange={() => toggleRecipient(`list:${l.id}`)}
                     />
@@ -574,6 +576,7 @@
                   <label class="pick">
                     <input
                       type="checkbox"
+                      aria-label={groupLabel(g)}
                       checked={selectedRecipients.has(`group:${g.id}`)}
                       onchange={() => toggleRecipient(`group:${g.id}`)}
                     />

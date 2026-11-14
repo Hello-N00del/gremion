@@ -1,4 +1,5 @@
 <script lang="ts">
+  import PageTitle from '$lib/components/PageTitle.svelte'
   import type { PageData } from './$types'
   import Pill from '$lib/components/pills/Pill.svelte'
 
@@ -15,6 +16,8 @@
     election: 'Wahl',
   }
 </script>
+
+<PageTitle title={`Beschlüsse – ${data.committee.name}`} />
 
 <div class="space-y-4">
   <div class="flex items-center justify-between">

@@ -17,6 +17,8 @@ import type { NavItem } from '$lib/components/layout/nav-schema'
 // via the same governance org-unit membership the board uses, at Role.Member.
 export const vaultManifest: ModuleManifest = {
   id: 'vault',
+  // Display name: the Systemstatus catalog reads it (never the raw id).
+  status: { label: 'Tresor', note: 'Gemeinsame Zugangsdaten je Organisationseinheit.' },
   // 115: between handover (110) and vaultwarden (120) — three modules landed the
   // same day; distinct orders keep the codegen sort deterministic.
   order: 115,

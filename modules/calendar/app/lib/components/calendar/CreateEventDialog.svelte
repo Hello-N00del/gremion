@@ -222,6 +222,7 @@
             <label class="flex items-center gap-1 text-sm">
               <input
                 type="checkbox"
+                aria-label={c.name}
                 checked={committeeIds.includes(c.id)}
                 onchange={() => toggleCommittee(c.id)}
               />

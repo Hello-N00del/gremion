@@ -48,6 +48,14 @@ describe('Systemstatus module catalog', () => {
     }
   })
 
+  it('shows no module by its raw id: every registered manifest declares a German display name', () => {
+    // The page mixed names (Kalender, Wahlen) with ids (content, newsletter, files, messages, board)
+    // because five manifests declared no status.label and the catalog fell back to the id.
+    const unnamed = MODULE_MANIFESTS.filter((m) => !m.status?.label || m.status.label === m.id).map((m) => m.id)
+    expect(unnamed, 'These manifests need status.label (a German display name).').toEqual([])
+    for (const m of [...PLUGGABLE_MODULES, ...CORE_MODULES]) expect(m.label, m.id).not.toBe(m.id)
+  })
+
   it('keeps CORE_MODULE_LABELS in step with CORE_MODULES', () => {
     expect([...CORE_MODULE_LABELS]).toEqual(CORE_MODULES.map((m) => m.label))
   })

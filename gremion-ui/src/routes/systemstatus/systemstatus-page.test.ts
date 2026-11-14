@@ -90,4 +90,13 @@ describe('systemstatus page (E3)', () => {
     expect(container.textContent).not.toMatch(/Alle geprüften Dienste sind erreichbar/)
     expect(container.textContent).toMatch(/Kein Mandant/)
   })
+
+  it('names every module by its German display name, never by its raw id', () => {
+    const { container } = render(Page, { props: { data: data(ALL_OK) } })
+    const names = Array.from(container.querySelectorAll('.mod-card .mc-name')).map((e) => e.textContent?.trim())
+    for (const label of ['Inhalte', 'Newsletter', 'Dateien', 'Nachrichten', 'Aufgaben', 'Kalender']) {
+      expect(names, label).toContain(label)
+    }
+    for (const id of ['content', 'newsletter', 'files', 'messages', 'board']) expect(names, id).not.toContain(id)
+  })
 })
