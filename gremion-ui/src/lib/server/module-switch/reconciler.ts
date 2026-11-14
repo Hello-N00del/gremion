@@ -277,6 +277,12 @@ async function alignOnce(tenant: TenantContext, d: ReconcilerDeps, council: Coun
         if (platformOn) turningOn.set(manifestId, catalogueId)
       }
     }
+    // Publish what the platform holds off NOW, before any hook, write or migration that can still fail: the
+    // hold is a fact read from the platform, and an alignment that is blocked (another module's failing hook,
+    // a failed write or migration catch-up) must not leave the direct settings writes free to turn the board
+    // back on until it completes. Only holds are published here; a release waits for the completed alignment
+    // below, because the module coming back on may still owe its pre-apply work.
+    for (const [manifestId, on] of Object.entries(seen)) if (!on) rememberPlatformHeld(tenant.id, manifestId, true)
     // A module coming back on through alignment must pass the same pre-apply work as an applied enable
     // (the Art. 17 replay of a Karenz restore): a platform enablement that reached the platform before a
     // restart, with apply() never having run, must not switch the module on over unreplayed erasures. A
