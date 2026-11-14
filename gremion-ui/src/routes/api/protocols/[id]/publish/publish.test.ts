@@ -525,19 +525,51 @@ describe('POST /api/protocols/[id]/publish — body_html sanitization', () => {
   })
 
   it('hands the numbering and the adoption record the resolutions as the transaction sees them, not the early read', async () => {
-    // The early read says withdrawn; by the time the transaction runs another admin
-    // took the withdrawal back, so the row is an untallied binding one again.
-    const withdrawn = { ...untallied, result: 'withdrawn' }
-    const unwithdrawn = { ...untallied }
+    // The early read has one voted resolution; by the time the transaction runs another
+    // admin added a second one, which must be numbered and adopted too.
+    const added = { ...countedPassed, id: 'r3' }
     mockListResolutions.mockReset()
-    mockListResolutions.mockResolvedValueOnce([withdrawn]).mockResolvedValueOnce([unwithdrawn])
+    mockListResolutions.mockResolvedValueOnce([countedPassed]).mockResolvedValueOnce([countedPassed, added])
 
     expect((await POST(makeEvent())).status).toBe(200)
 
     expect(mockListResolutions).toHaveBeenCalledTimes(2)
     expect(mockListResolutions.mock.calls[1][1]).toEqual({ tx: { __tx: true } })
-    expect(mockRecordResolutionAdoptions.mock.calls[0][1]).toEqual([unwithdrawn])
-    expect(mockAssignGlobalNrs.mock.calls[0][2]).toEqual(['r2'])
+    expect(mockRecordResolutionAdoptions.mock.calls[0][1]).toEqual([countedPassed, added])
+    expect(mockAssignGlobalNrs.mock.calls[0][2]).toEqual(['r1', 'r3'])
+  })
+
+  it('refuses (422) and flips nothing when the transaction re-read holds an untallied row the early read did not', async () => {
+    // The early read says withdrawn; by the time the transaction runs another admin
+    // took the withdrawal back, so the row is an untallied binding one again.
+    const withdrawn = { ...untallied, result: 'withdrawn' }
+    mockListResolutions.mockReset()
+    mockListResolutions.mockResolvedValueOnce([withdrawn]).mockResolvedValueOnce([untallied])
+
+    await expect(POST(makeEvent())).rejects.toMatchObject({
+      status: 422,
+      body: { code: 'untallied_resolution' },
+    })
+    expect(mockAssignGlobalNrs).not.toHaveBeenCalled()
+    expect(mockRecordResolutionAdoptions).not.toHaveBeenCalled()
+    expect(mockSetProtocolStatus).not.toHaveBeenCalled()
+  })
+
+  it('refuses (422) and adopts nothing when the transaction re-read gains a binding row and the meeting is not quorate', async () => {
+    // Early read: no binding resolution, so the quorum gate is skipped. Before the
+    // transaction runs a voted resolution is added: the gate must run on THAT list.
+    mockListResolutions.mockReset()
+    mockListResolutions.mockResolvedValueOnce([]).mockResolvedValueOnce([countedPassed])
+    mockGetQuorumContext.mockResolvedValue({ eligibleVotingCount: 3, presentVotingCount: 1, quorate: false })
+
+    await expect(POST(makeEvent())).rejects.toMatchObject({
+      status: 422,
+      body: { message: expect.stringMatching(/Nicht beschlussfähig/) },
+    })
+    expect(mockGetQuorumContext).toHaveBeenCalled()
+    expect(mockAssignGlobalNrs).not.toHaveBeenCalled()
+    expect(mockRecordResolutionAdoptions).not.toHaveBeenCalled()
+    expect(mockSetProtocolStatus).not.toHaveBeenCalled()
   })
 
   // F1: no ProtocolDocumentPort (files off) is no longer a 503. With no in-app

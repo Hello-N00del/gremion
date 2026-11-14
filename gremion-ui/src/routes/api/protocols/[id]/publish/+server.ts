@@ -5,6 +5,7 @@ import type { SessionUser } from '$lib/auth'
 import {
   getProtocol, setProtocolStatus, updateProtocol,
   listResolutions, assignGlobalNrs, recordResolutionAdoptions,
+  type ProtocolResolution,
 } from '$lib/server/protocols/protocol-db'
 import { requireUuidParams } from '$lib/server/protocols/route-ids'
 import { convertOdtToHtml, convertOdtToPdf } from '$lib/server/documents/collabora-convert'
@@ -27,6 +28,32 @@ function requireAuth(event: RequestEvent): SessionUser {
   return user
 }
 
+/**
+ * The adoption gates of a publish, on one list of resolutions: nothing nobody voted
+ * on, and a binding resolution only when the meeting was beschlussfähig.
+ *
+ * Publish IS adoption, and a counted resolution nobody voted on (0/0/0, stored with
+ * the rule engine's placeholder "rejected") is not a decision: it must never be
+ * stamped and written to the audit chain as one. Refused first, since the way out
+ * (enter the count, withdraw or delete) also decides whether a quorum is needed at
+ * all. A consent resolution with an empty tally is adopted (silence adopts) and
+ * passes. A withdrawn resolution is not a vote and needs no quorum. Throws 422.
+ */
+async function assertAdoptable(protocolId: string, resolutions: readonly ProtocolResolution[]): Promise<void> {
+  const untallied = untalliedResolutionsMessage(resolutions)
+  if (untallied) throw error(422, { message: untallied, code: UNTALLIED_RESOLUTION_CODE })
+
+  if (resolutions.some((r) => r.result !== 'withdrawn')) {
+    const quorum = await getQuorumContext(protocolId)
+    if (!quorum.quorate) {
+      throw error(
+        422,
+        `Nicht beschlussfähig: ${quorum.presentVotingCount}/${quorum.eligibleVotingCount} stimmberechtigte Mitglieder anwesend — ein Protokoll mit bindenden Beschlüssen kann nicht veröffentlicht werden.`,
+      )
+    }
+  }
+}
+
 export async function POST(event: RequestEvent) {
   const user = requireAuth(event)
   if (!hasRole(user.roles, Role.CouncilAdmin)) throw error(403, 'Nur Admins können veröffentlichen')
@@ -42,27 +69,9 @@ export async function POST(event: RequestEvent) {
   // (non-withdrawn) resolution may only be published if the meeting was
   // beschlussfähig; a withdrawn resolution is not a vote and needs no quorum.
   const resolutions = await listResolutions(protocol.id)
-
-  // Publish IS adoption, and a counted resolution nobody voted on (0/0/0, stored
-  // with the rule engine's placeholder "rejected") is not a decision: it must
-  // never be stamped and written to the audit chain as one. Refused first, since
-  // the way out (enter the count, withdraw or delete) also decides whether a
-  // quorum is needed at all. A consent resolution with an empty tally is adopted
-  // (silence adopts) and passes. The submit route applies the same check while
-  // the resolutions are still editable; the adoption record repeats it on the
-  // transaction (recordResolutionAdoptions).
-  const untallied = untalliedResolutionsMessage(resolutions)
-  if (untallied) throw error(422, { message: untallied, code: UNTALLIED_RESOLUTION_CODE })
-
-  if (resolutions.some((r) => r.result !== 'withdrawn')) {
-    const quorum = await getQuorumContext(protocol.id)
-    if (!quorum.quorate) {
-      throw error(
-        422,
-        `Nicht beschlussfähig: ${quorum.presentVotingCount}/${quorum.eligibleVotingCount} stimmberechtigte Mitglieder anwesend — ein Protokoll mit bindenden Beschlüssen kann nicht veröffentlicht werden.`,
-      )
-    }
-  }
+  // Fail fast, before any file move: see assertAdoptable. The same gate runs again
+  // on the resolutions as the publish transaction reads them (below).
+  await assertAdoptable(protocol.id, resolutions)
 
   // F1 (operator ruling Q1, 2026-10-21) + R33b: the protocol body lives IN-APP
   // (protocols.body_html) and publish never needs Nextcloud when there is no
@@ -131,10 +140,13 @@ export async function POST(event: RequestEvent) {
         { bodyHtml, nextcloudPublishedPath: publishedDir, pdfNextcloudPath },
         { tx, allowPublished: true },
       )
-      // Re-read the resolutions on the transaction: the list read at the top is from
-      // before the file conversion, and a row edited, un-withdrawn or added in the
-      // meantime would otherwise miss the numbering and the untallied check below.
+      // Re-read the resolutions on the transaction, after updateProtocol took the
+      // protocol row: the list read at the top is from before the file conversion, and
+      // a row edited, un-withdrawn or added in the meantime must pass the SAME gates
+      // (untallied, quorum) as the early read before it is numbered and adopted. A 422
+      // here rolls the transaction back.
       const current = await listResolutions(protocol.id, { tx })
+      await assertAdoptable(protocol.id, current)
       await assignGlobalNrs(protocol.committee_id, year, current.map((r) => r.id), tx)
       // INV-5 + INV-1 (#320, ported gremion#22 G2): publish IS adoption. Stamp
       // decided_at on each binding resolution and append a tamper-evident
