@@ -14,6 +14,9 @@ vi.mock('$app/stores', async () => {
   }
 })
 
+// The committee comes from the parent layout's load; <PageTitle> reads the brand from $app/state.
+vi.mock('$app/state', () => ({ page: { data: {} } }))
+
 import Page from './+page.svelte'
 import { untalliedResolutionsMessage, UNTALLIED_RESOLUTION_CODE } from '$lib/governance/resolution-vote-state'
 
@@ -35,6 +38,7 @@ const pageData = (status: 'draft' | 'submitted') => ({
   actionItems: [],
   wopiToken: null,
   pendingApprovals: [],
+  committee: { id: 'c1', name: 'Finanzausschuss' },
   committeeId: 'c1',
 })
 

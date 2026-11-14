@@ -55,13 +55,13 @@ describe('Beschlussregister page: a resolution nobody voted on', () => {
   const rowText = (text: string) => screen.getByText(text).closest('tr')!.textContent ?? ''
 
   it('shows "keine Abstimmung" instead of "Abgelehnt"', () => {
-    render(Page, { props: { data: { committeeId: 'c1', entries: [entry({ untallied: true })] } } as never })
+    render(Page, { props: { data: { ...DATA, entries: [entry({ untallied: true })] } } as never })
     expect(rowText('Antrag ohne Abstimmung')).toMatch(/keine Abstimmung/)
     expect(rowText('Antrag ohne Abstimmung')).not.toMatch(/Abgelehnt|Angenommen/)
   })
 
   it('still shows a counted rejection as "Abgelehnt"', () => {
-    render(Page, { props: { data: { committeeId: 'c1', entries: [entry({ text: 'Abgelehnter Antrag' })] } } as never })
+    render(Page, { props: { data: { ...DATA, entries: [entry({ text: 'Abgelehnter Antrag' })] } } as never })
     expect(rowText('Abgelehnter Antrag')).toMatch(/Abgelehnt/)
     expect(rowText('Abgelehnter Antrag')).not.toMatch(/keine Abstimmung/)
   })
