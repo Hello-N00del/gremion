@@ -13,6 +13,7 @@
   import { deriveHue, deriveAbbr } from '$lib/governance/committee-color'
   import { toast } from 'svelte-sonner'
   import { senderInitials, senderLabel } from '$lib/components/messaging/sender-label'
+  import { groupByDay } from '$lib/components/messaging/day-groups'
 
   let rooms = $derived(Object.values($roomStore))
   // FLOW-MSG-001 (TASK-009 lane B, row 15): archived rooms move to their own
@@ -22,6 +23,14 @@
   let activeRoom = $derived(
     $selectedRoomId ? $roomStore[$selectedRoomId] : null
   )
+
+  // The conversation as runs of one calendar day each, every run under a separator that names its
+  // own day. `clock` only matters for the words "Heute" / "Gestern": it is re-read once a minute so
+  // that a page left open over midnight does not keep calling yesterday's messages "Heute".
+  const CLOCK_TICK_MS = 60_000
+  let clock = $state(Date.now())
+  let clockTimer: ReturnType<typeof setInterval> | null = null
+  let dayGroups = $derived(groupByDay(activeRoom?.messages ?? [], clock))
 
   let user = $derived($page.data.session?.user as SessionUser | undefined)
   let brand = $derived(resolveBrand($page.data.brand))
@@ -159,6 +168,7 @@
   }
 
   onMount(async () => {
+    clockTimer = setInterval(() => { clock = Date.now() }, CLOCK_TICK_MS)
     if (typeof window.matchMedia === 'function') {
       narrowQuery = window.matchMedia(NARROW_QUERY)
       narrow = narrowQuery.matches
@@ -214,6 +224,7 @@
   onDestroy(() => {
     narrowQuery?.removeEventListener('change', onNarrowChange)
     eventSource?.close()
+    if (clockTimer !== null) clearInterval(clockTimer)
   })
 
   // Open a room: select it, then mark it read so its unread count clears both
@@ -655,21 +666,23 @@
       </div>
 
       <div class="chat-body">
-        {#if activeRoom.messages.length > 0}
-          <div class="divider-label">Heute · {new Date().toLocaleDateString('de-DE')}</div>
-        {/if}
-        {#each activeRoom.messages as msg (msg.eventId)}
-          {@const who = senderLabel(msg.sender, msg.senderDisplayName)}
-          <div class="msg">
-            <div class="mav">{senderInitials(who)}</div>
-            <div class="mbody">
-              <div class="mhead">
-                <span class="mname">{who}</span>
-                {#if msg.ts}<span class="mtime mono">{fmtRoomTs(msg.ts)}</span>{/if}
+        {#each dayGroups as group (group.messages[0]?.eventId)}
+          {#if group.label}
+            <div class="divider-label">{group.label}</div>
+          {/if}
+          {#each group.messages as msg (msg.eventId)}
+            {@const who = senderLabel(msg.sender, msg.senderDisplayName)}
+            <div class="msg">
+              <div class="mav">{senderInitials(who)}</div>
+              <div class="mbody">
+                <div class="mhead">
+                  <span class="mname">{who}</span>
+                  {#if msg.ts}<span class="mtime mono">{fmtRoomTs(msg.ts)}</span>{/if}
+                </div>
+                <div class="mtext">{msg.body}</div>
               </div>
-              <div class="mtext">{msg.body}</div>
             </div>
-          </div>
+          {/each}
         {:else}
           <div class="chat-empty mono">Noch keine Nachrichten in diesem Raum.</div>
         {/each}
