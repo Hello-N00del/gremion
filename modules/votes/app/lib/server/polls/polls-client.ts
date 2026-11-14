@@ -39,7 +39,9 @@ export interface NcPoll {
     showResults?: string
   }
   status: {
-    expired: boolean      // API field (not isExpired)
+    /** Closed. Always a real boolean once a poll has left this client (see `withClosedFlag`):
+     *  Nextcloud reports the flag as `isExpired` (Polls 8+) or `expired` (older), and may report neither. */
+    expired: boolean
     countOptions: number
   }
   currentUserStatus: {
@@ -70,6 +72,17 @@ function requestedSettings(
     ...(dto.description !== undefined ? { description: dto.description } : {}),
     ...(dto.expire !== undefined ? { expire: dto.expire } : {}),
   }
+}
+
+/** The closed flag of a poll as it leaves this client. Nextcloud Polls reports it as `status.isExpired`
+ *  (Polls 8+) or `status.expired` (older); reading only one name left every poll "running" forever.
+ *  Whatever the flag says, a deadline that has passed closes the poll (`configuration.expire` is unix
+ *  SECONDS; 0 = no deadline), so the list, the poll page and the vote guard agree. */
+export function withClosedFlag<T extends { configuration: { expire?: number }; status?: unknown }>(poll: T): T & { status: { expired: boolean } } {
+  const status = (poll.status ?? {}) as { expired?: unknown; isExpired?: unknown }
+  const expire = Number(poll.configuration?.expire ?? 0)
+  const passed = Number.isFinite(expire) && expire > 0 && expire * 1000 <= Date.now()
+  return { ...poll, status: { ...(poll.status as object), expired: status.isExpired === true || status.expired === true || passed } } as T & { status: { expired: boolean } }
 }
 
 function ncBase(): string {
@@ -133,7 +146,7 @@ export function createPollsClient(opts: { oidcBearer?: string; tenantId?: string
     async listPolls(): Promise<NcPoll[]> {
       const t = tenant()
       const { polls } = await ncFetch<{ polls: NcPoll[] }>('/polls')
-      return polls.flatMap((p) => scopePoll(p, t, legacy(), adminUser()) ?? [])
+      return polls.flatMap((p) => scopePoll(p, t, legacy(), adminUser()) ?? []).map(withClosedFlag)
     },
 
     /** The poll, only if it belongs to the calling tenant (else pollsStatus 404). */
@@ -147,7 +160,8 @@ export function createPollsClient(opts: { oidcBearer?: string; tenantId?: string
         if (e instanceof Error && /→\s*(403|404)\b/.test(e.message)) throw notFound()
         throw e
       }
-      return scopePoll(raw, t, legacy(), adminUser()) ?? Promise.reject(notFound())
+      const scoped = scopePoll(raw, t, legacy(), adminUser())
+      return scoped ? withClosedFlag(scoped) : Promise.reject(notFound())
     },
 
     async getPollWithOptions(id: number): Promise<NcPoll> {
@@ -230,7 +244,7 @@ export function createPollsClient(opts: { oidcBearer?: string; tenantId?: string
       // Return what Nextcloud stored; without an echo, overlay the applied
       // configuration so callers never see the stale POST defaults.
       const stored = configured ?? { ...poll, configuration: { ...poll.configuration, ...settings } }
-      return scopePoll(stored, tenant(), legacy(), adminUser()) ?? stored
+      return withClosedFlag(scopePoll(stored, tenant(), legacy(), adminUser()) ?? stored)
     },
 
     /** Change the deadline and / or the result visibility of one poll (Karenz: freeze and
@@ -242,7 +256,8 @@ export function createPollsClient(opts: { oidcBearer?: string; tenantId?: string
         method: 'PUT',
         body: JSON.stringify({ pollConfiguration: patch }),
       })
-      return (res?.poll ? scopePoll(res.poll, tenant(), legacy(), adminUser()) : null) ?? (await this.getPoll(id))
+      const scoped = res?.poll ? scopePoll(res.poll, tenant(), legacy(), adminUser()) : null
+      return scoped ? withClosedFlag(scoped) : await this.getPoll(id)
     },
 
     /** Delete one poll of the calling tenant (Karenz day 30). Another tenant's poll answers 404. */
@@ -259,10 +274,7 @@ export function createPollsClient(opts: { oidcBearer?: string; tenantId?: string
       if (!oidcBearer) throw new PollAccessError(401, 'acting user required')
       const poll = await this.getPollWithOptions(pollId)
       if (!(poll.options ?? []).some((o) => o.id === optionId)) throw notFound()
-      const expired =
-        poll.status?.expired === true ||
-        (poll.configuration.expire > 0 && poll.configuration.expire * 1000 <= Date.now())
-      if (expired) throw new PollAccessError(409, 'poll closed')
+      if (poll.status.expired) throw new PollAccessError(409, 'poll closed')
       if ((poll.currentUserStatus?.countVotes ?? 0) > 0) throw new PollAccessError(409, 'already voted')
       return ncFetch<unknown>(`/option/${optionId}/vote/yes`, { method: 'PUT' })
     },

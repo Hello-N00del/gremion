@@ -28,6 +28,7 @@ export interface NcPoll {
     anonymous: boolean
     expire: number
   }
+  /** Closed: always a real boolean once a poll has left this client (see `withClosedFlag`). */
   status: { expired: boolean; countOptions: number }
   currentUserStatus: { userRole: string; isLocked: boolean; countVotes: number }
   options?: NcPollOption[]
@@ -40,6 +41,17 @@ export interface CreatePollDto {
   anonymous: boolean
   description?: string
   expire?: number
+}
+
+/** The closed flag of a poll as it leaves this client. Nextcloud Polls reports it as `status.isExpired`
+ *  (Polls 8+) or `status.expired` (older); reading only one name left every poll "running" forever.
+ *  Whatever the flag says, a deadline that has passed closes the poll (`configuration.expire` is unix
+ *  SECONDS; 0 = no deadline). Same rule as the in-process client of the app. */
+export function withClosedFlag<T extends { configuration: { expire?: number }; status?: unknown }>(poll: T): T & { status: { expired: boolean } } {
+  const status = (poll.status ?? {}) as { expired?: unknown; isExpired?: unknown }
+  const expire = Number(poll.configuration?.expire ?? 0)
+  const passed = Number.isFinite(expire) && expire > 0 && expire * 1000 <= Date.now()
+  return { ...poll, status: { ...(poll.status as object), expired: status.isExpired === true || status.expired === true || passed } } as T & { status: { expired: boolean } }
 }
 
 function ncBase(): string {
@@ -81,13 +93,13 @@ export const NextcloudPollsClient = {
   async listPolls(tenantId: string): Promise<NcPoll[]> {
     assertTenantId(tenantId)
     const { polls } = await ncFetch<{ polls: NcPoll[] }>('/polls')
-    return polls.flatMap((p) => scopePoll(p, tenantId, process.env.VOTES_LEGACY_POLL_TENANT_ID, adminUser()) ?? [])
+    return polls.flatMap((p) => scopePoll(p, tenantId, process.env.VOTES_LEGACY_POLL_TENANT_ID, adminUser()) ?? []).map(withClosedFlag)
   },
 
   /** Create a poll bound to `tenantId` (the marker is written here, server-side). */
   async createPoll(tenantId: string, dto: CreatePollDto): Promise<NcPoll> {
     const created = await createBound(tagTitle(tenantId, dto.title), dto)
-    return scopePoll(created, tenantId, undefined, adminUser()) ?? created
+    return withClosedFlag(scopePoll(created, tenantId, undefined, adminUser()) ?? created)
   },
 }
 
