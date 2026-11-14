@@ -265,6 +265,13 @@ describe('enable-module / disable-module --actor-kind', () => {
       expect(disableCustomerModule).not.toHaveBeenCalled()
     })
 
+    it('the refusal line survives the executor credential filter, so the operator sees it in the request events', async () => {
+      vi.stubEnv('UI_MODULES_DB_PASSWORD', '')
+      const err = await run('board').catch((e: unknown) => e as Error)
+      // infra/host/bin/gremion-executor SECRET_LINE_RE: a line matching it is replaced by a "withheld" notice
+      expect(String((err as Error).message).toUpperCase()).not.toMatch(/(PASSWORD|SECRET|TOKEN)[ \t]*[:=]/)
+    })
+
     it('goes through when the requester role is wired, which is what lets the reconciler follow it', async () => {
       vi.stubEnv('UI_MODULES_DB_PASSWORD', 'set')
       await run('board')
