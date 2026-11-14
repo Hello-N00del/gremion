@@ -79,19 +79,81 @@
     }
   }
 
-  async function addResolution() {
-    // INV-5: pick the decision rule up front (default simple) and let the SERVER
-    // compute the result — the client never sends a free-hand `result`.
-    const res = await fetch(`/api/protocols/${data.protocol.id}/resolutions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: '', votesYes: 0, votesNo: 0, votesAbstain: 0, requiredMajority: 'simple' }),
-    })
-    if (res.ok) {
-      resolutions = [...resolutions, (await res.json()).resolution]
-    } else {
-      alert('Beschluss konnte nicht hinzugefügt werden.')
+  // "+ Beschluss hinzufügen" only opens an entry form (an unsaved draft row, no
+  // id). Nothing is stored until the admin saves it with its text; Abbrechen
+  // discards the draft, so no empty decision is ever left behind.
+  let newResolution = $state<ResolutionLike | null>(null)
+  let newResolutionError = $state<string | null>(null)
+
+  function addResolution() {
+    newResolutionError = null
+    newResolution = {
+      sequence_nr: resolutions.length + 1,
+      global_nr: null,
+      text: '',
+      votes_yes: 0,
+      votes_no: 0,
+      votes_abstain: 0,
+      result: 'rejected',
+      required_majority: 'simple',
     }
+  }
+
+  // True while the create request is on its way: it cannot be repeated (two
+  // POSTs would store two identical decisions) nor cancelled (it is stored
+  // regardless of what the form shows).
+  let creating = false
+
+  function cancelNewResolution() {
+    if (creating) return
+    newResolution = null
+    newResolutionError = null
+  }
+
+  // The server message of a refused write (SvelteKit serialises it as { message }).
+  async function refusalMessage(res: Response, fallback: string): Promise<string> {
+    try {
+      const parsed = JSON.parse(await res.text())
+      if (parsed && typeof parsed.message === 'string' && parsed.message) return parsed.message
+    } catch {
+      // non-JSON body — use the fallback
+    }
+    return fallback
+  }
+
+  async function createResolution(r: ResolutionLike): Promise<boolean> {
+    if (creating) return false
+    creating = true
+    newResolutionError = null
+    const failed = 'Beschluss konnte nicht hinzugefügt werden.'
+    try {
+      // INV-5: pick the decision rule up front (default simple) and let the SERVER
+      // compute the result — the client never sends a free-hand `result`. The
+      // form refuses a blank count, so the three numbers are stored as typed.
+      const res = await fetch(`/api/protocols/${data.protocol.id}/resolutions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: r.text,
+          votesYes: Number(r.votes_yes),
+          votesNo: Number(r.votes_no),
+          votesAbstain: Number(r.votes_abstain),
+          requiredMajority: r.required_majority,
+        }),
+      })
+      if (res.ok) {
+        resolutions = [...resolutions, (await res.json()).resolution]
+        newResolution = null
+        return true
+      }
+      newResolutionError = await refusalMessage(res, failed)
+    } catch {
+      // network failure: keep the form (and the typed text) so it can be retried
+      newResolutionError = failed
+    } finally {
+      creating = false
+    }
+    return false
   }
 
   async function saveResolution(r: ResolutionLike) {
@@ -108,7 +170,7 @@
       const saved = (await res.json()).resolution as ResolutionLike
       resolutions = resolutions.map((x) => (x.id === saved.id ? saved : x))
     } else {
-      alert('Beschluss konnte nicht gespeichert werden.')
+      alert(await refusalMessage(res, 'Beschluss konnte nicht gespeichert werden.'))
     }
   }
 
@@ -249,8 +311,21 @@
           onDelete={deleteResolution}
         />
       {/each}
+      {#if newResolution && isAdmin && isEditable}
+        <ResolutionRow
+          resolution={newResolution}
+          isAdmin={true}
+          startEditing
+          error={newResolutionError}
+          protocolId={data.protocol.id}
+          eligibleVotingCount={data.quorum.eligibleVotingCount}
+          onSave={createResolution}
+          onDelete={() => {}}
+          onCancel={cancelNewResolution}
+        />
+      {/if}
     </div>
-    {#if isAdmin && isEditable}
+    {#if isAdmin && isEditable && !newResolution}
       <Button variant="outline" size="sm" onclick={addResolution}>+ Beschluss hinzufügen</Button>
     {/if}
   </section>
