@@ -11,8 +11,12 @@ const DATE_ISO = /^(\d{4})-(\d{2})-(\d{2})$/
 const GERMAN_DATE_TIME = /^(\d{1,2})\.(\d{1,2})\.(\d{4}),?\s+(\d{1,2}):(\d{2})$/
 const GERMAN_DATE = /^(\d{1,2})\.(\d{1,2})\.(\d{4})$/
 
-/** A real calendar day: Date rolls 31.02. over into March, so compare it back. */
+/**
+ * A real calendar day: Date rolls 31.02. over into March, so compare it back. Years below 1000 are
+ * refused: the ISO value would lose its leading zeros ("999-01-01") and no term starts there.
+ */
 function isRealDay(year: number, month: number, day: number): boolean {
+  if (year < 1000) return false
   const d = new Date(year, month - 1, day)
   return d.getFullYear() === year && d.getMonth() === month - 1 && d.getDate() === day
 }

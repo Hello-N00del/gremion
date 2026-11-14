@@ -130,6 +130,20 @@ describe('Amt zuweisen: the term is entered and shown in German order', () => {
     expect(calls.filter((c) => c.method === 'POST')).toHaveLength(0)
   })
 
+  it('refuses an end year below 1000: a hint shows, the text stays and nothing is sent', async () => {
+    const dialog = await openDialog()
+    await fireEvent.change(within(dialog).getByLabelText('Mitglied'), { target: { value: 'u-ben' } })
+    const end = field(dialog, 'Amtszeit bis')
+    await type(end, '01.01.0999')
+    await fireEvent.blur(end)
+    expect(end.value).toBe('01.01.0999')
+    expect(end.getAttribute('aria-invalid')).toBe('true')
+    const confirm = within(dialog).getByRole('button', { name: 'Zuweisen' }) as HTMLButtonElement
+    expect(confirm.disabled).toBe(true)
+    await fireEvent.click(confirm)
+    expect(calls.filter((c) => c.method === 'POST')).toHaveLength(0)
+  })
+
   it('keeps the term order rule: an end on or before the start cannot be sent', async () => {
     const dialog = await openDialog()
     await fireEvent.change(within(dialog).getByLabelText('Mitglied'), { target: { value: 'u-ben' } })

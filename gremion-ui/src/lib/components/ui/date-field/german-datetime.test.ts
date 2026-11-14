@@ -26,6 +26,12 @@ describe('parseDateDe', () => {
     expect(parseDateDe('05.11.26')).toBeNull()
     expect(parseDateDe('')).toBeNull()
   })
+  it('refuses a year below 1000: the ISO value would not have four digits', () => {
+    expect(parseDateDe('01.01.0999')).toBeNull()
+    expect(parseDateDe('01.01.0099')).toBeNull()
+    expect(parseDateDe('01.01.0000')).toBeNull()
+    expect(parseDateDe('01.01.1000')).toBe('1000-01-01')
+  })
   it('round-trips with formatDateDe', () => {
     expect(parseDateDe(formatDateDe('2028-02-29'))).toBe('2028-02-29')
   })
@@ -53,6 +59,11 @@ describe('parseDateTimeDe', () => {
     expect(parseDateTimeDe('01.01.2026 24:00')).toBeNull()
     expect(parseDateTimeDe('01.01.2026 10:60')).toBeNull()
     expect(parseDateTimeDe('05.11.2026')).toBeNull()
+  })
+  it('refuses a year below 1000: the ISO value would not have four digits', () => {
+    expect(parseDateTimeDe('01.01.0999 10:00')).toBeNull()
+    expect(parseDateTimeDe('01.01.0099 10:00')).toBeNull()
+    expect(parseDateTimeDe('01.01.1000 10:00')).toBe('1000-01-01T10:00')
   })
   it('round-trips with formatLocalInputDe', () => {
     expect(parseDateTimeDe(formatLocalInputDe('2031-12-24T18:45'))).toBe('2031-12-24T18:45')
