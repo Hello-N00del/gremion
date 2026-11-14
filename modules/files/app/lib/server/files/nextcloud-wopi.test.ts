@@ -147,6 +147,55 @@ describe('NextcloudClient.getDirectEditUrl', () => {
     expect(headers['X-Nextcloud-User']).toBe('charlie')
   })
 
+  // The name Collabora shows is the Nextcloud user the richdocuments session is created for. It must be the
+  // person at the keyboard, never one shared service user.
+  describe('editing identity', () => {
+    const ok = () => ({ ok: true, json: async () => ({ ocs: { data: { url: 'http://nextcloud/editor' } } }) })
+    const headersOfCall = (n: number) =>
+      (mockFetch.mock.calls[n][1] as RequestInit & { headers: Record<string, string> }).headers
+
+    it('creates the session with each user\'s own bearer, never the admin credentials', async () => {
+      mockFetch.mockResolvedValueOnce(ok()).mockResolvedValueOnce(ok())
+      const { createNextcloudClient } = await import('./nextcloud-client')
+      await createNextcloudClient({ webdavBearer: 'bearer-alice' }).getDirectEditUrl(42, 'alice')
+      await createNextcloudClient({ webdavBearer: 'bearer-bob' }).getDirectEditUrl(42, 'bob')
+
+      expect(headersOfCall(0)['Authorization']).toBe('Bearer bearer-alice')
+      expect(headersOfCall(1)['Authorization']).toBe('Bearer bearer-bob')
+      for (const n of [0, 1]) {
+        expect(headersOfCall(n)['Authorization']).not.toMatch(/^Basic /)
+        expect(headersOfCall(n)['X-Nextcloud-User']).toBeUndefined()
+      }
+    })
+
+    it('without a bearer, impersonates the requesting user: two users, two X-Nextcloud-User values', async () => {
+      mockFetch.mockResolvedValueOnce(ok()).mockResolvedValueOnce(ok())
+      const { createNextcloudClient } = await import('./nextcloud-client')
+      const nc = createNextcloudClient()
+      await nc.getDirectEditUrl(42, 'alice')
+      await nc.getDirectEditUrl(42, 'bob')
+
+      expect(headersOfCall(0)['X-Nextcloud-User']).toBe('alice')
+      expect(headersOfCall(1)['X-Nextcloud-User']).toBe('bob')
+    })
+
+    it('resolves the file id as the same user that then creates the session', async () => {
+      const propfind = {
+        ok: true,
+        text: async () =>
+          '<?xml version="1.0"?><d:multistatus xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns"><d:response><d:propstat><d:prop><oc:fileid>42</oc:fileid></d:prop></d:propstat></d:response></d:multistatus>'
+      }
+      mockFetch.mockResolvedValueOnce(propfind).mockResolvedValueOnce(ok())
+      const { createNextcloudClient } = await import('./nextcloud-client')
+      const nc = createNextcloudClient({ webdavBearer: 'bearer-carol' })
+      const fileId = await nc.getFileId('/remote.php/dav/files/carol/doc.odt', 'carol')
+      await nc.getDirectEditUrl(fileId, 'carol')
+
+      expect(headersOfCall(0)['Authorization']).toBe('Bearer bearer-carol')
+      expect(headersOfCall(1)['Authorization']).toBe('Bearer bearer-carol')
+    })
+  })
+
   it('throws when url is missing from the response', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
