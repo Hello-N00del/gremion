@@ -13,7 +13,7 @@ import { getTenant } from '$lib/server/tenant/context'
 import { getContentBackend } from '../backend'
 import { injectUnsubscribeFooter } from '../email-footer'
 import { resolvePostRecipients } from '../recipients'
-import { isOutcomeUnknown } from './smtp-outcome'
+import { isLoginRefused, isOutcomeUnknown } from './smtp-outcome'
 import type { Post, PostMedia, PostChannel } from '../types'
 import type { ChannelRenderer, EmailArtifact, EmailPreview, PublishResult, RenderedArtifact } from './types'
 
@@ -40,6 +40,16 @@ function unsubscribeOrigin(): string | null {
 		return null
 	}
 }
+
+/** `detail` of a result where the mail server refused the login and the pass was stopped. */
+const LOGIN_REFUSED_DETAIL = 'SMTP-Anmeldung abgelehnt'
+/** Shown with it. Names no address and carries no server text: the answer to a refused login can quote the login. */
+const LOGIN_REFUSED_WARNING =
+	'Der Mailserver hat die Anmeldung abgelehnt. Der Versand wurde nach dem ersten Versuch abgebrochen, ' +
+	'weil jeder weitere Versuch dieselbe Anmeldung wiederholt und der Mailserver das Postfach nach mehreren ' +
+	'Fehlversuchen sperren kann. Bitte die hinterlegten SMTP-Zugangsdaten prüfen lassen und danach erneut veröffentlichen.'
+/** The ledger reason of the one recipient that was tried. */
+const LOGIN_REFUSED_LEDGER_REASON = 'SMTP login refused'
 
 /** Total markDeliverySent attempts for a delivered mail, and the pause before each retry. */
 const RECORD_DELIVERED_ATTEMPTS = 3
@@ -135,6 +145,8 @@ export const emailRenderer: ChannelRenderer<EmailPreview> = {
 	 *   after the message was handed over) keeps the claim instead, and a delivered
 	 *   mail whose ledger write fails is never marked failed: both count as
 	 *   "unrecorded" and the result says not to re-publish before checking the log.
+	 *   A refused LOGIN is not a per-recipient failure: the pass stops at the first
+	 *   one, the tried recipient is marked failed and nobody after it is claimed.
 	 *
 	 * SMTP being unconfigured is surfaced as a clean 'failed' PublishResult (not a
 	 * throw). It is checked BEFORE the recipient loop so NO delivery row is claimed
@@ -200,6 +212,7 @@ export const emailRenderer: ChannelRenderer<EmailPreview> = {
 		// Delivered (or possibly delivered) this pass, but with no ledger row: the
 		// claim is kept, never 'failed' (a 'failed' row is re-sent by the next publish).
 		let unrecordedCount = 0
+		let loginRefused = false // the mail server refused the login: the pass stopped there
 
 		// Recipients are already lowercased by resolvePostRecipients; emailLower
 		// keeps the claim/token/ledger lookups byte-identical regardless of source.
@@ -241,6 +254,17 @@ export const emailRenderer: ChannelRenderer<EmailPreview> = {
 					)
 					continue
 				}
+				if (isLoginRefused(err)) {
+					// The login, not this recipient, was refused, and the next recipient
+					// would present the same login again. Stop here: this recipient gets a
+					// 'failed' row (re-claimed by the next publish), nobody after it is
+					// claimed, so all of them are sent once the login is corrected.
+					await backend.markDeliveryFailed(post.id, emailLower, LOGIN_REFUSED_LEDGER_REASON, claimToken ?? undefined)
+					failedCount += 1
+					loginRefused = true
+					warnings.push(LOGIN_REFUSED_WARNING)
+					break
+				}
 				// Definitive per-recipient failure (SMTP rejection / never connected):
 				// isolate it and keep sending the others. The 'failed' row is re-claimed
 				// by the next publish (claimDelivery takes over failed rows, F1-FIX-07
@@ -279,6 +303,20 @@ export const emailRenderer: ChannelRenderer<EmailPreview> = {
 					`${unrecordedCount} recipient(s) delivered but not recorded in the delivery ledger — do not re-publish before checking the delivery log`,
 				],
 				detail: 'delivery not recorded',
+			}
+		}
+
+		// The login was refused: whatever was delivered before stays delivered, the
+		// rest was not tried. Not the "publish again" advice below: publishing again
+		// before the login is corrected only repeats the refused login.
+		if (loginRefused) {
+			await flagChannelFailed(backend, post.id)
+			return {
+				channel: 'email',
+				status: 'failed',
+				recipientCount: sentCount,
+				warnings,
+				detail: LOGIN_REFUSED_DETAIL,
 			}
 		}
 

@@ -2,6 +2,7 @@
   import { Input } from '$lib/components/ui/input'
   import { Button } from '$lib/components/ui/button'
   import { computeResult, type MajorityRule } from '$lib/governance/compute-result'
+  import { isUntalliedResolution } from '$lib/governance/resolution-vote-state'
 
   interface Resolution {
     id?: string
@@ -23,7 +24,7 @@
     decision_rule_params?: { fraction?: number } | null
   }
 
-  let { resolution, isAdmin, protocolId, eligibleVotingCount = 0, onSave, onDelete }: {
+  let { resolution, isAdmin, protocolId, eligibleVotingCount = 0, startEditing = false, error = null, onSave, onDelete, onCancel }: {
     resolution: Resolution
     isAdmin: boolean
     protocolId: string
@@ -31,13 +32,61 @@
     // server is still the authority. Defaults to 0 so the row renders even before
     // the roster is known (only the `absolute` preview depends on it).
     eligibleVotingCount?: number
-    onSave: (r: Resolution) => void
+    // An unsaved draft (no id) opens as the entry form; Abbrechen then discards it
+    // through `onCancel` instead of just closing the editor.
+    startEditing?: boolean
+    // A refusal from the server for the last save, shown inside the form.
+    error?: string | null
+    // May resolve to `false` when the save was refused: the form then stays open
+    // so the typed text is not lost.
+    onSave: (r: Resolution) => void | boolean | Promise<void | boolean>
     onDelete: (id: string) => void
+    onCancel?: () => void
   } = $props()
 
   const uid = $props.id()
-  let editing = $state(false)
+  let editing = $state(startEditing)
   let draft = $state({ ...resolution })
+  // A decision is stored only with its text (the server refuses it too).
+  let textMissing = $state(false)
+
+  // A new decision is stored with all three counts; a cleared field is not a 0.
+  let countsMissing = $state(false)
+  // True while onSave is pending: the save cannot be repeated or cancelled.
+  let saving = $state(false)
+
+  const countIsBlank = (v: unknown) => v === null || v === undefined || v === ''
+
+  async function save() {
+    if (saving) return
+    if (typeof draft.text !== 'string' || draft.text.trim() === '') {
+      textMissing = true
+      return
+    }
+    textMissing = false
+    // An unsaved draft is a tally row whose counts are stored as typed, so a
+    // blank one would become a counted 0. Existing rows keep the server's rule.
+    countsMissing =
+      !resolution.id &&
+      draft.adoption_mode !== 'acclamation' &&
+      (countIsBlank(draft.votes_yes) || countIsBlank(draft.votes_no) || countIsBlank(draft.votes_abstain))
+    if (countsMissing) return
+    saving = true
+    try {
+      const ok = await onSave(draft)
+      if (ok !== false) editing = false
+    } finally {
+      saving = false
+    }
+  }
+
+  function cancel() {
+    if (saving) return
+    textMissing = false
+    countsMissing = false
+    editing = false
+    onCancel?.()
+  }
 
   const RESULT_LABEL: Record<string, string> = {
     passed: '✓ Angenommen',
@@ -62,26 +111,23 @@
   const ruleOf = (r: Resolution): MajorityRule => r.required_majority as MajorityRule
   const isAcclamation = $derived(resolution.adoption_mode === 'acclamation')
 
-  // A tally row whose counts are all zero (or empty) has not been voted on yet:
+  // A counted row whose counts are all zero (or empty) has not been voted on yet:
   // a fresh row is created as 0/0/0 and the server computes "rejected" for it,
-  // which must not be shown as a decision (finding 7). Withdrawn rows keep their
-  // verdict, acclamation rows carry a declared result and no tally by design.
-  const tallyIsEmpty = (r: Resolution) =>
-    (Number(r.votes_yes ?? 0) || 0) + (Number(r.votes_no ?? 0) || 0) + (Number(r.votes_abstain ?? 0) || 0) === 0
-  const hasNoVote = $derived(
-    !isAcclamation && resolution.result !== 'withdrawn' && tallyIsEmpty(resolution),
-  )
+  // which must not be shown as a decision (finding 7). The predicate is the one
+  // the server's submit and publish gates use (resolution-vote-state.ts), so the
+  // row and the server agree: withdrawn rows keep their verdict, acclamation rows
+  // carry a declared result and no tally by design, and a consent row with an
+  // empty tally is ADOPTED (silence adopts), not a missing vote.
+  const hasNoVote = $derived(isUntalliedResolution(resolution))
   // In the editor a cleared field (null or '') is a missing count, which the
   // "Stimmen unvollständig" line below explains; only explicit zeros mean "not
   // voted yet".
   const isBlank = (v: unknown) => v === null || v === undefined || v === ''
   const draftHasNoVote = $derived(
-    !isAcclamation &&
-      draft.result !== 'withdrawn' &&
-      !isBlank(draft.votes_yes) &&
+    !isBlank(draft.votes_yes) &&
       !isBlank(draft.votes_no) &&
       !isBlank(draft.votes_abstain) &&
-      tallyIsEmpty(draft),
+      isUntalliedResolution(draft),
   )
 
   // INV-5: the result shown while editing is COMPUTED from the fixed rule +
@@ -113,7 +159,14 @@
 
 {#if editing && isAdmin}
   <div class="rounded-md border p-3 space-y-2">
-    <Input bind:value={draft.text} placeholder="Beschlusstext" />
+    <Input bind:value={draft.text} placeholder="Beschlusstext" aria-label="Beschlusstext" aria-invalid={textMissing || undefined} />
+    {#if textMissing || countsMissing || error}
+      <p role="alert" class="text-sm text-red-700">{textMissing
+        ? 'Bitte den Beschlusstext eingeben.'
+        : countsMissing
+          ? 'Bitte alle drei Stimmzahlen angeben (0, wenn niemand so gestimmt hat).'
+          : error}</p>
+    {/if}
     <div class="flex flex-wrap items-center gap-2">
       <!-- Visible labels (finding 7): the tally fields were announced only by
            their placeholders, which vanish once a number is typed. -->
@@ -163,8 +216,8 @@
       <div class="text-sm text-ink-muted">Ergebnis: nicht berechenbar ({missingCause})</div>
     {/if}
     <div class="flex gap-2">
-      <Button size="sm" onclick={() => { onSave(draft); editing = false }}>Speichern</Button>
-      <Button size="sm" variant="ghost" onclick={() => editing = false}>Abbrechen</Button>
+      <Button size="sm" onclick={save} disabled={saving}>Speichern</Button>
+      <Button size="sm" variant="ghost" onclick={cancel} disabled={saving}>Abbrechen</Button>
       {#if resolution.id && draft.result !== 'withdrawn'}
         <Button
           size="sm"

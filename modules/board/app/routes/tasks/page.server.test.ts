@@ -133,7 +133,7 @@ describe('/tasks load — members for the card editor', () => {
 
 // The in-process backend reads the DATE column through the kernel pool, whose driver parses a
 // DATE to a JS Date; the service backend sends an ISO timestamp. The client gets a bare
-// YYYY-MM-DD either way (an <input type="date"> and the due pill both need exactly that).
+// YYYY-MM-DD either way (the editor's date field and the due pill both need exactly that).
 describe('/tasks load — due date shape', () => {
   const deckWith = (due: unknown) => ({
     board: { id: 'b1', org_unit_id: OU_A, name: 'Aufgaben', archived: false },
@@ -163,5 +163,40 @@ describe('/tasks load — due date shape', () => {
     deckFor.mockResolvedValue(deckWith(null))
     const data = await run()
     expect(data.deck.cards[0].due_date).toBeNull()
+  })
+})
+
+// Every new board is called "Aufgaben", so the switcher needs the committee to tell them apart.
+describe('/tasks load — boards for the switcher', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    deckFor.mockResolvedValue({ board: {}, stacks: [], cards: [] })
+    listOrgUnitMembers.mockResolvedValue([])
+    resolveMany.mockResolvedValue(new Map())
+    listOrgUnits.mockResolvedValue([
+      { id: OU_A, name: 'StuRa' },
+      { id: OU_B, name: 'Vorstand' },
+      { id: OU_C, name: 'Fremdes Gremium' },
+    ])
+    resolveScope.mockResolvedValue([OU_A, OU_B])
+  })
+
+  it("sends each board with its committee's name", async () => {
+    listBoardsForOrgUnits.mockResolvedValue([
+      { id: 'b1', org_unit_id: OU_A, name: 'Aufgaben', archived: false },
+      { id: 'b2', org_unit_id: OU_B, name: 'Aufgaben', archived: false },
+    ])
+    const data = await run()
+    expect(data.boards).toEqual([
+      { id: 'b1', org_unit_id: OU_A, org_unit_name: 'StuRa', name: 'Aufgaben', archived: false },
+      { id: 'b2', org_unit_id: OU_B, org_unit_name: 'Vorstand', name: 'Aufgaben', archived: false },
+    ])
+  })
+
+  it('sends an empty name, never the id, for a committee it cannot find', async () => {
+    listOrgUnits.mockResolvedValue([{ id: OU_A, name: 'StuRa' }])
+    listBoardsForOrgUnits.mockResolvedValue([{ id: 'b2', org_unit_id: OU_B, name: 'Aufgaben', archived: false }])
+    const data = await run()
+    expect(data.boards[0].org_unit_name).toBe('')
   })
 })

@@ -370,6 +370,48 @@ describe('dispatch email — per-recipient SMTP failure', () => {
   }, 20_000)
 })
 
+// A refused login is the same for every recipient: one attempt, then stop.
+describe('dispatch email — the mail server refuses the login (EAUTH)', () => {
+  const refusedLogin = () =>
+    Object.assign(new Error('kernel send-mail failed: 500'), {
+      name: 'MailSendError', code: 'EAUTH', responseCode: 535, command: 'AUTH LOGIN', httpStatus: 500,
+    })
+
+  it('stops after the first attempt: nobody after it is claimed, the failed one is re-claimable', async () => {
+    const { postId } = await makePostWithEmailList(['a@x.com', 'b@x.com', 'c@x.com'])
+    let calls = 0
+    const refusing: ChannelTransport = {
+      async send() {
+        calls += 1
+        throw refusedLogin()
+      },
+    }
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      await expect(
+        dispatch(DISPATCH_TENANT, postId, ACTOR, {
+          sql, kernel: makeFakeKernel(), channels: new Map([['email', refusing]]), origin: 'https://o',
+        }),
+      ).rejects.toThrow(/SMTP login refused, send stopped after the first attempt/)
+    } finally {
+      spy.mockRestore()
+    }
+
+    expect(calls).toBe(1)
+    const dels = await sql<{ email: string; status: string }[]>`
+      SELECT email, status FROM content.deliveries WHERE post_id = ${postId} ORDER BY email`
+    expect(dels).toEqual([{ email: 'a@x.com', status: 'failed' }])
+    expect((await getPost(sql, postId))!.status).toBe('failed')
+
+    // once the login is corrected, the next publish reaches all three
+    const healthy = makeFakeEmailTransport()
+    await dispatch(DISPATCH_TENANT, postId, ACTOR, {
+      sql, kernel: makeFakeKernel(), channels: new Map([['email', healthy]]), origin: 'https://o',
+    })
+    expect(healthy.sent.map((m) => m.to).sort()).toEqual(['a@x.com', 'b@x.com', 'c@x.com'])
+  })
+})
+
 // ── portal channel: single-call publish ────────────────────────────────────
 describe('dispatch portal — happy path', () => {
   it('calls portalPublish once and stores the returned id in publications', async () => {

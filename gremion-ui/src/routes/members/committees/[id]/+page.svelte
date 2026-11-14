@@ -1,8 +1,10 @@
 <script lang="ts">
+  import PageTitle from '$lib/components/PageTitle.svelte'
   import type { PageData } from './$types'
   import { invalidateAll, goto } from '$app/navigation'
   import { t } from '$lib/i18n'
   import { Dialog, DialogHeader, DialogTitle } from '$lib/components/ui/dialog'
+  import { DateTimeFieldDe } from '$lib/components/ui/date-field'
   import { buildRevokeRequest } from '$lib/governance/recall-action'
 
   let { data }: { data: PageData } = $props()
@@ -19,23 +21,44 @@
   let memberResults = $state<Array<{ id: string; name: string; email: string }>>([])
   let memberSearchLoading = $state(false)
   let memberAddError = $state('')
+  // The search finds any part of a name or an e-mail address, from one character on (GET /api/users).
+  const MEMBER_SEARCH_MAX = 10
+  // What the last finished search came to. The panel reports on a search only once it ran for the term
+  // in the field: 'empty' = nothing was typed, 'none' = nobody matches, 'all-members' = everyone who
+  // matches belongs to this committee already. Editing the term takes the report away.
+  let memberSearchOutcome = $state<'' | 'empty' | 'none' | 'all-members'>('')
+  // The answer filled the page that was asked for, so more people may match than it lists.
+  let memberSearchCapped = $state(false)
+
+  function clearMemberSearchReport() {
+    memberSearchOutcome = ''
+    memberSearchCapped = false
+  }
 
   async function searchUsers() {
-    if (!memberSearch.trim()) { memberResults = []; return }
+    if (memberSearchLoading) return
+    const term = memberSearch.trim()
+    clearMemberSearchReport()
+    if (!term) { memberResults = []; memberSearchOutcome = 'empty'; return }
     memberSearchLoading = true
     memberAddError = ''
     try {
-      const res = await fetch(`/api/users?search=${encodeURIComponent(memberSearch.trim())}&slim=true&max=10`)
+      const res = await fetch(`/api/users?search=${encodeURIComponent(term)}&slim=true&max=${MEMBER_SEARCH_MAX}`)
       if (!res.ok) { memberAddError = `Suche fehlgeschlagen (${res.status})`; return }
       const body = await res.json()
+      // The term was edited while the answer was on its way: it is not an answer to what the field shows.
+      if (memberSearch.trim() !== term) return
+      const hits: Array<{ id: string; email?: string; firstName?: string; lastName?: string; username?: string }> = body.data ?? []
       const existingIds = new Set(members.map((m) => m.user_keycloak_id))
-      memberResults = (body.data ?? [])
-        .filter((u: { id: string }) => !existingIds.has(u.id))
-        .map((u: { id: string; email?: string; firstName?: string; lastName?: string; username?: string }) => ({
+      memberResults = hits
+        .filter((u) => !existingIds.has(u.id))
+        .map((u) => ({
           id: u.id,
           email: u.email ?? '',
           name: [u.firstName, u.lastName].filter(Boolean).join(' ') || u.username || u.email || u.id,
         }))
+      memberSearchCapped = hits.length >= MEMBER_SEARCH_MAX
+      memberSearchOutcome = memberResults.length > 0 ? '' : hits.length > 0 ? 'all-members' : 'none'
     } finally {
       memberSearchLoading = false
     }
@@ -172,8 +195,11 @@
   // office is the recall above ("Abberufen"), which records a reason.
   let assignTarget = $state<{ roleId: string; roleName: string } | null>(null)
   let assignUserId = $state('')
+  // The term as ISO dates (YYYY-MM-DD). The fields show and take German order and leave '' here
+  // while the typed text is not a real date, so an unreadable or reversed term is never sent.
   let assignStart = $state('')
   let assignEnd = $state('')
+  const assignTermValid = $derived(assignStart !== '' && assignEnd !== '' && assignEnd > assignStart)
   let assignError = $state('')
   let assignNotice = $state('')
   let assigning = $state(false)
@@ -194,7 +220,7 @@
   }
 
   async function confirmAssign() {
-    if (!assignTarget || assigning || !assignUserId) return
+    if (!assignTarget || assigning || !assignUserId || !assignTermValid) return
     assigning = true
     assignError = ''
     try {
@@ -290,6 +316,8 @@
   })
 </script>
 
+<PageTitle title={data.committee.name} />
+
 <div class="w-full">
   <!-- Header -->
   <div class="mb-5 flex items-start justify-between gap-4">
@@ -351,7 +379,7 @@
       <h2 class="text-sm font-semibold uppercase tracking-wide text-ink-muted">Mitglieder & Ämter</h2>
       <button
         type="button"
-        onclick={() => { showAddMember = !showAddMember; if (!showAddMember) { memberSearch = ''; memberResults = [] } }}
+        onclick={() => { showAddMember = !showAddMember; if (!showAddMember) { memberSearch = ''; memberResults = []; clearMemberSearchReport() } }}
         class="rounded-md border border-border px-3 py-1.5 text-xs font-medium hover:bg-surface-2"
       >
         {showAddMember ? '× Schließen' : '+ Mitglied hinzufügen'}
@@ -366,6 +394,7 @@
             bind:value={memberSearch}
             placeholder="Name oder E-Mail suchen…"
             class="flex-1 rounded-md border border-border-strong bg-paper px-3 py-2 text-sm"
+            oninput={clearMemberSearchReport}
             onkeydown={(e) => e.key === 'Enter' && searchUsers()}
           />
           <select bind:value={newMemberType} class="rounded-md border border-border-strong bg-paper px-2 py-2 text-sm">
@@ -405,8 +434,15 @@
               </li>
             {/each}
           </ul>
-        {:else if memberSearch && !memberSearchLoading}
-          <p class="text-xs text-ink-muted">Keine passenden Nutzer gefunden.</p>
+        {:else if memberSearchOutcome === 'empty'}
+          <p class="text-xs text-ink-muted" role="status">Bitte einen Namen oder eine E-Mail-Adresse eingeben.</p>
+        {:else if memberSearchOutcome === 'all-members'}
+          <p class="text-xs text-ink-muted" role="status">Alle Treffer sind bereits Mitglied dieses Gremiums.</p>
+        {:else if memberSearchOutcome === 'none'}
+          <p class="text-xs text-ink-muted" role="status">Keine passenden Nutzer gefunden.</p>
+        {/if}
+        {#if memberSearchCapped}
+          <p class="text-xs text-ink-muted" role="status">Es gibt möglicherweise weitere Treffer. Bitte die Suche eingrenzen.</p>
         {/if}
       </div>
     {/if}
@@ -593,14 +629,14 @@
             {/each}
           </select>
         </div>
-        <div class="flex gap-3">
-          <div class="flex-1 space-y-1">
+        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div class="space-y-1">
             <label for="assign-start" class="text-sm font-medium">Amtszeit von</label>
-            <input id="assign-start" type="date" bind:value={assignStart} class="w-full rounded-md border border-border-strong bg-paper px-3 py-2 text-sm" />
+            <DateTimeFieldDe id="assign-start" label="Beginn der Amtszeit" dateOnly bind:value={assignStart} />
           </div>
-          <div class="flex-1 space-y-1">
+          <div class="space-y-1">
             <label for="assign-end" class="text-sm font-medium">Amtszeit bis</label>
-            <input id="assign-end" type="date" bind:value={assignEnd} class="w-full rounded-md border border-border-strong bg-paper px-3 py-2 text-sm" />
+            <DateTimeFieldDe id="assign-end" label="Ende der Amtszeit" dateOnly bind:value={assignEnd} />
           </div>
         </div>
       </div>
@@ -619,7 +655,7 @@
         <button
           type="button"
           onclick={confirmAssign}
-          disabled={assigning || !assignUserId || !assignStart || !assignEnd || assignEnd <= assignStart}
+          disabled={assigning || !assignUserId || !assignTermValid}
           class="rounded-md border border-accent/40 px-3 py-1.5 text-xs font-medium text-accent hover:bg-accent/10 disabled:opacity-50"
         >
           {assigning ? 'Wird zugewiesen…' : 'Zuweisen'}

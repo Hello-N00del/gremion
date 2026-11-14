@@ -179,7 +179,8 @@ describe('/api/content/posts/[id]/recipients', () => {
     expect(data.lists).toHaveLength(1)
   })
 
-  it('PUT 400s a group that Keycloak does not know, with the id in the message, and stores nothing', async () => {
+  it('PUT 400s an org-unit group that Keycloak does not know, with the id in the message, and stores nothing', async () => {
+    mockListOrgUnits.mockResolvedValue([{ id: 'u-typo' }])
     mockGetGroup.mockRejectedValue(Object.assign(new Error('Keycloak Admin API error: 404 {}'), { status: 404 }))
     await expect(
       PUT(makeEvent({ user: author, body: { recipients: [{ keycloak_group_id: 'typo' }] } })),
@@ -188,12 +189,116 @@ describe('/api/content/posts/[id]/recipients', () => {
     expect(mockSetRecipients).not.toHaveBeenCalled()
   })
 
-  it('PUT 400s a group id that cannot be a path segment', async () => {
-    mockGetGroup.mockRejectedValue(Object.assign(new Error('Invalid Keycloak id'), { name: 'KcInvalidIdError' }))
+  it('PUT 400s a group id that cannot be a path segment, without asking Keycloak', async () => {
     await expect(
       PUT(makeEvent({ user: author, body: { recipients: [{ keycloak_group_id: '..' }] } })),
     ).rejects.toMatchObject({ status: 400 })
+    expect(mockGetGroup).not.toHaveBeenCalled()
     expect(mockSetRecipients).not.toHaveBeenCalled()
+  })
+
+  it('PUT 400s an org-unit group whose recorded id Keycloak rejects as malformed', async () => {
+    mockListOrgUnits.mockResolvedValue([{ id: 'u-bad' }])
+    mockGetGroup.mockRejectedValue(Object.assign(new Error('Invalid Keycloak id'), { name: 'KcInvalidIdError' }))
+    await expect(
+      PUT(makeEvent({ user: author, body: { recipients: [{ keycloak_group_id: 'bad' }] } })),
+    ).rejects.toMatchObject({ status: 400, body: { message: 'Gruppe nicht gefunden: bad' } })
+    expect(mockSetRecipients).not.toHaveBeenCalled()
+  })
+
+  // --- only the groups of the customer's org units may be saved ----------------
+
+  it('PUT 400s a group that belongs to no org unit, names it, stores nothing and does not ask Keycloak', async () => {
+    await expect(
+      PUT(
+        makeEvent({
+          user: author,
+          body: { recipients: [{ mailing_list_id: 'l1' }, { keycloak_group_id: 'kc-admin' }] },
+        }),
+      ),
+    ).rejects.toMatchObject({
+      status: 400,
+      body: { message: 'Diese Gruppe gehört zu keinem Gremium und kann nicht angeschrieben werden: kc-admin' },
+    })
+    expect(mockGetGroup).not.toHaveBeenCalled()
+    expect(mockSetRecipients).not.toHaveBeenCalled()
+  })
+
+  it('PUT refuses the same way whether or not Keycloak knows the group', async () => {
+    mockGetGroup.mockRejectedValue(Object.assign(new Error('Keycloak Admin API error: 404 {}'), { status: 404 }))
+    await expect(
+      PUT(makeEvent({ user: author, body: { recipients: [{ keycloak_group_id: 'kc-admin' }] } })),
+    ).rejects.toMatchObject({
+      status: 400,
+      body: { message: 'Diese Gruppe gehört zu keinem Gremium und kann nicht angeschrieben werden: kc-admin' },
+    })
+  })
+
+  it('PUT refuses group recipients with a German text when the org units cannot be read, and stores nothing', async () => {
+    mockListOrgUnits.mockRejectedValue(new Error('db down'))
+    await expect(
+      PUT(
+        makeEvent({
+          user: author,
+          body: { recipients: [{ mailing_list_id: 'l1' }, { keycloak_group_id: 'g1' }] },
+        }),
+      ),
+    ).rejects.toMatchObject({
+      status: 503,
+      body: { message: expect.stringMatching(/^Die Gruppen der Gremien können gerade nicht geprüft werden/) },
+    })
+    expect(mockGetGroup).not.toHaveBeenCalled()
+    expect(mockSetRecipients).not.toHaveBeenCalled()
+  })
+
+  it('PUT still saves mailing lists when the org units cannot be read, and does not read them', async () => {
+    mockListOrgUnits.mockRejectedValue(new Error('db down'))
+    const res = await PUT(makeEvent({ user: author, body: { recipients: [{ mailing_list_id: 'l1' }] } }))
+    expect(res.status).toBe(200)
+    expect(mockListOrgUnits).not.toHaveBeenCalled()
+    expect(mockSetRecipients).toHaveBeenCalledWith('p1', [{ mailing_list_id: 'l1' }])
+  })
+
+  it('PUT saves the other changes and leaves out a stored group that no longer belongs to an org unit', async () => {
+    // "old" was saved for this post earlier; its org unit is gone since.
+    mockGetRecipients.mockResolvedValue([
+      { id: 'r1', post_id: 'p1', mailing_list_id: null, keycloak_group_id: 'old' },
+    ])
+    const res = await PUT(
+      makeEvent({
+        user: author,
+        body: {
+          recipients: [{ keycloak_group_id: 'old' }, { mailing_list_id: 'l1' }, { keycloak_group_id: 'g2' }],
+        },
+      }),
+    )
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ ok: true, removed: ['old'] })
+    expect(mockSetRecipients).toHaveBeenCalledWith('p1', [{ mailing_list_id: 'l1' }, { keycloak_group_id: 'g2' }])
+    // Keycloak is asked about the kept group only.
+    expect(mockGetGroup).toHaveBeenCalledTimes(1)
+    expect(mockGetGroup).toHaveBeenCalledWith('g2')
+  })
+
+  it('PUT 400s a new foreign group even when a stored one is sent along', async () => {
+    mockGetRecipients.mockResolvedValue([
+      { id: 'r1', post_id: 'p1', mailing_list_id: null, keycloak_group_id: 'old' },
+    ])
+    await expect(
+      PUT(
+        makeEvent({
+          user: author,
+          body: { recipients: [{ keycloak_group_id: 'old' }, { keycloak_group_id: 'kc-admin' }] },
+        }),
+      ),
+    ).rejects.toMatchObject({ status: 400, body: { message: expect.stringMatching(/: kc-admin$/) } })
+    expect(mockSetRecipients).not.toHaveBeenCalled()
+  })
+
+  it('PUT reports no removed group for an ordinary save, and reads the stored set only when needed', async () => {
+    const res = await PUT(makeEvent({ user: author, body: { recipients: [{ keycloak_group_id: 'g1' }] } }))
+    expect(await res.json()).toEqual({ ok: true, removed: [] })
+    expect(mockGetRecipients).not.toHaveBeenCalled()
   })
 
   it('PUT accepts the set when Keycloak is down, so mailing lists can still be saved', async () => {
@@ -217,6 +322,7 @@ describe('/api/content/posts/[id]/recipients', () => {
   it('PUT stops asking Keycloak after the first failure that is not a definite miss', async () => {
     mockGetGroup.mockRejectedValue(new Error('kc down'))
     const ids = ['g1', 'g2', 'g3', 'g4', 'g5']
+    mockListOrgUnits.mockResolvedValue(ids.map((id) => ({ id: `u-${id}` })))
     const res = await PUT(
       makeEvent({ user: author, body: { recipients: ids.map((id) => ({ keycloak_group_id: id })) } }),
     )

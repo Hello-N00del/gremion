@@ -59,6 +59,8 @@ const LEDGER = vi.hoisted(() => ({
   rooms: new Map<string, Map<string, string>>(),
   currentTenant: (): string => '',
   audit: [] as string[],
+  /** 'tenant|field|new value' of the audit entries a customer's OWN trail holds (read by auditEntryExists). */
+  ownAudit: new Set<string>(),
 }))
 vi.mock('$lib/server/governance/provisioning/ledger', () => ({
   getResource: async (unitId: string) => {
@@ -84,7 +86,10 @@ vi.mock('$lib/server/governance/provisioning/orchestrator', () => ({
   },
 }))
 vi.mock('$lib/server/db', () => ({ getDb: () => ({ begin: vi.fn() }) }))
-vi.mock('$lib/server/audit-db', () => ({ writeAuditEntry: async (e: { newValue: string }) => void LEDGER.audit.push(e.newValue) }))
+vi.mock('$lib/server/audit-db', () => ({
+  writeAuditEntry: async (e: { newValue: string }) => void LEDGER.audit.push(e.newValue),
+  auditEntryExists: async (field: string, value: string) => LEDGER.ownAudit.has(`${LEDGER.currentTenant()}|${field}|${value}`),
+}))
 
 import { GET as roomsGet } from '../../../routes/api/messages/rooms/+server'
 import { GET as messagesGet, POST as messagesPost } from '../../../routes/api/messages/rooms/[roomId]/messages/+server'
@@ -93,8 +98,10 @@ import { PUT as typingPut } from '../../../routes/api/messages/rooms/[roomId]/ty
 import { POST as mediaPost } from '../../../routes/api/messages/rooms/[roomId]/media/+server'
 import { PATCH as roomPatch, DELETE as roomDelete } from '../../../routes/api/messages/rooms/[roomId]/+server'
 import { POST as roomArchive } from '../../../routes/api/messages/rooms/[roomId]/archive/+server'
+import { POST as roomUnarchive } from '../../../routes/api/messages/rooms/[roomId]/unarchive/+server'
 import { GET as roomUnit } from '../../../routes/api/messages/rooms/[roomId]/unit/+server'
 import { getMessagesBackend } from './backend'
+import { listOverview } from './admin/room-admin'
 import { __resetMatrixCachesForTests, evictMatrixClient, getMatrixClient } from './matrix-client'
 import { __resetSynapseAdminForTests, getSynapseAdmin } from './synapse-admin'
 
@@ -254,7 +261,11 @@ class FakeSynapses {
       const room = server.rooms.get(m[1]!)
       return room ? json(200, { members: [...room.members], total: room.members.size }) : json(404)
     }
-    if ((m = /^\/_synapse\/admin\/v2\/rooms\/([^/]+)$/.exec(path)) && method === 'DELETE') {
+    if (path === '/_synapse/admin/v1/rooms' && method === 'GET') {
+      if (kind !== 'admin') return json(403)
+      return json(200, { rooms: [...server.rooms].filter(([, r]) => !r.deleted).map(([id, r]) => ({ room_id: id, creator: server.bot, name: r.name })) })
+    }
+    if ((m = /^\/_synapse\/admin\/v[12]\/rooms\/([^/]+)$/.exec(path)) && method === 'DELETE') {
       if (kind !== 'admin') return json(403)
       const room = server.rooms.get(m[1]!)
       if (room) room.deleted = true
@@ -296,6 +307,7 @@ beforeEach(() => {
   __resetSynapseAdminForTests()
   LEDGER.rooms.clear()
   LEDGER.audit.length = 0
+  LEDGER.ownAudit.clear()
   current = null
   shared()
   vi.stubGlobal('fetch', vi.fn((input: string | URL, init?: RequestInit) => net.handle(String(input), init)))
@@ -557,6 +569,78 @@ describe("an administration action on B's room as A is refused before any Matrix
     expect(writes(net.since(m))).toEqual([])
   })
 
+  it("restore: B's archived room as A is a 404, stays archived, and writes nothing", async () => {
+    // B archived its room: the marker of the admin bot names B's unit, the ledger row is released.
+    const marker = { org_unit_id: 'unit-b', archived_at: '2026-01-01T00:00:00Z', prior: null }
+    sharedSynapse.rooms.get(ROOM_B)!.state.set('org.gremion.room.archived', { sender: sharedSynapse.bot, content: marker })
+    LEDGER.rooms.get('tid-b')!.delete('unit-b')
+    const m = net.mark()
+    for (const orgUnitId of ['unit-a', 'unit-b']) {
+      const res = (await route(A_SHARED, roomUnarchive, ev(A_SHARED, ADMIN_A, 'admin-a', { roomId: ROOM_B, method: 'POST', body: JSON.stringify({ orgUnitId }), headers: json }))) as Response
+      expect(res.status).toBe(404)
+    }
+    expect(writes(net.since(m))).toEqual([])
+    expect(sharedSynapse.rooms.get(ROOM_B)!.state.get('org.gremion.room.archived')!.content).toEqual(marker)
+    expect(LEDGER.rooms.get('tid-a')!.get('unit-a')).toBe(ROOM_A)
+  })
+
+  // Two customers on ONE homeserver can have an org unit with the same id (the dev seed migration gives
+  // every fresh tenant database the same fixed unit ids). The archive marker is room state of the
+  // shared homeserver, so the unit id alone does not say whose room it is.
+  describe('an archived room of another customer whose unit has the same id', () => {
+    const MARKER = 'org.gremion.room.archived'
+    const json = { 'Content-Type': 'application/json' }
+    const stamped = { org_unit_id: 'unit-x', tenant_id: 'tid-b', archived_at: '2026-01-01T00:00:00Z', prior: null }
+    const legacy = { org_unit_id: 'unit-x', archived_at: '2026-01-01T00:00:00Z', prior: null }
+    /** Both customers have the unit 'unit-x' and neither has an active room for it (an empty id is no ledger row). */
+    const sameUnit = (marker: Record<string, unknown>) => {
+      LEDGER.rooms.set('tid-a', new Map([['unit-x', '']]))
+      LEDGER.rooms.set('tid-b', new Map([['unit-x', '']]))
+      sharedSynapse.rooms.get(ROOM_B)!.state.set(MARKER, { sender: sharedSynapse.bot, content: marker })
+    }
+
+    for (const [label, marker] of [['stamped with the other customer', stamped], ['written before markers carried a customer', legacy]] as const) {
+      it(`restore as A is a 404 and writes nothing (${label})`, async () => {
+        sameUnit(marker)
+        const m = net.mark()
+        const res = (await route(A_SHARED, roomUnarchive, ev(A_SHARED, ADMIN_A, 'admin-a', { roomId: ROOM_B, method: 'POST', body: JSON.stringify({ orgUnitId: 'unit-x' }), headers: json }))) as Response
+        expect(res.status).toBe(404)
+        expect(net.since(m).filter((r) => r.method !== 'GET' && !r.path.endsWith('/login'))).toEqual([])
+        expect(sharedSynapse.rooms.get(ROOM_B)!.state.get(MARKER)!.content).toEqual(marker)
+      })
+
+      it(`delete as A is a 404 and the room is kept (${label})`, async () => {
+        sameUnit(marker)
+        const res = (await route(A_SHARED, roomDelete, ev(A_SHARED, ADMIN_A, 'admin-a', { roomId: ROOM_B, method: 'DELETE', query: '?orgUnitId=unit-x' }))) as Response
+        expect(res.status).toBe(404)
+        expect(sharedSynapse.rooms.get(ROOM_B)!.deleted).toBe(false)
+      })
+
+      it(`A's archive list does not show it and reads no name of it (${label})`, async () => {
+        sameUnit(marker)
+        const m = net.mark()
+        const overview = await as(A_SHARED, () => listOverview([{ id: 'unit-x', name: 'Gremium unit-x' }]))
+        expect(overview.archivedRooms).toEqual([])
+        expect(net.since(m).some((r) => r.path.includes(ROOM_B) && r.path.endsWith('/state/m.room.name'))).toBe(false)
+      })
+    }
+
+    it('a room archived before markers named a customer is still shown to the customer whose own audit trail records the archive, and to no other', async () => {
+      sameUnit(legacy)
+      LEDGER.ownAudit.add(`tid-b|messages.room.archive|unit-x:${ROOM_B}:ok`)
+      const own = await as(B_SHARED, () => listOverview([{ id: 'unit-x', name: 'Gremium unit-x' }]))
+      expect(own.archivedRooms.map((r) => r.roomId)).toEqual([ROOM_B])
+      const other = await as(A_SHARED, () => listOverview([{ id: 'unit-x', name: 'Gremium unit-x' }]))
+      expect(other.archivedRooms).toEqual([])
+    })
+
+    it('the customer that archived the room still sees it', async () => {
+      sameUnit(stamped)
+      const overview = await as(B_SHARED, () => listOverview([{ id: 'unit-x', name: 'Gremium unit-x' }]))
+      expect(overview.archivedRooms.map((r) => r.roomId)).toEqual([ROOM_B])
+    })
+  })
+
   it("delete: B's room as A is a 404, B's room is not deleted, no delete request leaves", async () => {
     const m = net.mark()
     for (const orgUnitId of ['unit-a', 'unit-b']) {
@@ -577,7 +661,7 @@ describe("an administration action on B's room as A is refused before any Matrix
 
   it('a member without the admin role is refused before the ledger or Matrix is touched', async () => {
     const m = net.mark()
-    for (const [h, method, query] of [[roomPatch, 'PATCH', ''], [roomArchive, 'POST', ''], [roomDelete, 'DELETE', '?orgUnitId=unit-a']] as const) {
+    for (const [h, method, query] of [[roomPatch, 'PATCH', ''], [roomArchive, 'POST', ''], [roomUnarchive, 'POST', ''], [roomDelete, 'DELETE', '?orgUnitId=unit-a']] as const) {
       const res = (await route(A_SHARED, h as Handler, ev(A_SHARED, ALICE, 'alice', { roomId: ROOM_A, method, query, body: method === 'DELETE' ? null : JSON.stringify({ orgUnitId: 'unit-a', name: 'x' }), headers: json }))) as Response
       expect(res.status).toBe(403)
     }

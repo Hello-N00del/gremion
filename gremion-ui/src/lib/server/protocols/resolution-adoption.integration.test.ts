@@ -12,7 +12,9 @@
 //   (c) a withdrawn resolution is NOT recorded (no decided_at, no audit row),
 //   (d) the audit hash chain is still intact afterwards (verifyAuditChain ok),
 //   (e) the whole record participates in the caller's tx — a rolled-back
-//       publish leaves NO decided_at and NO audit row.
+//       publish leaves NO decided_at and NO audit row,
+//   (f) a counted resolution nobody voted on is refused and rolls the tx back;
+//       a consent resolution with an empty tally is adopted.
 //
 // The route-level wiring (helper invoked on the publish tx, in the right
 // order) is pinned separately in the mocked unit test
@@ -28,6 +30,7 @@ import {
   listResolutions,
   recordResolutionAdoptions,
 } from './protocol-db'
+import { UntalliedResolutionError } from './untallied-resolution'
 import { actor } from '../audit-test-actor'
 
 const ADOPTER = actor('admin-user-1')
@@ -291,6 +294,66 @@ describe('#320 recordResolutionAdoptions (integration)', () => {
     expect(after.find((r) => r.id === passed.id)?.decided_at).toBeNull()
     expect(await readAuditLog('protocol_resolution.decided')).toHaveLength(0)
     // The chain (empty) is still valid.
+    expect(await verifyAuditChain()).toEqual({ ok: true })
+  })
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // A counted resolution nobody voted on (0/0/0 under a majority rule, stored
+  // with the rule engine's placeholder "rejected") is not a decision. The
+  // recorder refuses it on the publish tx, so nothing of that publish persists.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  it('refuses a counted resolution nobody voted on: no decided_at, no audit row, also for the rows recorded before it', async () => {
+    const { protocol, passed } = await seedProtocolWithResolutions()
+    const untallied = await addResolution(protocol.id, {
+      text: 'Antrag D', votesYes: 0, votesNo: 0, votesAbstain: 0, result: 'rejected', requiredMajority: 'simple',
+    })
+    const resolutions = await listResolutions(protocol.id)
+    // The untallied row comes last, after two rows the recorder accepts.
+    expect(resolutions[resolutions.length - 1].id).toBe(untallied.id)
+
+    await expect(
+      getDb().begin((tx) => recordResolutionAdoptions(ADOPTER, resolutions, tx)),
+    ).rejects.toBeInstanceOf(UntalliedResolutionError)
+
+    const after = await listResolutions(protocol.id)
+    expect(after.map((r) => r.decided_at)).toEqual(after.map(() => null))
+    expect(after.find((r) => r.id === passed.id)?.decided_at).toBeNull()
+    expect(await readAuditLog('protocol_resolution.decided')).toHaveLength(0)
+    expect(await verifyAuditChain()).toEqual({ ok: true })
+  })
+
+  it('judges the stored row: a count cleared after the caller read the list is refused too', async () => {
+    const { protocol, passed } = await seedProtocolWithResolutions()
+    const read = await listResolutions(protocol.id)
+    await getDb()`UPDATE protocol_resolutions SET votes_yes = 0, votes_no = 0, votes_abstain = 0 WHERE id = ${passed.id}`
+
+    await expect(
+      getDb().begin((tx) => recordResolutionAdoptions(ADOPTER, read, tx)),
+    ).rejects.toBeInstanceOf(UntalliedResolutionError)
+    expect((await listResolutions(protocol.id)).every((r) => r.decided_at === null)).toBe(true)
+    expect(await readAuditLog('protocol_resolution.decided')).toHaveLength(0)
+  })
+
+  it('adopts a consent resolution with an empty tally: silence adopts', async () => {
+    const { protocol } = await seedProtocolWithResolutions()
+    const consent = await addResolution(protocol.id, {
+      text: 'Antrag E', votesYes: 0, votesNo: 0, votesAbstain: 0, result: 'passed', requiredMajority: 'consent',
+    })
+
+    const recorded = await getDb().begin(async (tx) =>
+      recordResolutionAdoptions(ADOPTER, await listResolutions(protocol.id), tx),
+    )
+
+    expect(recorded).toBe(3) // passed + rejected + consent; withdrawn skipped
+    const after = await listResolutions(protocol.id)
+    expect(after.find((r) => r.id === consent.id)?.decided_at).not.toBeNull()
+    const payloads = (await readAuditLog('protocol_resolution.decided')).map(
+      (a) => JSON.parse(a.newValue) as Record<string, unknown>,
+    )
+    expect(payloads.find((p) => p.resolutionId === consent.id)).toMatchObject({
+      result: 'passed', requiredMajority: 'consent', votesYes: 0, votesNo: 0, votesAbstain: 0,
+    })
     expect(await verifyAuditChain()).toEqual({ ok: true })
   })
 })

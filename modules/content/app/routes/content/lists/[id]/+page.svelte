@@ -3,7 +3,7 @@
   // (email + optional name) and remove. CSV import is L2-stretch; out of scope.
   import { invalidateAll } from '$app/navigation'
   import PageTitle from '$lib/components/PageTitle.svelte'
-  import { countLabel } from '$lib/components/news/format-de'
+  import { countLabel, sourceLabel } from '$lib/components/news/format-de'
   import type { PageData } from './$types'
 
   let { data }: { data: PageData } = $props()
@@ -12,7 +12,8 @@
   let name = $state('')
   let error = $state('')
 
-  async function addMember() {
+  async function addMember(e: SubmitEvent) {
+    e.preventDefault()
     if (!email.trim()) return
     error = ''
     const res = await fetch(`/api/content/lists/${data.list.id}/members`, {
@@ -51,11 +52,11 @@
   <p class="err">{error}</p>
 {/if}
 
-<div class="add">
+<form class="add" onsubmit={addMember}>
   <input type="email" bind:value={email} placeholder="E-Mail" />
   <input type="text" bind:value={name} placeholder="Name (optional)" />
-  <button onclick={addMember}>Hinzufügen</button>
-</div>
+  <button type="submit">Hinzufügen</button>
+</form>
 
 <h2 class="h2">{countLabel(data.members.length, 'Mitglied', 'Mitglieder')}</h2>
 
@@ -68,7 +69,7 @@
         <div>
           <span class="email">{m.email}</span>
           {#if m.name}<span class="mname">{m.name}</span>{/if}
-          <span class="src">({m.source})</span>
+          <span class="src">({sourceLabel(m.source)})</span>
         </div>
         <button class="del" onclick={() => removeMember(m.id)}>Entfernen</button>
       </div>

@@ -6,6 +6,7 @@
   import KarenzStatus from '$lib/components/KarenzStatus.svelte'
   import ModuleOffWarning from '$lib/components/ModuleOffWarning.svelte'
   import ModuleSwitchNotice from '$lib/components/ModuleSwitchNotice.svelte'
+  import OperatorModuleList from './OperatorModuleList.svelte'
   import { t } from '$lib/i18n'
   import { fillText } from '$lib/modules/fill-text'
   import type { KarenzView, ModuleDeletionPreview, ModuleOverview, ModuleOverviewItem } from '$lib/modules/switch-preview'
@@ -16,6 +17,12 @@
   // warning (what is deleted after 30 days, what is kept) and then the typed-name gate. A module that is
   // off keeps its 30 days (Karenz): the status block shows the days left, the problems, the sealed copies
   // and the one button that restores the module, which is the same enable request as any other.
+  //
+  // A switch needs a fresh second factor. Without one the server keeps the confirmed input and answers 401,
+  // and the browser leaves for /auth/step-up. This page then holds nothing any more, so it leaves a mark in
+  // the tab (no content, only "a switch is waiting") and, when it is back, asks the server once to carry the
+  // kept switch out ({ resume: true }). The server decides everything; a resume it refuses is shown here and
+  // never leads to a second round trip.
   let {
     pollMs = 5000,
     navigate = (url: string) => {
@@ -25,6 +32,8 @@
 
   const API = '/api/settings/modules'
   const STEP_UP = '/auth/step-up?returnTo=/settings/module'
+  const RESUME_MARK = 'gremion.module-switch.resume'
+  const RESUME_MARK_MAX_AGE_MS = 15 * 60_000
 
   type Load = 'loading' | 'ready' | 'notConfigured' | 'error'
   let load = $state<Load>('loading')
@@ -42,6 +51,8 @@
 
   // The last refresh failed after a good one: the list on screen may be out of date.
   let stale = $state(false)
+  // A switch kept for the second factor was not carried out, and the answer names no module.
+  let resumeError = $state<string | null>(null)
 
   const pending = $derived(overview?.modules.some((m) => m.pending.length > 0) ?? false)
 
@@ -73,11 +84,69 @@
     }
   }
 
+  /** Leave for the second factor; the mark tells this page, once it is back, that a switch is waiting on the server. */
+  function toStepUp(): void {
+    try {
+      sessionStorage.setItem(RESUME_MARK, Date.now().toString())
+    } catch {
+      // no tab storage: the switch is repeated by hand after the second factor
+    }
+    navigate(STEP_UP)
+  }
+
+  /**
+   * True once per round trip: the mark is removed as it is read, so a reload never resumes again. A mark
+   * older than RESUME_MARK_MAX_AGE_MS is from a round trip that was given up long ago (the server keeps a
+   * switch for a few minutes only): it is dropped without asking, so a later visit shows nothing about it.
+   */
+  function takeResumeMark(): boolean {
+    try {
+      const left = sessionStorage.getItem(RESUME_MARK)
+      if (left === null) return false
+      sessionStorage.removeItem(RESUME_MARK)
+      const age = Date.now() - Number(left)
+      return Number.isFinite(age) && age >= 0 && age <= RESUME_MARK_MAX_AGE_MS
+    } catch {
+      return false
+    }
+  }
+
+  /** Back from the second factor: ask the server to carry out the switch it kept, and show what it answers. */
+  async function resumeKept(): Promise<void> {
+    let status = 0
+    let body: Record<string, unknown> = {}
+    try {
+      const res = await fetch(API, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ resume: true }),
+      })
+      status = res.status
+      body = ((await res.json().catch(() => null)) ?? {}) as Record<string, unknown>
+    } catch {
+      resumeError = $t('settings.modules.error.network')
+      return
+    }
+    if (status === 201) return
+    const moduleId = typeof body.moduleId === 'string' ? body.moduleId : null
+    if (moduleId !== null && body.code === 'DPIA_REQUIRED') {
+      openDpia(moduleId)
+      return
+    }
+    const text = typeof body.error === 'string' && typeof body.code === 'string' ? body.error : $t('settings.modules.error.generic')
+    if (moduleId !== null) setError(moduleId, text)
+    else resumeError = text
+  }
+
   // First load in the browser (an effect never runs during SSR, which renders the loading state). untrack:
-  // refresh() reads component state, and the load must run once, not whenever that state changes.
+  // the calls read component state, and the load must run once, not whenever that state changes. A kept
+  // switch is resumed BEFORE the first list, so the list already shows it as pending.
   $effect(() => {
     untrack(() => {
-      void refresh()
+      void (async () => {
+        if (takeResumeMark()) await resumeKept()
+        await refresh()
+      })()
     })
   })
 
@@ -128,7 +197,7 @@
       dpiaFor = null
       await refresh()
     } else if (r.code === 'STEP_UP_REQUIRED') {
-      navigate(STEP_UP)
+      toStepUp()
     } else if (r.code === 'DPIA_REQUIRED') {
       openDpia(m.moduleId)
     } else {
@@ -143,7 +212,7 @@
     const r = await send({ moduleId: m.moduleId, action: 'enable' })
     busyId = null
     if (r.ok) await refresh()
-    else if (r.code === 'STEP_UP_REQUIRED') navigate(STEP_UP)
+    else if (r.code === 'STEP_UP_REQUIRED') toStepUp()
     else setError(m.moduleId, r.text)
   }
 
@@ -196,7 +265,7 @@
       warning = null
       await refresh()
     } else if (r.code === 'STEP_UP_REQUIRED') {
-      navigate(STEP_UP)
+      toStepUp()
     } else if (warning && warning.preview.moduleId === moduleId) {
       // Re-check after the await: the warning may have been closed meanwhile; never rebuild it from null.
       warning = { ...warning, busy: false, error: r.text }
@@ -206,6 +275,12 @@
 
 <div class="space-y-5 py-4" data-testid="tab-modules">
   <p class="text-sm text-ink-muted">{$t('settings.modules.intro')}</p>
+
+  {#if resumeError}
+    <p role="alert" class="rounded-md border border-rust/50 bg-rust-soft px-3 py-2 text-sm text-rust-ink" data-testid="module-resume-error">
+      {resumeError}
+    </p>
+  {/if}
 
   {#if load === 'loading'}
     <p class="text-sm text-ink-muted" role="status">{$t('settings.modules.loading')}</p>
@@ -331,5 +406,8 @@
         </li>
       {/each}
     </ul>
+
+    <!-- what the customer has that the council cannot switch: state only, no control -->
+    <OperatorModuleList modules={overview.operatorModules ?? []} />
   {/if}
 </div>

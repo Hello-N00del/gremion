@@ -5,6 +5,9 @@
 //   - GET → { recipients, lists, groups }: the post's current recipient set
 //           plus the pickable content mailing lists and KC groups for the UI.
 //   - PUT → replace the recipient set ({ recipients: [{mailing_list_id} | {keycloak_group_id}] }).
+//           A group must be the group of an org unit, as in the picker. Answers
+//           { ok, removed }: `removed` names stored groups that are no org-unit
+//           group any more and were left out of the new set.
 //
 // Gated by `content.author` (same capability as authoring/recipient curation;
 // the heavier `content.publish` gates the actual send). The KC group list is a
@@ -93,6 +96,45 @@ export const PUT: RequestHandler = async (event) => {
       throw error(400, 'each recipient targets EXACTLY one of mailing_list_id OR keycloak_group_id')
   }
 
+  const requestedGroupIds = [
+    ...new Set(recipients.map((r) => r.keycloak_group_id).filter((id): id is string => !!id)),
+  ]
+
+  // The same rule as the picker: only the group of an org unit is a recipient.
+  // The org units are read only when a group is in the set, so a save of
+  // mailing lists alone does not depend on them. If they cannot be read, no
+  // group is accepted (never all of them).
+  let orgUnitGroupIds: ReadonlySet<string> = new Set()
+  if (requestedGroupIds.length > 0) {
+    let unreadable = false
+    try {
+      orgUnitGroupIds = await listOrgUnitGroupIds()
+    } catch (err) {
+      console.error('[content:recipients] org units unreadable, group recipients refused', errName(err))
+      unreadable = true
+    }
+    if (unreadable) {
+      // The editor shows this text to the author.
+      throw error(503, 'Die Gruppen der Gremien können gerade nicht geprüft werden. Bitte später erneut versuchen.')
+    }
+  }
+
+  // A group that is no org-unit group is refused, naming the id as it was sent;
+  // the answer does not depend on whether Keycloak knows the group. One case is
+  // not a refusal: a group that is already stored for this post and stopped
+  // being an org-unit group since. It is left out of the new set and reported
+  // as `removed`, so the author can still save the other changes.
+  const foreign = requestedGroupIds.filter((id) => !orgUnitGroupIds.has(id))
+  if (foreign.length > 0) {
+    const stored = new Set((await backend.getPostRecipients(post.id)).map((r) => r.keycloak_group_id))
+    const refused = foreign.find((id) => !stored.has(id))
+    if (refused !== undefined) {
+      // The editor shows this text to the author.
+      throw error(400, `Diese Gruppe gehört zu keinem Gremium und kann nicht angeschrieben werden: ${refused}`)
+    }
+  }
+  const removed = new Set(foreign)
+
   // A group id that Keycloak does not know would later make the whole send
   // fail, mailing lists included. Refuse it now, naming the id. Only a definite
   // miss refuses: a Keycloak outage must not block saving mailing lists.
@@ -100,9 +142,7 @@ export const PUT: RequestHandler = async (event) => {
   // Each distinct id is checked once, and the checks stop at the first failure
   // that is not a definite miss (an outage would otherwise cost one full
   // timeout per id).
-  const groupIds = [
-    ...new Set(recipients.map((r) => r.keycloak_group_id).filter((id): id is string => !!id)),
-  ]
+  const groupIds = requestedGroupIds.filter((id) => !removed.has(id))
   if (groupIds.length > 0) {
     let kc: { getGroup(id: string): Promise<unknown> } | null = null
     try {
@@ -127,12 +167,14 @@ export const PUT: RequestHandler = async (event) => {
 
   await backend.setPostRecipients(
     post.id,
-    recipients.map((r) =>
-      r.mailing_list_id
-        ? { mailing_list_id: r.mailing_list_id }
-        : { keycloak_group_id: r.keycloak_group_id },
-    ),
+    recipients
+      .filter((r) => !r.keycloak_group_id || !removed.has(r.keycloak_group_id))
+      .map((r) =>
+        r.mailing_list_id
+          ? { mailing_list_id: r.mailing_list_id }
+          : { keycloak_group_id: r.keycloak_group_id },
+      ),
   )
 
-  return json({ ok: true })
+  return json({ ok: true, removed: [...removed] })
 }

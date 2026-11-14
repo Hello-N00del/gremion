@@ -39,4 +39,4 @@ export {
 export { recordNewsletterAudit } from './audit.js'
 
 export type { ClaimResult } from './deliveries.js'
-export { claimRecipient, markSent } from './deliveries.js'
+export { claimRecipient, markSent, releaseClaim } from './deliveries.js'

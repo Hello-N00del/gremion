@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { eur0 } from './format'
+  import { eur0, pluralDe } from './format'
   import type { BudgetSummary } from './types'
 
   // KPI row — role-dependent. #290: on a finance-OFF tenant the two finance
@@ -34,7 +34,7 @@
     <div class="kpi"><div class="label">Anstehende Termine</div><div class="val">{upcomingCount}</div><div class="delta">nächste 30 Tage</div></div>
     <div class="kpi"><div class="label">In meinen {gremienPlural}</div><div class="val">{myEventCount}</div><div class="delta">davon meine</div></div>
     <div class="kpi"><div class="label">Abstimmungen</div><div class="val">{liveVotesCount}</div><div class="delta">offen für dich</div></div>
-    <div class="kpi"><div class="label">Ungelesen · Matrix</div><div class="val">{unreadCount}</div><div class="delta">{unreadCount > 0 ? 'neue Nachrichten' : 'alles gelesen'}</div></div>
+    <div class="kpi"><div class="label">Ungelesen · Matrix</div><div class="val">{unreadCount}</div><div class="delta">{unreadCount > 0 ? pluralDe(unreadCount, 'neue Nachricht', 'neue Nachrichten') : 'alles gelesen'}</div></div>
   </div>
 {:else}
   <div class="kpi-grid kpi-row">
@@ -76,7 +76,7 @@
         <div class="delta">nächste 30 Tage</div>
       </div>
       <div class="kpi"><div class="label">In meinen {gremienPlural}</div><div class="val">{myEventCount}</div><div class="delta">davon meine</div></div>
-      <div class="kpi"><div class="label">Ungelesen · Matrix</div><div class="val">{unreadCount}</div><div class="delta">{unreadCount > 0 ? 'neue Nachrichten' : 'alles gelesen'}</div></div>
+      <div class="kpi"><div class="label">Ungelesen · Matrix</div><div class="val">{unreadCount}</div><div class="delta">{unreadCount > 0 ? pluralDe(unreadCount, 'neue Nachricht', 'neue Nachrichten') : 'alles gelesen'}</div></div>
     {/if}
   </div>
 {/if}

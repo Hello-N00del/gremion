@@ -1,4 +1,5 @@
 <script lang="ts">
+  import PageTitle from '$lib/components/PageTitle.svelte'
   import type { PageData } from './$types'
   import { Button } from '$lib/components/ui/button'
   import Pill from '$lib/components/pills/Pill.svelte'
@@ -23,6 +24,8 @@
     published: 'success',
   }
 </script>
+
+<PageTitle title={`Protokolle – ${data.committee.name}`} />
 
 <div class="space-y-4">
   <div class="flex items-center justify-between">

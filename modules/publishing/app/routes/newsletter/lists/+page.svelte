@@ -1,4 +1,5 @@
 <script lang="ts">
+  import PageTitle from '$lib/components/PageTitle.svelte'
   import { invalidateAll } from '$app/navigation'
   import type { PageData } from './$types'
 
@@ -7,7 +8,8 @@
   let newListName = $state('')
   let error = $state('')
 
-  async function createList() {
+  async function createList(e: SubmitEvent) {
+    e.preventDefault()
     if (!newListName.trim()) return
     const res = await fetch('/api/newsletter/lists', {
       method: 'POST',
@@ -28,6 +30,8 @@
   }
 </script>
 
+<PageTitle title="Verteilerlisten" />
+
 <div class="p-6 max-w-3xl mx-auto">
   <div class="flex items-center gap-3 mb-1">
     <a href="/newsletter" class="text-sm text-ink-muted hover:underline">← Newsletter</a>
@@ -38,12 +42,12 @@
     <div class="rounded-md border border-rust bg-rust-soft p-3 mb-4 text-sm text-rust-ink">{error}</div>
   {/if}
 
-  <div class="flex gap-2 mb-6">
+  <form class="flex gap-2 mb-6" onsubmit={createList}>
     <input type="text" bind:value={newListName} placeholder="Name der neuen Liste" class="flex-1 rounded-md border px-3 py-2 text-sm" />
-    <button onclick={createList} class="rounded-md bg-accent text-paper px-4 py-2 text-sm font-medium hover:bg-accent/90">
+    <button type="submit" class="rounded-md bg-accent text-paper px-4 py-2 text-sm font-medium hover:bg-accent/90">
       Erstellen
     </button>
-  </div>
+  </form>
 
   {#if data.lists.length === 0}
     <p class="text-ink-muted text-sm">Noch keine Verteilerlisten vorhanden.</p>

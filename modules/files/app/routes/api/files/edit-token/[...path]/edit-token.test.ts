@@ -2,16 +2,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth'
 
-const { mockGetFileId, mockGetCollaboraEditorUrl } = vi.hoisted(() => ({
+const { mockGetFileId, mockGetCollaboraEditorUrl, clientOpts } = vi.hoisted(() => ({
+  clientOpts: [] as Array<{ webdavBearer?: string } | undefined>,
   mockGetFileId: vi.fn(),
   mockGetCollaboraEditorUrl: vi.fn()
 }))
 
 vi.mock('$lib/server/files/nextcloud-client', () => ({
-  createNextcloudClient: () => ({
-    getFileId: mockGetFileId,
-    getCollaboraEditorUrl: mockGetCollaboraEditorUrl
-  })
+  createNextcloudClient: (opts?: { webdavBearer?: string }) => {
+    clientOpts.push(opts)
+    return { getFileId: mockGetFileId, getCollaboraEditorUrl: mockGetCollaboraEditorUrl }
+  }
 }))
 vi.mock('$env/dynamic/private', () => ({ env: {} }))
 
@@ -130,6 +131,31 @@ describe('GET /api/files/edit-token/[...path]', () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (GET as any)(makeEvent('Notes/meeting.md', [Role.Member]))
     ).rejects.toMatchObject({ status: 400 })
+  })
+
+  // Collabora shows the name of whoever the WOPI token was minted for. Two people co-editing one file must each
+  // be minted their own token, as themselves: their own Keycloak id and their own bearer, never one shared
+  // service identity (which would show both as the same person).
+  it('mints the token as the requesting user: two users get their own id and their own bearer', async () => {
+    const { GET } = await import('./+server')
+    const asUser = (id: string, accessToken: string) =>
+      ({
+        params: { path: 'Docs/Protokoll.odt' },
+        locals: { user: { id, email: `${id}@example.com`, name: id, roles: [Role.Member], groups: [], loa: 0, authTime: 0 }, accessToken },
+        url: new URL('http://localhost/api/files/edit-token/Docs/Protokoll.odt'),
+        request: new Request('http://localhost/api/files/edit-token/Docs/Protokoll.odt')
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      }) as any
+
+    clientOpts.length = 0
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (GET as any)(asUser('kc-alice', 'bearer-alice'))
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (GET as any)(asUser('kc-bob', 'bearer-bob'))
+
+    expect(clientOpts).toEqual([{ webdavBearer: 'bearer-alice' }, { webdavBearer: 'bearer-bob' }])
+    expect(mockGetFileId.mock.calls.map((c) => c[1])).toEqual(['kc-alice', 'kc-bob'])
+    expect(mockGetCollaboraEditorUrl.mock.calls.map((c) => c[1])).toEqual(['kc-alice', 'kc-bob'])
   })
 
   it('keys the WebDAV path by the Keycloak user id, not preferredUsername', async () => {

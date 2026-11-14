@@ -17,7 +17,7 @@ vi.mock('$lib/components/VideoCallPip.svelte', () => ({ default: function VideoC
 
 const UI_ROOT = resolve(process.cwd())
 const SLOTS_DIR = join(UI_ROOT, 'src', 'lib', 'modules', 'slots')
-const ALLOWED = new Set(['chips', 'liveCall', 'bell', 'overlay'])
+const ALLOWED = new Set(['chips', 'liveCall', 'bell', 'overlay', 'bareRoutes'])
 
 describe('the root layout consumes the module slots', () => {
   const layout = readFileSync(join(UI_ROOT, 'src', 'routes', '+layout.svelte'), 'utf8')
@@ -43,13 +43,18 @@ describe('every slot file in the build', () => {
   })
 
   for (const f of files) {
-    it(`${f} default-exports only chips / liveCall / bell / overlay, each a component`, async () => {
+    it(`${f} default-exports only chips / liveCall / bell / overlay (each a component) and bareRoutes (path prefixes)`, async () => {
       const mod = (await import(/* @vite-ignore */ `../../src/lib/modules/slots/${f}`)) as { default: Record<string, unknown> }
       expect(Object.keys(mod.default).length).toBeGreaterThan(0)
-      for (const [key, value] of Object.entries(mod.default)) {
-        expect(ALLOWED.has(key), `unknown slot part "${key}" in ${f}`).toBe(true)
-        expect(typeof value, `${f}: ${key} must be a component`).toBe('function')
-      }
+      const problems = Object.entries(mod.default).flatMap(([key, value]) => {
+        if (!ALLOWED.has(key)) return [`unknown slot part "${key}"`]
+        if (key === 'bareRoutes') {
+          const ok = Array.isArray(value) && value.every((p) => typeof p === 'string' && p.startsWith('/'))
+          return ok ? [] : ['bareRoutes must be a list of paths starting with /']
+        }
+        return typeof value === 'function' ? [] : [`${key} must be a component`]
+      })
+      expect(problems, f).toEqual([])
     })
   }
 })

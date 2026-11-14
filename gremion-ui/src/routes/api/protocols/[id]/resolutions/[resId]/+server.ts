@@ -7,6 +7,7 @@ import {
 } from '$lib/server/protocols/protocol-db'
 import type { AdoptionMode, RequiredMajority } from '$lib/server/protocols/protocol-db'
 import { requireUuidParams } from '$lib/server/protocols/route-ids'
+import { requireResolutionText } from '$lib/server/protocols/resolution-text'
 import { getDb } from '$lib/server/db'
 import { decideResolution } from '$lib/server/governance/resolution-decision'
 import { isDecisionRuleInputError } from '$lib/server/governance/decision-rule'
@@ -81,6 +82,10 @@ export async function PATCH(event: RequestEvent) {
   const body = await event.request.json()
   const current = await loadEditableResolution(event)
 
+  // An edit may leave the text alone (undefined: the stored text is kept), but it
+  // can never clear it: a decision without text is not stored.
+  const text = body.text === undefined ? undefined : requireResolutionText(body.text)
+
   // INV-5 (T4, mirror of the POST gate): the binding result is never accepted
   // free-hand on an edit either — an acclamation edit uses declared_result;
   // `result` is consulted ONLY for 'withdrawn'.
@@ -104,7 +109,7 @@ export async function PATCH(event: RequestEvent) {
     // "edit the tallies to recompute" un-withdraw path.
     if (body.result === 'withdrawn') {
       const resolution = await refusePublished(() => updateResolution(event.params.resId!, {
-        text: body.text,
+        text,
         result: 'withdrawn',
         requiredMajority,
       }))
@@ -124,7 +129,7 @@ export async function PATCH(event: RequestEvent) {
       throw error(400, 'Informative Stimmzahlen entweder vollständig (Ja/Nein/Enthaltung) oder gar nicht angeben')
     }
     const resolution = await refusePublished(() => updateResolution(event.params.resId!, {
-      text: body.text,
+      text,
       ...(providedVotes === 3 ? { votesYes, votesNo, votesAbstain } : {}),
       ...(declaredResult !== undefined ? { result: declaredResult } : {}),
       requiredMajority,
@@ -170,7 +175,7 @@ export async function PATCH(event: RequestEvent) {
   })
 
   const resolution = await refusePublished(() => updateResolution(event.params.resId!, {
-    text: body.text,
+    text,
     votesYes,
     votesNo,
     votesAbstain,

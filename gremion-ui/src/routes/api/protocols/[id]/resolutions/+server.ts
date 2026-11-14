@@ -5,6 +5,7 @@ import type { SessionUser } from '$lib/auth'
 import { getProtocol, addResolution } from '$lib/server/protocols/protocol-db'
 import type { AdoptionMode, RequiredMajority } from '$lib/server/protocols/protocol-db'
 import { requireUuidParams } from '$lib/server/protocols/route-ids'
+import { requireResolutionText } from '$lib/server/protocols/resolution-text'
 import { decideResolution } from '$lib/server/governance/resolution-decision'
 import {
   CORE_DECISION_RULE_IDS,
@@ -26,6 +27,8 @@ export async function POST(event: RequestEvent) {
   const protocol = await getProtocol(event.params.id!)
   if (!protocol || protocol.status === 'published') throw error(403, 'Nicht bearbeitbar')
   const body = await event.request.json()
+  // A decision is stored only with its text (editor: entry form, not an empty row).
+  const text = requireResolutionText(body.text)
 
   // T4 (#320 Phase 2): HOW the decision is reached — 'tally' (counted vote,
   // the default and the exact pre-existing behaviour) or 'acclamation'
@@ -81,7 +84,7 @@ export async function POST(event: RequestEvent) {
       throw error(400, 'Informative Stimmzahlen entweder vollständig (Ja/Nein/Enthaltung) oder gar nicht angeben')
     }
     const resolution = await addResolution(protocol.id, {
-      text: body.text ?? '',
+      text,
       votesYes: providedVotes === 3 ? body.votesYes : null,
       votesNo: providedVotes === 3 ? body.votesNo : null,
       votesAbstain: providedVotes === 3 ? body.votesAbstain : null,
@@ -122,7 +125,7 @@ export async function POST(event: RequestEvent) {
   })
 
   const resolution = await addResolution(protocol.id, {
-    text: body.text ?? '',
+    text,
     votesYes,
     votesNo,
     votesAbstain,

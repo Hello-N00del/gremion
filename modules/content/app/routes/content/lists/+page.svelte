@@ -10,7 +10,8 @@
   let newListName = $state('')
   let error = $state('')
 
-  async function createList() {
+  async function createList(e: SubmitEvent) {
+    e.preventDefault()
     if (!newListName.trim()) return
     error = ''
     const res = await fetch('/api/content/lists', {
@@ -48,10 +49,10 @@
   <p class="err">{error}</p>
 {/if}
 
-<div class="create">
+<form class="create" onsubmit={createList}>
   <input type="text" bind:value={newListName} placeholder="Name der neuen Liste" />
-  <button onclick={createList}>Erstellen</button>
-</div>
+  <button type="submit">Erstellen</button>
+</form>
 
 {#if data.lists.length === 0}
   <p class="muted">Noch keine Verteilerlisten.</p>

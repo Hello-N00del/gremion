@@ -32,6 +32,11 @@ const base = {
   id: 'p1', committee_id: 'c1', title: 'VV', meeting_date: '2026-04-16', status: 'submitted',
   nextcloud_draft_path: null, body_html: '<p>Beschluss</p><script>x()</script>', approval_poll_id: null,
 }
+// A counted resolution with a recorded vote, as listResolutions returns it.
+const counted = {
+  id: 'r1', result: 'passed', adoption_mode: 'tally', required_majority: 'simple',
+  votes_yes: 2, votes_no: 0, votes_abstain: 1,
+}
 const ev = () => ({
   locals: { user: { id: 'u1', roles: ['council-admin'] } },
   params: { id: '123e4567-e89b-12d3-a456-426614174001' },
@@ -61,14 +66,14 @@ describe('POST /api/protocols/[id]/publish - files off (F1)', () => {
   })
 
   it('still writes the audit adoption record on the publish tx', async () => {
-    const r = [{ id: 'r1', result: 'accepted' }]
+    const r = [counted]
     h.listResolutions.mockResolvedValue(r)
     await POST(ev())
     expect(h.recordAdoptions).toHaveBeenCalledWith('u1', r, { __tx: true })
   })
 
   it('still refuses (422) a non-quorate protocol with binding resolutions and writes nothing', async () => {
-    h.listResolutions.mockResolvedValue([{ id: 'r1', result: 'accepted' }])
+    h.listResolutions.mockResolvedValue([counted])
     h.quorum.mockResolvedValue({ eligibleVotingCount: 5, presentVotingCount: 1, quorate: false })
     await expect(POST(ev())).rejects.toMatchObject({ status: 422 })
     expect(h.setStatus).not.toHaveBeenCalled()

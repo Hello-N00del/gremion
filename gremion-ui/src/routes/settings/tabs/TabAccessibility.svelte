@@ -22,18 +22,17 @@
 
   <!-- Language (moved out of TabGeneral, #168) -->
   <section>
-    <h3 class="text-sm font-semibold mb-1" style="font-family: var(--font-display);">{$t('settings.appearance.language')}</h3>
+    <h3 id="lang-heading" class="text-sm font-semibold mb-1" style="font-family: var(--font-display);">{$t('settings.appearance.language')}</h3>
     <p class="text-xs text-ink-muted mb-4">{$t('settings.appearance.language.sub')}</p>
     <!-- TASK-062: a plain form POST + 303 (routes/settings/+page.server.ts,
          action `locale`). Works with JS off; the next document is rendered
          in the new language by the server, so nothing flips after hydration. -->
-    <form method="POST" action="/settings?/locale" class="flex gap-2" role="group" aria-labelledby="lang-select">
+    <form method="POST" action="/settings?/locale" class="flex gap-2" role="group" aria-labelledby="lang-heading">
       <input type="hidden" name="redirectTo" value={page.url.pathname} />
       <button
         type="submit"
         name="locale"
         value="de"
-        id="lang-select"
         aria-pressed={$lang === 'de'}
         class="flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors
                {$lang === 'de'
@@ -68,8 +67,8 @@
   <section>
     <h3 class="text-sm font-semibold mb-1" style="font-family: var(--font-display);">Farbsehkorrektur</h3>
     <p class="text-xs text-ink-muted mb-4">
-      Passt die Farbpalette der Oberfläche an deine Sehbedingungen an.
-      Die Einstellung wird lokal gespeichert und nur auf deinem Gerät angewendet.
+      Passt die Farbpalette der Oberfläche an Ihre Sehbedingungen an.
+      Die Einstellung wird lokal gespeichert und nur auf Ihrem Gerät angewendet.
     </p>
 
     <div class="space-y-2">
@@ -117,7 +116,7 @@
   <!-- Theme -->
   <section>
     <h3 class="text-sm font-semibold mb-1" style="font-family: var(--font-display);">Erscheinungsbild</h3>
-    <p class="text-xs text-ink-muted mb-4">Wähle zwischen hellem und dunklem Modus.</p>
+    <p class="text-xs text-ink-muted mb-4">Wählen Sie zwischen hellem und dunklem Modus.</p>
     <div class="flex gap-2">
       {#each [
         { key: 'light', label: 'Hell',   icon: 'sun'  },
@@ -161,10 +160,11 @@
   <!-- Motion -->
   <section>
     <h3 class="text-sm font-semibold mb-1" style="font-family: var(--font-display);">Animationen</h3>
-    <p class="text-xs text-ink-muted mb-3">Reduziere Bewegungseffekte, wenn du empfindlich auf Animationen reagierst.</p>
+    <p class="text-xs text-ink-muted mb-3">Reduzieren Sie Bewegungseffekte, wenn Sie empfindlich auf Animationen reagieren.</p>
     <label class="flex items-center gap-3 cursor-pointer">
       <input
         type="checkbox"
+        aria-label="Animationen reduzieren"
         class="rounded border-border"
         checked={$reducedMotion}
         onchange={(e) => reducedMotion.set((e.target as HTMLInputElement).checked)}

@@ -23,13 +23,14 @@ import {
   type ArchivePriorPowerLevels, type PowerLevelsContent,
 } from './archive-power-levels'
 import { serviceEnv } from '$lib/server/env/service-env'
+import { currentTenantId } from '$lib/server/tenant/context'
 import { getOrgUnit, listOrgUnits, setSubsystemWanted, type OrgUnit } from '$lib/server/governance/org-units-db'
 import { enqueueResources, getResource, markResourceOk } from '$lib/server/governance/provisioning/ledger'
 import { withUnitLock } from '$lib/server/governance/provisioning/mutex'
 import { attachSubsystem, releaseSubsystem } from '$lib/server/governance/provisioning/orchestrator'
 import { getDb } from '$lib/server/db'
 import type { ProvisioningReport } from '$lib/server/governance/provisioning/types'
-import { writeAuditEntry } from '$lib/server/audit-db'
+import { writeAuditEntry, auditEntryExists } from '$lib/server/audit-db'
 
 /** Thrown when a Matrix/Synapse call fails for a TRANSPORT reason (unreachable,
  *  timed out, or a 502/503/504 from the homeserver) — the caller (route layer)
@@ -196,7 +197,7 @@ async function archiveMatrixSide(unitId: string, unitName: string, roomId: strin
   // overwrite, so unarchiveRoom can put them back exactly. A retry after a partial archive
   // finds the room ALREADY read-only, so the first attempt's marker (when it is a trusted
   // one with a prior) wins: reading the levels again would store the archived ones.
-  const existing = await getRoomArchiveMarker(roomId)
+  const existing = await getRoomArchiveMarker(roomId, { recordedUnitId: unitId })
   // A stale marker of ANOTHER unit (or of an earlier life of the room) never sets this archive's prior or timestamp.
   const keptPrior = existing?.org_unit_id === unitId ? sanitizePrior(existing.prior) : null
   let current: PowerLevelsContent | undefined
@@ -217,7 +218,7 @@ async function archiveMatrixSide(unitId: string, unitName: string, roomId: strin
     ? existing.archive_alias : null
   const archiveAlias = keptAlias ?? freshArchiveAlias(unitName)
   await mc.setRoomState(roomId, ROOM_ARCHIVE_MARKER_TYPE, '', {
-    org_unit_id: unitId, archived_at: (keptPrior && typeof existing?.archived_at === 'string' && existing.archived_at) || new Date().toISOString(), prior,
+    org_unit_id: unitId, tenant_id: currentTenantId(), archived_at: (keptPrior && typeof existing?.archived_at === 'string' && existing.archived_at) || new Date().toISOString(), prior,
     archive_alias: archiveAlias,
   })
   await applyReadOnlyPowerLevels(roomId, current)
@@ -350,13 +351,13 @@ async function unarchiveMatrixSide(
  *  row is failed too, and an archive that died before the marker write leaves nothing to undo). A RoomConflictError means the unit already has another active room; the Matrix side is
  *  not touched then. */
 export async function unarchiveRoom(
-  unitId: string, roomId: string, opts: { userId: string },
+  unitId: string, roomId: string, opts: { userId: string; recordedByCaller?: boolean },
 ): Promise<{ aliasRestored: boolean; priorGuessed: boolean }> {
   const unit = await getOrgUnit(unitId)
   if (!unit) throw new RoomNotFoundError(`org unit not found: ${unitId}`)
 
   return withUnitLock(unitId, async () => {
-    const marker = await getRoomArchiveMarker(roomId)
+    const marker = await getRoomArchiveMarker(roomId, { recordedUnitId: opts.recordedByCaller ? unitId : undefined })
     const resource = await getResource(unitId, 'matrix')
     if (!marker || marker.org_unit_id !== unitId) {
       if (resource?.external_id === roomId) return { aliasRestored: true, priorGuessed: false } // already active
@@ -481,12 +482,34 @@ export interface RoomOverviewEntry {
   unitName: string
   state: RoomOverviewState
   roomId?: string
+  /** The room's own name (m.room.name). A rename changes this and never the unit's name. Absent
+   *  while Matrix is unreachable, or when the name could not be read. */
+  roomName?: string
   lastError?: string
+}
+
+/** One archived room. A unit can have several (archived, a new room created, archived again),
+ *  and a unit that has an active room again still has its archived ones. */
+export interface ArchivedRoomEntry {
+  roomId: string
+  unitId: string
+  unitName: string
+  roomName?: string
+  archivedAt?: string
+  /** False when the unit has another room: unarchiveRoom refuses that restore (RoomConflictError). */
+  restorable: boolean
+  /** Why it is not restorable, so the page can say the true reason: the unit has `other_room`, a new room
+   *  of the unit is still `being_created` (a pending row without a room: a restore here would race the
+   *  provisioning), or the unit's ledger could not be read (`unreadable`, which says nothing about
+   *  another room). */
+  restoreBlockedBy?: 'other_room' | 'unreadable' | 'being_created'
 }
 
 export interface RoomOverview {
   matrix: 'reachable' | 'unreachable'
   units: RoomOverviewEntry[]
+  /** Every archived room of the given units, newest archive first. Empty while Matrix is unreachable. */
+  archivedRooms: ArchivedRoomEntry[]
 }
 
 // FLOW-MSG-001 (TASK-009 fu1 defect 1): bounded-concurrency map, used so
@@ -495,6 +518,8 @@ export interface RoomOverview {
 // (a server with hundreds of Gremion-managed rooms would otherwise open
 // hundreds of concurrent connections to Synapse for a single overview load).
 const ARCHIVE_MARKER_CONCURRENCY = 8
+
+interface FoundArchivedRoom { roomId: string; unitId: string; archivedAt?: string }
 
 async function mapWithConcurrency<T, R>(
   items: readonly T[], limit: number, fn: (item: T) => Promise<R>
@@ -534,9 +559,13 @@ async function mapWithConcurrency<T, R>(
  *  candidate's marker, bounded to ARCHIVE_MARKER_CONCURRENCY at a time.
  *  Best-effort: any failure (listing or a single marker read) degrades to
  *  detecting nothing archived, so the overview still renders every unit's
- *  ledger-derived state (PRD-DEP-004) instead of throwing. */
-async function findArchivedRooms(): Promise<Map<string, { roomId: string; archivedAt?: string }>> {
-  const byUnit = new Map<string, { roomId: string; archivedAt?: string }>()
+ *  ledger-derived state (PRD-DEP-004) instead of throwing.
+ *
+ *  Answers EVERY archived room, newest archive first (ties by room id, so the order never
+ *  depends on the listing). A unit can have more than one: keeping only the newest per unit
+ *  hid the others, and deleting the newest then brought the next one up in its place. */
+async function findArchivedRooms(): Promise<FoundArchivedRoom[]> {
+  const found: FoundArchivedRoom[] = []
   try {
     const bot = getMatrixClient().getAdminBotUserId()
     // LOW (TASK-009 fu1 round 2 verifier): an unconfigured admin bot user id
@@ -550,13 +579,12 @@ async function findArchivedRooms(): Promise<Map<string, { roomId: string; archiv
     // own explicit signal rather than degrading in silence.
     if (!bot) {
       console.error('[room-admin] findArchivedRooms: admin bot user id unconfigured, cannot detect archived rooms')
-      return byUnit
+      return found
     }
     const allRooms = await getSynapseAdmin().listRooms()
     const candidates = allRooms.filter((room) => room.creator === bot)
     // Markers are read with bounded concurrency (each independent of the
-    // others), then merged sequentially so a genuine multi-archive collision
-    // (LOW, r2-rooms-B3) can still be resolved deterministically by archivedAt.
+    // others), then merged sequentially and ordered by archivedAt below.
     const markers = await mapWithConcurrency(candidates, ARCHIVE_MARKER_CONCURRENCY, async (room) => {
       const roomId = room.room_id
       if (!roomId) return null
@@ -575,15 +603,15 @@ async function findArchivedRooms(): Promise<Map<string, { roomId: string; archiv
     })
     for (const entry of markers) {
       if (!entry) continue
-      const unitId = entry.marker.org_unit_id as string
-      const existing = byUnit.get(unitId)
-      // Deterministic pick when a unit has more than one archived room
-      // (re-archived after a recreate cycle): keep the newest archivedAt
-      // rather than whichever listing order happened to win.
-      if (!existing || (entry.marker.archived_at ?? '') > (existing.archivedAt ?? '')) {
-        byUnit.set(unitId, { roomId: entry.roomId, archivedAt: entry.marker.archived_at })
-      }
+      const archivedAt = typeof entry.marker.archived_at === 'string' ? entry.marker.archived_at : undefined
+      found.push({ roomId: entry.roomId, unitId: entry.marker.org_unit_id as string, archivedAt })
     }
+    // Newest first. The timestamps are ISO strings of one writer, so they order as text; a tie
+    // (or two markers without a timestamp) falls back to the room id.
+    found.sort((a, b) => {
+      const byDate = (b.archivedAt ?? '').localeCompare(a.archivedAt ?? '')
+      return byDate === 0 ? a.roomId.localeCompare(b.roomId) : byDate
+    })
   } catch (err) {
     // Matrix listing unreachable/erroring — degrade to none-detected (see
     // above), but log it: a genuine listRooms bug must not look identical to
@@ -591,21 +619,57 @@ async function findArchivedRooms(): Promise<Map<string, { roomId: string; archiv
     console.error('[room-admin] findArchivedRooms: listRooms failed, degrading to none-detected', {
       error: err instanceof Error ? err.message : String(err),
     })
+    return []
   }
-  return byUnit
+  return found
+}
+
+/** The own names (m.room.name) of the given rooms, read as the admin bot like every other state
+ *  read here, at most ARCHIVE_MARKER_CONCURRENCY at a time. Read as room state, the authoritative
+ *  source of a room's name, and not taken from the admin room listing: the overview is reloaded
+ *  right after a rename and must show the name that was just set. A failed read is logged and
+ *  leaves the name out; it never fails the overview. */
+async function readRoomNames(roomIds: readonly string[]): Promise<Map<string, string>> {
+  const names = new Map<string, string>()
+  const mc = getMatrixClient()
+  await mapWithConcurrency(roomIds, ARCHIVE_MARKER_CONCURRENCY, async (roomId) => {
+    try {
+      const content = (await mc.getRoomState(roomId, 'm.room.name')) as { name?: unknown } | null
+      if (typeof content?.name === 'string' && content.name !== '') names.set(roomId, content.name)
+    } catch (err) {
+      console.error('[room-admin] listOverview: room name could not be read, showing the room without it', {
+        roomId, error: err instanceof Error ? err.message : 'unknown error',
+      })
+    }
+  })
+  return names
 }
 
 /** GET /messages/manage load (route layer, next unit). Never throws — every
  *  per-unit ledger read is caught individually, and Matrix reachability
  *  degrades to 'unreachable' via validateCredentials's own no-throw contract
  *  (PRD-DEP-004: the rest of the page/admin still works with Matrix down). The
- *  archived-room search only runs while Matrix is reachable, so an outage
- *  never adds extra failing calls on top of the already-degraded state. */
+ *  archived-room search and the room-name reads only run while Matrix is
+ *  reachable, so an outage never adds extra failing calls on top of the
+ *  already-degraded state. */
 export async function listOverview(
   units: readonly Pick<OrgUnit, 'id' | 'name'>[]
 ): Promise<RoomOverview> {
   const matrixReachable = await getSynapseAdmin().validateCredentials().catch(() => false)
-  const archivedByUnit = matrixReachable ? await findArchivedRooms() : new Map<string, { roomId: string; archivedAt?: string }>()
+  const archived = matrixReachable ? await findArchivedRooms() : []
+  // The newest archived room of each unit (the list is newest first): what a unit without a
+  // ledger row shows as its 'archiviert' room.
+  const archivedByUnit = new Map<string, FoundArchivedRoom>()
+  for (const room of archived) {
+    if (!archivedByUnit.has(room.unitId)) archivedByUnit.set(room.unitId, room)
+  }
+  // What unarchiveRoom checks before a restore: the room the unit's ledger row names, if any. A
+  // unit whose row could not be read is absent, and its archived rooms are not offered for restore.
+  const ledgerRoomByUnit = new Map<string, string | null>()
+  // Units whose row is pending without a room: a new room is being created for them. The restore of
+  // the room-admin page is not offered then (unarchiveRoom itself accepts that row, which the Karenz
+  // switch-on relies on, when it re-attaches the room the module switch-on enqueued).
+  const unitsBeingCreated = new Set<string>()
 
   // Parallel per-unit ledger reads (N+1 -> one round-trip batch, MEDIUM,
   // r1-kernel-nav-roomsB2): each read is independent of every other unit's.
@@ -625,6 +689,10 @@ export async function listOverview(
           unitId: unit.id, error: err instanceof Error ? err.message : String(err),
         })
       }
+      if (!readFailed) {
+        ledgerRoomByUnit.set(unit.id, resource?.external_id ?? null)
+        if (resource && !resource.external_id && resource.status === 'pending') unitsBeingCreated.add(unit.id)
+      }
       let state: RoomOverviewState
       let roomId: string | undefined
       let lastError: string | undefined
@@ -642,10 +710,10 @@ export async function listOverview(
         // No ledger row at all — either never had a room (leer) or the row
         // was released on archive (S2.1 "Matrix first, DB second"), which
         // the archived-room cross-reference below can still detect.
-        const archived = archivedByUnit.get(unit.id)
-        if (archived) {
+        const newestArchived = archivedByUnit.get(unit.id)
+        if (newestArchived) {
           state = 'archiviert'
-          roomId = archived.roomId
+          roomId = newestArchived.roomId
         } else {
           state = 'leer'
         }
@@ -666,7 +734,32 @@ export async function listOverview(
       return { unitId: unit.id, unitName: unit.name, state, roomId, lastError }
     })
   )
-  return { matrix: matrixReachable ? 'reachable' : 'unreachable', units: entries }
+  if (!matrixReachable) return { matrix: 'unreachable', units: entries, archivedRooms: [] }
+
+  // Only rooms of THESE units: a marker naming any other unit (one that was removed, or one of
+  // another customer on the same homeserver) is not this overview's to show.
+  const unitNames = new Map(units.map((unit) => [unit.id, unit.name]))
+  const ownArchived = archived.filter((room) => unitNames.has(room.unitId))
+  const activeRoomIds = entries.flatMap((entry) => (entry.state === 'aktiv' && entry.roomId ? [entry.roomId] : []))
+  const names = await readRoomNames([...new Set([...activeRoomIds, ...ownArchived.map((room) => room.roomId)])])
+
+  const archivedRooms: ArchivedRoomEntry[] = ownArchived.map((room) => {
+    const ledgerRoom = ledgerRoomByUnit.get(room.unitId)
+    const beingCreated = unitsBeingCreated.has(room.unitId)
+    const restorable = ledgerRoom !== undefined && !beingCreated && (ledgerRoom === null || ledgerRoom === room.roomId)
+    const blockedBy = ledgerRoom === undefined ? 'unreadable' as const : beingCreated ? 'being_created' as const : 'other_room' as const
+    return {
+      roomId: room.roomId,
+      unitId: room.unitId,
+      unitName: unitNames.get(room.unitId) ?? '',
+      roomName: names.get(room.roomId),
+      archivedAt: room.archivedAt,
+      restorable,
+      ...(restorable ? {} : { restoreBlockedBy: blockedBy }),
+    }
+  })
+  const withNames = entries.map((entry) => (entry.roomId ? { ...entry, roomName: names.get(entry.roomId) } : entry))
+  return { matrix: 'reachable', units: withNames, archivedRooms }
 }
 
 /** Standalone Matrix-reachability probe (the overview's own reachability check
@@ -677,6 +770,15 @@ export async function probeMatrix(): Promise<boolean> {
 
 export interface RoomArchiveMarker {
   org_unit_id?: string
+  /** The customer (tenant) that archived the room. Org unit ids are not unique across customers (the
+   *  dev seed gives every fresh tenant database the same fixed ids) and the marker is room state of a
+   *  homeserver that several customers can share, so the unit id alone does not say whose room it is. */
+  tenant_id?: string
+  /** Set by getRoomArchiveMarker ONLY, never stored: the room is archived, but not provably by this
+   *  customer (another customer's tenant id, or a marker of a build that did not store one that
+   *  nothing of this customer records). Such a marker carries no org_unit_id here, so nothing matches
+   *  it to one of this customer's units. */
+  foreign?: true
   archived_at?: string
   /** Karenz (Task 15): the power levels the archive overwrote (see ArchivePriorPowerLevels). Raw Matrix
    *  state, NOT trusted: run it through sanitizePrior before reading a single field. */
@@ -710,7 +812,9 @@ export const ROOM_ARCHIVE_MARKER_TYPE = 'org.gremion.room.archived'
  *  else returns null — "not archived, not Gremion-managed". A missing marker
  *  (404) is also null; a transport failure propagates so each caller keeps
  *  its own fail-closed/fail-open policy. */
-export async function getRoomArchiveMarker(roomId: string): Promise<RoomArchiveMarker | null> {
+export async function getRoomArchiveMarker(
+  roomId: string, opts: { recordedUnitId?: string } = {},
+): Promise<RoomArchiveMarker | null> {
   const mc = getMatrixClient()
   const bot = mc.getAdminBotUserId()
   const markerEvent = await mc.getRoomStateEvent(roomId, ROOM_ARCHIVE_MARKER_TYPE)
@@ -735,7 +839,40 @@ export async function getRoomArchiveMarker(roomId: string): Promise<RoomArchiveM
   // room routes treat the room as active again.
   const unitId = (content as RoomArchiveMarker).org_unit_id
   if (typeof unitId !== 'string' || unitId === '') return null
+  // Whose archive this is. A room archived by another customer on a shared homeserver is still
+  // ARCHIVED (it is not joined, not offered as active), but it is not this customer's to list, restore
+  // or delete: its unit id is withheld, so it matches no unit.
+  const stamp = (content as RoomArchiveMarker).tenant_id
+  if (stamp !== undefined && stamp !== currentTenantId()) {
+    console.warn('[room-admin] getRoomArchiveMarker: ignoring the unit of an archive marker stamped by another customer', { roomId })
+    return { foreign: true }
+  }
+  // A marker with no stamp was written by a build that stored none (every room archived before the
+  // stamp). It cannot say whose it is, so it is this customer's only when this customer's own records
+  // already name the room for that unit; otherwise it is treated like another customer's.
+  if (stamp === undefined && !(await recordsOwnArchive(unitId, roomId, opts.recordedUnitId))) {
+    console.warn('[room-admin] getRoomArchiveMarker: ignoring the unit of an unstamped archive marker nothing of this customer records', { roomId })
+    return { foreign: true }
+  }
   return content as RoomArchiveMarker
+}
+
+/** Whether this customer's own records show that `roomId` is archived for `unitId`: the caller's own
+ *  record (`recordedUnitId`, e.g. the Karenz item the messaging Karenz made for it), the unit's ledger
+ *  row naming the room (an archive that has not detached it yet), or the audit trail entry the archive
+ *  wrote. Both are per customer, unlike the room state of a homeserver several customers can share.
+ *  A failing read proves nothing: the marker stays withheld, it never fails the caller. */
+async function recordsOwnArchive(unitId: string, roomId: string, recordedUnitId?: string): Promise<boolean> {
+  if (recordedUnitId === unitId) return true
+  try {
+    if ((await getResource(unitId, 'matrix'))?.external_id === roomId) return true
+    return await auditEntryExists('messages.room.archive', `${unitId}:${roomId}:ok`)
+  } catch (err) {
+    console.error('[room-admin] getRoomArchiveMarker: this customer\'s records of the archive could not be read, treating the marker as not its own', {
+      roomId, error: err instanceof Error ? err.message : 'unknown error',
+    })
+    return false
+  }
 }
 
 /** TASK-009 lane B (row 15): reverse-lookup for the /messages Einstellungen

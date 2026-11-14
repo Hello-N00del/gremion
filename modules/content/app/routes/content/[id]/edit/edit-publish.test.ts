@@ -322,6 +322,55 @@ describe('an invalid group id cannot break a send', () => {
     expect(queryByText('Internal Error')).toBeNull()
   })
 
+  it('shows the message of the server when the groups cannot be checked right now', async () => {
+    const message = 'Die Gruppen der Gremien können gerade nicht geprüft werden. Bitte später erneut versuchen.'
+    stubFetch({ putStatus: 503, putBody: { message } })
+    const { findByLabelText, getByRole, findByText } = renderPage()
+    await fireEvent.click(await findByLabelText('Liste A'))
+    await fireEvent.click(getByRole('button', { name: 'Empfänger speichern' }))
+    expect(await findByText(message)).toBeTruthy()
+  })
+
+  it('unticks a group the server left out of the saved set, and says so', async () => {
+    const calls = stubFetch({
+      stored: [
+        { mailing_list_id: 'l1', keycloak_group_id: null },
+        { mailing_list_id: null, keycloak_group_id: 'old' },
+      ],
+      putBody: { ok: true, removed: ['old'] },
+    })
+    const { findByLabelText, queryByLabelText, getByRole, findByText } = renderPage()
+    expect(((await findByLabelText('old (nicht in der Liste)')) as HTMLInputElement).checked).toBe(true)
+    await fireEvent.click(getByRole('button', { name: 'Empfänger speichern' }))
+    expect(
+      await findByText('Eine Gruppe gehört zu keinem Gremium mehr und wurde aus den Empfängern entfernt.'),
+    ).toBeTruthy()
+    expect(queryByLabelText('old (nicht in der Liste)')).toBeNull()
+
+    // The next save no longer sends the group.
+    await fireEvent.click(getByRole('button', { name: 'Empfänger speichern' }))
+    await waitFor(() => expect(calls.filter(isPut)).toHaveLength(2))
+    expect(calls.filter(isPut)[1].body).toEqual({ recipients: [{ mailing_list_id: 'l1' }] })
+  })
+
+  it('does not send when the audience changed while saving; the author looks first', async () => {
+    const calls = stubFetch({
+      stored: [
+        { mailing_list_id: 'l1', keycloak_group_id: null },
+        { mailing_list_id: null, keycloak_group_id: 'old' },
+      ],
+      putBody: { ok: true, removed: ['old'] },
+    })
+    const { findByLabelText, getAllByRole, findByText } = renderPage()
+    await findByLabelText('old (nicht in der Liste)')
+    await fireEvent.click(getAllByRole('button', { name: 'Jetzt veröffentlichen' })[0])
+    expect(
+      await findByText('Die Empfänger haben sich geändert. Bitte prüfen und den Vorgang wiederholen.'),
+    ).toBeTruthy()
+    expect(calls.some(isPut)).toBe(true)
+    expect(calls.some(isPublish)).toBe(false)
+  })
+
   it('shows a German text, not the generic English one, when the publish fails on the server', async () => {
     stubFetch({ publishStatus: 500, publishBody: { message: 'Internal Error' } })
     const { findByLabelText, getAllByRole, findByText, queryByText } = renderPage()

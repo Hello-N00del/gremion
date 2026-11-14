@@ -18,9 +18,13 @@ import type { RequestHandler } from './$types'
 // requires every /api/internal/ handler to call isInternalTrustRequest or constantTimeEqual).
 import { constantTimeEqual } from '$lib/server/internal-fetch'
 import { getKeycloakAdminClientForCurrentTenant } from '$lib/server/keycloak-admin'
+import { listOrgUnitGroupIds } from '$lib/server/governance/org-unit-groups'
 
 const ResolveGroupBody = z.object({
   groupId: z.string().min(1),
+  // A caller whose recipients must be groups of the customer's org units (the
+  // content leaf) sets this; the newsletter leaf does not.
+  orgUnitOnly: z.boolean().optional(),
 })
 
 export const POST: RequestHandler = async ({ request }) => {
@@ -52,14 +56,35 @@ export const POST: RequestHandler = async ({ request }) => {
   const parsed = ResolveGroupBody.safeParse(body)
   if (!parsed.success) {
     return json(
-      { success: false, error: 'Missing or invalid groupId' },
+      { success: false, error: 'Missing or invalid groupId or orgUnitOnly' },
       { status: 400 }
     )
   }
 
-  const { groupId } = parsed.data
+  const { groupId, orgUnitOnly } = parsed.data
 
-  // ── 3. Fetch KC group members and filter/format (scheduler parity) ────────
+  // ── 3. orgUnitOnly: only the group of an org unit has members to return ───
+  // Any other group answers with no members and Keycloak is not asked. If the
+  // org units cannot be read the callback fails, so the caller's send fails
+  // as a whole instead of going out to a part of its audience.
+  if (orgUnitOnly) {
+    let orgUnitGroupIds: ReadonlySet<string>
+    try {
+      orgUnitGroupIds = await listOrgUnitGroupIds()
+    } catch (err) {
+      console.error(
+        '[newsletter:resolve-group] org units unreadable',
+        err instanceof Error ? err.name : typeof err,
+      )
+      return json({ success: false, error: 'Org units unavailable' }, { status: 503 })
+    }
+    if (!orgUnitGroupIds.has(groupId)) {
+      console.warn('[newsletter:resolve-group] not an org-unit group, no members returned')
+      return json({ members: [] })
+    }
+  }
+
+  // ── 4. Fetch KC group members and filter/format (scheduler parity) ────────
   try {
     const kc = getKeycloakAdminClientForCurrentTenant()
     const rawMembers = await kc.getGroupMembers(groupId)

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import PageTitle from '$lib/components/PageTitle.svelte'
   import type { PageData } from './$types'
   import Pill from '$lib/components/pills/Pill.svelte'
 
@@ -15,6 +16,8 @@
     election: 'Wahl',
   }
 </script>
+
+<PageTitle title={`Beschlüsse – ${data.committee.name}`} />
 
 <div class="space-y-4">
   <div class="flex items-center justify-between">
@@ -48,7 +51,11 @@
                 {entry.meeting_date ? new Date(entry.meeting_date).toLocaleDateString('de-DE') : '—'}
               </td>
               <td class="px-3 py-2">
-                {#if entry.result === 'passed'}
+                {#if entry.untallied}
+                  <!-- Nobody voted on it: the stored "rejected" is the rule engine's
+                       placeholder, not a decision (flag set by the register API). -->
+                  <span class="text-ink-muted">keine Abstimmung</span>
+                {:else if entry.result === 'passed'}
                   <span class="text-green-700 font-medium">✓ Angenommen</span>
                 {:else if entry.result === 'rejected'}
                   <span class="text-red-700">✗ Abgelehnt</span>

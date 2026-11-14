@@ -1,5 +1,6 @@
 <script lang="ts">
   import AppShell from '$lib/components/layout/AppShell.svelte'
+  import { isShellPath } from '$lib/components/layout/shell-route'
   import '../app.css'
   // #177: self-hosted fonts — no third-party Google Fonts dependency (GDPR) and
   // no blocked-by-CSP external request. Weights mirror the families declared in
@@ -94,12 +95,9 @@
     contentLocaleFor($page.route.id, browser ? uiLocaleOf(document.documentElement) : $lang)
   )
 
-  // Don't show shell on auth/legal pages
-  let isShellRoute = $derived(
-    !$page.url.pathname.startsWith('/auth') &&
-    !$page.url.pathname.startsWith('/legal') &&
-    !$page.url.pathname.startsWith('/setup')
-  )
+  // No shell on auth/legal/setup pages, nor on a route a module renders full-viewport (its slot's bareRoutes).
+  const bareRoutes = moduleSlots.flatMap((s) => s.bareRoutes ?? [])
+  let isShellRoute = $derived(isShellPath($page.url.pathname, bareRoutes))
 </script>
 
 <!-- Skip-to-content link — WCAG 2.4.1 / BITV 2.0 -->

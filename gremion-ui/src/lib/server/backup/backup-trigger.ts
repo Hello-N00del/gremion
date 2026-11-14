@@ -31,7 +31,7 @@ export interface BackupRunRecord {
 
 export class BackupTriggerError extends Error {
   constructor(
-    public readonly code: 'unavailable' | 'busy',
+    public readonly code: 'unavailable' | 'busy' | 'not_configured',
     message: string,
   ) {
     super(message)
@@ -40,7 +40,8 @@ export class BackupTriggerError extends Error {
 }
 
 export interface BackupDeps {
-  socketPath: string
+  /** The host daemon's socket; null when the installation names none (not managed from the app). */
+  socketPath: string | null
   runsDir: string
   timeoutMs: number
   /** Stamps config.backups.last_backup_at for the request's tenant. */
@@ -124,21 +125,25 @@ export function triggerAvailability(deps: Pick<BackupDeps, 'socketPath'>): Trigg
 
 /**
  * Connect to hostd, send `backup`, record `started`, and finish the record in the
- * background. Throws BackupTriggerError (never records a run) when hostd cannot
- * be reached or a run is already in flight.
+ * background. Throws BackupTriggerError (never records a run) when no host daemon
+ * is configured, when hostd cannot be reached, or when a run is already in flight.
  */
 export async function startBackup(deps: BackupDeps, opts: { requestedBy: string | null }): Promise<BackupRunRecord> {
   const now = deps.now ?? (() => new Date())
   if (active.has(deps.runsDir)) {
     throw new BackupTriggerError('busy', 'Es läuft bereits ein Backup.')
   }
-  const availability = hostdAvailability(deps.socketPath)
-  if (!availability.available) {
-    throw new BackupTriggerError('unavailable', availability.reason ?? 'Der Host-Dienst (hostd) ist nicht erreichbar.')
+  const availability = triggerAvailability(deps)
+  const socketPath = deps.socketPath
+  if (!availability.available || socketPath === null) {
+    throw new BackupTriggerError(
+      availability.state === 'not_configured' ? 'not_configured' : 'unavailable',
+      availability.reason ?? 'Der Host-Dienst (hostd) ist nicht erreichbar.',
+    )
   }
   let sock: net.Socket
   try {
-    sock = await (deps.connect ?? connectHostd)(deps.socketPath)
+    sock = await (deps.connect ?? connectHostd)(socketPath)
   } catch (err) {
     const msg = err instanceof HostdUnreachableError ? err.message : 'Der Host-Dienst (hostd) ist nicht erreichbar.'
     throw new BackupTriggerError('unavailable', msg)

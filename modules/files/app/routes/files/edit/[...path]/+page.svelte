@@ -4,6 +4,7 @@
   import { goto } from '$app/navigation'
   import { Alert } from '$lib/components/ui/alert'
   import { Button } from '$lib/components/ui/button'
+  import { closeEditor } from '$lib/files/editor-close'
 
   let { data }: { data: PageData } = $props()
 
@@ -87,7 +88,7 @@
           Values?: { success?: boolean; result?: string }
         }
         if (msg.MessageId === 'App_Close_Requested') {
-          goto(data.backPath)
+          closeOnce()
         } else if (msg.MessageId === 'Action_Save_Resp' && msg.Values?.success === false) {
           saveError = msg.Values.result ?? 'Speichern fehlgeschlagen — bitte erneut versuchen.'
         }
@@ -107,33 +108,54 @@
     window.location.reload()
   }
 
+  // The tab the app opened for this editor closes itself; any other (a bookmark, a pasted link) goes back to the
+  // folder of the file. Schließen and Collabora's own close button both land here, and Schließen makes Collabora
+  // answer with App_Close_Requested too, so the close runs once. The latch is only a debounce: if the tab is
+  // still there after the browser had its say (a refused window.close, a leave-page prompt the person
+  // cancelled), Schließen works again.
+  const CLOSE_LATCH_MS = 2000
+  let closing = false
+  function closeOnce() {
+    if (closing) return
+    closing = true
+    setTimeout(() => { closing = false }, CLOSE_LATCH_MS)
+    closeEditor({ win: window, backPath: data.backPath, navigate: (path) => void goto(path) })
+  }
+
   function requestClose() {
     if (iframeEl?.contentWindow) {
       iframeEl.contentWindow.postMessage(JSON.stringify({ MessageId: 'UI_Close' }), collaboraOrigin)
     }
-    goto(data.backPath)
+    closeOnce()
   }
 </script>
 
 <PageTitle title={data.fileName} />
 
-<!-- min-height: 0 lets the iframe fill the remaining flex height correctly on
-     short viewports. Without it, the iframe overflows the viewport on heights
-     under ~700px. -->
-<div class="flex flex-col" style="height: 100vh; min-height: 0;">
-  <div class="flex items-center gap-3 px-4 py-2 border-b bg-paper shrink-0">
-    <Button variant="ghost" size="sm" onclick={requestClose}>
-      ← Zurück zu Dateien
+<!-- The route renders without the app shell (files.slot.ts bareRoutes), so this page owns the whole viewport:
+     100dvh follows a phone's visible area as the address bar moves (100vh is taller than what is visible). The
+     env() insets only take effect where the viewport meta asks for viewport-fit=cover (app.html does not, the
+     app shell does not want it); without it the browser already keeps the page out of a notch and the home
+     indicator, and the insets are 0. They are kept so the page stays correct if that changes. min-height: 0 lets the
+     iframe fill the remaining flex height on short viewports. -->
+<div
+  data-testid="editor-root"
+  class="flex flex-col bg-paper"
+  style="height: 100dvh; min-height: 0; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);"
+>
+  <header data-testid="editor-bar" class="flex items-center gap-3 px-3 border-b bg-paper shrink-0" style="min-height: 44px;">
+    <span class="text-sm font-medium truncate flex-1 min-w-0">{data.fileName}</span>
+    <Button variant="outline" size="sm" onclick={requestClose} class="shrink-0" style="min-height: 44px; min-width: 44px;">
+      Schließen
     </Button>
-    <span class="text-sm font-medium truncate">{data.fileName}</span>
-  </div>
+  </header>
 
   {#if saveError}
     <Alert variant="destructive" class="rounded-none border-x-0 shrink-0">
       <div class="flex items-center justify-between gap-3">
         <span>{saveError}</span>
         <Button variant="link" size="sm" onclick={() => saveError = null} class="h-auto p-0">
-          Schließen
+          Hinweis ausblenden
         </Button>
       </div>
     </Alert>
@@ -151,7 +173,7 @@
   {/if}
 
   {#if iframeError}
-    <div class="flex flex-col items-center justify-center flex-1 gap-4 p-8">
+    <div id="main-content" class="flex flex-col items-center justify-center flex-1 gap-4 p-8">
       <Alert variant="destructive" class="max-w-md">
         Editor konnte nicht geladen werden — bitte versuche es später erneut.
       </Alert>
@@ -159,6 +181,7 @@
     </div>
   {:else}
     <iframe
+      id="main-content"
       bind:this={iframeEl}
       src={iframeSrc}
       class="flex-1 w-full border-0"

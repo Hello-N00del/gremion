@@ -15,9 +15,13 @@ vi.mock('$app/stores', async () => {
   }
 })
 
+// The committee comes from the parent layout's load; <PageTitle> reads the brand from $app/state.
+vi.mock('$app/state', () => ({ page: { data: {} } }))
+
 import Page from './+page.svelte'
 
 const DATA = {
+  committee: { id: 'c1', name: 'Finanzausschuss' },
   committeeId: 'c1',
   entries: [
     { global_nr: 1, type: 'beschluss', text: 'Haushalt 2026', meeting_date: '2026-03-01', result: 'passed', protocol_id: 'p1' },
@@ -33,5 +37,32 @@ describe('Beschlussregister page (K2#5)', () => {
   it('still lists the register entries', () => {
     render(Page, { props: { data: DATA } as never })
     expect(screen.getByText('Haushalt 2026')).toBeTruthy()
+  })
+
+  it('sets a browser title that names the committee', () => {
+    render(Page, { props: { data: DATA } as never })
+    expect(document.title).toBe('Beschlüsse – Finanzausschuss – Portal')
+  })
+})
+
+// A resolution nobody voted on (marked by the register API) is not a decision:
+// the register must not print the rule engine's placeholder "Abgelehnt" for it.
+describe('Beschlussregister page: a resolution nobody voted on', () => {
+  const entry = (over: Record<string, unknown>) => ({
+    global_nr: 'B-2026-002', type: 'beschluss', text: 'Antrag ohne Abstimmung', meeting_date: '2026-03-01',
+    result: 'rejected', protocol_id: 'p1', untallied: false, ...over,
+  })
+  const rowText = (text: string) => screen.getByText(text).closest('tr')!.textContent ?? ''
+
+  it('shows "keine Abstimmung" instead of "Abgelehnt"', () => {
+    render(Page, { props: { data: { ...DATA, entries: [entry({ untallied: true })] } } as never })
+    expect(rowText('Antrag ohne Abstimmung')).toMatch(/keine Abstimmung/)
+    expect(rowText('Antrag ohne Abstimmung')).not.toMatch(/Abgelehnt|Angenommen/)
+  })
+
+  it('still shows a counted rejection as "Abgelehnt"', () => {
+    render(Page, { props: { data: { ...DATA, entries: [entry({ text: 'Abgelehnter Antrag' })] } } as never })
+    expect(rowText('Abgelehnter Antrag')).toMatch(/Abgelehnt/)
+    expect(rowText('Abgelehnter Antrag')).not.toMatch(/keine Abstimmung/)
   })
 })

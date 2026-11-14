@@ -194,3 +194,103 @@ describe('committee roster: assign and clear an office', () => {
     await waitFor(() => expect(finRow().textContent).toContain('Unbesetzt'))
   })
 })
+
+// The add-member panel says something about a search only once that search has run, and tells
+// "nobody matches" apart from "everyone who matches is already a member" and from "nothing was typed".
+describe('committee roster: what the add-member search reports', () => {
+  const NONE = 'Keine passenden Nutzer gefunden.'
+  const ALL_MEMBERS = 'Alle Treffer sind bereits Mitglied dieses Gremiums.'
+  const TYPE_SOMETHING = 'Bitte einen Namen oder eine E-Mail-Adresse eingeben.'
+  const REFINE = 'Es gibt möglicherweise weitere Treffer. Bitte die Suche eingrenzen.'
+  const text = () => document.body.textContent ?? ''
+  const hit = (id: string, firstName: string, lastName: string) => ({ id, firstName, lastName, email: `${id}@example.test`, username: id })
+  const userSearches = () => calls.filter((c) => c.url.startsWith('/api/users'))
+
+  async function openPanel() {
+    await fireEvent.click(screen.getByRole('button', { name: /Mitglied hinzufügen/ }))
+    return screen.getByPlaceholderText(/Name oder E-Mail/)
+  }
+  async function search(term: string) {
+    const input = await openPanel()
+    await fireEvent.input(input, { target: { value: term } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Suchen' }))
+    await screen.findByRole('button', { name: 'Suchen' })
+    return input
+  }
+
+  it('a single typed letter is sent as it is: the search starts at one character', async () => {
+    responder = () => ({ status: 200, body: { data: [hit('u-mia', 'Mia', 'Neu')] } })
+    mount()
+    await search('e')
+    await screen.findByText('Mia Neu')
+    expect(userSearches().map((c) => c.url)).toEqual(['/api/users?search=e&slim=true&max=10'])
+  })
+
+  it('typing a term without searching reports nothing: no "none found" before a search ran', async () => {
+    mount()
+    const input = await openPanel()
+    await fireEvent.input(input, { target: { value: 'mia' } })
+    expect(text()).not.toContain(NONE)
+    expect(userSearches()).toEqual([])
+  })
+
+  it('an empty search asks for a term instead of looking like an empty user list, and sends no request', async () => {
+    mount()
+    await openPanel()
+    await fireEvent.click(screen.getByRole('button', { name: 'Suchen' }))
+    await waitFor(() => expect(text()).toContain(TYPE_SOMETHING))
+    expect(text()).not.toContain(NONE)
+    expect(userSearches()).toEqual([])
+  })
+
+  it('a search nobody matches says so', async () => {
+    responder = () => ({ status: 200, body: { data: [] } })
+    mount()
+    await search('zzz')
+    await waitFor(() => expect(text()).toContain(NONE))
+    expect(text()).not.toContain(ALL_MEMBERS)
+  })
+
+  it('a search whose hits are all members already says that, not "none found"', async () => {
+    responder = () => ({ status: 200, body: { data: [hit('u-anna', 'Anna', 'Berger'), hit('u-ben', 'Ben', 'Hoffmann')] } })
+    mount()
+    await search('e')
+    await waitFor(() => expect(text()).toContain(ALL_MEMBERS))
+    expect(text()).not.toContain(NONE)
+    expect(screen.queryByRole('button', { name: /^\+ Hinzufügen$/ })).toBeNull()
+  })
+
+  it('a full page of hits says that there may be more and asks to narrow the search', async () => {
+    const page = Array.from({ length: 10 }, (_, i) => hit(`u-x${i}`, 'Person', `Nr${i}`))
+    responder = () => ({ status: 200, body: { data: page } })
+    mount()
+    await search('e')
+    await waitFor(() => expect(text()).toMatch(REFINE))
+    expect(screen.getAllByRole('button', { name: /^\+ Hinzufügen$/ })).toHaveLength(10)
+  })
+
+  it('fewer hits than a full page carry no such note', async () => {
+    responder = () => ({ status: 200, body: { data: [hit('u-mia', 'Mia', 'Neu')] } })
+    mount()
+    await search('mia')
+    await screen.findByText('Mia Neu')
+    expect(text()).not.toMatch(REFINE)
+  })
+
+  it('changing the term after a search takes the old verdict away until the next search', async () => {
+    responder = () => ({ status: 200, body: { data: [] } })
+    mount()
+    const input = await search('zzz')
+    await waitFor(() => expect(text()).toContain(NONE))
+    await fireEvent.input(input, { target: { value: 'mia' } })
+    await waitFor(() => expect(text()).not.toContain(NONE))
+  })
+
+  it('a failed search shows the failure and no verdict about users', async () => {
+    responder = () => ({ status: 502, body: { success: false, error: 'Mitgliedersuche fehlgeschlagen' } })
+    mount()
+    await search('mia')
+    await waitFor(() => expect(text()).toContain('Suche fehlgeschlagen (502)'))
+    expect(text()).not.toContain(NONE)
+  })
+})

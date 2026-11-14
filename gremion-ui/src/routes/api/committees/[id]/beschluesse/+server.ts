@@ -5,6 +5,7 @@ import { getBeschlussregisterSettings } from '$lib/server/protocols/protocol-db'
 import { getDb } from '$lib/server/db'
 import { getOrgUnit } from '$lib/server/governance/org-units-db'
 import { viewerCanSeeProtocol } from '$lib/server/governance/visibility'
+import { isUntalliedResolution, type ResolutionVoteFields } from '$lib/governance/resolution-vote-state'
 
 function requireAuth(event: RequestEvent): SessionUser {
   const user = event.locals.user as SessionUser | undefined
@@ -36,10 +37,11 @@ export async function GET(event: RequestEvent) {
     // Cast year to ::int so porsager/postgres can infer the parameter type
     // when the value is null (otherwise PostgreSQL rejects the prepared
     // statement with "could not determine data type of parameter").
-    const rows = await sql`
+    const rows = await sql<ResolutionVoteFields[]>`
       SELECT
         r.id, r.global_nr, r.sequence_nr, r.text,
         r.votes_yes, r.votes_no, r.votes_abstain, r.result, r.created_at,
+        r.required_majority, r.adoption_mode,
         p.meeting_date, p.title AS protocol_title, p.id AS protocol_id,
         'beschluss' AS type
       FROM protocol_resolutions r
@@ -49,7 +51,11 @@ export async function GET(event: RequestEvent) {
         AND (${year ?? null}::int IS NULL OR EXTRACT(YEAR FROM p.meeting_date) = ${year ?? null}::int)
       ORDER BY p.meeting_date DESC, r.sequence_nr
     `
-    entries.push(...rows)
+    // `untallied`: a counted resolution nobody voted on. Publish refuses one, but
+    // a protocol published before that check may still hold it, stored with the
+    // rule engine's placeholder "rejected". The register marks it so no reader
+    // takes the placeholder for a decision (same predicate as the protocol page).
+    entries.push(...rows.map((r) => ({ ...r, untallied: isUntalliedResolution(r) })))
   }
 
   // (open-core carve) settings.include_polls previously merged Nextcloud Polls

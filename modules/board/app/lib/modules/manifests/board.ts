@@ -21,6 +21,8 @@ import type { ModuleManifest } from '../types'
 // the module migration-ownership guards.
 export const boardManifest: ModuleManifest = {
   id: 'board',
+  // Display name: the Systemstatus catalog reads it (never the raw id).
+  status: { label: 'Aufgaben', note: 'Aufgabenboards der Gremien.' },
   order: 100,
   toggleable: true,
   // No notTenantIsolated marker: the default (BOARD_BACKEND unset) serves the board in-process, and

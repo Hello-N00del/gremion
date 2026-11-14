@@ -2,6 +2,7 @@
   // FLOW-MSG-001 (TASK-009 lane B, rows-plan.md row 14 / S2.6): the
   // "Verwaltung -> Räume" overview. One row per org unit; the room actions
   // per state come straight off the FLOW states table (rows-plan.md §1).
+  // Below it the archive: one row per archived ROOM (a unit can have several).
   import { page } from '$app/state'
   import { invalidateAll } from '$app/navigation'
   import PageTitle from '$lib/components/PageTitle.svelte'
@@ -13,16 +14,21 @@
   let { data }: { data: PageData } = $props()
 
   let user = $derived(page.data.session?.user as SessionUser | undefined)
-  // R23-4: hard delete is ITAdmin-only (CouncilAdmin reaches create/rename/archive).
+  // R23-4: hard delete is ITAdmin-only (CouncilAdmin reaches create/rename/archive/restore).
   let isITAdmin = $derived(user ? hasRole(user.roles, Role.ITAdmin) : false)
 
   let units = $derived(data.units)
+  // A unit whose room is archived has no row of its own: its room is in the archive below.
   let activeUnits = $derived(units.filter((u) => u.state !== 'archiviert'))
-  let archivedUnits = $derived(units.filter((u) => u.state === 'archiviert'))
+  // Every archived room, straight from the overview. Not derived from the unit rows: those carry
+  // one room per unit, so a second archived room of a unit, or the archived room of a unit that
+  // has a room again, would not appear, and deleting a room would bring another up in its row.
+  let archivedRooms = $derived(data.archivedRooms)
 
-  let busyUnitId = $state<string | null>(null)
-  // A per-unit confirm step for the two undoable-never actions (archive, delete).
-  let confirmUnitId = $state<string | null>(null)
+  // The row an action is running on, or asks its confirmation on: the unit id for a unit row,
+  // the room id for an archive row (two archived rooms can belong to one unit).
+  let busyKey = $state<string | null>(null)
+  let confirmKey = $state<string | null>(null)
   let confirmAction = $state<'archive' | 'delete' | null>(null)
   // MEDIUM (house review, TASK-009 fix round 2): rename used the browser's
   // native window.prompt() — inconsistent styling/theming with the rest of
@@ -41,12 +47,12 @@
     archiviert: 'Archiviert',
   }
 
-  function requestConfirm(unitId: string, action: 'archive' | 'delete') {
-    confirmUnitId = unitId
+  function requestConfirm(key: string, action: 'archive' | 'delete') {
+    confirmKey = key
     confirmAction = action
   }
   function cancelConfirm() {
-    confirmUnitId = null
+    confirmKey = null
     confirmAction = null
   }
 
@@ -59,8 +65,16 @@
     renameValue = ''
   }
 
+  // The day a room was archived, for the archive row. The marker stores an ISO timestamp.
+  function archivedOn(iso: string | undefined): string {
+    if (!iso) return ''
+    const date = new Date(iso)
+    if (Number.isNaN(date.getTime())) return ''
+    return date.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' })
+  }
+
   async function createRoom(unitId: string) {
-    busyUnitId = unitId
+    busyKey = unitId
     try {
       const res = await fetch('/api/messages/rooms', {
         method: 'POST',
@@ -75,17 +89,19 @@
     } catch {
       toast.error('Raum konnte nicht angelegt werden')
     } finally {
-      busyUnitId = null
+      busyKey = null
     }
   }
 
+  // currentName is the ROOM's name (the unit's name only until the room has one of its own): a
+  // rename back to the unit's name is a change like any other.
   async function submitRename(unitId: string, roomId: string, currentName: string) {
     const name = renameValue.trim()
     if (!name || name === currentName) {
       cancelRename()
       return
     }
-    busyUnitId = unitId
+    busyKey = unitId
     try {
       const res = await fetch(`/api/messages/rooms/${encodeURIComponent(roomId)}`, {
         method: 'PATCH',
@@ -98,18 +114,19 @@
         toast.error('Raum konnte nicht umbenannt werden')
         return
       }
+      toast.success(`Raum in „${name}“ umbenannt`)
       await invalidateAll()
     } catch (err) {
-      console.error('[messages/manage] submitRename threw', { unitId, roomId, error: err instanceof Error ? err.message : String(err) })
+      console.error('[messages/manage] submitRename threw', { unitId, roomId, error: err instanceof Error ? err.message : 'unknown error' })
       toast.error('Raum konnte nicht umbenannt werden')
     } finally {
-      busyUnitId = null
+      busyKey = null
       cancelRename()
     }
   }
 
   async function archiveRoom(unitId: string, roomId: string) {
-    busyUnitId = unitId
+    busyKey = unitId
     try {
       const res = await fetch(`/api/messages/rooms/${encodeURIComponent(roomId)}/archive`, {
         method: 'POST',
@@ -120,17 +137,50 @@
         toast.error('Raum konnte nicht archiviert werden')
         return
       }
+      toast.success('Raum archiviert')
       await invalidateAll()
     } catch {
       toast.error('Raum konnte nicht archiviert werden')
     } finally {
-      busyUnitId = null
+      busyKey = null
       cancelConfirm()
     }
   }
 
-  async function deleteRoom(unitId: string, roomId: string) {
-    busyUnitId = unitId
+  // The inverse of archiveRoom. The server decides whether the room may come back (it is an
+  // archived room of this unit, and the unit has no other room); a refusal usually means the
+  // overview on screen is out of date, so it is reloaded in both cases.
+  async function restoreRoom(unitId: string, roomId: string) {
+    busyKey = roomId
+    try {
+      const res = await fetch(`/api/messages/rooms/${encodeURIComponent(roomId)}/unarchive`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orgUnitId: unitId }),
+      })
+      if (res.ok) {
+        const body = await res.json().catch(() => null)
+        // The room is writable again either way; only its address may be missing.
+        toast.success(body?.data?.aliasRestored === false
+          ? 'Raum wiederhergestellt. Die frühere Adresse gehört inzwischen einem anderen Raum und wurde nicht übernommen.'
+          : 'Raum wiederhergestellt')
+      } else {
+        const body = await res.json().catch(() => null)
+        console.error('[messages/manage] restoreRoom failed', { unitId, roomId, status: res.status, body })
+        toast.error('Raum konnte nicht wiederhergestellt werden')
+      }
+      await invalidateAll()
+    } catch (err) {
+      console.error('[messages/manage] restoreRoom threw', { unitId, roomId, error: err instanceof Error ? err.message : 'unknown error' })
+      toast.error('Raum konnte nicht wiederhergestellt werden')
+    } finally {
+      busyKey = null
+    }
+  }
+
+  // rowKey: the row the delete was asked on (see busyKey).
+  async function deleteRoom(rowKey: string, unitId: string, roomId: string) {
+    busyKey = rowKey
     try {
       const res = await fetch(
         `/api/messages/rooms/${encodeURIComponent(roomId)}?orgUnitId=${encodeURIComponent(unitId)}`,
@@ -140,11 +190,12 @@
         toast.error('Raum konnte nicht gelöscht werden')
         return
       }
+      toast.success('Raum gelöscht')
       await invalidateAll()
     } catch {
       toast.error('Raum konnte nicht gelöscht werden')
     } finally {
-      busyUnitId = null
+      busyKey = null
       cancelConfirm()
     }
   }
@@ -166,9 +217,13 @@
     <h2 class="section-title">Gremien &amp; Initiativen</h2>
     <div class="rooms-table">
       {#each activeUnits as unit (unit.unitId)}
+        {@const roomName = unit.roomName ?? unit.unitName}
         <div class="room-row">
           <div class="room-row-main">
             <span class="unit-name">{unit.unitName}</span>
+            {#if roomName !== unit.unitName}
+              <span class="room-name">Raum „{roomName}“</span>
+            {/if}
             <span class="state-pill state-{unit.state}">{STATE_LABEL[unit.state] ?? unit.state}</span>
             {#if unit.state === 'fehler' && unit.lastError}
               <span class="last-error mono">{unit.lastError}</span>
@@ -176,11 +231,11 @@
           </div>
           <div class="room-row-actions">
             {#if unit.state === 'leer'}
-              <button type="button" class="btn btn-sm" disabled={busyUnitId === unit.unitId} onclick={() => createRoom(unit.unitId)}>
+              <button type="button" class="btn btn-sm" disabled={busyKey === unit.unitId} onclick={() => createRoom(unit.unitId)}>
                 Raum anlegen
               </button>
             {:else if unit.state === 'fehler'}
-              <button type="button" class="btn btn-sm" disabled={busyUnitId === unit.unitId} onclick={() => createRoom(unit.unitId)}>
+              <button type="button" class="btn btn-sm" disabled={busyKey === unit.unitId} onclick={() => createRoom(unit.unitId)}>
                 Erneut versuchen
               </button>
             {:else if unit.state === 'wird_angelegt'}
@@ -193,39 +248,46 @@
                   maxlength="200"
                   aria-label="Neuer Raumname"
                   onkeydown={(e) => {
-                    if (e.key === 'Enter') submitRename(unit.unitId, unit.roomId!, unit.unitName)
+                    if (e.key === 'Enter') submitRename(unit.unitId, unit.roomId!, roomName)
                     if (e.key === 'Escape') cancelRename()
                   }}
                 />
-                <button type="button" class="btn btn-sm btn-primary" disabled={busyUnitId === unit.unitId || !renameValue.trim()} onclick={() => submitRename(unit.unitId, unit.roomId!, unit.unitName)}>
+                <button type="button" class="btn btn-sm btn-primary" disabled={busyKey === unit.unitId || !renameValue.trim()} onclick={() => submitRename(unit.unitId, unit.roomId!, roomName)}>
                   Speichern
                 </button>
                 <button type="button" class="btn btn-sm btn-ghost" onclick={cancelRename}>Abbrechen</button>
               {:else}
-                <button type="button" class="btn btn-sm" disabled={busyUnitId === unit.unitId} onclick={() => startRename(unit.unitId, unit.unitName)}>
+                <button type="button" class="btn btn-sm" disabled={busyKey === unit.unitId} onclick={() => startRename(unit.unitId, roomName)}>
                   Umbenennen
                 </button>
               {/if}
-              {#if confirmUnitId === unit.unitId && confirmAction === 'archive'}
-                <button type="button" class="btn btn-sm btn-danger" onclick={() => archiveRoom(unit.unitId, unit.roomId!)}>Bestätigen</button>
+              {#if confirmKey === unit.unitId && confirmAction === 'archive'}
+                <button type="button" class="btn btn-sm btn-danger" disabled={busyKey === unit.unitId} onclick={() => archiveRoom(unit.unitId, unit.roomId!)}>Bestätigen</button>
                 <button type="button" class="btn btn-sm btn-ghost" onclick={cancelConfirm}>Abbrechen</button>
               {:else}
-                <button type="button" class="btn btn-sm" disabled={busyUnitId === unit.unitId} onclick={() => requestConfirm(unit.unitId, 'archive')}>
+                <button type="button" class="btn btn-sm" disabled={busyKey === unit.unitId} onclick={() => requestConfirm(unit.unitId, 'archive')}>
                   Archivieren
                 </button>
               {/if}
               {#if isITAdmin}
-                {#if confirmUnitId === unit.unitId && confirmAction === 'delete'}
-                  <button type="button" class="btn btn-sm btn-danger" onclick={() => deleteRoom(unit.unitId, unit.roomId!)}>Bestätigen</button>
+                {#if confirmKey === unit.unitId && confirmAction === 'delete'}
+                  <button type="button" class="btn btn-sm btn-danger" disabled={busyKey === unit.unitId} onclick={() => deleteRoom(unit.unitId, unit.unitId, unit.roomId!)}>Bestätigen</button>
                   <button type="button" class="btn btn-sm btn-ghost" onclick={cancelConfirm}>Abbrechen</button>
                 {:else}
-                  <button type="button" class="btn btn-sm btn-ghost" disabled={busyUnitId === unit.unitId} onclick={() => requestConfirm(unit.unitId, 'delete')}>
+                  <button type="button" class="btn btn-sm btn-ghost" disabled={busyKey === unit.unitId} onclick={() => requestConfirm(unit.unitId, 'delete')}>
                     Löschen
                   </button>
                 {/if}
               {/if}
             {/if}
           </div>
+          {#if confirmKey === unit.unitId && confirmAction === 'archive'}
+            <p class="confirm-hint">
+              Der Raum wird schreibgeschützt, der Verlauf bleibt für die Mitglieder lesbar. Er kann später im Archiv wiederhergestellt werden.
+            </p>
+          {:else if confirmKey === unit.unitId && confirmAction === 'delete'}
+            <p class="confirm-hint">Der Raum wird mit seinem Verlauf endgültig gelöscht. Das lässt sich nicht rückgängig machen.</p>
+          {/if}
         </div>
       {:else}
         <div class="rooms-empty mono">Keine Gremien/Initiativen gefunden.</div>
@@ -233,31 +295,57 @@
     </div>
   </section>
 
-  {#if archivedUnits.length > 0}
+  {#if archivedRooms.length > 0}
     <section class="rooms-section">
       <h2 class="section-title">Archiv</h2>
+      <p class="confirm-hint section-note">Den Verlauf eines archivierten Raums können nur dessen Mitglieder lesen.</p>
       <div class="rooms-table">
-        {#each archivedUnits as unit (unit.unitId)}
-          <div class="room-row">
+        {#each archivedRooms as room (room.roomId)}
+          {@const since = archivedOn(room.archivedAt)}
+          <div class="room-row" data-archived-room={room.roomId}>
             <div class="room-row-main">
-              <span class="unit-name">{unit.unitName}</span>
+              <span class="unit-name">{room.unitName}</span>
+              {#if room.roomName && room.roomName !== room.unitName}
+                <span class="room-name">Raum „{room.roomName}“</span>
+              {/if}
               <span class="state-pill state-archiviert">Archiviert</span>
+              {#if since}
+                <span class="archived-on mono">seit {since}</span>
+              {/if}
             </div>
             <div class="room-row-actions">
-              {#if unit.roomId}
-                <a class="btn btn-sm btn-ghost" href={`/messages?ou=${unit.unitId}`}>Verlauf lesen</a>
+              <a class="btn btn-sm btn-ghost" href={`/messages?room=${encodeURIComponent(room.roomId)}`}>Verlauf lesen</a>
+              {#if room.restorable}
+                <button type="button" class="btn btn-sm" disabled={busyKey === room.roomId} onclick={() => restoreRoom(room.unitId, room.roomId)}>
+                  Wiederherstellen
+                </button>
               {/if}
-              {#if isITAdmin && unit.roomId}
-                {#if confirmUnitId === unit.unitId && confirmAction === 'delete'}
-                  <button type="button" class="btn btn-sm btn-danger" onclick={() => deleteRoom(unit.unitId, unit.roomId!)}>Bestätigen</button>
+              {#if isITAdmin}
+                {#if confirmKey === room.roomId && confirmAction === 'delete'}
+                  <button type="button" class="btn btn-sm btn-danger" disabled={busyKey === room.roomId} onclick={() => deleteRoom(room.roomId, room.unitId, room.roomId)}>Bestätigen</button>
                   <button type="button" class="btn btn-sm btn-ghost" onclick={cancelConfirm}>Abbrechen</button>
                 {:else}
-                  <button type="button" class="btn btn-sm btn-ghost" disabled={busyUnitId === unit.unitId} onclick={() => requestConfirm(unit.unitId, 'delete')}>
+                  <button type="button" class="btn btn-sm btn-ghost" disabled={busyKey === room.roomId} onclick={() => requestConfirm(room.roomId, 'delete')}>
                     Löschen
                   </button>
                 {/if}
               {/if}
             </div>
+            {#if confirmKey === room.roomId && confirmAction === 'delete'}
+              <p class="confirm-hint">Der Raum wird mit seinem Verlauf endgültig gelöscht. Das lässt sich nicht rückgängig machen.</p>
+            {:else if !room.restorable && room.restoreBlockedBy === 'unreadable'}
+              <p class="confirm-hint">
+                Der Raumstatus von „{room.unitName}“ konnte nicht gelesen werden. Der Raum lässt sich deshalb gerade nicht wiederherstellen; bitte die Seite neu laden.
+              </p>
+            {:else if !room.restorable && room.restoreBlockedBy === 'being_created'}
+              <p class="confirm-hint">
+                „{room.unitName}“ bekommt gerade einen neuen Raum. Dieser Raum kann deshalb gerade nicht wiederhergestellt werden; sein Verlauf bleibt lesbar.
+              </p>
+            {:else if !room.restorable}
+              <p class="confirm-hint">
+                „{room.unitName}“ hat bereits einen neuen Raum. Dieser Raum kann deshalb nicht wiederhergestellt werden; sein Verlauf bleibt lesbar.
+              </p>
+            {/if}
           </div>
         {/each}
       </div>
@@ -318,6 +406,8 @@
     min-width: 0;
   }
   .unit-name { font-size: 13.5px; font-weight: 500; color: var(--ink); }
+  .room-name { font-size: 12.5px; color: var(--ink-muted); overflow-wrap: anywhere; }
+  .archived-on { font-size: 11px; color: var(--ink-muted); }
   .state-pill {
     font-size: 10.5px;
     font-weight: 600;
@@ -344,6 +434,15 @@
   }
   .last-error { font-size: 11px; color: var(--rust-ink, var(--rust)); }
   .room-row-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  /* A full-width line under the row: what the pending confirmation does, or why a control is absent. */
+  .confirm-hint {
+    flex-basis: 100%;
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--ink-muted);
+  }
+  .section-note { padding: 8px 16px 0; }
   .rename-input {
     font: inherit;
     font-size: 13px;

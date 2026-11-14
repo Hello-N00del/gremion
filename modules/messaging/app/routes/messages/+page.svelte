@@ -3,7 +3,8 @@
   import Icon from '$lib/components/ui/Icon.svelte'
   import { onMount, onDestroy } from 'svelte'
   import { page } from '$app/stores'
-  import { invalidate } from '$app/navigation'
+  import { page as pageState } from '$app/state'
+  import { invalidate, replaceState } from '$app/navigation'
   import { roomStore, selectedRoomId, syncStatus } from '$lib/stores/matrix'
   import type { MatrixMessage, RoomState } from '$lib/stores/matrix'
   import { callStore, startRoomCall } from '$lib/stores/call-store.svelte'
@@ -12,6 +13,8 @@
   import { deriveHue, deriveAbbr } from '$lib/governance/committee-color'
   import { toast } from 'svelte-sonner'
   import { senderInitials, senderLabel } from '$lib/components/messaging/sender-label'
+  import { groupByDay } from '$lib/components/messaging/day-groups'
+  import { messageCount, roomCount, unreadMessageCount } from '$lib/components/messaging/count'
 
   let rooms = $derived(Object.values($roomStore))
   // FLOW-MSG-001 (TASK-009 lane B, row 15): archived rooms move to their own
@@ -21,6 +24,14 @@
   let activeRoom = $derived(
     $selectedRoomId ? $roomStore[$selectedRoomId] : null
   )
+
+  // The conversation as runs of one calendar day each, every run under a separator that names its
+  // own day. `clock` only matters for the words "Heute" / "Gestern": it is re-read once a minute so
+  // that a page left open over midnight does not keep calling yesterday's messages "Heute".
+  const CLOCK_TICK_MS = 60_000
+  let clock = $state(Date.now())
+  let clockTimer: ReturnType<typeof setInterval> | null = null
+  let dayGroups = $derived(groupByDay(activeRoom?.messages ?? [], clock))
 
   let user = $derived($page.data.session?.user as SessionUser | undefined)
   let brand = $derived(resolveBrand($page.data.brand))
@@ -63,6 +74,23 @@
   // True once loadRooms() got a successful answer. Before that the empty store only means "not
   // loaded yet", so the empty-list copy must not say anything about the user's membership.
   let roomsLoaded = $state(false)
+  // /messages?room=<room id>: the room a link names (the archive of the room administration links
+  // the history of a room this way). Taken once, with the first room list. A room that is not in
+  // that list (a room is only in the list of its members) opens NO other room in its place.
+  let linkedRoomPending = true
+  let linkedRoomMissing = $state(false)
+  const LINKED_ROOM_MISSING = 'Dieser Raum ist in Ihrer Raumliste nicht vorhanden. Den Verlauf können nur Mitglieder des Raums lesen.'
+  // The link is taken once. The address then stops naming the room, so a reload after another room
+  // was picked does not jump back to the linked one. Best effort: the address is not worth failing for.
+  function forgetLinkedRoomParam() {
+    try {
+      const url = new URL(pageState.url)
+      url.searchParams.delete('room')
+      replaceState(url, pageState.state)
+    } catch (err) {
+      console.error('[messages] the room link could not be removed from the address', { error: err instanceof Error ? err.message : 'unknown error' })
+    }
+  }
 
   let totalUnread = $derived(activeRooms.reduce((sum, r) => sum + (r.unreadCount ?? 0), 0))
 
@@ -106,6 +134,22 @@
           loaded[r.roomId] = { ...r, messages: $roomStore[r.roomId]?.messages ?? [] }
         }
         roomStore.set(loaded)
+        const linkedRoomId = linkedRoomPending ? pageState.url.searchParams.get('room') : null
+        linkedRoomPending = false
+        if (linkedRoomId) {
+          forgetLinkedRoomParam()
+          if (loaded[linkedRoomId]) {
+            void openRoom(linkedRoomId)
+          } else {
+            linkedRoomMissing = true
+            selectedRoomId.set(null)
+            toast.error(LINKED_ROOM_MISSING)
+          }
+          return
+        }
+        // The open room outlives the page (it is a store). A room that is gone from the list,
+        // deleted in the meantime, is not kept: nothing would be open and nothing would be chosen.
+        if ($selectedRoomId && !loaded[$selectedRoomId]) selectedRoomId.set(null)
         // On a phone nothing is opened by itself: the list is the first screen.
         if (!$selectedRoomId && !narrow) {
           const firstActive = json.data.find((r: { archived?: boolean }) => !r.archived)
@@ -125,6 +169,7 @@
   }
 
   onMount(async () => {
+    clockTimer = setInterval(() => { clock = Date.now() }, CLOCK_TICK_MS)
     if (typeof window.matchMedia === 'function') {
       narrowQuery = window.matchMedia(NARROW_QUERY)
       narrow = narrowQuery.matches
@@ -180,6 +225,7 @@
   onDestroy(() => {
     narrowQuery?.removeEventListener('change', onNarrowChange)
     eventSource?.close()
+    if (clockTimer !== null) clearInterval(clockTimer)
   })
 
   // Open a room: select it, then mark it read so its unread count clears both
@@ -191,6 +237,7 @@
   async function openRoom(roomId: string) {
     selectedRoomId.set(roomId)
     conversationOpen = true
+    linkedRoomMissing = false
 
     const room = $roomStore[roomId]
     if (!room || room.unreadCount === 0) return
@@ -411,6 +458,7 @@
       roomStore.update((store) =>
         store[roomId] ? { ...store, [roomId]: { ...store[roomId], name: newName } } : store
       )
+      toast.success(`Raum in „${newName}“ umbenannt`)
       closeSettings()
     } catch (err) {
       console.error('[messages] saveSettingsName threw', { roomId: settingsRoomId, error: err instanceof Error ? err.message : String(err) })
@@ -439,6 +487,7 @@
       roomStore.update((store) =>
         store[roomId] ? { ...store, [roomId]: { ...store[roomId], archived: true } } : store
       )
+      toast.success('Raum archiviert')
       closeSettings()
     } catch (err) {
       console.error('[messages] confirmArchive threw', { roomId: settingsRoomId, error: err instanceof Error ? err.message : String(err) })
@@ -504,7 +553,7 @@
         </div>
       </div>
       {#if rooms.length > 0}
-        <div class="room-list-sub mono">{activeRooms.length} Räume · {totalUnread} ungelesen</div>
+        <div class="room-list-sub mono">{roomCount(activeRooms.length)} · {totalUnread} ungelesen</div>
       {/if}
     </div>
 
@@ -527,7 +576,7 @@
           <div class="r-preview">
             <span class="mono r-members">Matrix-Raum</span>
             {#if room.unreadCount > 0}
-              <span class="unread" aria-label="{room.unreadCount} ungelesene Nachrichten">{room.unreadCount}</span>
+              <span class="unread" aria-label={unreadMessageCount(room.unreadCount)}>{room.unreadCount}</span>
             {/if}
           </div>
         </div>
@@ -588,7 +637,7 @@
         <div class="chat-head-text">
           <div class="chat-head-name">{activeRoom.name}</div>
           <div class="chat-head-sub mono">
-            {activeRoom.messages.length} Nachrichten · Ende-zu-Ende
+            {messageCount(activeRoom.messages.length)} · Ende-zu-Ende
             {#if activeRoom.archived} · archiviert{/if}
           </div>
         </div>
@@ -618,21 +667,23 @@
       </div>
 
       <div class="chat-body">
-        {#if activeRoom.messages.length > 0}
-          <div class="divider-label">Heute · {new Date().toLocaleDateString('de-DE')}</div>
-        {/if}
-        {#each activeRoom.messages as msg (msg.eventId)}
-          {@const who = senderLabel(msg.sender, msg.senderDisplayName)}
-          <div class="msg">
-            <div class="mav">{senderInitials(who)}</div>
-            <div class="mbody">
-              <div class="mhead">
-                <span class="mname">{who}</span>
-                {#if msg.ts}<span class="mtime mono">{fmtRoomTs(msg.ts)}</span>{/if}
+        {#each dayGroups as group (group.messages[0]?.eventId)}
+          {#if group.label}
+            <div class="divider-label">{group.label}</div>
+          {/if}
+          {#each group.messages as msg (msg.eventId)}
+            {@const who = senderLabel(msg.sender, msg.senderDisplayName)}
+            <div class="msg">
+              <div class="mav">{senderInitials(who)}</div>
+              <div class="mbody">
+                <div class="mhead">
+                  <span class="mname">{who}</span>
+                  {#if msg.ts}<span class="mtime mono">{fmtRoomTs(msg.ts)}</span>{/if}
+                </div>
+                <div class="mtext">{msg.body}</div>
               </div>
-              <div class="mtext">{msg.body}</div>
             </div>
-          </div>
+          {/each}
         {:else}
           <div class="chat-empty mono">Noch keine Nachrichten in diesem Raum.</div>
         {/each}
@@ -661,6 +712,8 @@
           </button>
         </div>
       {/if}
+    {:else if linkedRoomMissing}
+      <div class="chat-placeholder mono" role="status">{LINKED_ROOM_MISSING}</div>
     {:else}
       <div class="chat-placeholder mono">Wählen Sie einen Raum aus.</div>
     {/if}

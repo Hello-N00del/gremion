@@ -1,8 +1,12 @@
 <script lang="ts">
+  import PageTitle from '$lib/components/PageTitle.svelte'
   import { invalidateAll } from '$app/navigation'
   import type { PageData } from './$types'
 
   let { data }: { data: PageData } = $props()
+
+  // German label for how a member was added: typed in or imported.
+  const sourceLabel = (source: string): string => (source === 'csv' ? 'CSV' : 'manuell')
 
   let csvFile = $state<File | null>(null)
   let manualEmail = $state('')
@@ -28,7 +32,8 @@
     }
   }
 
-  async function addManual() {
+  async function addManual(e: SubmitEvent) {
+    e.preventDefault()
     if (!manualEmail.trim()) return
     const res = await fetch(`/api/newsletter/lists/${data.list.id}/members`, {
       method: 'POST',
@@ -45,6 +50,8 @@
     if (res.ok) await invalidateAll()
   }
 </script>
+
+<PageTitle title={data.list.name} />
 
 <div class="p-6 max-w-3xl mx-auto">
   <div class="flex items-center gap-3 mb-1">
@@ -75,18 +82,18 @@
     <!-- Manual add -->
     <div class="rounded-md border p-4">
       <h2 class="font-medium mb-3">Manuell hinzufügen</h2>
-      <div class="flex gap-2">
+      <form class="flex gap-2" onsubmit={addManual}>
         <input type="email" bind:value={manualEmail} placeholder="E-Mail" class="flex-1 rounded-md border px-3 py-2 text-sm" />
         <input type="text" bind:value={manualName} placeholder="Name (optional)" class="flex-1 rounded-md border px-3 py-2 text-sm" />
-        <button onclick={addManual} class="rounded-md bg-accent text-paper px-4 py-2 text-sm font-medium hover:bg-accent/90">
+        <button type="submit" class="rounded-md bg-accent text-paper px-4 py-2 text-sm font-medium hover:bg-accent/90">
           Hinzufügen
         </button>
-      </div>
+      </form>
     </div>
 
     <!-- Member list -->
     <div>
-      <h2 class="font-medium mb-3">{data.members.length} Mitglieder</h2>
+      <h2 class="font-medium mb-3">{data.members.length} {data.members.length === 1 ? 'Mitglied' : 'Mitglieder'}</h2>
       {#if data.members.length === 0}
         <p class="text-sm text-ink-muted">Noch keine Mitglieder.</p>
       {:else}
@@ -96,7 +103,7 @@
               <div>
                 <span class="font-medium">{member.email}</span>
                 {#if member.name}<span class="text-ink-muted ml-2">{member.name}</span>{/if}
-                <span class="ml-2 text-xs text-ink-muted">({member.source})</span>
+                <span class="ml-2 text-xs text-ink-muted">({sourceLabel(member.source)})</span>
               </div>
               <button onclick={() => removeMember(member.id)} class="text-rust hover:underline text-xs">Entfernen</button>
             </div>

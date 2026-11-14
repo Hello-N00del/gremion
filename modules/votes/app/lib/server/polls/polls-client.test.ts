@@ -304,3 +304,93 @@ describe('NextcloudPollsClient', () => {
     await expect(NextcloudPollsClient.listPolls()).rejects.toThrow('Nextcloud Polls')
   })
 })
+
+// The closed flag. Nextcloud Polls reports it as `status.isExpired` (since Polls 8; `status.expired` before).
+// Whatever the name, every poll that leaves the client carries `status.expired` as a real boolean that follows
+// the deadline, so the list, the poll page, the vote guard and the Karenz participant all read one value.
+describe('the closed flag of a poll follows its real deadline', () => {
+  const mockFetch = vi.fn()
+  const NOW = Date.parse('2026-11-12T09:00:00Z')
+  const YESTERDAY = Math.floor(Date.parse('2026-11-11T17:00:00Z') / 1000)
+  const TOMORROW = Math.floor(Date.parse('2026-11-13T17:00:00Z') / 1000)
+
+  beforeEach(() => {
+    mockFetch.mockReset()
+    vi.stubGlobal('fetch', mockFetch)
+    vi.useFakeTimers({ now: NOW, toFake: ['Date'] })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+    vi.resetModules()
+  })
+
+  const upstream = (id: number, expire: number, status: Record<string, unknown>) => ({
+    id,
+    type: 'textPoll',
+    owner: { userId: 'admin' },
+    configuration: { title: `[gt:tenant-a] Poll ${id}`, description: '', allowComment: false, anonymous: false, expire },
+    status,
+    currentUserStatus: { userRole: 'owner', isLocked: false, countVotes: 0 },
+  })
+  const answer = (data: unknown) => mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve(ocs(data)) })
+
+  it('listPolls: a poll past its deadline is closed, as Nextcloud reports it (isExpired)', async () => {
+    answer({ polls: [upstream(1, YESTERDAY, { isExpired: true })] })
+    const { NextcloudPollsClient } = await import('./polls-client')
+    const [poll] = await NextcloudPollsClient.listPolls()
+    expect(poll!.status.expired).toBe(true)
+  })
+
+  it('listPolls: the older spelling of the flag (expired) still closes the poll', async () => {
+    answer({ polls: [upstream(1, YESTERDAY, { expired: true })] })
+    const { NextcloudPollsClient } = await import('./polls-client')
+    const [poll] = await NextcloudPollsClient.listPolls()
+    expect(poll!.status.expired).toBe(true)
+  })
+
+  it('listPolls: a passed deadline closes the poll even when the answer carries no flag at all', async () => {
+    answer({ polls: [upstream(1, YESTERDAY, {})] })
+    const { NextcloudPollsClient } = await import('./polls-client')
+    const [poll] = await NextcloudPollsClient.listPolls()
+    expect(poll!.status.expired).toBe(true)
+  })
+
+  it('listPolls: a poll whose deadline is still ahead is running', async () => {
+    answer({ polls: [upstream(1, TOMORROW, { isExpired: false })] })
+    const { NextcloudPollsClient } = await import('./polls-client')
+    const [poll] = await NextcloudPollsClient.listPolls()
+    expect(poll!.status.expired).toBe(false)
+  })
+
+  it('listPolls: a poll without a deadline is running, with or without a flag', async () => {
+    answer({ polls: [upstream(1, 0, { isExpired: false }), upstream(2, 0, {})] })
+    const { NextcloudPollsClient } = await import('./polls-client')
+    const polls = await NextcloudPollsClient.listPolls()
+    expect(polls.map((p) => p.status.expired)).toEqual([false, false])
+  })
+
+  it('getPoll: the single-poll read carries the same flag', async () => {
+    answer({ poll: upstream(1, YESTERDAY, { isExpired: true }) })
+    const { NextcloudPollsClient } = await import('./polls-client')
+    expect((await NextcloudPollsClient.getPoll(1)).status.expired).toBe(true)
+  })
+
+  it('vote: a poll Nextcloud reports as closed refuses the vote (409), no vote is sent', async () => {
+    mockFetch.mockImplementation((url: string) =>
+      Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve(
+            url.endsWith('/poll/1')
+              ? ocs({ poll: upstream(1, YESTERDAY, { isExpired: true }) })
+              : ocs({ options: [{ id: 42, text: 'Ja', votes: { count: 0, yes: 0, no: 0, maybe: 0, currentUser: null } }] }),
+          ),
+      }),
+    )
+    const { createPollsClient } = await import('./polls-client')
+    await expect(createPollsClient({ oidcBearer: 'kc-token' }).vote(1, 42)).rejects.toMatchObject({ pollsStatus: 409 })
+    expect(mockFetch.mock.calls.some(([url]) => String(url).includes('/vote/'))).toBe(false)
+  })
+})

@@ -59,6 +59,17 @@ export interface ModuleOverviewItem {
 }
 
 /**
+ * A module the customer has that the operator controls: the council may not switch it, so the page shows it
+ * with its state and no control. Only modules that are ON are listed (a module the customer does not have is
+ * not offered, and a held-off one is never named).
+ */
+export interface OperatorModuleItem {
+  /** Catalogue id. */
+  moduleId: string
+  label: string
+}
+
+/**
  * A module in its 30-day Karenz, as the settings page shows it. Built on the server from the platform
  * row (the clock), the tenant step ledger and the sealed copies. It carries counts, step names and ids,
  * never a person: not the one who switched the module off, not a recipient of the mail.
@@ -89,6 +100,8 @@ export type SwitchStateName = 'queued' | 'succeeded' | 'applying' | 'applied' | 
 
 export interface ModuleOverview {
   modules: ModuleOverviewItem[]
+  /** Modules the customer has that the council cannot switch (operator-managed); absent reads as none. */
+  operatorModules?: OperatorModuleItem[]
   disableAvailable: boolean
   problem: string | null
 }

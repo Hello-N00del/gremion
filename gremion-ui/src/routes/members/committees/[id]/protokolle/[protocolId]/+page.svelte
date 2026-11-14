@@ -1,7 +1,9 @@
 <script lang="ts">
+  import PageTitle from '$lib/components/PageTitle.svelte'
   import type { PageData } from './$types'
   import type { ProtocolActionItem } from '$lib/server/protocols/protocol-db'
   import { resolutionPatchBody } from '$lib/governance/resolution-patch-body'
+  import { isUntalliedResolution, UNTALLIED_RESOLUTION_CODE } from '$lib/governance/resolution-vote-state'
 
   interface ResolutionLike {
     id?: string
@@ -47,23 +49,111 @@
   }
 
   let resolutions = $state<ResolutionLike[]>(data.resolutions)
+  // Resolutions are edited in the draft. One exception: a submitted protocol that
+  // still holds a resolution nobody voted on cannot be published, so the admin
+  // must be able to enter that count, withdraw the resolution or delete it. The
+  // resolution API accepts the edit until the protocol is published.
+  const canEditResolution = (r: ResolutionLike) =>
+    Boolean(isAdmin) && (isEditable || (data.protocol.status === 'submitted' && isUntalliedResolution(r)))
   let actionItems = $state<ProtocolActionItem[]>(data.actionItems)
   // (4) the real 422 body from a blocked publish, surfaced inline (not alert()).
   let publishError = $state<string | null>(null)
+  // The refusal's machine-readable reason, when the server names one: the
+  // attendance shortcut only helps against a missing quorum.
+  let publishErrorCode = $state<string | null>(null)
+  // The server's refusal of a submit (e.g. a resolution without a vote), inline.
+  let submitError = $state<string | null>(null)
 
-  async function addResolution() {
-    // INV-5: pick the decision rule up front (default simple) and let the SERVER
-    // compute the result — the client never sends a free-hand `result`.
-    const res = await fetch(`/api/protocols/${data.protocol.id}/resolutions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: '', votesYes: 0, votesNo: 0, votesAbstain: 0, requiredMajority: 'simple' }),
-    })
-    if (res.ok) {
-      resolutions = [...resolutions, (await res.json()).resolution]
-    } else {
-      alert('Beschluss konnte nicht hinzugefügt werden.')
+  // The message (and reason code) of a refused request. The SvelteKit error
+  // helper serialises { message, code? }, the submit route answers { error };
+  // any other body is shown as it is.
+  async function refusalOf(res: Response): Promise<{ message: string; code: string | null }> {
+    const raw = await res.text()
+    try {
+      const parsed = JSON.parse(raw)
+      const message =
+        typeof parsed?.message === 'string' ? parsed.message : typeof parsed?.error === 'string' ? parsed.error : raw
+      return { message, code: typeof parsed?.code === 'string' ? parsed.code : null }
+    } catch {
+      return { message: raw, code: null }
     }
+  }
+
+  // "+ Beschluss hinzufügen" only opens an entry form (an unsaved draft row, no
+  // id). Nothing is stored until the admin saves it with its text; Abbrechen
+  // discards the draft, so no empty decision is ever left behind.
+  let newResolution = $state<ResolutionLike | null>(null)
+  let newResolutionError = $state<string | null>(null)
+
+  function addResolution() {
+    newResolutionError = null
+    newResolution = {
+      sequence_nr: resolutions.length + 1,
+      global_nr: null,
+      text: '',
+      votes_yes: 0,
+      votes_no: 0,
+      votes_abstain: 0,
+      result: 'rejected',
+      required_majority: 'simple',
+    }
+  }
+
+  // True while the create request is on its way: it cannot be repeated (two
+  // POSTs would store two identical decisions) nor cancelled (it is stored
+  // regardless of what the form shows).
+  let creating = false
+
+  function cancelNewResolution() {
+    if (creating) return
+    newResolution = null
+    newResolutionError = null
+  }
+
+  // The server message of a refused write (SvelteKit serialises it as { message }).
+  async function refusalMessage(res: Response, fallback: string): Promise<string> {
+    try {
+      const parsed = JSON.parse(await res.text())
+      if (parsed && typeof parsed.message === 'string' && parsed.message) return parsed.message
+    } catch {
+      // non-JSON body — use the fallback
+    }
+    return fallback
+  }
+
+  async function createResolution(r: ResolutionLike): Promise<boolean> {
+    if (creating) return false
+    creating = true
+    newResolutionError = null
+    const failed = 'Beschluss konnte nicht hinzugefügt werden.'
+    try {
+      // INV-5: pick the decision rule up front (default simple) and let the SERVER
+      // compute the result — the client never sends a free-hand `result`. The
+      // form refuses a blank count, so the three numbers are stored as typed.
+      const res = await fetch(`/api/protocols/${data.protocol.id}/resolutions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: r.text,
+          votesYes: Number(r.votes_yes),
+          votesNo: Number(r.votes_no),
+          votesAbstain: Number(r.votes_abstain),
+          requiredMajority: r.required_majority,
+        }),
+      })
+      if (res.ok) {
+        resolutions = [...resolutions, (await res.json()).resolution]
+        newResolution = null
+        return true
+      }
+      newResolutionError = await refusalMessage(res, failed)
+    } catch {
+      // network failure: keep the form (and the typed text) so it can be retried
+      newResolutionError = failed
+    } finally {
+      creating = false
+    }
+    return false
   }
 
   async function saveResolution(r: ResolutionLike) {
@@ -80,7 +170,7 @@
       const saved = (await res.json()).resolution as ResolutionLike
       resolutions = resolutions.map((x) => (x.id === saved.id ? saved : x))
     } else {
-      alert('Beschluss konnte nicht gespeichert werden.')
+      alert(await refusalMessage(res, 'Beschluss konnte nicht gespeichert werden.'))
     }
   }
 
@@ -107,40 +197,36 @@
   }
 
   async function submitForVote() {
+    submitError = null
     const res = await fetch(`/api/protocols/${data.protocol.id}/submit`, { method: 'POST' })
     if (res.ok) {
       location.reload()
-    } else {
-      alert('Einreichung zur Abstimmung fehlgeschlagen: ' + (await res.text()))
+      return
     }
+    submitError = (await refusalOf(res)).message || 'Einreichung zur Abstimmung fehlgeschlagen.'
   }
 
   async function publish() {
     publishError = null
+    publishErrorCode = null
     const res = await fetch(`/api/protocols/${data.protocol.id}/publish`, { method: 'POST' })
     if (res.ok) {
       location.reload()
       return
     }
     // (4) surface the REAL server body inline (e.g. the 422 "Nicht beschlussfähig:
-    // X/Y …" quorum message) as an actionable banner, not a modal alert(). The
-    // SvelteKit error helper serialises the message as JSON { message }; fall back
-    // to the raw text for any non-JSON error body.
-    const raw = await res.text()
-    let message = raw
-    try {
-      const parsed = JSON.parse(raw)
-      if (parsed && typeof parsed.message === 'string') message = parsed.message
-    } catch {
-      // non-JSON body — keep the raw text
-    }
-    publishError = message || 'Veröffentlichung fehlgeschlagen.'
+    // X/Y …" quorum message) as an actionable banner, not a modal alert().
+    const refusal = await refusalOf(res)
+    publishError = refusal.message || 'Veröffentlichung fehlgeschlagen.'
+    publishErrorCode = refusal.code
   }
 
   function scrollToAttendance() {
     document.getElementById('anwesenheit')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 </script>
+
+<PageTitle title={`${data.protocol.title || 'Protokoll'} – ${data.committee.name}`} />
 
 <div class="space-y-6 max-w-4xl">
   <div class="flex flex-wrap items-center gap-3 rounded-lg border px-4 py-3 bg-surface-2/30">
@@ -160,6 +246,7 @@
       <label class="flex items-center gap-2 text-sm cursor-pointer">
         <input
           type="checkbox"
+          aria-label="Gastbearbeitung erlaubt"
           checked={data.protocol.guest_edit_enabled}
           onchange={async (e) => {
             const target = e.target as HTMLInputElement
@@ -217,15 +304,28 @@
       {#each resolutions as resolution (resolution.id)}
         <ResolutionRow
           {resolution}
-          isAdmin={isAdmin && isEditable}
+          isAdmin={canEditResolution(resolution)}
           protocolId={data.protocol.id}
           eligibleVotingCount={data.quorum.eligibleVotingCount}
           onSave={saveResolution}
           onDelete={deleteResolution}
         />
       {/each}
+      {#if newResolution && isAdmin && isEditable}
+        <ResolutionRow
+          resolution={newResolution}
+          isAdmin={true}
+          startEditing
+          error={newResolutionError}
+          protocolId={data.protocol.id}
+          eligibleVotingCount={data.quorum.eligibleVotingCount}
+          onSave={createResolution}
+          onDelete={() => {}}
+          onCancel={cancelNewResolution}
+        />
+      {/if}
     </div>
-    {#if isAdmin && isEditable}
+    {#if isAdmin && isEditable && !newResolution}
       <Button variant="outline" size="sm" onclick={addResolution}>+ Beschluss hinzufügen</Button>
     {/if}
   </section>
@@ -283,9 +383,18 @@
       <div class="rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-800" role="alert">
         <div class="font-medium">Veröffentlichung blockiert</div>
         <p class="mt-1">{publishError}</p>
-        <div class="mt-2">
-          <Button size="sm" variant="outline" onclick={scrollToAttendance}>Anwesenheit erfassen</Button>
-        </div>
+        {#if publishErrorCode !== UNTALLIED_RESOLUTION_CODE}
+          <!-- Recording attendance does not help a resolution without a vote. -->
+          <div class="mt-2">
+            <Button size="sm" variant="outline" onclick={scrollToAttendance}>Anwesenheit erfassen</Button>
+          </div>
+        {/if}
+      </div>
+    {/if}
+    {#if submitError}
+      <div class="rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-800" role="alert">
+        <div class="font-medium">Einreichung nicht möglich</div>
+        <p class="mt-1">{submitError}</p>
       </div>
     {/if}
     <div class="flex gap-2 pt-2 border-t">

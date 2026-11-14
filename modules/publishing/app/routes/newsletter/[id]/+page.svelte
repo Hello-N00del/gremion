@@ -1,4 +1,5 @@
 <script lang="ts">
+  import PageTitle from '$lib/components/PageTitle.svelte'
   import { invalidateAll } from '$app/navigation'
   import type { PageData } from './$types'
 
@@ -40,6 +41,8 @@
     }
   }
 </script>
+
+<PageTitle title={data.newsletter.title} />
 
 <div class="p-6 max-w-3xl mx-auto">
   <div class="flex items-center gap-3 mb-1">

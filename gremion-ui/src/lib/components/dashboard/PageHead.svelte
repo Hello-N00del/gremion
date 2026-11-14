@@ -1,7 +1,7 @@
 <script lang="ts">
   import Icon from '$lib/components/ui/Icon.svelte'
   import { t } from '$lib/i18n'
-  import { fmtMeetingPill, greeting } from './format'
+  import { fmtMeetingPill, greeting, pluralDe } from './format'
   import type { Upcoming } from './types'
 
   // Page head: title block (left) + actions (right).
@@ -37,9 +37,9 @@
     <h1 class="page-title" style="margin-top: 10px;">{greeting($t)}, {firstName}.</h1>
     <div class="page-sub">
       {#if isMember || !financeEnabled}
-        {myEventCount} Termine in deinen {gremienPlural} · {liveVotesCount} Abstimmungen laufen.
+        {myEventCount} {pluralDe(myEventCount, 'Termin', 'Termine')} in deinen {gremienPlural} · {liveVotesCount} {pluralDe(liveVotesCount, 'Abstimmung läuft', 'Abstimmungen laufen')}.
       {:else}
-        {approvalsCount} Anträge warten auf Freigabe · {liveVotesCount} Abstimmungen laufen.
+        {approvalsCount} {pluralDe(approvalsCount, 'Antrag wartet', 'Anträge warten')} auf Freigabe · {liveVotesCount} {pluralDe(liveVotesCount, 'Abstimmung läuft', 'Abstimmungen laufen')}.
       {/if}
     </div>
   </div>
