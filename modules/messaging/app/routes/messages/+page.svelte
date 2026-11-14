@@ -14,6 +14,7 @@
   import { toast } from 'svelte-sonner'
   import { senderInitials, senderLabel } from '$lib/components/messaging/sender-label'
   import { groupByDay } from '$lib/components/messaging/day-groups'
+  import { messageCount, roomCount, unreadMessageCount } from '$lib/components/messaging/count'
 
   let rooms = $derived(Object.values($roomStore))
   // FLOW-MSG-001 (TASK-009 lane B, row 15): archived rooms move to their own
@@ -552,7 +553,7 @@
         </div>
       </div>
       {#if rooms.length > 0}
-        <div class="room-list-sub mono">{activeRooms.length} Räume · {totalUnread} ungelesen</div>
+        <div class="room-list-sub mono">{roomCount(activeRooms.length)} · {totalUnread} ungelesen</div>
       {/if}
     </div>
 
@@ -575,7 +576,7 @@
           <div class="r-preview">
             <span class="mono r-members">Matrix-Raum</span>
             {#if room.unreadCount > 0}
-              <span class="unread" aria-label="{room.unreadCount} ungelesene Nachrichten">{room.unreadCount}</span>
+              <span class="unread" aria-label={unreadMessageCount(room.unreadCount)}>{room.unreadCount}</span>
             {/if}
           </div>
         </div>
@@ -636,7 +637,7 @@
         <div class="chat-head-text">
           <div class="chat-head-name">{activeRoom.name}</div>
           <div class="chat-head-sub mono">
-            {activeRoom.messages.length} Nachrichten · Ende-zu-Ende
+            {messageCount(activeRoom.messages.length)} · Ende-zu-Ende
             {#if activeRoom.archived} · archiviert{/if}
           </div>
         </div>
