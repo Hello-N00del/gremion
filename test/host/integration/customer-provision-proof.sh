@@ -975,7 +975,8 @@ phase_customer_create_refuse() {
         "$(q postgres "SELECT 1 FROM pg_database WHERE datname = 'gremion_platform'" | grep -q 1 && q gremion_platform "SELECT count(*) || ':' || coalesce(max(occurred_at)::text, '-') FROM plt.provisioning_step")"; }
     # R30 A1 (PRD-PLAT-012 / PRD-REC-003): vault stays on the deny list.
     local denied rid st oc
-    for denied in vault; do
+    local -a denied_ids=(vault)
+    for denied in "${denied_ids[@]}"; do
         snap_before="$(snap)"
         rc=0; rid="$(panel_create "$X" "calendar,${denied}")" || rc=$?
         if (( rc != 0 )); then bad "customer-create: could not queue the ${denied} request"; continue; fi
