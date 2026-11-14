@@ -220,6 +220,21 @@ kcadm_login() {
     password=""
 }
 
+# short_read_error -> stdin's first line, a credential masked, at most 160 characters; "no message" when there
+# is none. The same masking as shortReadError in gremion-ui/scripts/ops-realm-refusal.ts (the refusal says the
+# same words on both paths): a URL's user:secret part, a password=/secret=/token= value, a Bearer token.
+short_read_error() {
+    local t
+    t="$(head -n 1 | tr -d '\r' | sed -E \
+        -e 's#://[^/@[:space:]]*@#://***@#g' \
+        -e 's/\b(password|secret|token|client_secret)\b(["'"'"']?[[:space:]]*[=:][[:space:]]*["'"'"']?)[^[:space:]"'"'"',&]+/\1\2***/Ig' \
+        -e 's/\bBearer[[:space:]]+[^[:space:]]+/Bearer ***/Ig')" || t=""
+    t="${t#"${t%%[![:space:]]*}"}"
+    [[ -n "$t" ]] || t="no message"
+    if (( ${#t} > 160 )); then t="${t:0:157}..."; fi
+    printf '%s' "$t"
+}
+
 init_realm_only_kcadm() {   # <container> <origin>
     local kc="$1" origin="$2" tmpl fp have secret secret_file
     need_cmd docker jq openssl sha256sum
@@ -250,21 +265,38 @@ init_realm_only_kcadm() {   # <container> <origin>
         # them apart. The realm's control-panel client says which origin it was made for (its one redirect
         # URI is <origin>/*): the CURRENT template with THAT origin hashes to the stored value exactly when
         # only the origin differs. The TypeScript side (gremion-ui/scripts/ops-realm-refusal.ts) does the same.
-        local have_fp stored_origin="" stored_fp_same
+        # An unreadable client (a 403, a 500, an expired session, an answer that is not JSON) is NOT "the client names
+        # no origin": the refusal says which, with a short masked form of the error.
+        local have_fp stored_origin="" stored_fp_same cerr craw crc=0 read_err="" lead fp not_known
         have_fp="$(jq -r '.attributes["gremion.ops-realm.sha256"] // ""' <<< "$have" | tr -d '\r')"
-        stored_origin="$(docker exec "$kc" "$KCADM_BIN" get clients -r platform -q clientId=control-panel --fields redirectUris 2>/dev/null \
-            | jq -r '.[0].redirectUris[0] // ""' 2>/dev/null | tr -d '\r' || true)"
-        stored_origin="${stored_origin%/\*}"
+        cerr="$(mktemp)"
+        craw="$(docker exec "$kc" "$KCADM_BIN" get clients -r platform -q clientId=control-panel --fields redirectUris 2>"$cerr")" || crc=$?
+        if (( crc != 0 )); then
+            read_err="$(short_read_error < "$cerr")"
+            [[ "$read_err" != "no message" ]] || read_err="kcadm exit ${crc}"
+        else
+            stored_origin="$(jq -r '.[0].redirectUris[0] // ""' <<< "$craw" 2>/dev/null | tr -d '\r')" || read_err="the answer could not be parsed"
+        fi
+        rm -f "$cerr"
+        if [[ "$stored_origin" == */\* ]]; then stored_origin="${stored_origin%/\*}"; else stored_origin=""; fi
+        # The wording is the TypeScript side's (gremion-ui/scripts/ops-realm-refusal.ts), word for word.
+        lead="realm platform differs from realm-export.ops.json for panel origin ${origin}"
+        fp="${have_fp:-absent}"
+        not_known="either the origin changed (it cannot change in place; the install needs a new ops realm) or the realm was made by an earlier template (docs/ops/runbook/upgrade.md, step 8a, whose precondition tells which)"
+        if [[ -n "$read_err" ]]; then
+            die "${lead} (fingerprint ${fp}): the realm's control-panel client could not be read (${read_err}), so the origin it was made for is not known; ${not_known}; refusing to overwrite an ops realm" "$GREMION_EXIT_ASSERT"
+        fi
         if [[ -n "$stored_origin" && "$stored_origin" != "$origin" ]]; then
             stored_fp_same="$( { cat "$tmpl"; printf '\n%s' "$stored_origin"; } | sha256sum | cut -d' ' -f1)"
             if [[ "$stored_fp_same" == "$have_fp" ]]; then
-                die "realm platform differs from realm-export.ops.json for ${origin}: it was made for the panel origin ${stored_origin}, and an origin cannot change in place (the realm's redirect URIs, web origin and fingerprint are bound to it); this install needs a new ops realm for ${origin}, or its origin put back to ${stored_origin}. The template is not the difference, so step 8a of docs/ops/runbook/upgrade.md does not apply; refusing to overwrite an ops realm" "$GREMION_EXIT_ASSERT"
+                die "${lead}: it was made for the panel origin ${stored_origin}, and an origin cannot change in place (the realm's redirect URIs, web origin and fingerprint are bound to it); this install needs a new ops realm for ${origin}, or its origin put back to ${stored_origin}. The template is not the difference, so step 8a of docs/ops/runbook/upgrade.md does not apply; refusing to overwrite an ops realm" "$GREMION_EXIT_ASSERT"
             fi
+            die "${lead} (fingerprint ${fp}): it was made for the panel origin ${stored_origin}, and its fingerprint is not the current template's for ${stored_origin} either, so the origin and the template both differ (or the realm was changed by hand). An origin cannot change in place: this install needs a new ops realm for ${origin}, or its origin put back to ${stored_origin}, and then docs/ops/runbook/upgrade.md, step 8a (read its precondition first) decides about the template; refusing to overwrite an ops realm" "$GREMION_EXIT_ASSERT"
         fi
         if [[ "$stored_origin" == "$origin" ]]; then
-            die "realm platform differs from realm-export.ops.json for ${origin}: the origin is the one it was made for, so its template is the difference. A realm made by an earlier release's template is brought up to this one with kcadm, then re-stamped: docs/ops/runbook/upgrade.md, step 8a (read its precondition first); refusing to overwrite an ops realm" "$GREMION_EXIT_ASSERT"
+            die "${lead}: the origin is the one it was made for, so its template is the difference (fingerprint ${fp}). A realm made by an earlier release's template is brought up to this one with kcadm, then re-stamped: docs/ops/runbook/upgrade.md, step 8a (read its precondition first); refusing to overwrite an ops realm" "$GREMION_EXIT_ASSERT"
         fi
-        die "realm platform differs from realm-export.ops.json for ${origin}, and the realm's control-panel client does not say which origin it was made for, or differs in both: either the origin changed (it cannot change in place; the install needs a new ops realm) or the realm was made by an earlier template (docs/ops/runbook/upgrade.md, step 8a, whose precondition tells which); refusing to overwrite an ops realm" "$GREMION_EXIT_ASSERT"
+        die "${lead} (fingerprint ${fp}): the realm's control-panel client carries no redirect URI of the form <origin>/*, so the origin it was made for is not known; ${not_known}; refusing to overwrite an ops realm" "$GREMION_EXIT_ASSERT"
     fi
     if ! grep -qiE 'not found|404' "$err"; then
         local why; why="$(tr -d '\r' < "$err" | tail -n 3 | tr '\n' ' ')"; rm -f "$err"

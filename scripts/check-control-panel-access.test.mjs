@@ -32,7 +32,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import { REPO_ROOT, renderState } from './compose-edge.mjs'
@@ -325,8 +325,60 @@ test('CONTROL_PANEL_HOST: the key an operator sets is documented where they look
     assert.ok(runbook.includes(need), `the runbook says "${need}"`)
   }
   // no tool builds the control host by hand any more: each takes it from the resolved value
-  for (const rel of ['infra/host/bin/gremion-render', 'infra/host/bin/gremion-verify', 'infra/host/ops/render-ops.sh']) {
-    assert.ok(!/["'`]control\.\$\{PLATFORM_DOMAIN\}["'`]/.test(read(rel).replace(/printf 'control\.%s'[^\n]*|control\.\$\{PLATFORM_DOMAIN\}\}/g, '')), `${rel} builds control.<domain> by hand`)
+  const offenders = []
+  for (const rel of hostToolFiles()) offenders.push(...handBuiltControlHosts(rel, read(rel)).map((l) => `${rel}: ${l}`))
+  assert.deepEqual(offenders, [], 'these lines build control.<domain> by hand; resolve_control_panel_host (infra/host/lib/common.sh) is the one place that knows the default')
+})
+
+/** Every file under infra/host (tools, libraries, templates): a hand-built control host can hide in any of them. */
+function hostToolFiles(dir = 'infra/host') {
+  const out = []
+  for (const e of readdirSync(path.join(REPO_ROOT, dir), { withFileTypes: true })) {
+    const rel = `${dir}/${e.name}`
+    if (e.isDirectory()) out.push(...hostToolFiles(rel))
+    else out.push(rel)
+  }
+  return out
+}
+
+/** The one line that may spell the default control host: the resolver, matched by its exact text. */
+const CONTROL_HOST_RESOLVER = { file: 'infra/host/lib/common.sh', line: `printf 'control.%s' "$PLATFORM_DOMAIN"` }
+
+/**
+ * The lines of <text> that spell the control host's default by hand: control.${PLATFORM_DOMAIN}
+ * (after a quote, after ://, after a :- default, anywhere), control.$PLATFORM_DOMAIN, or a printf
+ * format control.%s. Only the resolver's own line in common.sh is exempt, by exact text.
+ */
+function handBuiltControlHosts(rel, text) {
+  const spelled = /control\.(\$\{PLATFORM_DOMAIN\}|\$PLATFORM_DOMAIN\b|%s)/
+  return text
+    .split('\n')
+    .map((l, i) => ({ l: l.replace(/\r$/, ''), n: i + 1 }))
+    .filter(({ l }) => spelled.test(l))
+    .filter(({ l }) => !(rel === CONTROL_HOST_RESOLVER.file && l.trim() === CONTROL_HOST_RESOLVER.line))
+    .map(({ l, n }) => `line ${n}: ${l.trim()}`)
+}
+
+test('no tool builds the control host by hand: the guard flags every spelling it was written for (negative fixtures)', () => {
+  const tool = 'infra/host/bin/gremion-fixture'
+  const bad = [
+    'want="https://control.${PLATFORM_DOMAIN}"',
+    '    write_targets blackbox-control.yml "https://control.${PLATFORM_DOMAIN}"',
+    `control_host() { printf 'control.%s' "$PLATFORM_DOMAIN"; }`,
+    `control_host() { printf '%s' "\${CONTROL_PANEL_HOST:-control.\${PLATFORM_DOMAIN}}"; }`,
+    'host="control.$PLATFORM_DOMAIN"',
+    "host='control.${PLATFORM_DOMAIN}'",
+    'url=`echo https://control.${PLATFORM_DOMAIN}/x`',
+  ]
+  for (const line of bad) assert.equal(handBuiltControlHosts(tool, line).length, 1, `the guard must flag: ${line}`)
+  // the resolver's own line is exempt by exact text, in common.sh only
+  const resolver = `        ${CONTROL_HOST_RESOLVER.line}`
+  assert.equal(handBuiltControlHosts(CONTROL_HOST_RESOLVER.file, resolver).length, 0)
+  assert.equal(handBuiltControlHosts(tool, resolver).length, 1, 'the same line in another file is a hand-built host')
+  assert.equal(handBuiltControlHosts(CONTROL_HOST_RESOLVER.file, `${resolver} # copy`).length, 1, 'the exemption is the exact text, not a prefix')
+  // the placeholders prose and docs use are not spellings of the default
+  for (const ok of ['# the control host (CONTROL_PANEL_HOST, else control.<PLATFORM_DOMAIN>)', 'echo "https://${control_host}"']) {
+    assert.equal(handBuiltControlHosts(tool, ok).length, 0, `not flagged: ${ok}`)
   }
 })
 

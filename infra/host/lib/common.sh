@@ -452,14 +452,21 @@ compose_file_names() {
 # control_panel_key_of <env file> <KEY> -> the value of KEY in the file, nothing when
 # the file or the key is absent. THE reader of the two control panel keys for every
 # tool that does not source the file through load_env (gremion-render for the app
-# envs, gremion-deploy, gremion-tenant, gremion-operator-ca): the last line wins, a
-# trailing CR is dropped and ONE layer of matching quotes is stripped, exactly what
-# `docker compose --env-file` and load_env do, so that KEY="https://control.<domain>"
-# and KEY="" mean the same thing to every tool and to the panel's ORIGIN. A private
-# reader per tool is how one of them took the quotes into the value.
+# envs, gremion-deploy, gremion-tenant, gremion-operator-ca): a trailing CR is dropped
+# and ONE layer of matching quotes is stripped, as load_env and `docker compose
+# --env-file` do, so that KEY="https://control.<domain>" and KEY="" mean the same thing
+# to every tool and to the panel's ORIGIN. A private reader per tool is how one of them
+# took the quotes into the value. A key that appears on more than one line is REFUSED
+# (exit 2 from the calling command substitution, which the callers' set -e passes on),
+# the way load_env refuses a duplicate key: compose would take the last line and a tool
+# that took the first would name another host, and nobody can tell which line was meant.
 control_panel_key_of() {
-    local f="$1" k="$2" v
+    local f="$1" k="$2" v n
     [[ -f "$f" ]] || return 0
+    n="$(tr -d '\r' < "$f" | grep -cE "^${k}=" || true)"
+    if (( n > 1 )); then
+        die "${f}: ${k} is set on ${n} lines; keep one (the control panel keys are read from one line, as load_env reads every key)" "$GREMION_EXIT_USAGE"
+    fi
     v="$(tr -d '\r' < "$f" | grep -E "^${k}=" | tail -n 1 || true)"
     v="${v#"${k}"=}"
     if [[ "$v" == \"*\" || "$v" == \'*\' ]]; then v="${v:1:${#v}-2}"; fi

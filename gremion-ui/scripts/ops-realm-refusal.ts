@@ -11,10 +11,21 @@
 // The realm's own control-panel client says which origin it was made for (its one redirect
 // URI is `<origin>/*`): the fingerprint of the CURRENT template with THAT origin equals the
 // stored one exactly when only the origin differs. gremion-tenant's kcadm path
-// (init_realm_only_kcadm) does the same in bash; test/host/tenant.bats holds that side.
+// (init_realm_only_kcadm) does the same in bash and says the same words for the same case;
+// test/host/tenant.bats holds that side, and scripts/check-control-panel-access.test.mjs
+// holds the phrases both sides share.
+//
+// Five outcomes, so that "the client could not be read" is never worded like "the client
+// says nothing":
+//   origin      the stored origin is another one and the fingerprint is the current template's for it
+//   template    the stored origin is this one: the template is the difference
+//   both        the stored origin is another one and the fingerprint is not the current template's
+//               for it either: origin and template differ (or the realm was edited by hand)
+//   no-redirect the client was read and carries no `<origin>/*` redirect URI
+//   unreadable  the client could not be read: the refusal carries a short form of the error
 import { createHash } from 'node:crypto'
 
-export type OpsRealmRefusalKind = 'origin' | 'template' | 'unknown'
+export type OpsRealmRefusalKind = 'origin' | 'template' | 'both' | 'no-redirect' | 'unreadable'
 
 export interface OpsRealmRefusal {
   readonly kind: OpsRealmRefusalKind
@@ -31,29 +42,66 @@ export function storedPanelOrigin(redirectUris: readonly string[] | undefined): 
   return first.endsWith('/*') ? first.slice(0, -2) : ''
 }
 
+/** The longest error text a refusal carries. */
+export const READ_ERROR_MAX = 160
+
+/**
+ * A short, safe form of why a read failed, for the refusal text: the first line, with a
+ * credential in a URL (`scheme://user:secret@host`) and a `password=`, `secret=`, `token=`
+ * or `Bearer` value masked, at most READ_ERROR_MAX characters. gremion-tenant's bash does the
+ * same masking.
+ */
+export function shortReadError(e: unknown): string {
+  const raw = e instanceof Error ? e.message : typeof e === 'string' ? e : 'unknown error'
+  const first = raw.split(/\r?\n/)[0]?.trim() ?? ''
+  const masked = first
+    .replace(/:\/\/[^/@\s]*@/g, '://***@')
+    .replace(/\b(password|secret|token|client_secret)\b(["']?\s*[=:]\s*["']?)[^\s"',&]+/gi, '$1$2***')
+    .replace(/\bBearer\s+\S+/gi, 'Bearer ***')
+  const text = masked === '' ? 'no message' : masked
+  return text.length > READ_ERROR_MAX ? `${text.slice(0, READ_ERROR_MAX - 3)}...` : text
+}
+
 export function opsRealmRefusal(args: {
   realm: string
   templateText: string
   origin: string
   storedFingerprint: string | undefined
   storedRedirectUris: readonly string[] | undefined
+  /** Set when reading the realm's control-panel client failed: the short form of the error (shortReadError). */
+  storedReadError?: string | undefined
 }): OpsRealmRefusal {
   const { realm, templateText, origin, storedFingerprint } = args
   const stored = storedPanelOrigin(args.storedRedirectUris)
-  if (stored !== '' && stored !== origin && storedFingerprint === opsRealmFingerprint(templateText, stored)) {
+  const head = `realm ${realm} differs from realm-export.ops.json for panel origin ${origin}`
+  const fp = storedFingerprint ?? 'absent'
+  const notKnown = `either the origin changed (it cannot change in place; the install needs a new ops realm) or the realm was made by an earlier template (docs/ops/runbook/upgrade.md, step 8a, whose precondition tells which)`
+  if (args.storedReadError !== undefined && args.storedReadError !== '') {
     return {
-      kind: 'origin',
-      message: `realm ${realm} differs from realm-export.ops.json for panel origin ${origin}: it was made for the panel origin ${stored}, and an origin cannot change in place (the realm's redirect URIs, web origin and fingerprint are bound to it); this install needs a new ops realm for ${origin}, or its origin put back to ${stored}. The template is not the difference, so step 8a of docs/ops/runbook/upgrade.md does not apply`,
+      kind: 'unreadable',
+      message: `${head} (fingerprint ${fp}): the realm's control-panel client could not be read (${args.storedReadError}), so the origin it was made for is not known; ${notKnown}`,
+    }
+  }
+  if (stored !== '' && stored !== origin) {
+    if (storedFingerprint === opsRealmFingerprint(templateText, stored)) {
+      return {
+        kind: 'origin',
+        message: `${head}: it was made for the panel origin ${stored}, and an origin cannot change in place (the realm's redirect URIs, web origin and fingerprint are bound to it); this install needs a new ops realm for ${origin}, or its origin put back to ${stored}. The template is not the difference, so step 8a of docs/ops/runbook/upgrade.md does not apply`,
+      }
+    }
+    return {
+      kind: 'both',
+      message: `${head} (fingerprint ${fp}): it was made for the panel origin ${stored}, and its fingerprint is not the current template's for ${stored} either, so the origin and the template both differ (or the realm was changed by hand). An origin cannot change in place: this install needs a new ops realm for ${origin}, or its origin put back to ${stored}, and then docs/ops/runbook/upgrade.md, step 8a (read its precondition first) decides about the template`,
     }
   }
   if (stored === origin) {
     return {
       kind: 'template',
-      message: `realm ${realm} differs from realm-export.ops.json for panel origin ${origin}: the origin is the one it was made for, so its template is the difference (fingerprint ${storedFingerprint ?? 'absent'}). A realm made by an earlier release's template is brought up to this one with kcadm, then re-stamped: docs/ops/runbook/upgrade.md, step 8a (read its precondition first)`,
+      message: `${head}: the origin is the one it was made for, so its template is the difference (fingerprint ${fp}). A realm made by an earlier release's template is brought up to this one with kcadm, then re-stamped: docs/ops/runbook/upgrade.md, step 8a (read its precondition first)`,
     }
   }
   return {
-    kind: 'unknown',
-    message: `realm ${realm} differs from realm-export.ops.json for panel origin ${origin} (fingerprint ${storedFingerprint ?? 'absent'}), and the realm's control-panel client does not say which origin it was made for, so the cause is not known: either the origin changed (it cannot change in place; the install needs a new ops realm) or the realm was made by an earlier template (docs/ops/runbook/upgrade.md, step 8a, whose precondition tells which)`,
+    kind: 'no-redirect',
+    message: `${head} (fingerprint ${fp}): the realm's control-panel client carries no redirect URI of the form <origin>/*, so the origin it was made for is not known; ${notKnown}`,
   }
 }

@@ -1479,6 +1479,23 @@ relay_ops_env() {   # <ALERT_EMAIL_TO>
     assert_absent "(\$'|printf -- '\[\])\$" "$f" "a raw LF sits inside a quoted escape"
 }
 
+@test "render-ops: the control host may not be the customer host PILOT_TENANT_HOST of state.env, nor the relay's turn.<it> (read from state.env like CONTROL_PANEL_HOST)" {
+    write_ops_env
+    printf 'PLATFORM_DOMAIN=example.org\nPILOT_TENANT_HOST=cust.example.com\nCONTROL_PANEL_HOST=cust.example.com\n' > "$GREMION_ROOT/etc/env/state.env"
+    run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+    [ "$status" -eq 2 ] || { echo "exit ${status}: ${output}"; return 1; }
+    [[ "$output" == *"CONTROL_PANEL_HOST is refused: it is the customer host PILOT_TENANT_HOST"* ]] || { echo "$output"; return 1; }
+    printf 'PLATFORM_DOMAIN=example.org\nPILOT_TENANT_HOST="cust.example.com"\nCONTROL_PANEL_HOST=turn.cust.example.com\n' > "$GREMION_ROOT/etc/env/state.env"
+    run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+    [ "$status" -eq 2 ] || { echo "exit ${status}: ${output}"; return 1; }
+    [[ "$output" == *"it is the video relay host turn.PILOT_TENANT_HOST"* ]] || { echo "$output"; return 1; }
+    # another host is fine
+    printf 'PLATFORM_DOMAIN=example.org\nPILOT_TENANT_HOST=cust.example.com\nCONTROL_PANEL_HOST=panel.example.net\n' > "$GREMION_ROOT/etc/env/state.env"
+    run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+    [ "$status" -eq 0 ] || { echo "exit ${status}: ${output}"; return 1; }
+    grep -q 'https://panel.example.net' "$GREMION_ROOT/runtime/ops/targets/blackbox-control.yml"
+}
+
 @test "render-ops: the control probe targets CONTROL_PANEL_HOST from state.env (a host outside the platform domain), the default name without it, and an invalid host is refused (exit 2) before anything is written" {
     write_ops_env
     printf 'pilot.example.org\n' > "$GREMION_ROOT/etc/tenant-hosts.txt"

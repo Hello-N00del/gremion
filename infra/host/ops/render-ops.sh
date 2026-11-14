@@ -69,6 +69,11 @@ ALLOW_SENTINELS=1 load_env "$ENV_FILE"
 # other tool reads it; an absent state.env or key is the default.
 CONTROL_PANEL_HOST="$(control_panel_host_of "$ROOT/etc/env/state.env")"
 export CONTROL_PANEL_HOST
+# The same file names the customer host (PILOT_TENANT_HOST) and the video relay's turn.<it>, which the
+# control host must not equal (resolve_control_panel_host refuses both). Read like CONTROL_PANEL_HOST: ops.env
+# does not carry it, and a check that cannot see the key passes a host the other tools refuse.
+PILOT_TENANT_HOST="$(control_panel_key_of "$ROOT/etc/env/state.env" PILOT_TENANT_HOST)"
+export PILOT_TENANT_HOST
 
 require_var() {
     local name="$1"

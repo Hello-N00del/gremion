@@ -94,7 +94,7 @@ import {
   type Tenant,
 } from '../src/lib/server/tenant/registry'
 import { KcProvisionApi, masterAdminClientId, type KcTransport } from '../src/lib/server/tenant/provisioner/kc-admin-api'
-import { opsRealmFingerprint, opsRealmRefusal } from './ops-realm-refusal'
+import { opsRealmFingerprint, opsRealmRefusal, shortReadError } from './ops-realm-refusal'
 import { customerAdapters, governanceServer, kernelServer, reconcileKernelAudit } from '../src/lib/server/tenant/provisioner/customer-adapters'
 import { kernelApiSeedDeps, reconcileKernelApiSeed, reconcilePurgerConnect } from '../src/lib/server/tenant/provisioner/reconcile-reensure'
 import { fixtureIdentities } from '../src/lib/server/tenant/provisioner/fixture-identities'
@@ -665,13 +665,17 @@ async function ensureOpsRealm(kc: KcProvisionApi, raw: KcTransport): Promise<{ c
     // mismatch (an earlier release's template: upgrade runbook step 8a) have different remedies; the realm's
     // own control-panel client says which origin it was made for.
     let storedRedirectUris: string[] | undefined
+    let storedReadError: string | undefined
     try {
       const clients = (await raw('GET', `/admin/realms/${OPS_REALM}/clients?clientId=control-panel`)) as Array<{ redirectUris?: string[] }> | undefined
       storedRedirectUris = clients?.[0]?.redirectUris
-    } catch {
-      storedRedirectUris = undefined // unreadable: the refusal then says the cause is not known
+    } catch (e) {
+      // Unreadable (a 403, a 500, an expired session, an unparsable answer) is not "the client names no origin":
+      // the refusal carries a short, masked form of the error so the two can be told apart.
+      storedRedirectUris = undefined
+      storedReadError = shortReadError(e)
     }
-    const why = opsRealmRefusal({ realm: OPS_REALM, templateText, origin, storedFingerprint: have, storedRedirectUris })
+    const why = opsRealmRefusal({ realm: OPS_REALM, templateText, origin, storedFingerprint: have, storedRedirectUris, storedReadError })
     throw new ProvisioningError('PRECONDITION', `${why.message}; refusing to overwrite an ops realm by hand`)
   }
   const secretPath = process.env.OPS_CLIENT_SECRET_FILE ?? join(tenantSecretsDir(), 'platform_client_control-panel')

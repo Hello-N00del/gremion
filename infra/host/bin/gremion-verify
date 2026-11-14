@@ -831,11 +831,15 @@ CONTROL_SERVICE="panel@file"
 CONTROL_CHAIN="edge-hostpin-control@docker edge-hsts-platform@docker edge-ratelimit-portal@docker"
 CONTROL_CA_REL="mtls/operator-ca.pem"
 
-# The control host: CONTROL_PANEL_HOST (state.env) or control.<PLATFORM_DOMAIN>. A value that
-# is set is validated once, by prepare_verify (resolve_control_panel_host), which refuses a bad
-# one before any check runs; every host list, SAN check, handshake probe and router rule below
-# comes from this one function.
-control_host() { printf '%s' "${CONTROL_PANEL_HOST:-control.${PLATFORM_DOMAIN}}"; }
+# The control host: CONTROL_PANEL_HOST (state.env) or control.<PLATFORM_DOMAIN>, resolved ONCE
+# by prepare_verify through resolve_control_panel_host (common.sh, the one place that knows the
+# default), which refuses a bad value before any check runs; every host list, SAN check,
+# handshake probe and router rule below comes from this one function.
+CONTROL_HOST_RESOLVED=""
+control_host() {
+    if [[ -n "$CONTROL_HOST_RESOLVED" ]]; then printf '%s' "$CONTROL_HOST_RESOLVED"; return 0; fi
+    resolve_control_panel_host
+}
 
 # True when this run must treat the control host as the client-certificate host:
 # the install opted in, or Traefik serves the router.
@@ -869,7 +873,7 @@ check_control_panel_file() {   # <the etc/edge directory>
     # The opt-in names ONE host: CONTROL_PANEL_ORIGIN is exactly https://<the control host>.
     # gremion-render refuses anything else; a state.env edited after that render is caught here.
     if [[ -n "${CONTROL_PANEL_ORIGIN:-}" && "$CONTROL_PANEL_ORIGIN" != "https://$(control_host)" ]]; then
-        fail "CONTROL_PANEL_ORIGIN (${CONTROL_PANEL_ORIGIN}) is not https://$(control_host): the control host is CONTROL_PANEL_HOST in state.env, else control.${PLATFORM_DOMAIN}"
+        fail "CONTROL_PANEL_ORIGIN (${CONTROL_PANEL_ORIGIN}) is not https://$(control_host): the control host is CONTROL_PANEL_HOST in state.env, else control.<the platform domain>"
     fi
 
     # No other router may name the control host: it would be served without the
@@ -999,13 +1003,21 @@ PANEL_UP_TRIES="${PANEL_UP_TRIES:-3}"
 PANEL_UP_WAIT_SECONDS="${PANEL_UP_WAIT_SECONDS:-15}"
 
 # panel_server_problems -> one message per server of panel@file that is not UP, in the
-# current SERVICES_JSON; nothing when all are UP or the service is unknown.
+# current SERVICES_JSON. A check that looked at nothing is not a pass: on an install that
+# opted in (CONTROL_PANEL_ORIGIN set, the control router routes to this service) a service
+# Traefik does not list, or lists without a server, is a message too. Without the opt-in
+# there is nothing to judge and nothing is said.
 panel_server_problems() {
-    local svc url st
+    local svc url st checked=0
     svc="$(printf '%s' "$SERVICES_JSON" | jq -c --arg n "$CONTROL_SERVICE" '[.[] | select(.name == $n)][0] // null')"
-    [[ "$svc" != "null" ]] || return 0   # a router on an unknown service is already UNCLASSIFIED
+    if [[ "$svc" == "null" ]]; then
+        [[ -z "${CONTROL_PANEL_ORIGIN:-}" ]] \
+            || printf '%s\n' "service ${CONTROL_SERVICE}: traefik lists no such service, so nothing was checked about the panel's server (CONTROL_PANEL_ORIGIN is set: the control router routes to it)"
+        return 0
+    fi
     while IFS= read -r url; do
         [[ -n "$url" ]] || continue
+        checked=$((checked + 1))
         st="$(jq -r --arg u "$url" '.serverStatus[$u] // "none"' <<<"$svc")"
         case "$st" in
             UP) ;;
@@ -1013,6 +1025,9 @@ panel_server_problems() {
             *) printf '%s\n' "service ${CONTROL_SERVICE}: traefik reports its server ${url} as ${st}: it cannot reach the panel (the panel must join the edge network under its colour alias: docker-compose.control-public.yml in the COMPOSE_FILE of both app envs, then recreate the colour)" ;;
         esac
     done < <(jq -r '.loadBalancer.servers // [] | .[].url' <<<"$svc")
+    if (( checked == 0 )) && [[ -n "${CONTROL_PANEL_ORIGIN:-}" ]]; then
+        printf '%s\n' "service ${CONTROL_SERVICE}: traefik lists no server for it, so nothing was checked about the panel (CONTROL_PANEL_ORIGIN is set: the control router routes to it)"
+    fi
     return 0
 }
 
@@ -1642,10 +1657,10 @@ prepare_verify() {
     for k in PLATFORM_DOMAIN EDGE_BIND_IP EDGE_HTTP_PORT EDGE_HTTPS_PORT; do
         [[ -n "${!k:-}" ]] || die "$k is not set in etc/env/state.env" 2
     done
-    if [[ -n "${CONTROL_PANEL_HOST:-}" ]]; then
-        local why
-        why="$(resolve_control_panel_host)" || die "etc/env/state.env: ${why}" 2
-    fi
+    # Resolved for every install, set or not: the default is the resolver's, not a copy here.
+    local why
+    why="$(resolve_control_panel_host)" || die "etc/env/state.env: ${why}" 2
+    CONTROL_HOST_RESOLVED="$why"
 }
 
 main() {

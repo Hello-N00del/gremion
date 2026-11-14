@@ -297,6 +297,33 @@ PROBE
     [[ "$output" == *"A"* ]]
 }
 
+@test "control_panel_key_of: one line is read (quotes and CR dropped), an absent key or file is empty, and a key on two lines is REFUSED like load_env refuses it" {
+    printf 'CONTROL_PANEL_ORIGIN="https://control.example.org"\r\nOTHER=1\n' > "${GREMION_ROOT}/t.env"
+    run_with 'control_panel_origin_of "$1"' "${GREMION_ROOT}/t.env"
+    [ "$status" -eq 0 ]
+    [ "$output" = "https://control.example.org" ]
+    run_with 'control_panel_host_of "$1"' "${GREMION_ROOT}/t.env"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+    run_with 'control_panel_host_of "$1"' "${GREMION_ROOT}/no-such.env"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+    # a duplicate is a refusal, not "the last line wins": which line was meant cannot be told
+    printf 'CONTROL_PANEL_ORIGIN=https://a.example.org\nX=1\nCONTROL_PANEL_ORIGIN=https://b.example.org\n' > "${GREMION_ROOT}/dup.env"
+    run_with 'control_panel_origin_of "$1"' "${GREMION_ROOT}/dup.env"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"CONTROL_PANEL_ORIGIN is set on 2 lines"* ]] || { echo "$output"; return 1; }
+    [[ "$output" != *"b.example.org"* ]]
+    printf 'CONTROL_PANEL_HOST=a.example.org\nCONTROL_PANEL_HOST=\n' > "${GREMION_ROOT}/dup-host.env"
+    run_with 'control_panel_host_of "$1"' "${GREMION_ROOT}/dup-host.env"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"CONTROL_PANEL_HOST is set on 2 lines"* ]]
+    # the way every caller uses it: an assignment under set -e stops the caller
+    run_with 'v="$(control_panel_origin_of "$1")"; echo reached' "${GREMION_ROOT}/dup.env"
+    [ "$status" -eq 2 ]
+    [[ "$output" != *"reached"* ]]
+}
+
 @test "load_env rejects a CHANGE_ME_ value with exit 2" {
     printf 'PLATFORM_DOMAIN=CHANGE_ME_OPERATOR_platform_domain\n' > "${GREMION_ROOT}/t.env"
     run_with 'load_env "$1"' "${GREMION_ROOT}/t.env"
