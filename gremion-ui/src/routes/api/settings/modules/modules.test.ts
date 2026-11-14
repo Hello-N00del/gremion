@@ -23,6 +23,7 @@ const h = vi.hoisted(() => {
     submitModuleSwitch: vi.fn(),
     loadModuleOverview: vi.fn(),
     previewSwitchOff: vi.fn(),
+    loadOperatorModules: vi.fn(),
     rows,
     /** An empty table, and the first handle again (handle-1, key-1). */
     reset: () => {
@@ -56,6 +57,7 @@ vi.mock('$lib/server/module-switch/pending', async (orig) => ({
   claimPendingSwitch: h.claim,
 }))
 vi.mock('$lib/server/module-switch/preview', () => ({ previewSwitchOff: h.previewSwitchOff }))
+vi.mock('$lib/server/module-switch/operator-modules', () => ({ loadOperatorModules: h.loadOperatorModules }))
 vi.mock('$lib/server/module-switch/council-db', async (orig) => ({ ...(await orig<typeof import('$lib/server/module-switch/council-db')>()) }))
 vi.mock('$env/dynamic/private', () => ({ env: {} }))
 
@@ -130,6 +132,7 @@ beforeEach(() => {
   h.submitModuleSwitch.mockReset().mockResolvedValue({ ok: true, requestId: 'req-1' })
   h.loadModuleOverview.mockReset().mockResolvedValue({ modules: [], disableAvailable: false, problem: null })
   h.previewSwitchOff.mockReset().mockResolvedValue({ moduleId: 'votes', graceDays: null })
+  h.loadOperatorModules.mockReset().mockResolvedValue([])
   h.reset()
   h.arm.mockClear()
   h.claim.mockClear()
@@ -409,8 +412,35 @@ describe('GET /api/settings/modules', () => {
   it('returns the overview for an admin', async () => {
     const res = await get()
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ success: true, data: { modules: [], disableAvailable: false, problem: null } })
+    expect(await res.json()).toEqual({ success: true, data: { modules: [], disableAvailable: false, problem: null, operatorModules: [] } })
     expect(h.loadModuleOverview).toHaveBeenCalledWith(TENANT)
+  })
+
+  it('carries the modules the council cannot switch but the customer has, next to the switchable ones', async () => {
+    const held = [
+      { moduleId: 'files', label: 'Dokumente' },
+      { moduleId: 'content', label: 'Inhalte' },
+    ]
+    h.loadModuleOverview.mockResolvedValue({ modules: [{ moduleId: 'votes' }], disableAvailable: true, problem: null })
+    h.loadOperatorModules.mockResolvedValue(held)
+    const body = await (await get()).json()
+    expect(body.data.modules).toEqual([{ moduleId: 'votes' }])
+    expect(body.data.operatorModules).toEqual(held)
+    expect(h.loadOperatorModules).toHaveBeenCalledWith(TENANT)
+  })
+
+  it('an operator module list that cannot be read fails the whole read, never a list that silently omits them', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    h.loadOperatorModules.mockRejectedValue(new Error('platform down'))
+    const res = await get()
+    expect(res.status).toBe(500)
+    expect(JSON.stringify(await res.json())).not.toContain('platform down')
+    log.mockRestore()
+  })
+
+  it('a non-admin reads neither list', async () => {
+    expect((await get('', locals([Role.Member]))).status).toBe(403)
+    expect(h.loadOperatorModules).not.toHaveBeenCalled()
   })
 
   it('403 for a non-admin and for no session', async () => {

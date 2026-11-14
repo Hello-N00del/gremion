@@ -14,12 +14,13 @@ import {
   type PendingRefusal,
   type PendingSwitch,
 } from '$lib/server/module-switch/pending'
+import { loadOperatorModules } from '$lib/server/module-switch/operator-modules'
 import { previewSwitchOff } from '$lib/server/module-switch/preview'
 import { loadModuleOverview, mayManageModules, submitModuleSwitch, type SwitchContext, type SwitchInput } from '$lib/server/module-switch/service'
 import { MODULE_SWITCH_REQUIRED_LOA } from '$lib/server/module-switch/step-up'
 
 // Karenz phase 1: council module self-service.
-//   GET  /api/settings/modules                    -> the switchable modules and their state
+//   GET  /api/settings/modules                    -> the switchable modules and their state, plus operatorModules (the others the customer has)
 //   GET  /api/settings/modules?preview=<id>       -> what a switch-off would delete (the warning's data)
 //   POST /api/settings/modules {moduleId, action} -> queue a switch (201 { success, requestId })
 //   POST /api/settings/modules {resume: true}     -> carry out the switch confirmed before the second factor
@@ -164,7 +165,9 @@ export const GET: RequestHandler = async ({ url, locals }) => {
       }
       return json({ success: true, data: await previewSwitchOff(locals.tenant, preview) })
     }
-    return json({ success: true, data: await loadModuleOverview(locals.tenant) })
+    // The switchable modules (with their switches) and, next to them, the ones the customer has that the council cannot switch.
+    const overview = await loadModuleOverview(locals.tenant)
+    return json({ success: true, data: { ...overview, operatorModules: await loadOperatorModules(locals.tenant) } })
   } catch (err) {
     if (err instanceof CouncilNotConfigured) return json(NOT_CONFIGURED, { status: 503 })
     console.error('[settings/modules] read failed:', err instanceof Error ? err.message : err)

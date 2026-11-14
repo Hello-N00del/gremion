@@ -6,6 +6,7 @@
   import KarenzStatus from '$lib/components/KarenzStatus.svelte'
   import ModuleOffWarning from '$lib/components/ModuleOffWarning.svelte'
   import ModuleSwitchNotice from '$lib/components/ModuleSwitchNotice.svelte'
+  import OperatorModuleList from './OperatorModuleList.svelte'
   import { t } from '$lib/i18n'
   import { fillText } from '$lib/modules/fill-text'
   import type { KarenzView, ModuleDeletionPreview, ModuleOverview, ModuleOverviewItem } from '$lib/modules/switch-preview'
@@ -405,5 +406,8 @@
         </li>
       {/each}
     </ul>
+
+    <!-- what the customer has that the council cannot switch: state only, no control -->
+    <OperatorModuleList modules={overview.operatorModules ?? []} />
   {/if}
 </div>

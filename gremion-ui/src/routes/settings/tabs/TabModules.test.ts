@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, fireEvent, screen, waitFor } from '@testing-library/svelte'
+import { render, fireEvent, screen, waitFor, within } from '@testing-library/svelte'
 import type { KarenzView, ModuleOverview, ModuleOverviewItem } from '$lib/modules/switch-preview'
 import TabModules from './TabModules.svelte'
 
@@ -357,6 +357,76 @@ describe('TabModules.svelte', () => {
     render(TabModules, { props: { pollMs: 10_000 } })
     expect(await screen.findByText(/Verlauf der Modulanfragen/)).toBeTruthy()
     expect(screen.getByText('Abstimmungen')).toBeTruthy()
+  })
+
+  // Einstellungen > Module listed only what the council may switch; content, files, messaging and publishing
+  // were missing although the customer had them on. They are listed now, honestly marked, without a control.
+  describe('modules the operator manages', () => {
+    const operator = [
+      { moduleId: 'messaging', label: 'Chat' },
+      { moduleId: 'files', label: 'Dokumente' },
+      { moduleId: 'content', label: 'Inhalte' },
+      { moduleId: 'publishing', label: 'Newsletter' },
+    ]
+
+    it('lists every one of them with its state and "Vom Betreiber verwaltet", next to the switchable ones', async () => {
+      fetchDouble([
+        ok({
+          ...overview([item({ enabled: true }), item({ moduleId: 'calendar', label: 'Kalender', enabled: true })]),
+          operatorModules: operator,
+        }),
+      ])
+      render(TabModules, { props: { pollMs: 10_000 } })
+      expect(await screen.findByText('Abstimmungen')).toBeTruthy()
+      expect(screen.getByText('Kalender')).toBeTruthy()
+      for (const m of operator) {
+        const li = document.querySelector(`[data-module="${m.moduleId}"]`) as HTMLElement
+        expect(li, m.moduleId).not.toBeNull()
+        expect(within(li).getByText(m.label)).toBeTruthy()
+        expect(within(li).getByText('Eingeschaltet')).toBeTruthy()
+        expect(within(li).getByText('Vom Betreiber verwaltet')).toBeTruthy()
+      }
+      expect(screen.getByRole('list', { name: 'Vom Betreiber verwaltete Module' })).toBeTruthy()
+    })
+
+    it('an operator row has no control at all: no switch, no DPIA line, no dead button', async () => {
+      fetchDouble([ok({ ...overview([item({ enabled: true })], { disableAvailable: true }), operatorModules: operator })])
+      render(TabModules, { props: { pollMs: 10_000 } })
+      await screen.findByText('Abstimmungen')
+      for (const m of operator) {
+        const li = document.querySelector(`[data-module="${m.moduleId}"]`) as HTMLElement
+        expect(within(li).queryAllByRole('button')).toHaveLength(0)
+        expect(within(li).queryByText(/DPIA/)).toBeNull()
+      }
+      // the switchable row keeps its switch as before
+      const votes = document.querySelector('[data-module="votes"]') as HTMLElement
+      expect(within(votes).getByRole('button', { name: 'Ausschalten' })).toBeTruthy()
+    })
+
+    it('a switchable row does not read as operator-managed', async () => {
+      fetchDouble([ok({ ...overview([item({ enabled: true })]), operatorModules: operator })])
+      render(TabModules, { props: { pollMs: 10_000 } })
+      await screen.findByText('Abstimmungen')
+      const votes = document.querySelector('[data-module="votes"]') as HTMLElement
+      expect(within(votes).queryByText('Vom Betreiber verwaltet')).toBeNull()
+    })
+
+    it('without any operator module (or an answer that predates the field) the list is the switchable one and no empty second list shows', async () => {
+      fetchDouble([ok(overview([item({ enabled: true })])), ok({ ...overview([item({ enabled: true })]), operatorModules: [] })])
+      const { unmount } = render(TabModules, { props: { pollMs: 10_000 } })
+      expect(await screen.findByText('Abstimmungen')).toBeTruthy()
+      expect(screen.queryByRole('list', { name: 'Vom Betreiber verwaltete Module' })).toBeNull()
+      unmount()
+      render(TabModules, { props: { pollMs: 10_000 } })
+      expect(await screen.findByText('Abstimmungen')).toBeTruthy()
+      expect(screen.queryByRole('list', { name: 'Vom Betreiber verwaltete Module' })).toBeNull()
+    })
+
+    it('only operator modules: they show although the switchable list is empty', async () => {
+      fetchDouble([ok({ ...overview([]), operatorModules: operator })])
+      render(TabModules, { props: { pollMs: 10_000 } })
+      expect(await screen.findByText('Dokumente')).toBeTruthy()
+    })
   })
 })
 

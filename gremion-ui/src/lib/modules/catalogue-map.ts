@@ -48,6 +48,20 @@ export const HELD_BACK_CATALOGUE_IDS: Readonly<Record<string, string>> = Object.
   handover: 'held back: it owns no toggleable manifest, so there is nothing to switch',
 })
 
+/**
+ * The manifest id (config.modules key) each HELD-BACK catalogue id registers under; they differ for messaging
+ * (messages) and publishing (newsletter). Display only: the settings page lists these modules as managed by the
+ * operator. Nothing refuses or accepts a switch through this map: manifestIdOf and catalogueIdOf stay the only
+ * pair the council switch trusts, and they know nothing of it. handover owns no manifest, so it has no entry.
+ */
+export const HELD_BACK_MANIFEST_IDS: Readonly<Record<string, string>> = Object.freeze({
+  content: 'content',
+  files: 'files',
+  messaging: 'messages',
+  publishing: 'newsletter',
+  board: 'board',
+})
+
 /** The manifest id (config.modules key) of a switchable catalogue id, else null. */
 export function manifestIdOf(catalogueId: string): string | null {
   if (!SWITCHABLE_CATALOGUE_IDS.has(catalogueId)) return null
