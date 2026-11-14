@@ -374,11 +374,14 @@ const CONTROL_HOST_RESOLVER = { file: 'infra/host/lib/common.sh', line: `printf 
 
 /**
  * The lines of <text> that spell the control host's default by hand: control.${PLATFORM_DOMAIN}
- * (after a quote, after ://, after a :- default, anywhere), control.$PLATFORM_DOMAIN, or a printf
- * format control.%s. Only the resolver's own line in common.sh is exempt, by exact text.
+ * (after a quote, after ://, after a :- default, anywhere), control.$PLATFORM_DOMAIN, a modified
+ * expansion (${PLATFORM_DOMAIN:-x}, ${PLATFORM_DOMAIN%.}), a quoted or split-quote spelling
+ * (control."$PLATFORM_DOMAIN", "control"."$PLATFORM_DOMAIN"), another variable that holds a domain
+ * (control.${domain}), or a printf format control.%s. Only the resolver's own line in common.sh is
+ * exempt, by exact text.
  */
 function handBuiltControlHosts(rel, text) {
-  const spelled = /control\.(\$\{PLATFORM_DOMAIN\}|\$PLATFORM_DOMAIN\b|%s)/
+  const spelled = /control["']?\.["']?(\$\{?\w*domain|%s)/i
   return text
     .split('\n')
     .map((l, i) => ({ l: l.replace(/\r$/, ''), n: i + 1 }))
@@ -397,6 +400,11 @@ test('no tool builds the control host by hand: the guard flags every spelling it
     'host="control.$PLATFORM_DOMAIN"',
     "host='control.${PLATFORM_DOMAIN}'",
     'url=`echo https://control.${PLATFORM_DOMAIN}/x`',
+    'host=control.${PLATFORM_DOMAIN:-example.org}',
+    'host="control.${PLATFORM_DOMAIN%.}"',
+    'host=control."${PLATFORM_DOMAIN}"',
+    'host="control"."$PLATFORM_DOMAIN"',
+    'host="control.${domain}"',
   ]
   for (const line of bad) assert.equal(handBuiltControlHosts(tool, line).length, 1, `the guard must flag: ${line}`)
   // the resolver's own line is exempt by exact text, in common.sh only

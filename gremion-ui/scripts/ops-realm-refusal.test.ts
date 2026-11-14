@@ -1,7 +1,7 @@
 // The init refusal of an existing ops realm tells an ORIGIN mismatch (no in-place change; a new ops
 // realm) from a TEMPLATE mismatch (upgrade runbook step 8a). See ops-realm-refusal.ts.
 import { describe, expect, it } from 'vitest'
-import { opsRealmFingerprint, opsRealmRefusal, READ_ERROR_MAX, shortReadError, storedPanelOrigin } from './ops-realm-refusal'
+import { opsRealmFingerprint, opsRealmRefusal, READ_ERROR_MAX, readStoredPanelClient, shortReadError, storedPanelOrigin } from './ops-realm-refusal'
 
 const TEMPLATE = '{"realm":"platform","fixture":"current template"}'
 const OLD_TEMPLATE = '{"realm":"platform","fixture":"previous template"}'
@@ -82,6 +82,36 @@ describe('ops realm refusal', () => {
     expect(shortReadError(new Error(''))).toBe('no message')
     expect(shortReadError('plain text')).toBe('plain text')
     expect(shortReadError({ not: 'an error' })).toBe('unknown error')
+  })
+
+  it('masks the other credential spellings too: access_token, a *_PASSWORD variable, JSON values, a quoted value with a space, an Authorization header', () => {
+    expect(shortReadError(new Error('rejected: {"access_token":"tok-1 x","refresh_token":"tok2","expires_in":60}'))).toBe('rejected: {"access_token":"***","refresh_token":"***","expires_in":60}')
+    expect(shortReadError(new Error('env KEYCLOAK_ADMIN_PASSWORD=hunter3 was refused'))).toBe('env KEYCLOAK_ADMIN_PASSWORD=*** was refused')
+    expect(shortReadError(new Error('secret = "pa ss" and next'))).toBe('secret = "***" and next')
+    expect(shortReadError(new Error("api_key: 'k 1' end"))).toBe("api_key: '***' end")
+    expect(shortReadError(new Error('401 for Authorization: Basic dXNlcjpwYXNz'))).toBe('401 for Authorization: ***')
+    expect(shortReadError(new Error('HTTP error - 500 Internal Server Error'))).toBe('HTTP error - 500 Internal Server Error')
+  })
+
+  it("reading the realm's control-panel client: an answer gives its redirect URIs, a failed read gives a short error and no URIs (unreadable is not 'no redirect URI')", async () => {
+    const ok = await readStoredPanelClient(async () => [{ redirectUris: [`${OTHER}/*`] }], 'platform')
+    expect(ok).toEqual({ storedRedirectUris: [`${OTHER}/*`], storedReadError: undefined })
+    const none = await readStoredPanelClient(async () => [], 'platform')
+    expect(none).toEqual({ storedRedirectUris: undefined, storedReadError: undefined })
+    const paths: string[] = []
+    const failed = await readStoredPanelClient(async (method, path) => {
+      paths.push(`${method} ${path}`)
+      throw new Error('Keycloak Admin API error: 403 on GET\nsecond line http://u:pw@kc.internal/x')
+    }, 'platform')
+    expect(paths).toEqual(['GET /admin/realms/platform/clients?clientId=control-panel'])
+    expect(failed.storedRedirectUris).toBeUndefined()
+    expect(failed.storedReadError).toBe('Keycloak Admin API error: 403 on GET')
+    // the failure reaches the refusal as "unreadable", not as "carries no redirect URI"
+    expect(refuse({ ...failed }).kind).toBe('unreadable')
+    expect(refuse({ ...none }).kind).toBe('no-redirect')
+    // an answer that is not a list is unreadable too
+    const odd = await readStoredPanelClient(async () => '<html>login</html>', 'platform')
+    expect(odd.storedReadError).toBeDefined()
   })
 
   it('the fingerprint is the one the shell computes: sha256(template, newline, origin)', () => {

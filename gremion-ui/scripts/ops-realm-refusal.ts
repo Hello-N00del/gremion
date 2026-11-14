@@ -47,19 +47,47 @@ export const READ_ERROR_MAX = 160
 
 /**
  * A short, safe form of why a read failed, for the refusal text: the first line, with a
- * credential in a URL (`scheme://user:secret@host`) and a `password=`, `secret=`, `token=`
- * or `Bearer` value masked, at most READ_ERROR_MAX characters. gremion-tenant's bash does the
- * same masking.
+ * credential in a URL (`scheme://user:secret@host`), the value of any key whose name holds
+ * password, passwd, secret, token or api_key (`password=x`, `KEYCLOAK_ADMIN_PASSWORD=x`,
+ * `"access_token":"x"`, `secret = "a b"`), an Authorization header and a `Bearer` token masked,
+ * at most READ_ERROR_MAX characters. gremion-tenant's bash does the same masking.
  */
 export function shortReadError(e: unknown): string {
   const raw = e instanceof Error ? e.message : typeof e === 'string' ? e : 'unknown error'
   const first = raw.split(/\r?\n/)[0]?.trim() ?? ''
+  const key = String.raw`([\w.-]*(?:password|passwd|secret|token|api[_-]?key)[\w.-]*["']?\s*[=:]\s*)`
   const masked = first
     .replace(/:\/\/[^/@\s]*@/g, '://***@')
-    .replace(/\b(password|secret|token|client_secret)\b(["']?\s*[=:]\s*["']?)[^\s"',&]+/gi, '$1$2***')
+    .replace(/\bAuthorization(["']?\s*[=:]\s*)[^"',&]*/gi, 'Authorization$1***')
+    .replace(new RegExp(`${key}"[^"]*"`, 'gi'), '$1"***"')
+    .replace(new RegExp(`${key}'[^']*'`, 'gi'), "$1'***'")
+    .replace(new RegExp(`${key}[^\\s"',&]+`, 'gi'), '$1***')
     .replace(/\bBearer\s+\S+/gi, 'Bearer ***')
   const text = masked === '' ? 'no message' : masked
   return text.length > READ_ERROR_MAX ? `${text.slice(0, READ_ERROR_MAX - 3)}...` : text
+}
+
+/**
+ * Reads the realm's control-panel client (the origin the realm was made for is its one redirect
+ * URI). A failed read (a 403, a 500, an expired session, an answer that is not a list) is NOT "the
+ * client carries no redirect URI": it comes back as `storedReadError`, a short masked form of the
+ * error, and the refusal words the two differently. A list without that client is no error.
+ */
+export async function readStoredPanelClient(
+  raw: (method: string, path: string, body?: unknown) => Promise<unknown>,
+  realm: string,
+): Promise<{ storedRedirectUris: string[] | undefined; storedReadError: string | undefined }> {
+  try {
+    const clients = await raw('GET', `/admin/realms/${realm}/clients?clientId=control-panel`)
+    if (clients === undefined || clients === null) return { storedRedirectUris: undefined, storedReadError: undefined }
+    if (!Array.isArray(clients)) return { storedRedirectUris: undefined, storedReadError: 'the answer is not a list of clients' }
+    const first: unknown = clients[0]
+    const uris: unknown = typeof first === 'object' && first !== null ? (first as { redirectUris?: unknown }).redirectUris : undefined
+    const list = Array.isArray(uris) ? uris.filter((u): u is string => typeof u === 'string') : undefined
+    return { storedRedirectUris: list, storedReadError: undefined }
+  } catch (e) {
+    return { storedRedirectUris: undefined, storedReadError: shortReadError(e) }
+  }
 }
 
 export function opsRealmRefusal(args: {

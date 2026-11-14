@@ -222,12 +222,17 @@ kcadm_login() {
 
 # short_read_error -> stdin's first line, a credential masked, at most 160 characters; "no message" when there
 # is none. The same masking as shortReadError in gremion-ui/scripts/ops-realm-refusal.ts (the refusal says the
-# same words on both paths): a URL's user:secret part, a password=/secret=/token= value, a Bearer token.
+# same words on both paths): a URL's user:secret part, the value of any key whose name holds password, passwd,
+# secret, token or api_key (a bare, a quoted or a JSON value), an Authorization header, a Bearer token.
 short_read_error() {
     local t
+    local k='([A-Za-z0-9_.-]*(password|passwd|secret|token|api[_-]?key)[A-Za-z0-9_.-]*["'"'"']?[[:space:]]*[=:][[:space:]]*)'
     t="$(head -n 1 | tr -d '\r' | sed -E \
         -e 's#://[^/@[:space:]]*@#://***@#g' \
-        -e 's/\b(password|secret|token|client_secret)\b(["'"'"']?[[:space:]]*[=:][[:space:]]*["'"'"']?)[^[:space:]"'"'"',&]+/\1\2***/Ig' \
+        -e 's/\bAuthorization(["'"'"']?[[:space:]]*[=:][[:space:]]*)[^"'"'"',&]*/Authorization\1***/Ig' \
+        -e "s/${k}\"[^\"]*\"/\\1\"***\"/Ig" \
+        -e "s/${k}'[^']*'/\\1'***'/Ig" \
+        -e "s/${k}[^[:space:]\"',&]+/\\1***/Ig" \
         -e 's/\bBearer[[:space:]]+[^[:space:]]+/Bearer ***/Ig')" || t=""
     t="${t#"${t%%[![:space:]]*}"}"
     [[ -n "$t" ]] || t="no message"

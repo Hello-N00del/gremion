@@ -752,6 +752,7 @@ case " $* " in
     [ -f "$GREMION_ROOT/realm.json" ] || exit 1
     [ -f "$GREMION_ROOT/kc-clients-unreadable" ] && { echo "HTTP error - 500 Internal Server Error" >&2; exit 1; }
     [ -f "$GREMION_ROOT/kc-clients-leaky" ] && { echo "connect failed for http://admin:hunter2@kc.internal:8080/auth token=abc123def" >&2; exit 1; }
+    [ -f "$GREMION_ROOT/kc-clients-leaky2" ] && { echo "rejected: {\"access_token\":\"tok-1 x\",\"refresh_token\":\"tok2\"} KEYCLOAK_ADMIN_PASSWORD=hunter3 secret = \"pa ss\" Authorization: Basic dXNlcjpwYXNz" >&2; exit 1; }
     [ -f "$GREMION_ROOT/kc-clients-notjson" ] && { echo "<html>login page</html>"; exit 0; }
     [ -f "$GREMION_ROOT/kc-clients-noredirect" ] && { echo "[{\"redirectUris\":[]}]"; exit 0; }
     jq "[.clients[] | select(.clientId == \"control-panel\") | {redirectUris}]" "$GREMION_ROOT/realm.json"; exit 0 ;;
@@ -840,6 +841,26 @@ exit 0'
     [[ "$output" == *"could not be read (connect failed for http://***@kc.internal:8080/auth token=***)"* ]] || { echo "$output"; return 1; }
     [[ "$output" != *"hunter2"* ]]
     [[ "$output" != *"abc123def"* ]]
+}
+
+@test "init --realm-only --keycloak-container: the error is masked for access_token, a *_PASSWORD variable, a quoted value with a space and an Authorization header too" {
+    shim_kcadm
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-kc-admin-secret \
+        run "$LAUNCHER" init --realm-only --keycloak-container kc-fixture --panel-origin https://panel.fixture.example
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    jq '.attributes["gremion.ops-realm.sha256"] = "0000000000000000000000000000000000000000000000000000000000000000"' "${GREMION_ROOT}/realm.json" > "${GREMION_ROOT}/realm.json.new"
+    mv "${GREMION_ROOT}/realm.json.new" "${GREMION_ROOT}/realm.json"
+    touch "${GREMION_ROOT}/kc-clients-leaky2"
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-kc-admin-secret \
+        run "$LAUNCHER" init --realm-only --keycloak-container kc-fixture --panel-origin https://panel.fixture.example
+    [ "$status" -eq 1 ]
+    # the same words as scripts/ops-realm-refusal.test.ts holds for the TypeScript side
+    [[ "$output" == *'could not be read (rejected: {"access_token":"***","refresh_token":"***"} KEYCLOAK_ADMIN_PASSWORD=*** secret = "***" Authorization: ***)'* ]] || { echo "$output"; return 1; }
+    [[ "$output" != *"tok-1"* ]]
+    [[ "$output" != *"tok2"* ]]
+    [[ "$output" != *"hunter3"* ]]
+    [[ "$output" != *"pa ss"* ]]
+    [[ "$output" != *"dXNlcjpwYXNz"* ]]
 }
 
 @test "init --realm-only --keycloak-container: an answer that is not JSON (a jq error) is unreadable, with its own words" {
