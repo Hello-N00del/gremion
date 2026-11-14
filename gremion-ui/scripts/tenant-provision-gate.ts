@@ -30,6 +30,7 @@
 import { readFileSync } from 'node:fs'
 import { assertMountedRoot, DEFAULT_MOUNTINFO_PATH } from '@gremion/storage'
 import type postgres from 'postgres'
+import { PLATFORM_FOLLOWED_CATALOGUE_IDS } from '../src/lib/modules/catalogue-map'
 import {
   attestedEnablements,
   disableCustomerModule,
@@ -177,11 +178,29 @@ export function exportDirRefusal(dir: string, opts: { override?: (dir: string) =
   }
 }
 
+/**
+ * Why a platform disable of `moduleKey` would not take effect, or null when it will.
+ *
+ * A module the council cannot switch but the app still follows (the board: it owns no module database, so
+ * the disable removes only the platform enablement) is hidden from the customer by the app's module-switch
+ * reconciler alone. The reconciler runs only where the council requester role is wired, and the app's
+ * PLATFORM_MODULES_DATABASE_URL is rendered from the same UI_MODULES_DB_PASSWORD that tenant-create receives
+ * (docker-compose.app.yml). Without it the disable would be reported as done while the module stays
+ * reachable, so it is refused before anything is written.
+ */
+export function platformFollowRefusal(moduleKey: string, env: NodeJS.ProcessEnv = process.env): string | null {
+  if (!PLATFORM_FOLLOWED_CATALOGUE_IDS.includes(moduleKey)) return null
+  if ((env.UI_MODULES_DB_PASSWORD ?? '').trim() !== '') return null
+  return `this installation runs no module-switch reconciler (UI_MODULES_DB_PASSWORD is empty, so the app has no council requester role), and only the reconciler hides ${moduleKey} for the customer after a platform disable; set UI_MODULES_DB_PASSWORD, run init and recreate the app containers first`
+}
+
 async function cmdDisableModule(ctx: GateVerbContext): Promise<void> {
   const slug = arg(ctx, 0, 'slug', 'disable-module')
   const moduleKey = arg(ctx, 1, 'module', 'disable-module')
   const op = operatorId(ctx)
   const kind = actorKind(ctx)
+  const followRefusal = platformFollowRefusal(moduleKey)
+  if (followRefusal !== null) throw ctx.usage(`disable-module ${moduleKey} refused: ${followRefusal}; nothing was touched`)
   const dir = process.env.TENANT_EXPORT_DIR ?? ''
   const refusal = exportDirRefusal(dir, { override: ctx.exportDirMounted })
   if (refusal !== null) {

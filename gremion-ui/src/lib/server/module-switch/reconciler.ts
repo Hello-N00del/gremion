@@ -21,7 +21,7 @@
 // The board is the one module that follows the platform enablement without being council-switchable
 // (PLATFORM_FOLLOWED_CATALOGUE_IDS): the alignment covers it, and a later platform disable or enable of it
 // is followed within a minute (followPlatform), so a platform disable hides it for that customer.
-import { manifestIdOf, SWITCHABLE_CATALOGUE_IDS } from '$lib/modules/catalogue-map'
+import { manifestIdOf, PLATFORM_FOLLOWED_CATALOGUE_IDS, SWITCHABLE_CATALOGUE_IDS } from '$lib/modules/catalogue-map'
 import { isHeldOffModule } from '$lib/modules/held-off'
 import { MODULE_MANIFESTS } from '$lib/modules/manifests'
 import { readConfig, writeConfig } from '$lib/server/config'
@@ -47,18 +47,6 @@ const SWEEP_INTERVAL_MS = 5 * 60_000
 const ALIGN_RETRY_MS = 60_000
 /** The stored outcome text is capped; the executor text can be long. */
 const OUTCOME_MAX = 500
-
-/**
- * Catalogue ids that follow the PLATFORM enablement although a council may not switch them (they are in
- * HELD_BACK_CATALOGUE_IDS, never in SWITCHABLE_CATALOGUE_IDS, and no council request can name them).
- *
- * The board: it is served in-process on the tenant's kernel tables and owns no module database, so a
- * platform-level disable_module of it blocks nothing and, without this, left config.modules.board true
- * (the board stayed reachable). Following the platform hides it: config.modules.board false, and every
- * board page and api answers as for any disabled module. Nothing is deleted: the rows stay in the tenant
- * database, and an enable brings the board back with its data.
- */
-const PLATFORM_FOLLOWED_CATALOGUE_IDS: readonly string[] = Object.freeze(['board'])
 
 /** After the first alignment a followed module's platform state is read at most this often per tenant, so a platform disable hides it within about a minute. */
 const FOLLOW_INTERVAL_MS = 60_000
@@ -134,7 +122,7 @@ export interface ReconcilerState {
   migrateOwed: Set<string>
   /**
    * Tenant id -> the last platform state seen for the platform-followed modules (manifest id -> enabled) and
-   * when it was read. Set by a completed alignment; a tenant without an entry is not followed yet. Optional so
+   * when it was read. Set by a completed alignment (the platform-held map is filled earlier, see alignOnce); a tenant without an entry is not followed yet. Optional so
    * a state built by hand (a test double) stays valid.
    */
   followed?: Map<string, { at: number; on: Record<string, boolean> }>
@@ -258,7 +246,7 @@ async function alignOnce(tenant: TenantContext, d: ReconcilerDeps, council: Coun
     const diff: Record<string, boolean> = {}
     /** manifest id -> catalogue id, for the modules this alignment would turn ON. */
     const turningOn = new Map<string, string>()
-    /** The platform state of every followed module that has a row, remembered once the alignment completes. */
+    /** The platform state of every followed module that has a row, its baseline for following is remembered once the alignment completes; its holds are published at once (see below). */
     const seen: Record<string, boolean> = {}
     for (const { catalogueId, manifestId } of alignTargets()) {
       const row = byKey.get(catalogueId)

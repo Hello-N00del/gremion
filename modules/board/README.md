@@ -103,8 +103,10 @@ None besides the kernel (and, in service mode, the leaf's PostgreSQL server).
   reconciler, which sets `config.modules.board = false` within about a minute. It runs only
   when `PLATFORM_MODULES_DATABASE_URL` is set; the deploy wiring leaves it empty when
   `UI_MODULES_DB_PASSWORD` is unset, and the app then logs `module self-service reconciler
-  off`. On such a host a platform disable does not hide the board: it stays reachable until
-  `config.modules.board` is set to false by hand. After an app restart the platform's hold is
+  off`. On such a host the `disable-module` verb refuses `board` (before anything is written,
+  the message names `UI_MODULES_DB_PASSWORD`), so a platform disable is never reported as done
+  while the board stays reachable; set the variable, run `init` and recreate the app
+  containers first, or set `config.modules.board` to false by hand. After an app restart the platform's hold is
   forgotten until the first alignment pass, so for that short window a settings write can
   still turn the board on; the pass puts it back.
 - Leaving board unticked at creation does not hide it. The board follows the platform only
