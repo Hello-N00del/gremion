@@ -149,7 +149,7 @@ async function switchOff(ctx: KarenzContext): Promise<void> {
       const resource = await getResource(unitId, 'matrix')
       if (resource?.external_id === item.externalId) {
         await archiveRoom(unitId, { userId: ACTOR })
-      } else if ((await getRoomArchiveMarker(item.externalId))?.org_unit_id !== unitId) {
+      } else if ((await getRoomArchiveMarker(item.externalId, { recordedUnitId: unitId }))?.org_unit_id !== unitId) {
         // Not attached to its unit and not archived by us. "Gone" needs positive evidence: the homeserver
         // says the room does not exist, or the unit's ledger names a DIFFERENT room. Anything else is a
         // live room the Karenz could not archive: it fails the step (retried) and says so.
@@ -202,7 +202,7 @@ async function restore(ctx: KarenzContext): Promise<void> {
     const unitId = unitOf(item)
     if (unitId === null) continue
     try {
-      const { aliasRestored, priorGuessed } = await unarchiveRoom(unitId, item.externalId, { userId: ACTOR })
+      const { aliasRestored, priorGuessed } = await unarchiveRoom(unitId, item.externalId, { userId: ACTOR, recordedByCaller: true })
       if (!aliasRestored) ctx.log(`messaging: ${unitLabel(unitId)} restored without its alias (another room holds it)`)
       if (priorGuessed) ctx.log(`messaging: ${unitLabel(unitId)} restored with default permissions (the archive stored none)`)
       await ctx.items.setState(item.itemId, 'restored')
@@ -259,7 +259,7 @@ async function finalize(ctx: KarenzContext, opts: { dryRun: boolean }): Promise<
         continue
       }
       // Only a room the admin bot archived for THIS unit (the one trusted marker chokepoint) is deleted.
-      const marker = await getRoomArchiveMarker(item.externalId)
+      const marker = await getRoomArchiveMarker(item.externalId, { recordedUnitId: unitId })
       if (!marker || marker.org_unit_id !== unitId) {
         // Never deleted, but never silent either: the Karenz locked this room itself, so a missing or
         // untrusted marker means the deletion did not happen. The item stays locked, so every pass reports it.

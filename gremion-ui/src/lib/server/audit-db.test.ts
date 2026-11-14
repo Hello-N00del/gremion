@@ -39,6 +39,17 @@ describe('audit-db', () => {
     expect(mockSql).toHaveBeenCalledOnce()
   })
 
+  it('auditEntryExists asks for exactly this field and new value, and answers whether a row came back', async () => {
+    const { auditEntryExists } = await import('./audit-db')
+
+    mockSql.mockResolvedValueOnce([{ one: 1 }])
+    await expect(auditEntryExists('messages.room.archive', 'u1:!r:ok')).resolves.toBe(true)
+    expect(mockSql.mock.calls[0]!.slice(1)).toEqual(['messages.room.archive', 'u1:!r:ok'])
+
+    mockSql.mockResolvedValueOnce([])
+    await expect(auditEntryExists('messages.room.archive', 'u1:!r:ok')).resolves.toBe(false)
+  })
+
   it('readAuditLog filters by field when provided', async () => {
     mockSql.mockResolvedValue([])
     const { readAuditLog } = await import('./audit-db')

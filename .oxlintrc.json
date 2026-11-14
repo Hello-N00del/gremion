@@ -131,6 +131,7 @@
         "modules/messaging/app/routes/api/messages/rooms/?roomId?/messages/+server.ts",
         "modules/messaging/app/routes/api/messages/rooms/?roomId?/read/+server.ts",
         "modules/messaging/app/routes/api/messages/rooms/?roomId?/typing/+server.ts",
+        "modules/messaging/app/routes/api/messages/rooms/?roomId?/unarchive/+server.ts",
         "modules/messaging/app/routes/api/messages/rooms/?roomId?/unit/+server.ts",
         "modules/messaging/app/routes/api/messages/sync/+server.ts",
         "modules/messaging/app/routes/api/video/meeting-room/+server.ts",
