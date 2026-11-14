@@ -32,6 +32,8 @@ export const RESERVED_PLATFORM_LABELS: readonly string[] = Object.freeze([
 
 /** The environment values the control panel's host is read from, passed as data (nothing is read from process.env here). */
 export interface ControlPanelEnv {
+  /** Any other name: process.env and the dynamic env of a SvelteKit app pass as they are. */
+  [name: string]: string | undefined
   PLATFORM_DOMAIN?: string | undefined
   /** state.env: the panel's own host; empty or absent means control.<PLATFORM_DOMAIN>, which is already a reserved label. */
   CONTROL_PANEL_HOST?: string | undefined
