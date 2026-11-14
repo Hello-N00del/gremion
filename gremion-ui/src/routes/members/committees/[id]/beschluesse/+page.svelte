@@ -51,7 +51,11 @@
                 {entry.meeting_date ? new Date(entry.meeting_date).toLocaleDateString('de-DE') : '—'}
               </td>
               <td class="px-3 py-2">
-                {#if entry.result === 'passed'}
+                {#if entry.untallied}
+                  <!-- Nobody voted on it: the stored "rejected" is the rule engine's
+                       placeholder, not a decision (flag set by the register API). -->
+                  <span class="text-ink-muted">keine Abstimmung</span>
+                {:else if entry.result === 'passed'}
                   <span class="text-green-700 font-medium">✓ Angenommen</span>
                 {:else if entry.result === 'rejected'}
                   <span class="text-red-700">✗ Abgelehnt</span>

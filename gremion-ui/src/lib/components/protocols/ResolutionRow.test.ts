@@ -163,10 +163,22 @@ describe('ResolutionRow — a decision without a vote (finding 7)', () => {
     expect(container.textContent).not.toMatch(/0 Ja \/ 0 Nein/)
   })
 
-  test('the same holds for a consent row (0 Nein would otherwise read "Angenommen")', () => {
+  // Consent is the one rule where silence adopts: with no objection recorded the
+  // server stores "passed" for an empty tally and adopts it at publish, so the
+  // row must show that decision and not a missing vote.
+  test('a consent row with an empty tally is adopted, not a missing vote', () => {
+    const { container } = renderFresh({ required_majority: 'consent', result: 'passed' })
+    expect(container.textContent).toMatch(/Angenommen/)
+    expect(container.textContent).toMatch(/Konsens/)
+    expect(container.textContent).not.toMatch(/noch keine Abstimmung/)
+  })
+
+  test('the edit preview of a consent row with an empty tally shows the computed "Angenommen"', async () => {
     const { container, getByText } = renderFresh({ required_majority: 'consent', result: 'passed' })
-    expect(getByText(/noch keine Abstimmung/)).toBeTruthy()
-    expect(container.textContent).not.toMatch(/Angenommen|Abgelehnt/)
+    await enterEditMode(getByText)
+    expect(container.textContent).toMatch(/Angenommen/)
+    expect(container.textContent).toMatch(/berechnet/)
+    expect(container.textContent).not.toMatch(/noch keine Abstimmung/)
   })
 
   test('edit preview shows "noch keine Abstimmung" instead of a computed verdict', async () => {
