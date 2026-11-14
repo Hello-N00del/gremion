@@ -82,7 +82,7 @@ const hostSpelling = (v: string | undefined): string => (v ?? '').trim().toLower
  * one corpus. The executor's request-verify and the registry refuse the same names, so this only spares the operator
  * a request that would be refused later.
  */
-export function reservedHostCheck(env: { PLATFORM_DOMAIN?: string | undefined; CONTROL_PANEL_HOST?: string | undefined; ORIGIN?: string | undefined }): (host: string) => boolean {
+export function reservedHostCheck(env: Readonly<Record<string, string | undefined>>): (host: string) => boolean {
   const names = new Set<string>()
   const apex = hostSpelling(env.PLATFORM_DOMAIN)
   if (apex) {

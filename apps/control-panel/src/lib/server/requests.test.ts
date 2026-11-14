@@ -111,7 +111,7 @@ describe('validateNewCustomer', () => {
     expect(reservedHostCheck({ PLATFORM_DOMAIN: 'platform.proof.example', ORIGIN: 'https://panel.proof.example' })('panel.proof.example')).toBe(true)
   })
   it('the reserved labels and the check are the tenancy-core ones (the panel image has no such dependency, so one test pins the two)', async () => {
-    const core = await import('../../../../../packages/tenancy-core/src/reserved-hosts.ts')
+    const core = await import('../../../../../packages/tenancy-core/src/reserved-hosts')
     expect([...RESERVED_PLATFORM_LABELS]).toEqual([...core.RESERVED_PLATFORM_LABELS])
     const env = { PLATFORM_DOMAIN: 'platform.proof.example', CONTROL_PANEL_HOST: 'panel.proof.example' }
     const mine = reservedHostCheck(env)
