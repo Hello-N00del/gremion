@@ -32,7 +32,7 @@ registerServerInitHook(() => {
     getCouncilDb()
   } catch (err) {
     if (err instanceof CouncilNotConfigured) {
-      console.info('[module-switch] PLATFORM_MODULES_DATABASE_URL not set - module self-service reconciler off; a platform disable of the board is not followed either (modules/board/README.md)')
+      console.warn('[module-switch] PLATFORM_MODULES_DATABASE_URL not set - module self-service reconciler off; a platform disable of the board is not followed either (modules/board/README.md)')
     } else {
       console.error('[module-switch] the council pool could not be created - reconciler off:', err instanceof Error ? err.message : err)
     }
