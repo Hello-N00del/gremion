@@ -28,6 +28,7 @@ import {
   deleteResolution,
   ResolutionPublishedError,
   ResolutionNotFoundError,
+  ProtocolNotEditableError,
 } from './protocol-db'
 
 const ADOPTER = actor('admin-user-1')
@@ -48,6 +49,16 @@ async function seed(status: 'draft' | 'submitted' = 'submitted') {
   await sql`UPDATE protocols SET status = ${status} WHERE id = ${protocol.id}`
   return { unit, protocol, resolution }
 }
+
+async function countResolutions(protocolId: string): Promise<number> {
+  const [row] = await getDb()<{ n: number }[]>`
+    SELECT count(*)::int AS n FROM protocol_resolutions WHERE protocol_id = ${protocolId}`
+  return row.n
+}
+
+const NEW_RESOLUTION = {
+  text: 'Antrag B', votesYes: 1, votesNo: 0, votesAbstain: 0, result: 'passed', requiredMajority: 'simple',
+} as const
 
 async function textOf(id: string): Promise<string | undefined> {
   const [row] = await getDb()<{ text: string }[]>`SELECT text FROM protocol_resolutions WHERE id = ${id}`
@@ -178,5 +189,108 @@ describe('#433 publish lock (real Postgres)', { timeout: 30_000 }, () => {
     await seed('draft')
     await expect(updateResolution(MISSING_ID, { text: 'x' })).rejects.toBeInstanceOf(ResolutionNotFoundError)
     await expect(deleteResolution(MISSING_ID)).rejects.toBeInstanceOf(ResolutionNotFoundError)
+  })
+})
+
+// Adding a resolution is serialised with publish the same way an edit is: the
+// status check is part of the INSERT, so an add that blocks behind the publish
+// transaction is decided against the committed status.
+describe('adding a resolution while the protocol is being published (real Postgres)', { timeout: 30_000 }, () => {
+  beforeEach(async () => {
+    const sql = getDb()
+    await sql`DELETE FROM protocol_attendance`
+    await sql`DELETE FROM protocols` // cascades protocol_resolutions
+    await sql`DELETE FROM org_unit_members`
+    await sql`DELETE FROM org_units`
+  })
+
+  describe.each([
+    { stampAdoption: false, variant: 'publish writes only the protocol status' },
+    { stampAdoption: true, variant: 'publish also stamps decided_at (the real route)' },
+  ])('publish tx open, $variant', ({ stampAdoption }) => {
+    it('an add that blocks behind it is refused once the publish commits', async () => {
+      const { unit, protocol } = await seed('submitted')
+      const publish = await openPublishTx(protocol.id, unit.id, stampAdoption)
+
+      const outcome = addResolution(protocol.id, NEW_RESOLUTION)
+        .then(() => 'applied' as const, (e: unknown) => e)
+      await waitUntilBlocked('INSERT INTO protocol_resolutions')
+      await publish.commit()
+
+      expect(await outcome).toBeInstanceOf(ProtocolNotEditableError)
+      expect(await countResolutions(protocol.id)).toBe(1)
+    })
+  })
+
+  it('an add that blocks behind a row lock on the protocol waits, and is refused once the protocol is published', async () => {
+    const { protocol } = await seed('submitted')
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    let locked!: () => void
+    const lockedP = new Promise<void>((r) => { locked = r })
+    const holder = getDb().begin(async (tx) => {
+      await tx`SELECT id FROM protocols WHERE id = ${protocol.id} FOR UPDATE`
+      locked()
+      await gate
+      await tx`UPDATE protocols SET status = 'published' WHERE id = ${protocol.id}`
+    })
+    open.push({ commit: () => { release(); return holder } })
+    await lockedP
+
+    const outcome = addResolution(protocol.id, NEW_RESOLUTION)
+      .then(() => 'applied' as const, (e: unknown) => e)
+    await waitUntilBlocked('INSERT INTO protocol_resolutions')
+    release()
+    await holder
+
+    expect(await outcome).toBeInstanceOf(ProtocolNotEditableError)
+    expect(await countResolutions(protocol.id)).toBe(1)
+  })
+
+  it('an add that blocks behind a row lock goes through when the protocol stays unpublished', async () => {
+    const { protocol } = await seed('submitted')
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    let locked!: () => void
+    const lockedP = new Promise<void>((r) => { locked = r })
+    const holder = getDb().begin(async (tx) => {
+      await tx`SELECT id FROM protocols WHERE id = ${protocol.id} FOR UPDATE`
+      locked()
+      await gate
+    })
+    open.push({ commit: () => { release(); return holder } })
+    await lockedP
+
+    const outcome = addResolution(protocol.id, NEW_RESOLUTION)
+    await waitUntilBlocked('INSERT INTO protocol_resolutions')
+    release()
+    await holder
+
+    await expect(outcome).resolves.toMatchObject({ text: 'Antrag B', sequence_nr: 2 })
+    expect(await countResolutions(protocol.id)).toBe(2)
+  })
+
+  it('refuses an add to a protocol whose publish already committed', async () => {
+    const { protocol } = await seed('submitted')
+    await getDb()`UPDATE protocols SET status = 'published' WHERE id = ${protocol.id}`
+    await expect(addResolution(protocol.id, NEW_RESOLUTION)).rejects.toBeInstanceOf(ProtocolNotEditableError)
+    expect(await countResolutions(protocol.id)).toBe(1)
+  })
+
+  it('refuses an add to a protocol that does not exist', async () => {
+    await seed('draft')
+    await expect(addResolution(MISSING_ID, NEW_RESOLUTION)).rejects.toBeInstanceOf(ProtocolNotEditableError)
+  })
+
+  it.each(['draft', 'submitted'] as const)('numbers and stores an add to a %s protocol', async (status) => {
+    const { protocol } = await seed(status)
+    const added = await addResolution(protocol.id, {
+      ...NEW_RESOLUTION, adoptionMode: 'acclamation', votesYes: null, votesNo: null, votesAbstain: null,
+      decisionRuleParams: { fraction: 0.5 },
+    })
+    expect(added).toMatchObject({
+      protocol_id: protocol.id, sequence_nr: 2, text: 'Antrag B', adoption_mode: 'acclamation',
+      votes_yes: null, decision_rule_params: { fraction: 0.5 },
+    })
   })
 })

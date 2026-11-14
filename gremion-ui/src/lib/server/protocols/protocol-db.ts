@@ -25,6 +25,19 @@ export class ResolutionPublishedError extends Error {
 }
 
 /**
+ * Thrown by addResolution when the protocol takes no new resolution: it is
+ * published (or being published: the add waited for the publish and read the
+ * committed status) or it does not exist. The route answers with the same 403
+ * as for any protocol that is not editable.
+ */
+export class ProtocolNotEditableError extends Error {
+  constructor(public readonly protocolId: string) {
+    super(`Protokoll ${protocolId} ist veröffentlicht oder nicht vorhanden und nimmt keine Beschlüsse mehr auf`)
+    this.name = 'ProtocolNotEditableError'
+  }
+}
+
+/**
  * Thrown by updateResolution / deleteResolution when the write matched no row
  * because the resolution does not exist (any more), e.g. another admin deleted
  * it between the route's check and the write. The routes map it to a 404.
