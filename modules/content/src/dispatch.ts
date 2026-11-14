@@ -274,6 +274,7 @@ async function dispatchEmail(
   let failed = 0
   let unrecorded = 0 // delivered, but the ledger write failed (claim kept)
   let lastError: unknown
+  let loginRefused = false
 
   for (const { email } of recipients) {
     const { result: claim, claimedAt } = await claimDelivery(sql, postId, email)
@@ -307,6 +308,14 @@ async function dispatchEmail(
       // Name the cause (class, SMTP code, response code, command); never the
       // address, message or response, which can echo the recipient.
       console.error(`[dispatch] email send (post ${postId}) failed`, mailErrorFields(err))
+      // A refused LOGIN is the same for every recipient, and mail servers lock
+      // the account after a few refused logins: stop at the first one. Nobody
+      // after this recipient is claimed, so a publish after the login is
+      // corrected reaches all of them.
+      if (mailErrorFields(err).code === 'EAUTH') {
+        loginRefused = true
+        break
+      }
       continue
     }
 
@@ -327,6 +336,10 @@ async function dispatchEmail(
     throw new Error(
       `${unrecorded} recipient(s) delivered but not recorded in the delivery ledger — do not re-publish before checking the delivery log${alsoFailed}`,
     )
+  }
+
+  if (loginRefused) {
+    throw new Error(`SMTP login refused, send stopped after the first attempt${mailCauseText(lastError)}`)
   }
 
   if (failed > 0) {

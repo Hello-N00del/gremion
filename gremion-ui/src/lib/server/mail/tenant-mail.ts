@@ -115,9 +115,15 @@ export function getTenantMailContext(): TenantMailContext {
   const baseOptions = {
     port,
     name: smtpEhloName(),
-    // O-5: implicit TLS only on 465; nodemailer auto-STARTTLSes on 587.
+    // O-5: implicit TLS only on 465; on every other port nodemailer upgrades
+    // with STARTTLS when the server offers it.
     secure: port === 465,
     auth,
+    // A login only ever goes out on an encrypted session. STARTTLS is offered in
+    // plaintext, so without this a session that does not offer it would carry the
+    // login in the clear; with it the send fails before AUTH instead. A transport
+    // without a login (a local mail catcher) keeps the opportunistic upgrade.
+    ...(auth && port !== 465 ? { requireTLS: true } : {}),
     connectionTimeout: 10_000,
     greetingTimeout: 10_000,
   }

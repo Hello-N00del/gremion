@@ -37,7 +37,7 @@ import type { ContentEvent } from '@gremion/ports/broker'
 import type { Sql, TenantRef } from './tenant-store.js'
 import { MailUnconfiguredError, type KernelClient } from './kernel-client.js'
 import { enqueueOutbox } from './outbox.js'
-import { mailErrorFields } from './mail-error.js'
+import { mailCauseText, mailErrorFields } from './mail-error.js'
 import { checkLinkBase } from './link-base.js'
 import {
   getPost,
@@ -296,6 +296,7 @@ async function publishEmail(
   let failedCount = 0
   let unrecordedCount = 0 // delivered this pass, but the ledger write failed (claim kept)
   let smtpUnconfigured = false
+  let loginRefused: unknown = null // the refused-login error, once seen
 
   // buildRecipientList already lowercases; keep emailLower for the ledger lookups.
   for (const { email } of recipients) {
@@ -346,6 +347,14 @@ async function publishEmail(
       // Name the cause (class, SMTP code, response code, command, HTTP status);
       // never the address or message, which can echo the recipient.
       console.error(`[publish-channel] email send (post ${postId}) failed`, mailErrorFields(err))
+      // A refused LOGIN is the same for every recipient, and mail servers lock
+      // the account after a few refused logins: stop at the first one. Nobody
+      // after this recipient is claimed, so a publish after the login is
+      // corrected reaches all of them.
+      if (mailErrorFields(err).code === 'EAUTH') {
+        loginRefused = err
+        break
+      }
       continue
     }
 
@@ -380,6 +389,24 @@ async function publishEmail(
         warnings: [...warnings, doNotRepublish],
         operatorWarnings: [doNotRepublish],
         detail: DELIVERY_NOT_RECORDED,
+      },
+    }
+  }
+
+  // The mail server refused the login: the un-sent recipients were not tried, so
+  // this is a failure whatever was delivered before. The text names the cause
+  // fields only (an error message can echo the recipient address).
+  if (loginRefused !== null) {
+    await flagChannelFailed(sql, postId)
+    const refusedText = `SMTP login refused, send stopped after the first attempt${mailCauseText(loginRefused)} — correct the SMTP login, then publish again`
+    return {
+      result: {
+        channel: 'email',
+        status: 'failed',
+        recipientCount: sentCount,
+        warnings: [refusedText],
+        operatorWarnings: [refusedText],
+        detail: 'SMTP login refused',
       },
     }
   }

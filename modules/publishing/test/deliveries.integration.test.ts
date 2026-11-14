@@ -10,7 +10,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
 import postgres from 'postgres'
 import { storeFor, _resetTenantStoreForTests, type TenantRef } from '../src/tenant-store.ts'
 import { createNewsletter } from '../src/store/index.ts'
-import { claimRecipient, markSent } from '../src/store/deliveries.ts'
+import { claimRecipient, markSent, releaseClaim } from '../src/store/deliveries.ts'
 import { requireEphemeralTestPgUrl, assertSafeTestEnv } from './support/pg-test-guard.ts'
 
 // ── fail-closed guard ─────────────────────────────────────────────────────────
@@ -234,5 +234,28 @@ describe('DoD-c — deliveries ledger', () => {
     expect(toSend).toContain('dave@example.com')
     expect(toSend).not.toContain('alice@example.com')
     expect(toSend).not.toContain('bob@example.com')
+  })
+})
+
+// ── releaseClaim ──────────────────────────────────────────────────────────────
+describe('releaseClaim', () => {
+  it("frees a 'claimed' row at once: the next claim is 'fresh', not 'in-flight'", async () => {
+    const nlId = await makeNewsletter()
+    expect(await claimRecipient(sql, nlId, 'alice@example.com')).toBe('fresh')
+    expect(await claimRecipient(sql, nlId, 'alice@example.com')).toBe('in-flight')
+
+    await releaseClaim(sql, nlId, 'alice@example.com')
+
+    expect(await claimRecipient(sql, nlId, 'alice@example.com')).toBe('fresh')
+  })
+
+  it("never touches a 'sent' row: the recipient is still not re-sent", async () => {
+    const nlId = await makeNewsletter()
+    await claimRecipient(sql, nlId, 'bob@example.com')
+    await markSent(sql, nlId, 'bob@example.com', '<id@test>')
+
+    await releaseClaim(sql, nlId, 'bob@example.com')
+
+    expect(await claimRecipient(sql, nlId, 'bob@example.com')).toBe('already-sent')
   })
 })

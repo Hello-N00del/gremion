@@ -9,7 +9,7 @@
  *
  * Fail-closed guard mirrors dispatch.integration.test.ts.
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest'
 import postgres from 'postgres'
 import { storeFor, _resetTenantStoreForTests, type TenantRef } from '../src/tenant-store.ts'
 import {
@@ -39,17 +39,25 @@ const TENANT: TenantRef = {
 // ── fakes ───────────────────────────────────────────────────────────────────
 
 function makeFakeEmailTransport(
-  opts: { failFor?: Set<string>; mailUnconfigured?: boolean } = {},
-): ChannelTransport & { sent: Array<{ to: string }>; countFor(email: string): number } {
+  opts: { failFor?: Set<string>; mailUnconfigured?: boolean; refuseLogin?: boolean } = {},
+): ChannelTransport & { sent: Array<{ to: string }>; attempts: string[]; countFor(email: string): number } {
+  const attempts: string[] = []
   const sent: Array<{ to: string; subject: string; html: string }> = []
   let seq = 0
   return {
     sent,
+    attempts,
     countFor(email: string): number {
       return sent.filter((m) => m.to === email).length
     },
     async send(msg: { to?: string; subject?: string; html?: string }): Promise<{ id: string }> {
       if (opts.mailUnconfigured) throw new MailUnconfiguredError()
+      if (opts.refuseLogin) {
+        attempts.push(msg.to ?? '')
+        throw Object.assign(new Error('kernel send-mail failed: 500'), {
+          name: 'MailSendError', code: 'EAUTH', responseCode: 535, command: 'AUTH LOGIN', httpStatus: 500,
+        })
+      }
       if (opts.failFor?.has(msg.to ?? '')) throw new Error(`fake SMTP failure for ${msg.to}`)
       sent.push({ to: msg.to ?? '', subject: msg.subject ?? '', html: msg.html ?? '' })
       seq += 1
@@ -261,6 +269,40 @@ describe('publishChannel — email', () => {
     // bob's claim was released (no durable 'claimed' row), so a retry sees him fresh.
     const bob = await sql<{ status: string }[]>`SELECT status FROM content.deliveries WHERE post_id = ${postId} AND email = 'bob@x.com'`
     expect(bob).toHaveLength(0)
+  })
+})
+
+// A refused login is the same for every recipient, and mail servers lock the
+// account after a few refused logins: one attempt, then stop.
+describe('publishChannel — email, the mail server refuses the login (EAUTH)', () => {
+  it('stops after the first attempt, fails the channel, and a later publish reaches everyone', async () => {
+    const postId = await makePost()
+    await enableChannel(postId, 'email')
+    await addEmailRecipients(postId, ['a@x.com', 'b@x.com', 'c@x.com'])
+    const refusing = makeFakeEmailTransport({ refuseLogin: true })
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    let result
+    try {
+      result = await publishChannel(TENANT, postId, 'email', deps(sql, makeFakeKernel(), refusing))
+    } finally {
+      spy.mockRestore()
+    }
+
+    expect(refusing.attempts).toHaveLength(1)
+    expect(result).toMatchObject({ channel: 'email', status: 'failed', detail: 'SMTP login refused' })
+    expect(JSON.stringify(result)).not.toMatch(/@x\.com/) // never echo a recipient address
+    // Nobody after the first recipient was claimed.
+    const dels = await sql<{ status: string }[]>`SELECT status FROM content.deliveries WHERE post_id = ${postId}`
+    expect(dels).toHaveLength(1)
+    expect(dels[0]!.status).not.toBe('sent')
+    expect((await getChannelRow(sql, postId, 'email'))!.status).toBe('failed')
+    expect(await outboxRows()).toHaveLength(0)
+
+    // Once the login is corrected, the next publish reaches all three.
+    const healthy = makeFakeEmailTransport()
+    const again = await publishChannel(TENANT, postId, 'email', deps(sql, makeFakeKernel(), healthy))
+    expect(again.status).toBe('sent')
+    expect(healthy.sent.map((m) => m.to).sort()).toEqual(['a@x.com', 'b@x.com', 'c@x.com'])
   })
 })
 

@@ -126,3 +126,27 @@ export async function markSent(
       AND email         = ${emailLower}
   `
 }
+
+// ── releaseClaim ──────────────────────────────────────────────────────────────
+
+/**
+ * Give a claim back: remove the recipient's 'claimed' row so the next dispatch
+ * claims it fresh instead of finding it 'in-flight' for the stale window.
+ *
+ * Only ever removes a row that is still 'claimed' — a 'sent' row is never
+ * touched, so this cannot cause a re-send. Reserved for a failure that is
+ * definitive: nothing reached the recipient (a refused SMTP login fails before
+ * any message is transmitted). An ambiguous failure keeps its claim.
+ */
+export async function releaseClaim(
+  sql: Sql,
+  newsletterId: number,
+  emailLower: string,
+): Promise<void> {
+  await sql`
+    DELETE FROM deliveries
+    WHERE newsletter_id = ${newsletterId}
+      AND email         = ${emailLower}
+      AND status        = 'claimed'
+  `
+}
