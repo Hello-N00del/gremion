@@ -15,9 +15,13 @@ vi.mock('$app/stores', async () => {
   }
 })
 
+// The committee comes from the parent layout's load; <PageTitle> reads the brand from $app/state.
+vi.mock('$app/state', () => ({ page: { data: {} } }))
+
 import Page from './+page.svelte'
 
 const DATA = {
+  committee: { id: 'c1', name: 'Finanzausschuss' },
   protocol: {
     id: 'p1', committee_id: 'c1', title: 'Sitzung', meeting_date: '2026-11-01',
     location: null, status: 'draft', guest_edit_enabled: false, body_html: null,
