@@ -71,6 +71,15 @@ describe('create args', () => {
     expect(verify(env({ args: createArgs({ enable: ['calendar', id] }) }))).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(why) })
   })
 
+  it('a create naming a reserved host (the control panel host) is refused; another host and an absent check still verify', () => {
+    const PANEL = 'panel.musterstadt.example'
+    const isReservedHost = (h: string) => h === PANEL
+    const guarded = (e: RequestEnvelope) => verifyRequestArgs(e, { catalogueIds: CATALOGUE, disabledIds: DISABLED, isReservedHost })
+    expect(guarded(env({ args: createArgs({ host: PANEL }) }))).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/host .* control panel/) })
+    expect(guarded(env())).toMatchObject({ verdict: 'ok' })
+    expect(verify(env({ args: createArgs({ host: PANEL }) }))).toMatchObject({ verdict: 'ok' })
+  })
+
   it('a bad host, a missing administrator, a host path in the args or an unknown field are refused', () => {
     expect(verify(env({ args: createArgs({ host: 'Rat.Example' }) }))).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/host/) })
     expect(verify(env({ args: createArgs({ councilAdmin: 'not-an-address' }) }))).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/admin email/) })

@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
-import { createArgs, DENY_REASONS, listModuleChoices, PRINTABLE, PROVEN_MODULES, RESERVED_SLUGS, submitCreate, submitRefusal, SubmitRefused, validateNewCustomer, type Evidence, type NewCustomerInput } from './requests'
+import { createArgs, DENY_REASONS, listModuleChoices, PRINTABLE, PROVEN_MODULES, RESERVED_PLATFORM_LABELS, RESERVED_SLUGS, reservedHostCheck, submitCreate, submitRefusal, SubmitRefused, validateNewCustomer, type Evidence, type NewCustomerInput } from './requests'
 
 const OP = '8d6b9c7e-1f2a-4b3c-9d4e-5f6a7b8c9d0e'
 const KEY = '0192f0c4-0000-7000-8000-00000000000a'
@@ -98,6 +98,26 @@ describe('validateNewCustomer', () => {
     expect(gate.length).toBeGreaterThan(0)
     expect([...RESERVED_SLUGS].sort()).toEqual([...gate].sort())
     for (const slug of gate) expect(validateNewCustomer({ ...GOOD, slug }).slug, slug).toMatch(/reserviert/)
+  })
+  it('the control panel host is no customer host: the configured name and the default control.<platform> are field errors, another host is not', () => {
+    const refuse = reservedHostCheck({ PLATFORM_DOMAIN: 'platform.proof.example', CONTROL_PANEL_HOST: 'Panel.Proof.Example' })
+    const errs = (host: string) => validateNewCustomer({ ...GOOD, host }, DENY_REASONS, null, refuse)
+    expect(errs('panel.proof.example').host).toMatch(/reserviert/)
+    expect(errs('PANEL.proof.example').host).toMatch(/reserviert/)
+    expect(errs('control.platform.proof.example').host).toMatch(/reserviert/)
+    expect(errs('rat.proof.example').host).toBeUndefined()
+    expect(validateNewCustomer({ ...GOOD, host: 'panel.proof.example' })).toEqual({}) // no check passed: unchanged behaviour
+    // the opt-in origin names the same host
+    expect(reservedHostCheck({ PLATFORM_DOMAIN: 'platform.proof.example', ORIGIN: 'https://panel.proof.example' })('panel.proof.example')).toBe(true)
+  })
+  it('the reserved labels and the check are the tenancy-core ones (the panel image has no such dependency, so one test pins the two)', async () => {
+    const core = await import('../../../../../packages/tenancy-core/src/reserved-hosts.ts')
+    expect([...RESERVED_PLATFORM_LABELS]).toEqual([...core.RESERVED_PLATFORM_LABELS])
+    const env = { PLATFORM_DOMAIN: 'platform.proof.example', CONTROL_PANEL_HOST: 'panel.proof.example' }
+    const mine = reservedHostCheck(env)
+    const theirs = core.reservedHostCheck(env)
+    const corpus = ['panel.proof.example', 'Panel.Proof.Example.', 'panel.proof.example:443', 'platform.proof.example', 'www.platform.proof.example', 'control.platform.proof.example', '_dmarc.platform.proof.example', 'rat.proof.example', 'panel.proof.example.evil.example']
+    for (const h of corpus) expect(mine(h), h).toBe(theirs(h))
   })
   it('MED-2: with a known-module list, an id outside it is an enable error', () => {
     expect(validateNewCustomer({ ...GOOD, enable: ['calendar'], dpia: GOOD.dpia }, DENY_REASONS, ['calendar', 'votes'])).toEqual({})
