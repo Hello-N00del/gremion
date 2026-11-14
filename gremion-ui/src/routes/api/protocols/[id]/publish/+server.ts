@@ -148,9 +148,12 @@ export async function POST(event: RequestEvent) {
       // Re-read the resolutions on the transaction, after updateProtocol took the
       // protocol row: the list read at the top is from before the file conversion, so
       // the rows as this transaction sees them must pass the SAME gates (untallied,
-      // quorum) as the early read before they are numbered and adopted. Edits made
-      // after this re-read are serialised by the row lock. The quorum check runs on
-      // the transaction handle, never on the pool. A 422 here rolls the transaction back.
+      // quorum) as the early read before they are numbered and adopted. Edits,
+      // deletes and added resolutions are serialised by the row lock: each of those
+      // statements carries its own status guard (FOR SHARE on the protocol row), so
+      // one that starts while this transaction is open waits for the commit and is
+      // then refused. The quorum check runs on the transaction handle, never on the
+      // pool. A 422 here rolls the transaction back.
       const current = await listResolutions(protocol.id, { tx })
       await assertAdoptable(protocol.id, current, tx)
       await assignGlobalNrs(protocol.committee_id, year, current.map((r) => r.id), tx)
