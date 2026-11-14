@@ -113,11 +113,26 @@ describe('validateNewCustomer', () => {
   it('the reserved labels and the check are the tenancy-core ones (the panel image has no such dependency, so one test pins the two)', async () => {
     const core = await import('../../../../../packages/tenancy-core/src/reserved-hosts')
     expect([...RESERVED_PLATFORM_LABELS]).toEqual([...core.RESERVED_PLATFORM_LABELS])
-    const env = { PLATFORM_DOMAIN: 'platform.proof.example', CONTROL_PANEL_HOST: 'panel.proof.example' }
-    const mine = reservedHostCheck(env)
-    const theirs = core.reservedHostCheck(env)
-    const corpus = ['panel.proof.example', 'Panel.Proof.Example.', 'panel.proof.example:443', 'platform.proof.example', 'www.platform.proof.example', 'control.platform.proof.example', '_dmarc.platform.proof.example', 'rat.proof.example', 'panel.proof.example.evil.example']
-    for (const h of corpus) expect(mine(h), h).toBe(theirs(h))
+    const corpus = ['panel.proof.example', 'Panel.Proof.Example.', 'panel.proof.example:443', 'origin.proof.example', 'platform.proof.example', 'www.platform.proof.example', 'control.platform.proof.example', '_dmarc.platform.proof.example', 'rat.proof.example', 'panel.proof.example.evil.example']
+    const envs = [
+      { PLATFORM_DOMAIN: 'platform.proof.example' },
+      { PLATFORM_DOMAIN: 'platform.proof.example', CONTROL_PANEL_HOST: 'panel.proof.example' },
+      { PLATFORM_DOMAIN: 'platform.proof.example', CONTROL_PANEL_ORIGIN: 'https://origin.proof.example' },
+      { PLATFORM_DOMAIN: 'platform.proof.example', CONTROL_PANEL_HOST: 'Panel.Proof.Example.', CONTROL_PANEL_ORIGIN: 'not an origin' },
+    ]
+    for (const env of envs) {
+      const mine = reservedHostCheck(env)
+      const theirs = core.reservedHostCheck(env)
+      for (const h of corpus) expect(mine(h), `${JSON.stringify(env)} ${h}`).toBe(theirs(h))
+    }
+  })
+  it('the two differences from the core check are deliberate: the panel reads ORIGIN too, and an unset PLATFORM_DOMAIN does not throw', async () => {
+    const core = await import('../../../../../packages/tenancy-core/src/reserved-hosts')
+    const env = { PLATFORM_DOMAIN: 'platform.proof.example', ORIGIN: 'https://panel.proof.example' }
+    expect(reservedHostCheck(env)('panel.proof.example')).toBe(true) // compose hands the panel its origin as ORIGIN
+    expect(core.reservedHostCheck(env)('panel.proof.example')).toBe(false)
+    expect(() => core.reservedHostCheck({})).toThrow(/PLATFORM_DOMAIN/)
+    expect(reservedHostCheck({})('rat.proof.example')).toBe(false) // the form still answers; request-verify and the registry are the fail-closed ones
   })
   it('MED-2: with a known-module list, an id outside it is an enable error', () => {
     expect(validateNewCustomer({ ...GOOD, enable: ['calendar'], dpia: GOOD.dpia }, DENY_REASONS, ['calendar', 'votes'])).toEqual({})

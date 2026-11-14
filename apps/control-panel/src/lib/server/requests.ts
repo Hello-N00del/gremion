@@ -77,10 +77,12 @@ const hostSpelling = (v: string | undefined): string => (v ?? '').trim().toLower
 
 /**
  * Is `host` a name no customer may have: the platform domain, its reserved labels, or the control panel's own host
- * (CONTROL_PANEL_HOST, which may lie OUTSIDE the platform domain, and the host of the panel's ORIGIN)? Mirror of
+ * (CONTROL_PANEL_HOST, which may lie OUTSIDE the platform domain, and the host of the panel's origin)? Mirror of
  * @gremion/tenancy-core's reservedHostCheck (the panel image has no such dependency); requests.test.ts runs both over
- * one corpus. The executor's request-verify and the registry refuse the same names, so this only spares the operator
- * a request that would be refused later.
+ * one corpus and pins the two differences, both deliberate: the panel also reads ORIGIN (compose hands the panel its
+ * CONTROL_PANEL_ORIGIN under that name, so it is the host the panel is served on), and an unset PLATFORM_DOMAIN does
+ * not throw here (a form must not answer 500). The executor's request-verify and the registry refuse the same names
+ * and fail closed, so this only spares the operator a request that would be refused later.
  */
 export function reservedHostCheck(env: Readonly<Record<string, string | undefined>>): (host: string) => boolean {
   const names = new Set<string>()
@@ -91,11 +93,13 @@ export function reservedHostCheck(env: Readonly<Record<string, string | undefine
   }
   const custom = hostSpelling(env.CONTROL_PANEL_HOST)
   if (custom) names.add(custom)
-  try {
-    const fromOrigin = hostSpelling(new URL((env.ORIGIN ?? '').trim()).hostname)
-    if (fromOrigin) names.add(fromOrigin)
-  } catch {
-    // no origin or not an origin: the panel's own config check refuses it
+  for (const origin of [env.CONTROL_PANEL_ORIGIN, env.ORIGIN]) {
+    try {
+      const fromOrigin = hostSpelling(new URL((origin ?? '').trim()).hostname)
+      if (fromOrigin) names.add(fromOrigin)
+    } catch {
+      // no origin or not an origin: the panel's own config check refuses it
+    }
   }
   return (host) => names.has(hostSpelling(host))
 }
