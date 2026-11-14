@@ -18,6 +18,13 @@
 #                                                   etc/legal.env, refused while
 #                                                   it holds a placeholder
 #                                                   (kernel #84)
+#   7. etc/edge/control-panel.yml                   the public control-panel
+#                                                   router and its client-
+#                                                   certificate TLS option, ONLY
+#                                                   on an opt-in host whose
+#                                                   active.yml already defines
+#                                                   the panel service; otherwise
+#                                                   the file is removed
 #
 # Exit codes: 0 ok · 1 post-condition failed · 2 usage/missing precondition ·
 #             3 blocked.
@@ -31,6 +38,8 @@ RELEASE_DIR=""
 STAGING=0
 LEGAL_ONLY=0
 INIT_LEGAL=0
+CONTROL_ONLY=0
+DEFER_CONTROL=0
 OUTPUTS=0
 
 # The ONLY variables a release template may name. A template referencing
@@ -48,7 +57,7 @@ RENDER_ALLOWED_VARS=(
     IMAGE_TAG
     LIVEKIT_API_KEY LIVEKIT_API_SECRET LIVEKIT_TURN_SECRET
     ELEMENT_CALL_LIVEKIT_URL
-    PILOT_TENANT_HOST
+    PILOT_TENANT_HOST CONTROL_HOST
     LIVEKIT_TURN_ENABLED LIVEKIT_TURN_DOMAIN LIVEKIT_RTC_PORT_END
 )
 
@@ -59,7 +68,7 @@ KC_ARTEFACTS=(internal-ca.crt internal-ca.pem internal-ca.key keycloak.crt keycl
 
 usage() {
     cat <<'EOF'
-usage: gremion-render [--release DIR] [--staging | --legal-env-only | --init-legal-env]
+usage: gremion-render [--release DIR] [--staging | --legal-env-only | --init-legal-env | --control-panel-only] [--defer-control-panel]
 
   --release DIR   release tree to render into (default: <gremion root>/current)
   --staging       additionally write etc/edge/extra-hosts.yml, the compose
@@ -72,6 +81,20 @@ usage: gremion-render [--release DIR] [--staging | --legal-env-only | --init-leg
                   state project's legal service, from etc/legal.env. The
                   deploy runs this before its first compose call on a new
                   release tree.
+  --control-panel-only
+                  render only etc/edge/control-panel.yml (step 7), and remove it
+                  when the install has not opted in. gremion-deploy runs this
+                  right after the switch: the router may only exist once the
+                  switch has written the `panel` service it routes to. On a host
+                  built by hand (no gremion-deploy) gremion-switch renders it itself;
+                  run this yourself only when the switch said it could not.
+  --defer-control-panel
+                  with the full render: check the control-panel opt-in (every
+                  refusal of step 7 still applies) but neither write nor
+                  remove etc/edge/control-panel.yml when the opt-in is valid.
+                  gremion-deploy passes it at step 4: a router rendered before
+                  the switch would route to the previous colour's panel, which
+                  still carries the previous ORIGIN.
   --init-legal-env
                   create etc/legal.env from the release's
                   legal/legal.env.example, with a CHANGE_ME_OPERATOR_
@@ -321,7 +344,7 @@ render_release_templates() {
 #    per reload and ignores it. Routing is unaffected and the file never
 #    exists on a production host.
 render_staging_extra_hosts() {
-    local out tfile services line host svc
+    local out tfile services line host svc control_host
     local hosts=()
     if [[ -n "${TRAEFIK_CERT_RESOLVER:-}" ]]; then
         die "--staging refuses a render whose TRAEFIK_CERT_RESOLVER is set: staging never holds public certificates" 2
@@ -330,7 +353,10 @@ render_staging_extra_hosts() {
     if [[ -z "${EDGE_BIND_IP:-}" ]]; then die "missing env key EDGE_BIND_IP" 2; fi
     need_cmd docker
 
-    hosts+=("${PLATFORM_DOMAIN}" "control.${PLATFORM_DOMAIN}" "mail.${PLATFORM_DOMAIN}")
+    # The control panel's host is the one the install resolves (CONTROL_PANEL_HOST, else
+    # control.<domain>), so a staging unit resolves the name the panel is really served on.
+    if ! control_host="$(resolve_control_panel_host)"; then die "$control_host" 2; fi
+    hosts+=("${PLATFORM_DOMAIN}" "${control_host}" "mail.${PLATFORM_DOMAIN}")
     tfile="$(gremion_root)/etc/tenant-hosts.txt"
     if [[ -f "$tfile" ]]; then
         while IFS= read -r line; do
@@ -366,6 +392,133 @@ render_staging_extra_hosts() {
         done <<< "$services"
     } | atomic_write "$out" 0644
     assert_rendered "$out"
+}
+
+# 7. The control panel's public router (operator decision 2026-11-12). OFF unless
+#    the install opts in, and fail-closed both ways:
+#      - CONTROL_PANEL_ORIGIN (state.env) empty: no router. A file an earlier
+#        opt-in left is DELETED, so turning the key off turns the host off.
+#      - CONTROL_PANEL_ORIGIN set: it must be exactly https://<the control host>,
+#        where the control host is CONTROL_PANEL_HOST (state.env: a lowercase DNS
+#        host name, validated, it may lie outside the platform domain) or, when
+#        that is empty or absent, control.<domain>,
+#        the operator CA certificate must be at etc/edge/mtls/operator-ca.pem
+#        (a PEM CA certificate, never a private key), and both app envs must
+#        carry the same origin (the panel answers ONE host name, its ORIGIN's).
+#        Anything else deletes the file FIRST and then refuses the render: a
+#        half-configured opt-in must never leave a router behind. Traefik also
+#        closes the host when the CA file is unusable (measured), so this is
+#        two independent refusals, not one.
+#    The template is infra/host/templates/edge/control-panel.yml.tmpl.
+CONTROL_PANEL_FILE="control-panel.yml"
+CONTROL_PANEL_CA="mtls/operator-ca.pem"
+
+CONTROL_PANEL_OVERLAY="docker-compose.control-public.yml"
+
+# The key and the app envs are one decision. Turned off in state.env alone, a colour
+# would keep the public ORIGIN (a panel that refuses the loopback origin its tunnel
+# uses) and the overlay that puts it on the edge network, with no router in front.
+# Turned on in state.env alone, the panel would answer the wrong host. Either
+# disagreement is refused, with the router file removed first.
+control_panel_env_agreement() {   # <want origin, empty when the install has not opted in> <router file to remove on refusal>
+    local want="$1" out="$2" colour envf got
+    for colour in blue green; do
+        envf="$(gremion_root)/etc/env/app-${colour}.env"
+        if [[ ! -f "$envf" ]]; then continue; fi
+        got="$(control_panel_origin_of "$envf")"
+        if [[ "$got" != "$want" ]]; then
+            rm -f -- "$out"
+            if [[ -z "$want" ]]; then
+                die "${envf}: CONTROL_PANEL_ORIGIN is set but state.env has none: the install has not opted in to the public control panel, so remove the line from both app envs (and the ${CONTROL_PANEL_OVERLAY} entry of their COMPOSE_FILE), or set it in state.env too; no control router was rendered" 2
+            fi
+            die "${envf}: CONTROL_PANEL_ORIGIN is not ${want} (the panel answers one host name, so state.env and both app envs must agree); no control router was rendered" 2
+        fi
+        if compose_file_names "$envf" | grep -qxF "$CONTROL_PANEL_OVERLAY"; then
+            if [[ -z "$want" ]]; then
+                rm -f -- "$out"
+                die "${envf}: COMPOSE_FILE names ${CONTROL_PANEL_OVERLAY} but the install has not opted in (no CONTROL_PANEL_ORIGIN in state.env): the control panel would sit on the edge network with no router in front; remove the entry, or opt in; no control router was rendered" 2
+            fi
+        elif [[ -n "$want" ]]; then
+            rm -f -- "$out"
+            die "${envf}: COMPOSE_FILE does not name ${CONTROL_PANEL_OVERLAY}: the control panel would not be on the edge network, and Traefik could not reach it (add it after docker-compose.app.yml in both app envs, then redeploy); no control router was rendered" 2
+        fi
+    done
+}
+
+render_control_panel_edge() {
+    local edge out ca tpl want problem n host=""
+    edge="$(gremion_root)/etc/edge"
+    out="${edge}/${CONTROL_PANEL_FILE}"
+    ca="${edge}/${CONTROL_PANEL_CA}"
+    # A host name that is set must be a valid one whether or not the install has
+    # opted in yet: a typo found at the opt-in is a typo found late.
+    if [[ -n "${CONTROL_PANEL_HOST:-}" ]] && ! host="$(resolve_control_panel_host)"; then
+        rm -f -- "$out"
+        die "${host}; no control router was rendered" 2
+    fi
+    if [[ -z "${CONTROL_PANEL_ORIGIN:-}" ]]; then
+        control_panel_env_agreement "" "$out"
+        rm -f -- "$out"
+        info "control panel: not public (CONTROL_PANEL_ORIGIN is empty); no router, reachable through gremion-tenant panel only"
+        return 0
+    fi
+    # Every refusal below removes the file FIRST, then refuses. A live router is
+    # otherwise left alone and rewritten atomically: the control host must not
+    # drop out of the edge on every deploy.
+    if [[ -z "${PLATFORM_DOMAIN:-}" ]]; then rm -f -- "$out"; die "missing env key PLATFORM_DOMAIN" 2; fi
+    if ! host="$(resolve_control_panel_host)"; then rm -f -- "$out"; die "${host}; no control router was rendered" 2; fi
+    want="https://${host}"
+    if [[ "$CONTROL_PANEL_ORIGIN" != "$want" ]]; then
+        rm -f -- "$out"
+        die "CONTROL_PANEL_ORIGIN must be empty (off) or exactly ${want} (the control host is ${host}: CONTROL_PANEL_HOST in state.env, else control.<PLATFORM_DOMAIN>); any other value is refused and no control router was rendered" 2
+    fi
+    # The template's one host token. Set here, after every refusal, from the one resolved value.
+    # shellcheck disable=SC2034
+    CONTROL_HOST="$host"
+    if [[ -z "${TRAEFIK_CERT_RESOLVER:-}" ]]; then
+        rm -f -- "$out"
+        die "CONTROL_PANEL_ORIGIN is set but TRAEFIK_CERT_RESOLVER is empty: the control host needs a public certificate; no control router was rendered" 2
+    fi
+    control_panel_env_agreement "$want" "$out"
+    if [[ -d "$ca" || ! -f "$ca" || ! -s "$ca" ]]; then
+        rm -f -- "$out"
+        die "the operator CA certificate is missing: ${ca} (gremion-operator-ca install); CONTROL_PANEL_ORIGIN is set, so the render is refused and no control router was rendered" 2
+    fi
+    if grep -q 'PRIVATE KEY' "$ca"; then
+        rm -f -- "$out"
+        die "${ca} contains a private key: the host holds the CA CERTIFICATE only. Remove the key from this host, treat it as compromised, and rotate the CA; no control router was rendered" 2
+    fi
+    if ! problem="$(ca_bundle_problem "$ca")"; then
+        rm -f -- "$out"
+        die "${ca} ${problem}; no control router was rendered" 2
+    fi
+    n="$(grep -c 'BEGIN CERTIFICATE' "$ca" || true)"
+    tpl="${RELEASE_DIR}/infra/host/templates/edge/control-panel.yml.tmpl"
+    if [[ ! -f "$tpl" ]]; then rm -f -- "$out"; die "release tree has no ${tpl}" 2; fi
+    # --defer-control-panel (gremion-deploy, step 4): every refusal above has run, and
+    # the router is rendered by step 10, after the switch, never here. A file an
+    # earlier deploy left stays (it is rewritten atomically by step 10), a missing
+    # one stays missing; gremion-verify --control-after-switch (step 9) accepts
+    # exactly that state.
+    if [[ "$DEFER_CONTROL" -eq 1 ]]; then
+        info "control panel: opt-in checked; the router is written after the switch (gremion-render --control-panel-only)"
+        return 0
+    fi
+    # ORDER. The router names the service `panel@file`, which only active.yml
+    # defines, and only after a switch with a template that has it. A router whose
+    # service does not exist is reported disabled, and gremion-verify fails any
+    # disabled router. So with no panel service in the edge yet (step 4 of the
+    # first opted-in deploy, before its switch) the router is DEFERRED, not
+    # rendered: gremion-deploy renders it again right after the switch
+    # (--control-panel-only), and the router is never earlier than its service.
+    if ! grep -qE '^    panel:[[:space:]]*$' "${edge}/active.yml" 2>/dev/null; then
+        rm -f -- "$out"
+        info "control panel: opted in and the CA is in place, but etc/edge/active.yml does not define the panel service yet: the router is deferred until after the switch: gremion-deploy does it at step 10 and gremion-switch does it on a host built by hand (if that said it could not: gremion-render --release DIR --control-panel-only)"
+        return 0
+    fi
+    mkdir -p "$edge"
+    render_template "$tpl" "$out"
+    info "control panel: public at ${want} behind the operator CA (${n} certificate(s) in ${CONTROL_PANEL_CA})"
 }
 
 # 6. The env file of the state project's `legal` service (kernel #84).
@@ -498,13 +651,18 @@ main() {
                 RELEASE_DIR="$2"; shift 2 ;;
             --staging) STAGING=1; shift ;;
             --legal-env-only) LEGAL_ONLY=1; shift ;;
+            --control-panel-only) CONTROL_ONLY=1; shift ;;
+            --defer-control-panel) DEFER_CONTROL=1; shift ;;
             --init-legal-env) INIT_LEGAL=1; shift ;;
             -h|--help) usage; exit 0 ;;
             *) usage >&2; die "unknown argument: $1" 2 ;;
         esac
     done
-    if [[ $((LEGAL_ONLY + INIT_LEGAL + STAGING)) -gt 1 ]]; then
-        die "--staging, --legal-env-only and --init-legal-env cannot be combined" 2
+    if [[ $((LEGAL_ONLY + INIT_LEGAL + STAGING + CONTROL_ONLY)) -gt 1 ]]; then
+        die "--staging, --legal-env-only, --init-legal-env and --control-panel-only cannot be combined" 2
+    fi
+    if [[ "$DEFER_CONTROL" -eq 1 && "$CONTROL_ONLY" -eq 1 ]]; then
+        die "--defer-control-panel and --control-panel-only cannot be combined: one skips what the other renders" 2
     fi
 
     # A group NAME would be resolved against the host's /etc/group, not the
@@ -535,12 +693,18 @@ main() {
     fi
     need_cmd openssl
 
+    if [[ "$CONTROL_ONLY" -eq 1 ]]; then
+        render_control_panel_edge
+        printf 'RENDER: outputs=%d release=%s staging=no control-panel-only=yes\n' "$OUTPUTS" "$RELEASE_DIR"
+        exit 0
+    fi
     render_pgbouncer_userlist
     render_keycloak_certs
     ensure_ipcrypt_key
     derive_livekit_relay
     render_release_templates
     render_legal_env
+    render_control_panel_edge
     if [[ "$STAGING" -eq 1 ]]; then
         render_staging_extra_hosts
     fi

@@ -1,8 +1,9 @@
 // classify.ts — colour-bound vs state-bound, the classification spec A §F.4.10
 // makes and gremion-verify's check_routers applies to the RUNNING edge.
 //
-// A router is COLOUR-BOUND when its service is one of the four file-provider
-// services active.yml defines and gremion-switch rewrites; everything else —
+// A router is COLOUR-BOUND when its service is one of the five file-provider
+// services active.yml defines and gremion-switch rewrites (the panel, `panel@file`,
+// is the ACTIVE colour's control panel: only the opt-in control router names it); everything else —
 // including a same-named service from another provider — is STATE-BOUND and
 // untouched by a switch. test/classify.test.ts reads gremion-verify as text and
 // asserts its bash `case` table is equal to COLOUR_BOUND_SERVICES, so the two
@@ -11,6 +12,7 @@
 export const COLOUR_BOUND_SERVICES = Object.freeze([
   'app@file',
   'public@file',
+  'panel@file',
   'app-next@file',
   'public-next@file',
 ] as const)

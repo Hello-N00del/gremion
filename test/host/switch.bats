@@ -70,6 +70,23 @@ EOF
     grep -q 'url: "http://gremion-public-blue:3000"' "${GREMION_ROOT}/etc/edge/active.yml"
 }
 
+@test "gremion-switch points the panel service at the ACTIVE colour only, with a /healthz probe and no -next twin" {
+    shim_edge blue
+    run "$SWITCH" blue
+    [ "$status" -eq 0 ]
+    grep -q 'url: "http://control-panel-blue:3000"' "${GREMION_ROOT}/etc/edge/active.yml"
+    assert_absent 'control-panel-green' "${GREMION_ROOT}/etc/edge/active.yml"
+    [ "$(probe_path panel)" = "/healthz" ]
+    assert_absent 'panel-next' "${GREMION_ROOT}/etc/edge/active.yml"
+    # a switch to green moves it, and still declares no router for it
+    shim_edge green
+    run "$SWITCH" green
+    [ "$status" -eq 0 ]
+    grep -q 'url: "http://control-panel-green:3000"' "${GREMION_ROOT}/etc/edge/active.yml"
+    assert_absent 'control-panel-blue' "${GREMION_ROOT}/etc/edge/active.yml"
+    assert_absent 'rule:.*control' "${GREMION_ROOT}/etc/edge/active.yml"
+}
+
 @test "gremion-switch points app-next and public-next at the other colour" {
     shim_edge blue
     run "$SWITCH" blue
@@ -114,11 +131,11 @@ probe_path() {
     [ "$(probe_path app-next)" = "/healthz" ]
 }
 
-@test "TASK-023: an empty or absent PUBLIC_BASE_PATH probes /healthz on all four services" {
+@test "TASK-023: an empty or absent PUBLIC_BASE_PATH probes /healthz on all five services" {
     shim_edge blue
     run "$SWITCH" blue
     [ "$status" -eq 0 ]
-    for svc in app public app-next public-next; do
+    for svc in app public panel app-next public-next; do
         [ "$(probe_path "$svc")" = "/healthz" ] || { echo "${svc}: $(probe_path "$svc")"; return 1; }
     done
     printf 'PUBLIC_BASE_PATH=\n' >> "${GREMION_ROOT}/etc/env/state.env"
@@ -277,4 +294,75 @@ EOF
     [[ "$output" == *"active.yml.tmpl not found"* ]]
     [ ! -f "${GREMION_ROOT}/etc/edge/active.yml" ]
     [ ! -f "${GREMION_ROOT}/runtime/active-colour" ]
+}
+
+@test "a switch on an install that opted in renders the control router itself, from current, and says so" {
+    shim_edge blue
+    printf 'CONTROL_PANEL_ORIGIN=https://control.example.org\n' >> "${GREMION_ROOT}/etc/env/state.env"
+    shim gremion-render 'printf "http: {}\n" > "$GREMION_ROOT/etc/edge/control-panel.yml"; exit 0'
+    run "$SWITCH" blue
+    echo "$output"
+    [ "$status" -eq 0 ]
+    assert_recorded gremion-render "--release ${GREMION_ROOT}/current --control-panel-only"
+    [ -s "${GREMION_ROOT}/etc/edge/control-panel.yml" ]
+    [[ "$output" == *"control router rendered"* ]]
+    # the router is there already: nothing is rendered again
+    : > "$SHIM_LOG"
+    run "$SWITCH" blue
+    [ "$status" -eq 0 ]
+    [ "$(grep -c '^gremion-render ' "$SHIM_LOG" || true)" = "0" ]
+}
+
+@test "a switch renders the control router from the release whose template it was handed (gremion-deploy's step 10), not from current" {
+    shim_edge blue
+    printf 'CONTROL_PANEL_ORIGIN=https://control.example.org\n' >> "${GREMION_ROOT}/etc/env/state.env"
+    local rel="${GREMION_ROOT}/releases/dist-v9.9.9"
+    mkdir -p "${rel}/infra/host/templates/edge"
+    cp "${REPO_ROOT}/infra/host/templates/edge/active.yml.tmpl" "${rel}/infra/host/templates/edge/"
+    shim gremion-render 'printf "http: {}\n" > "$GREMION_ROOT/etc/edge/control-panel.yml"; exit 0'
+    GREMION_EDGE_TEMPLATE="${rel}/infra/host/templates/edge/active.yml.tmpl" run "$SWITCH" blue
+    echo "$output"
+    [ "$status" -eq 0 ]
+    assert_recorded gremion-render "--release ${rel} --control-panel-only"
+}
+
+@test "a refused control render does not undo the switch: the colour is live, the refusal and the manual command are named" {
+    shim_edge blue
+    printf 'CONTROL_PANEL_ORIGIN=https://control.example.org\n' >> "${GREMION_ROOT}/etc/env/state.env"
+    shim gremion-render 'echo "render: the operator CA is missing" >&2; exit 2'
+    run "$SWITCH" blue
+    echo "$output"
+    [ "$status" -eq 0 ]
+    [ "$(tr -d '[:space:]' < "${GREMION_ROOT}/runtime/active-colour")" = "blue" ]
+    [ ! -e "${GREMION_ROOT}/etc/edge/control-panel.yml" ]
+    [[ "$output" == *"the control router was not rendered (exit 2)"* ]]
+    [[ "$output" == *"gremion-render --release ${GREMION_ROOT}/current --control-panel-only"* ]]
+}
+
+@test "a switch on an install that did not opt in renders nothing and says nothing about the control router" {
+    shim_edge blue
+    shim gremion-render 'exit 0'
+    run "$SWITCH" blue
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"control-panel.yml"* ]]
+    [[ "$output" != *"control router"* ]]
+    [ "$(grep -c '^gremion-render ' "$SHIM_LOG" || true)" = "0" ]
+}
+
+@test "the REAL render behind the real switch: the router comes from the repo's own templates, routes to the panel service the switch wrote, and carries the client-certificate gate" {
+    shim_edge blue
+    local rel="${GREMION_ROOT}/releases/dist-v9.9.9"
+    mkdir -p "$rel"
+    make_opted_in_root "$rel" nopanel
+    GREMION_EDGE_TEMPLATE="${rel}/infra/host/templates/edge/active.yml.tmpl" run "$SWITCH" blue
+    echo "$output"
+    [ "$status" -eq 0 ]
+    # the switch wrote the panel service from the real template ...
+    grep -q 'url: "http://control-panel-blue:3000"' "${GREMION_ROOT}/etc/edge/active.yml"
+    # ... and the real render wrote the router that names it
+    [[ "$output" == *"control router rendered"* ]]
+    [ -s "${GREMION_ROOT}/etc/edge/control-panel.yml" ]
+    grep -q 'clientAuthType: RequireAndVerifyClientCert' "${GREMION_ROOT}/etc/edge/control-panel.yml"
+    grep -qF 'Host(`control.example.org`)' "${GREMION_ROOT}/etc/edge/control-panel.yml"
+    grep -q 'service: "panel@file"' "${GREMION_ROOT}/etc/edge/control-panel.yml"
 }

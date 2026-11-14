@@ -1,0 +1,17 @@
+# docker-compose.control-public.yml -- OPT-IN overlay of the app project: the control
+# panel joins the edge network under its colour alias, which is the address of
+# Traefik's `panel` service (etc/edge/active.yml). Nothing else changes.
+#
+# It is named in COMPOSE_FILE of BOTH app-<colour>.env on an install that opted in
+# to the public control panel (CONTROL_PANEL_ORIGIN, see
+# docs/runbooks/control-panel-access.md), and ONLY then: on every other install the
+# panel is on the app and state networks alone and is not a peer of the services
+# that share the edge network. gremion-render refuses any disagreement between
+# CONTROL_PANEL_ORIGIN and this overlay's presence in either app env.
+#
+# Layered after docker-compose.app.yml, which declares the top-level `edge` network.
+services:
+  control-panel:
+    networks:
+      edge:
+        aliases: ["control-panel-${COLOUR:?COLOUR required}"]

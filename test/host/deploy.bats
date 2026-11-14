@@ -180,12 +180,22 @@ exit 0
 '
 }
 
+# strict_flags <program> -- a shim body that is only as lenient as the real program: a --flag
+# the real program does not document in its own --help is refused (exit 2), so the stub cannot
+# keep accepting a spelling the real one would reject. The semantics of the two programs
+# agreeing on the state between them are NOT a stub's to prove: test/host/verify.bats runs the
+# REAL gremion-render and the REAL gremion-verify on one root with exactly these arguments.
+strict_flags() {
+    local real="${PROJECT_ROOT}/infra/host/bin/$1"
+    printf 'for a in "$@"; do case "$a" in --*) "%s" --help 2>&1 | grep -qF -- "$a" || { echo "%s stub: the real program documents no $a" >&2; exit 2; } ;; esac; done; exit 0' "$real" "$1"
+}
+
 stub_siblings() {
-    shim gremion-render   'exit 0'
+    shim gremion-render   "$(strict_flags gremion-render)"
     # TASK-075: step 5 is the pre-migration dump preflight; `switched` runs
     # after step 11. DUMP_EXIT_<CMD> makes one subcommand fail.
     shim gremion-migration-dump 'v="DUMP_EXIT_$1"; exit "${!v:-0}"'
-    shim gremion-verify   'exit 0'
+    shim gremion-verify   "$(strict_flags gremion-verify)"
     shim gremion-switch   'printf "%s\n" "$1" > "$GREMION_ROOT/runtime/active-colour"; exit 0'
 }
 
@@ -1440,6 +1450,142 @@ exit 0
     run bash -c "grep -n 'gremion-verify' '$SHIM_LOG' | tail -1 | cut -d: -f1"
     [ "$pre" -lt "$sw" ]
     [ "$sw" -lt "$output" ]
+}
+
+@test "the switch is handed THIS release's active.yml template, and the control router is rendered right after it, before the public verify" {
+    stub_all
+    shim gremion-switch 'printf "%s\n" "${GREMION_EDGE_TEMPLATE:-none}" > "$GREMION_ROOT/switch-template"; printf "%s\n" "$1" > "$GREMION_ROOT/runtime/active-colour"; exit 0'
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    # `current` is still the PREVIOUS release at step 10: its template would reach the edge one switch late
+    [ "$(cat "${GREMION_ROOT}/switch-template")" = "${GREMION_ROOT}/releases/dist-v1.2.3/infra/host/templates/edge/active.yml.tmpl" ]
+    assert_recorded gremion-render "--release ${GREMION_ROOT}/releases/dist-v1.2.3 --control-panel-only"
+    local sw cr pv
+    sw="$(grep -n '^gremion-switch ' "$SHIM_LOG" | head -1 | cut -d: -f1)"
+    cr="$(grep -n 'control-panel-only' "$SHIM_LOG" | head -1 | cut -d: -f1)"
+    pv="$(grep -n '^gremion-verify' "$SHIM_LOG" | tail -1 | cut -d: -f1)"
+    [ "$sw" -lt "$cr" ]
+    [ "$cr" -lt "$pv" ]
+}
+
+@test "the control router is written only after the switch: step 4 renders with --defer-control-panel, step 9 verifies with --control-after-switch, step 11 and the render after the switch pass neither" {
+    stub_all
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    local rel="${GREMION_ROOT}/releases/dist-v1.2.3"
+    # the exact words each program is called with (a recorded line is `<program> <args>`)
+    grep -qxF "gremion-render --release ${rel} --defer-control-panel" "$SHIM_LOG"
+    grep -qxF "gremion-render --release ${rel} --control-panel-only" "$SHIM_LOG"
+    grep -qxF "gremion-verify --colour blue --control-after-switch" "$SHIM_LOG"
+    # the public verify of step 11 holds the whole control path: no flag
+    [ "$(grep -c '^gremion-verify' "$SHIM_LOG")" -eq 2 ]
+    [ "$(grep -c '^gremion-verify --colour blue --control-after-switch$' "$SHIM_LOG")" -eq 1 ]
+    [ "$(grep '^gremion-verify' "$SHIM_LOG" | tail -n 1 | sed 's/[[:space:]]*$//')" = "gremion-verify" ]
+    # no full render without the deferral: every render of the release tree is one of the two above
+    [ "$(grep -c "^gremion-render --release ${rel}\$" "$SHIM_LOG" || true)" = "0" ]
+}
+
+@test "an opted-in install (the key in state.env and both app envs, the overlay as the third COMPOSE_FILE entry) deploys through the same steps: the env shapes the deploy itself reads are accepted" {
+    stub_all
+    local c
+    printf 'CONTROL_PANEL_ORIGIN=https://control.example.org\n' >> "${GREMION_ROOT}/etc/env/state.env"
+    for c in blue green; do
+        printf 'COMPOSE_FILE=docker-compose.app.yml:docker-compose.control-public.yml:docker-compose.pins.yml\nCONTROL_PANEL_ORIGIN=https://control.example.org\n' >> "${GREMION_ROOT}/etc/env/app-${c}.env"
+        # the seeded two-entry line gives way to the three-entry one (one COMPOSE_FILE line per file)
+        sed -i '0,/^COMPOSE_FILE=docker-compose.app.yml:docker-compose.pins.yml$/{//d}' "${GREMION_ROOT}/etc/env/app-${c}.env"
+    done
+    [ "$(grep -c '^COMPOSE_FILE=' "${GREMION_ROOT}/etc/env/app-blue.env")" -eq 1 ]
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    local rel="${GREMION_ROOT}/releases/dist-v1.2.3"
+    grep -qxF "gremion-render --release ${rel} --defer-control-panel" "$SHIM_LOG"
+    grep -qxF "gremion-render --release ${rel} --control-panel-only" "$SHIM_LOG"
+    # the colour was started under the env file that names the overlay
+    grep -q 'app-blue.env' "$SHIM_LOG"
+}
+
+# ── the control router across a REAL deploy: gremion-deploy driving the REAL gremion-render ──
+# The siblings are stubs everywhere else in this file. These cases keep the REAL gremion-render
+# (steps 4 and 10, with the exact arguments gremion-deploy passes) and replace only the verifier
+# with a recorder that notes, at each call, whether the router file exists. test/host/verify.bats
+# runs the REAL gremion-verify, with these arguments, on the very states recorded here
+# ("control panel, first opted-in deploy ...", "... already switched ...", "... routine redeploy").
+# The real verifier is not run in THIS file: it needs verify.bats's fixtures (a fake Traefik API,
+# fake certificates, fake containers), which answer docker, curl and openssl in a way this file's
+# stateful docker stub does not.
+
+# opted_in_release <panel|nopanel> -- an opted-in root and a release tree the real render can use
+opted_in_release() {
+    local fx="${BATS_TEST_TMPDIR}/release-real"
+    cp -R "$FIXTURE_RELEASE" "$fx"
+    make_opted_in_root "$fx" "$1"
+    export FIXTURE_RELEASE="$fx"
+}
+
+# real_render_stubs -- the real gremion-render, a verifier that records what the root looked like when it
+# ran, and a switch that writes the panel service into the edge file as the real one does
+real_render_stubs() {
+    stub_all
+    shim gremion-render "exec '${PROJECT_ROOT}/infra/host/bin/gremion-render' \"\$@\""
+    shim gremion-verify 'printf "%s %s\n" "$([ -e "$GREMION_ROOT/etc/edge/control-panel.yml" ] && echo router-present || echo router-absent)" "$*" >> "$GREMION_ROOT/verify-states"; exit 0'
+    shim gremion-switch 'printf "http:\n  services:\n    app:\n      loadBalancer: {}\n    panel:\n      loadBalancer: {}\n" > "$GREMION_ROOT/etc/edge/active.yml"; printf "%s\n" "$1" > "$GREMION_ROOT/runtime/active-colour"; exit 0'
+    # step 10 waits for Traefik to report the router: this one reports it at once
+    shim curl 'printf "{\"status\":\"enabled\"}"; exit 0'
+}
+
+@test "the real render across a deploy, first opted-in deploy (no panel service in the edge file yet): the router is absent for step 9 and written before step 11" {
+    opted_in_release nopanel
+    real_render_stubs
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    echo "$output"
+    [ "$status" -eq 0 ]
+    [ -s "${GREMION_ROOT}/etc/edge/control-panel.yml" ]
+    grep -q 'RequireAndVerifyClientCert' "${GREMION_ROOT}/etc/edge/control-panel.yml"
+    [ "$(wc -l < "${GREMION_ROOT}/verify-states")" -eq 2 ]
+    [ "$(sed -n 1p "${GREMION_ROOT}/verify-states")" = "router-absent --colour blue --control-after-switch" ]
+    [ "$(sed -n 2p "${GREMION_ROOT}/verify-states" | sed 's/[[:space:]]*$//')" = "router-present" ]
+}
+
+@test "the real render across a deploy: a QUOTED origin is read the same way by the render (state.env and both app envs) and by the deploy's own wait" {
+    opted_in_release panel
+    real_render_stubs
+    local c
+    sed -i 's|^CONTROL_PANEL_ORIGIN=\(.*\)$|CONTROL_PANEL_ORIGIN="\1"|' "${GREMION_ROOT}/etc/env/state.env"
+    for c in blue green; do sed -i 's|^CONTROL_PANEL_ORIGIN=\(.*\)$|CONTROL_PANEL_ORIGIN='"'"'\1'"'"'|' "${GREMION_ROOT}/etc/env/app-${c}.env"; done
+    grep -qx 'CONTROL_PANEL_ORIGIN="https://control.example.org"' "${GREMION_ROOT}/etc/env/state.env"
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    echo "$output"
+    [ "$status" -eq 0 ]
+    [ -s "${GREMION_ROOT}/etc/edge/control-panel.yml" ]
+    [[ "$output" == *"control router live at https://control.example.org"* ]]
+}
+
+@test "the real render across a deploy: a quoted EMPTY origin is off in all three files, renders no router and step 10 waits for none" {
+    opted_in_release panel
+    real_render_stubs
+    local c
+    sed -i 's|^CONTROL_PANEL_ORIGIN=.*$|CONTROL_PANEL_ORIGIN=""|' "${GREMION_ROOT}/etc/env/state.env"
+    for c in blue green; do
+        sed -i -e 's|^CONTROL_PANEL_ORIGIN=.*$|CONTROL_PANEL_ORIGIN=""|' -e 's|docker-compose.control-public.yml:||' "${GREMION_ROOT}/etc/env/app-${c}.env"
+    done
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    echo "$output"
+    [ "$status" -eq 0 ]
+    [ ! -e "${GREMION_ROOT}/etc/edge/control-panel.yml" ]
+    [[ "$output" != *"control router live"* ]]
+}
+
+@test "the real render across a deploy, opting in on a host that already switched (the panel service is in the edge file): the router is STILL absent for step 9" {
+    opted_in_release panel
+    real_render_stubs
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    echo "$output"
+    [ "$status" -eq 0 ]
+    # step 4 checks the opt-in and writes no router: one written now would route to the ACTIVE colour's panel,
+    # which still carries the loopback ORIGIN, and step 9 would fail on it
+    [ "$(sed -n 1p "${GREMION_ROOT}/verify-states")" = "router-absent --colour blue --control-after-switch" ]
+    [ -s "${GREMION_ROOT}/etc/edge/control-panel.yml" ]
+    [ "$(sed -n 2p "${GREMION_ROOT}/verify-states" | sed 's/[[:space:]]*$//')" = "router-present" ]
 }
 
 @test "both verify steps read the waiver ledger out of the release being deployed" {

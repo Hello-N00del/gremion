@@ -21,8 +21,8 @@ function bashColourBoundTable(): string[] {
 }
 
 describe('classify — TDD 3', () => {
-  it('app|public|app-next|public-next@file are colour-bound', () => {
-    for (const s of ['app@file', 'public@file', 'app-next@file', 'public-next@file']) {
+  it('app|public|panel|app-next|public-next@file are colour-bound', () => {
+    for (const s of ['app@file', 'public@file', 'panel@file', 'app-next@file', 'public-next@file']) {
       expect(classifyService(s)).toBe('colour-bound')
     }
   })

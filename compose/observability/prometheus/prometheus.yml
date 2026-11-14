@@ -36,8 +36,10 @@ scrape_configs:
       - target_label: __address__
         replacement: blackbox:9115
 
-  # control.<domain> answers 403 to an unallowlisted source (section C). A 403
-  # proves the edge is up AND the allowlist is enforced, so it counts here.
+  # The control host (CONTROL_PANEL_HOST, else control.<domain>) has no route unless the install opted in to the public
+  # control panel (docs/runbooks/control-panel-access.md); then the edge asks
+  # for a client certificate and ends a handshake without one. A 403 or 200
+  # counts as up here; the certificate gate itself is checked by gremion-verify.
   - job_name: "blackbox-control"
     metrics_path: /probe
     params:

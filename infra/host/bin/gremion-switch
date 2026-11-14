@@ -3,7 +3,8 @@
 # gremion-switch <blue|green> [--no-evict]
 #
 # Rewrites the Traefik switch file (etc/edge/active.yml) so that the colour-bound
-# services app@file / public@file point at <colour> and app-next@file /
+# services app@file / public@file / panel@file (the control panel, routed only on
+# an install that opted in) point at <colour> and app-next@file /
 # public-next@file point at the other colour (spec A §F.4.10).
 #
 # ORDER IS THE CONTRACT: the tenant-cache eviction fan-out (§H.2) runs BEFORE the
@@ -205,6 +206,40 @@ main() {
     printf '%s\n' "$colour" | atomic_write "$(gremion_root)/runtime/active-colour" 0644
     switch_log "switch to ${colour}: ok"
     ok "active colour is now ${colour}"
+    # The opt-in control-panel router names panel@file, which this switch has just
+    # written, so it can only be rendered NOW (never before the first switch).
+    if [[ -n "${CONTROL_PANEL_ORIGIN:-}" && ! -e "${edge_dir}/control-panel.yml" ]]; then
+        render_control_router "$edge_dir"
+    fi
+}
+
+# Renders the opt-in control router (gremion-render --control-panel-only) from the release
+# whose template this switch used: the one gremion-deploy hands over in GREMION_EDGE_TEMPLATE
+# (four directories above the template's own), else `current`. This is what makes a host
+# built by hand serve the control host without a step nobody remembers; gremion-deploy renders
+# it again right after this call, which only rewrites the same file. A refusal of the render
+# (the opt-in is incomplete: no CA certificate, an app env that disagrees) does NOT undo the
+# switch, which has completed: it is said here and judged by gremion-verify.
+render_control_router() {   # <the etc/edge directory>
+    local edge_dir="$1" rel render rc=0
+    rel="$(gremion_root)/current"
+    if [[ -n "${GREMION_EDGE_TEMPLATE:-}" && -f "${GREMION_EDGE_TEMPLATE}" ]]; then
+        rel="$(cd "$(dirname "${GREMION_EDGE_TEMPLATE}")/../../../.." 2>/dev/null && pwd)" || rel="$(gremion_root)/current"
+    fi
+    # the installed sibling first, then PATH (the same order gremion-deploy and gremion-rollback use)
+    render="${GREMION_BIN_DIR:-$(gremion_root)/bin}/gremion-render"
+    [[ -x "$render" ]] || render="$(command -v gremion-render 2>/dev/null || true)"
+    [[ -x "$render" ]] || render="${SCRIPT_DIR}/gremion-render"
+    if "$render" --release "$rel" --control-panel-only; then
+        if [[ -e "${edge_dir}/control-panel.yml" ]]; then
+            ok "control router rendered: ${edge_dir}/control-panel.yml"
+        else
+            info "CONTROL_PANEL_ORIGIN is set but ${edge_dir}/control-panel.yml was not written: the control host is not served yet (gremion-render --release <release dir> --control-panel-only says why)"
+        fi
+    else
+        rc=$?
+        info "WARNING: CONTROL_PANEL_ORIGIN is set but the control router was not rendered (exit ${rc}): the control host is not served yet. Fix what gremion-render said, then run: gremion-render --release ${rel} --control-panel-only"
+    fi
 }
 
 main "$@"

@@ -63,6 +63,13 @@ need_cmd grep tr cp find
 # duplicate-key refusal (exit 2) still applies and is not suppressed.
 ALLOW_SENTINELS=1 load_env "$ENV_FILE"
 
+# The control host is state.env's (CONTROL_PANEL_HOST, else control.<PLATFORM_DOMAIN>): this
+# script loads ops.env and nothing else, and a second copy of the key here would be a second
+# place for it to disagree. Read with the shared reader, so a quoted value is read as every
+# other tool reads it; an absent state.env or key is the default.
+CONTROL_PANEL_HOST="$(control_panel_host_of "$ROOT/etc/env/state.env")"
+export CONTROL_PANEL_HOST
+
 require_var() {
     local name="$1"
     [[ -n "${!name:-}" ]] || die "$name is empty in $ENV_FILE" 2
@@ -209,14 +216,16 @@ render_third_party() {
 # above, not assigned in this file.
 # shellcheck disable=SC2153
 render_targets() {
-    local https_targets=("https://${PLATFORM_DOMAIN}") host
+    local https_targets=("https://${PLATFORM_DOMAIN}") host control_host
     local acme_targets=()
+    # The control host (CONTROL_PANEL_HOST, else control.<domain>), validated before anything is written.
+    if ! control_host="$(resolve_control_panel_host)"; then die "$control_host" 2; fi
     while IFS= read -r host; do
         [[ -n "$host" ]] || continue
         https_targets+=("https://${host}")
     done < <(read_tenant_hosts)
     write_targets blackbox-https.yml "${https_targets[@]}"
-    write_targets blackbox-control.yml "https://control.${PLATFORM_DOMAIN}"
+    write_targets blackbox-control.yml "https://${control_host}"
 
     acme_targets=("http://${EDGE_BIND_IP}:80/.well-known/acme-challenge/probe")
     # Section C keeps :80 open on BOTH families for HTTP-01. An ACME probe that

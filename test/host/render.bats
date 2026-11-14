@@ -918,3 +918,519 @@ legal_example_keys() {
     [ "$status" -eq 2 ]
     [[ "$output" == *"cannot be combined"* ]]
 }
+
+
+# ---------------------------------------------------------------------------
+# 7. The control panel's public router (opt-in; fail-closed both ways)
+# ---------------------------------------------------------------------------
+# etc/edge/control-panel.yml exists ONLY when CONTROL_PANEL_ORIGIN is exactly
+# https://control.<PLATFORM_DOMAIN> AND the operator CA certificate is at
+# etc/edge/mtls/operator-ca.pem. Every other state leaves NO router behind, and a
+# half-configured opt-in refuses the render (exit 2) after deleting the file.
+
+CONTROL_FILE() { printf '%s' "${GREMION_ROOT}/etc/edge/control-panel.yml"; }
+CONTROL_CA_FILE() { printf '%s' "${GREMION_ROOT}/etc/edge/mtls/operator-ca.pem"; }
+
+control_release() {
+    mkdir -p "${RELEASE}/infra/host/templates/edge"
+    cp "${PROJECT_ROOT}/infra/host/templates/edge/control-panel.yml.tmpl" "${RELEASE}/infra/host/templates/edge/"
+    # the switch has written the panel service: the router may exist (it never precedes its service)
+    printf 'http:\n  services:\n    app:\n      loadBalancer: {}\n    panel:\n      loadBalancer: {}\n' > "${GREMION_ROOT}/etc/edge/active.yml"
+}
+
+# state.env of an install that has public certificates (a resolver) and opted in.
+control_state() {
+    sed -i 's/^TRAEFIK_CERT_RESOLVER=.*/TRAEFIK_CERT_RESOLVER=le-http/' "${GREMION_ROOT}/etc/env/state.env"
+    printf 'CONTROL_PANEL_ORIGIN=%s\n' "${1:-https://control.example.org}" >> "${GREMION_ROOT}/etc/env/state.env"
+}
+
+# a real CA certificate, as `gremion-operator-ca` would hand the host
+control_ca() {
+    local d="${BATS_TEST_TMPDIR}/ca"
+    mkdir -p "$d" "${GREMION_ROOT}/etc/edge/mtls"
+    openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -keyout "$d/ca.key" -out "$d/ca.pem" \
+        -days 30 -subj "/CN=bats operator CA" -addext "basicConstraints=critical,CA:TRUE" 2>/dev/null
+    cp "$d/ca.pem" "$(CONTROL_CA_FILE)"
+}
+
+@test "control panel: without CONTROL_PANEL_ORIGIN no router is rendered and the render succeeds" {
+    control_release
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"control panel: not public"* ]]
+    [ ! -e "$(CONTROL_FILE)" ]
+}
+
+@test "control panel: an EMPTY CONTROL_PANEL_ORIGIN is off, and deletes the file an earlier opt-in left" {
+    control_release
+    printf 'CONTROL_PANEL_ORIGIN=\n' >> "${GREMION_ROOT}/etc/env/state.env"
+    printf 'http:\n  routers: {}\n' > "$(CONTROL_FILE)"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    [ ! -e "$(CONTROL_FILE)" ]
+}
+
+@test "control panel: opted in with the CA, the router renders with the TLS option, the pin, HSTS, the portal rate tier and no probe path" {
+    control_release; control_state; control_ca
+    run "$RENDER" --release "$RELEASE"
+    echo "$output"
+    [ "$status" -eq 0 ]
+    render_out="$output"
+    f="$(CONTROL_FILE)"
+    [ -s "$f" ]
+    # no placeholder survives
+    assert_absent '\$\{' "$f"
+    # the gate: strict, once, min TLS 1.2, the CA certificate path under the mounted directory
+    [ "$(grep -c 'clientAuthType:' "$f")" -eq 1 ]
+    grep -qE '^        clientAuthType: RequireAndVerifyClientCert$' "$f"
+    grep -qE '^      minVersion: VersionTLS12$' "$f"
+    grep -qE '^          - /etc/traefik/dynamic/mtls/operator-ca\.pem$' "$f"
+    # the router: one host, the two probe paths excluded, the panel service, websecure alone
+    grep -qF 'rule: "Host(`control.example.org`) && !PathPrefix(`/healthz`) && !PathPrefix(`/api/internal`)"' "$f"
+    grep -qF 'entryPoints: ["websecure"]' "$f"
+    grep -qF 'service: "panel@file"' "$f"
+    # the chain: the pin FIRST, then HSTS, then the portal tier of the rate limit, in exactly this order
+    run awk '/^      middlewares:$/ {on=1; next} on && /^        - / {gsub(/^        - "|"$/, ""); printf "%s ", $0; next} on {exit}' "$f"
+    [ "$output" = "edge-hostpin-control@docker edge-hsts-platform@docker edge-ratelimit-portal@docker " ]
+    # the router names its own certificate resolver and the option
+    grep -qF 'certResolver: "le-http"' "$f"
+    grep -qF 'options: "control-panel-mtls"' "$f"
+    # nothing else is declared: no middleware, no service, no certificate store
+    assert_absent '^  (middlewares|services|certificates|stores):' "$f"
+    assert_absent '^    (middlewares|services):' "$f"
+    # the render announces how many CA certificates it saw
+    [[ "$render_out" == *"control panel: public at https://control.example.org behind the operator CA (1 certificate(s)"* ]]
+    # the file is world-readable like every other etc/edge file; the CA file was not touched
+    cmp -s "${BATS_TEST_TMPDIR}/ca/ca.pem" "$(CONTROL_CA_FILE)"
+}
+
+@test "control panel: turning the key off again deletes the rendered file" {
+    control_release; control_state; control_ca
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    [ -s "$(CONTROL_FILE)" ]
+    sed -i 's|^CONTROL_PANEL_ORIGIN=.*|CONTROL_PANEL_ORIGIN=|' "${GREMION_ROOT}/etc/env/state.env"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    [ ! -e "$(CONTROL_FILE)" ]
+}
+
+@test "control panel: opted in WITHOUT the CA file refuses the render (exit 2) and leaves no router, even over a stale one" {
+    control_release; control_state
+    printf 'http:\n  routers:\n    control-panel: {}\n' > "$(CONTROL_FILE)"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"the operator CA certificate is missing"* ]]
+    [[ "$output" == *"no control router was rendered"* ]]
+    [ ! -e "$(CONTROL_FILE)" ]
+}
+
+@test "control panel: a CA path that is a directory counts as missing" {
+    control_release; control_state
+    mkdir -p "$(CONTROL_CA_FILE)"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"the operator CA certificate is missing"* ]]
+    [ ! -e "$(CONTROL_FILE)" ]
+}
+
+@test "control panel: a CA file that is not PEM refuses the render" {
+    control_release; control_state
+    mkdir -p "${GREMION_ROOT}/etc/edge/mtls"
+    printf 'garbage\n' > "$(CONTROL_CA_FILE)"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"holds no PEM certificate"* ]]
+    [ ! -e "$(CONTROL_FILE)" ]
+}
+
+@test "control panel: a CA file that carries a private key is refused, and says to rotate" {
+    control_release; control_state; control_ca
+    cat "${BATS_TEST_TMPDIR}/ca/ca.key" >> "$(CONTROL_CA_FILE)"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"contains a private key"* ]]
+    [[ "$output" == *"rotate the CA"* ]]
+    [ ! -e "$(CONTROL_FILE)" ]
+}
+
+@test "control panel: a certificate that is not a CA is refused" {
+    control_release; control_state
+    mkdir -p "${GREMION_ROOT}/etc/edge/mtls"
+    openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -keyout "${BATS_TEST_TMPDIR}/leaf.key" \
+        -out "$(CONTROL_CA_FILE)" -days 30 -subj "/CN=bats leaf" -addext "basicConstraints=critical,CA:FALSE" 2>/dev/null
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"is not a CA certificate"* ]]
+    [ ! -e "$(CONTROL_FILE)" ]
+}
+
+@test "control panel: every certificate in the CA file is held to the CA rule, not only the first" {
+    control_release; control_state; control_ca
+    # a second certificate that is not a CA, behind a good first one: the gate would accept
+    # whatever it signs if it signed client certificates
+    openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -keyout "${BATS_TEST_TMPDIR}/leaf.key" \
+        -out "${BATS_TEST_TMPDIR}/leaf.pem" -days 30 -subj "/CN=bats leaf" -addext "basicConstraints=critical,CA:FALSE" 2>/dev/null
+    cat "${BATS_TEST_TMPDIR}/leaf.pem" >> "$(CONTROL_CA_FILE)"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"(#2 of 2) that is not a CA certificate"* ]]
+    [ ! -e "$(CONTROL_FILE)" ]
+}
+
+@test "control panel: any origin but exactly https://control.<PLATFORM_DOMAIN> is refused" {
+    control_release; control_ca
+    local bad
+    for bad in 1 true http://control.example.org https://control.example.org/ https://control.other.example https://example.org HTTPS://control.example.org; do
+        cp "${GREMION_ROOT}/etc/env/state.env" "${BATS_TEST_TMPDIR}/state.env.orig"
+        control_state "$bad"
+        run "$RENDER" --release "$RELEASE"
+        [ "$status" -eq 2 ] || { echo "origin '${bad}': exit ${status}"; return 1; }
+        [[ "$output" == *"CONTROL_PANEL_ORIGIN must be empty (off) or exactly https://control.example.org"* ]] || { echo "origin '${bad}': ${output}"; return 1; }
+        [ ! -e "$(CONTROL_FILE)" ]
+        cp "${BATS_TEST_TMPDIR}/state.env.orig" "${GREMION_ROOT}/etc/env/state.env"
+    done
+}
+
+@test "control panel: an install without a certificate resolver cannot open the control host" {
+    control_release; control_ca
+    printf 'CONTROL_PANEL_ORIGIN=https://control.example.org\n' >> "${GREMION_ROOT}/etc/env/state.env"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"TRAEFIK_CERT_RESOLVER is empty"* ]]
+    [ ! -e "$(CONTROL_FILE)" ]
+}
+
+@test "control panel: an app env whose origin differs from state.env refuses the render; one that agrees (or is absent) does not" {
+    control_release; control_state; control_ca
+    printf 'COLOUR=blue\nCOMPOSE_FILE=docker-compose.app.yml:docker-compose.control-public.yml:docker-compose.pins.yml\nCONTROL_PANEL_ORIGIN=https://control.example.org\n' > "${GREMION_ROOT}/etc/env/app-blue.env"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    printf 'COLOUR=green\nCOMPOSE_FILE=docker-compose.app.yml:docker-compose.control-public.yml\n' > "${GREMION_ROOT}/etc/env/app-green.env"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"app-green.env: CONTROL_PANEL_ORIGIN is not https://control.example.org"* ]]
+    [ ! -e "$(CONTROL_FILE)" ]
+}
+
+@test "control panel: a QUOTED origin is the same origin in state.env and in the app envs (compose strips one layer of quotes, so must every reader); a quoted empty value is off" {
+    control_release; control_state '"https://control.example.org"'; control_ca
+    local c
+    for c in blue green; do
+        printf 'COLOUR=%s\nCOMPOSE_FILE="docker-compose.app.yml:docker-compose.control-public.yml"\nCONTROL_PANEL_ORIGIN='"'"'https://control.example.org'"'"'\n' "$c" > "${GREMION_ROOT}/etc/env/app-${c}.env"
+    done
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [ -s "$(CONTROL_FILE)" ]
+    # a quoted empty value in all three files is "off", not a disagreement with an empty state.env
+    sed -i '/^CONTROL_PANEL_ORIGIN=/d' "${GREMION_ROOT}/etc/env/state.env"
+    printf 'CONTROL_PANEL_ORIGIN=""\n' >> "${GREMION_ROOT}/etc/env/state.env"
+    for c in blue green; do
+        printf 'COLOUR=%s\nCOMPOSE_FILE=docker-compose.app.yml\nCONTROL_PANEL_ORIGIN=""\n' "$c" > "${GREMION_ROOT}/etc/env/app-${c}.env"
+    done
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [ ! -e "$(CONTROL_FILE)" ]
+}
+
+# The edge-network layer of the control panel is part of the same decision as the key.
+control_app_envs() {   # <origin line or empty> <compose files>
+    local c
+    for c in blue green; do
+        printf 'COLOUR=%s\nCOMPOSE_FILE=%s\n%s\n' "$c" "$2" "$1" > "${GREMION_ROOT}/etc/env/app-${c}.env"
+    done
+}
+
+@test "control panel: opted in, an app env whose COMPOSE_FILE lacks the edge overlay refuses the render and leaves no router (the panel would not be reachable)" {
+    control_release; control_state; control_ca
+    control_app_envs 'CONTROL_PANEL_ORIGIN=https://control.example.org' 'docker-compose.app.yml:docker-compose.pins.yml'
+    printf 'http:\n  routers:\n    control-panel: {}\n' > "$(CONTROL_FILE)"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"COMPOSE_FILE does not name docker-compose.control-public.yml"* ]]
+    [ ! -e "$(CONTROL_FILE)" ]
+    # the same refusal at the deploy's step 4, which renders with the deferral flag
+    run "$RENDER" --release "$RELEASE" --defer-control-panel
+    [ "$status" -eq 2 ]
+    # with the overlay named in both envs it renders
+    control_app_envs 'CONTROL_PANEL_ORIGIN=https://control.example.org' 'docker-compose.app.yml:docker-compose.control-public.yml:docker-compose.pins.yml'
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    [ -s "$(CONTROL_FILE)" ]
+}
+
+@test "control panel: key turned off in state.env alone is refused while an app env still carries the origin (it would keep the public ORIGIN)" {
+    control_release; control_state; control_ca
+    control_app_envs 'CONTROL_PANEL_ORIGIN=https://control.example.org' 'docker-compose.app.yml:docker-compose.control-public.yml'
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    [ -s "$(CONTROL_FILE)" ]
+    sed -i 's|^CONTROL_PANEL_ORIGIN=.*|CONTROL_PANEL_ORIGIN=|' "${GREMION_ROOT}/etc/env/state.env"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"CONTROL_PANEL_ORIGIN is set but state.env has none"* ]]
+    [ ! -e "$(CONTROL_FILE)" ]
+    # off everywhere (and the overlay out of the COMPOSE_FILE) is the clean off state
+    control_app_envs '' 'docker-compose.app.yml:docker-compose.pins.yml'
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"control panel: not public"* ]]
+}
+
+@test "control panel: the edge overlay in an app env's COMPOSE_FILE without the opt-in is refused (the panel would sit on the edge network with no router)" {
+    control_release
+    control_app_envs '' 'docker-compose.app.yml:docker-compose.control-public.yml:docker-compose.pins.yml'
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"names docker-compose.control-public.yml but the install has not opted in"* ]]
+}
+
+@test "control panel: a release tree without the template refuses an opted-in render" {
+    control_state; control_ca
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"control-panel.yml.tmpl"* ]]
+    [ ! -e "$(CONTROL_FILE)" ]
+}
+
+@test "control panel: opted in with the CA but no panel service in active.yml yet, the router is DEFERRED (never earlier than its service), the render succeeds" {
+    control_release; control_state; control_ca
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    [ -s "$(CONTROL_FILE)" ]
+    # an active.yml from a release that had no panel service (an upgrade, before its switch)
+    printf 'http:\n  services:\n    app:\n      loadBalancer: {}\n' > "${GREMION_ROOT}/etc/edge/active.yml"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"the router is deferred until after the switch"* ]]
+    [ ! -e "$(CONTROL_FILE)" ]
+    # no active.yml at all (the first-ever deploy, step 4): deferred too
+    rm "${GREMION_ROOT}/etc/edge/active.yml"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"deferred"* ]]
+    [ ! -e "$(CONTROL_FILE)" ]
+}
+
+@test "control panel: a misconfigured opt-in is refused even while the router is deferred (step 4 stops the deploy, not step 11)" {
+    control_release; control_state
+    rm "${GREMION_ROOT}/etc/edge/active.yml"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"the operator CA certificate is missing"* ]]
+}
+
+@test "control panel: --control-panel-only renders just the router (after the switch), and touches nothing else" {
+    control_release; control_state; control_ca
+    run "$RENDER" --release "$RELEASE" --control-panel-only
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [ -s "$(CONTROL_FILE)" ]
+    [[ "$output" == *"control-panel-only=yes"* ]]
+    # no userlist, no CA mint, no ipcrypt key: the full render's other steps did not run
+    [ ! -e "${RELEASE}/docker/pgbouncer/userlist.txt" ]
+    [ ! -e "${GREMION_ROOT}/etc/secrets/ipcrypt_key.txt" ]
+}
+
+@test "control panel: --control-panel-only removes the router when the install has not opted in" {
+    control_release
+    printf 'http:\n  routers:\n    control-panel: {}\n' > "$(CONTROL_FILE)"
+    run "$RENDER" --release "$RELEASE" --control-panel-only
+    [ "$status" -eq 0 ]
+    [ ! -e "$(CONTROL_FILE)" ]
+}
+
+@test "control panel: --defer-control-panel checks the opt-in but writes nothing, even with the panel service already in active.yml, and keeps a file an earlier deploy left" {
+    control_release; control_state; control_ca
+    run "$RENDER" --release "$RELEASE" --defer-control-panel
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"the router is written after the switch"* ]]
+    [ ! -e "$(CONTROL_FILE)" ]
+    printf 'http:\n  routers:\n    control-panel: {}\n' > "$(CONTROL_FILE)"
+    run "$RENDER" --release "$RELEASE" --defer-control-panel
+    [ "$status" -eq 0 ]
+    grep -q 'control-panel: {}' "$(CONTROL_FILE)"
+    # the other half of the contract: the same state without the flag renders at once
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    grep -qF 'options: "control-panel-mtls"' "$(CONTROL_FILE)"
+}
+
+@test "control panel: --defer-control-panel still refuses a misconfigured opt-in, and still removes the file when the install has not opted in" {
+    control_release; control_state
+    run "$RENDER" --release "$RELEASE" --defer-control-panel
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"the operator CA certificate is missing"* ]]
+    sed -i '/^CONTROL_PANEL_ORIGIN=/d' "${GREMION_ROOT}/etc/env/state.env"
+    printf 'http:\n  routers:\n    control-panel: {}\n' > "$(CONTROL_FILE)"
+    run "$RENDER" --release "$RELEASE" --defer-control-panel
+    [ "$status" -eq 0 ]
+    [ ! -e "$(CONTROL_FILE)" ]
+}
+
+@test "control panel: --defer-control-panel and --control-panel-only cannot be combined" {
+    run "$RENDER" --release "$RELEASE" --defer-control-panel --control-panel-only
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"cannot be combined"* ]]
+}
+
+@test "control panel: --control-panel-only cannot be combined with another mode" {
+    run "$RENDER" --release "$RELEASE" --control-panel-only --staging
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"cannot be combined"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# CONTROL_PANEL_HOST (operator decision 2026-11-13): the panel may be served on a host
+# name OUTSIDE the platform domain. Empty or absent is control.<PLATFORM_DOMAIN>, and every
+# test above stays as it was; set, the one resolved value is the router's host, the
+# certificate's host and the only origin the render accepts.
+# ---------------------------------------------------------------------------
+
+# state.env of an opted-in install: the origin, then the host key
+control_host_state() {   # <host> [<origin>]
+    control_state "${2:-https://${1}}"
+    printf 'CONTROL_PANEL_HOST=%s\n' "$1" >> "${GREMION_ROOT}/etc/env/state.env"
+}
+
+@test "control panel host: CONTROL_PANEL_HOST=panel.example.com renders a router for exactly that host, outside the platform domain" {
+    control_release; control_ca; control_host_state panel.example.com
+    run "$RENDER" --release "$RELEASE"
+    echo "$output"
+    [ "$status" -eq 0 ]
+    f="$(CONTROL_FILE)"
+    grep -qF 'rule: "Host(`panel.example.com`) && !PathPrefix(`/healthz`) && !PathPrefix(`/api/internal`)"' "$f"
+    # the default name is nowhere in the file, and nothing unsubstituted is
+    assert_absent 'control\.example\.org' "$f"
+    assert_absent '\$\{' "$f"
+    [[ "$output" == *"control panel: public at https://panel.example.com "* ]]
+    # the chain still starts with the pin and carries the platform HSTS
+    grep -qF '"edge-hostpin-control@docker"' "$f"
+    grep -qF '"edge-hsts-platform@docker"' "$f"
+}
+
+@test "control panel host: with a custom host, the ORIGIN of the default name is refused (the panel answers one host), and so is any other" {
+    control_release; control_ca
+    local bad
+    for bad in https://control.example.org https://example.org https://panel.example.com/ http://panel.example.com https://other.example.com; do
+        cp "${GREMION_ROOT}/etc/env/state.env" "${BATS_TEST_TMPDIR}/state.env.orig"
+        control_host_state panel.example.com "$bad"
+        printf 'http:\n  routers:\n    control-panel: {}\n' > "$(CONTROL_FILE)"
+        run "$RENDER" --release "$RELEASE"
+        [ "$status" -eq 2 ] || { echo "origin '${bad}': exit ${status}"; return 1; }
+        [[ "$output" == *"CONTROL_PANEL_ORIGIN must be empty (off) or exactly https://panel.example.com"* ]] || { echo "origin '${bad}': ${output}"; return 1; }
+        [ ! -e "$(CONTROL_FILE)" ]
+        cp "${BATS_TEST_TMPDIR}/state.env.orig" "${GREMION_ROOT}/etc/env/state.env"
+    done
+}
+
+@test "control panel host: the origin of a custom host without the host key is refused (the key decides, not the origin)" {
+    control_release; control_ca; control_state https://panel.example.com
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"CONTROL_PANEL_ORIGIN must be empty (off) or exactly https://control.example.org"* ]]
+    [ ! -e "$(CONTROL_FILE)" ]
+}
+
+@test "control panel host: every invalid value is refused with exit 2, says why, and leaves no router even over a stale one" {
+    control_release; control_ca
+    printf 'Tenant.Example.NET   # upper case in the file\n# a comment\n' > "${GREMION_ROOT}/etc/tenant-hosts.txt"
+    local bad why
+    while IFS='|' read -r bad why; do
+        cp "${GREMION_ROOT}/etc/env/state.env" "${BATS_TEST_TMPDIR}/state.env.orig"
+        control_state https://control.example.org
+        printf 'CONTROL_PANEL_HOST="%s"\n' "$bad" >> "${GREMION_ROOT}/etc/env/state.env"
+        printf 'http:\n  routers:\n    control-panel: {}\n' > "$(CONTROL_FILE)"
+        run "$RENDER" --release "$RELEASE"
+        [ "$status" -eq 2 ] || { echo "host '${bad}': exit ${status}: ${output}"; return 1; }
+        [[ "$output" == *"CONTROL_PANEL_HOST is refused: "*"${why}"* ]] || { echo "host '${bad}' wanted '${why}': ${output}"; return 1; }
+        [ ! -e "$(CONTROL_FILE)" ] || { echo "host '${bad}' left a router"; return 1; }
+        cp "${BATS_TEST_TMPDIR}/state.env.orig" "${GREMION_ROOT}/etc/env/state.env"
+    done <<'CASES'
+*.example.com|wildcard
+Panel.example.com|not lowercase
+panel.example.com:8443|port
+https://panel.example.com|scheme
+panel.example.com/admin|path
+panel.example.com.|trailing dot
+panel|single label
+10.0.0.1|IP address
+203.0.113.7|IP address
+[::1]|port
+pan el.example.com|white space
+a..example.com|not a DNS host name
+-a.example.com|not a DNS host name
+pa_nel.example.com|not a DNS host name
+example.org|platform domain itself
+www.example.org|platform host
+sales.example.org|platform host
+mail.example.org|platform host
+pilot.example.org|PILOT_TENANT_HOST
+turn.pilot.example.org|video relay
+tenant.example.net|customer host
+CASES
+}
+
+@test "control panel host: the key empty (or quoted empty) renders byte for byte what an install without the key renders" {
+    control_release; control_ca; control_state
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    cp "$(CONTROL_FILE)" "${BATS_TEST_TMPDIR}/without-key.yml"
+    grep -qF 'Host(`control.example.org`)' "${BATS_TEST_TMPDIR}/without-key.yml"
+    local v
+    for v in '' '""' "''"; do
+        printf 'CONTROL_PANEL_HOST=%s\n' "$v" >> "${GREMION_ROOT}/etc/env/state.env"
+        rm -f "$(CONTROL_FILE)"
+        run "$RENDER" --release "$RELEASE"
+        [ "$status" -eq 0 ] || { echo "value [${v}]: ${output}"; return 1; }
+        cmp "$(CONTROL_FILE)" "${BATS_TEST_TMPDIR}/without-key.yml"
+        sed -i '/^CONTROL_PANEL_HOST=/d' "${GREMION_ROOT}/etc/env/state.env"
+    done
+    # the default name written out is the same router as the default
+    printf 'CONTROL_PANEL_HOST=control.example.org\n' >> "${GREMION_ROOT}/etc/env/state.env"
+    rm -f "$(CONTROL_FILE)"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    cmp "$(CONTROL_FILE)" "${BATS_TEST_TMPDIR}/without-key.yml"
+}
+
+@test "control panel host: a host that is set is validated before the opt-in; valid and not opted in is no router and success" {
+    control_release; control_ca
+    printf 'CONTROL_PANEL_HOST=panel.example.com\n' >> "${GREMION_ROOT}/etc/env/state.env"
+    printf 'http:\n  routers:\n    control-panel: {}\n' > "$(CONTROL_FILE)"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"control panel: not public"* ]]
+    [ ! -e "$(CONTROL_FILE)" ]
+    sed -i 's|^CONTROL_PANEL_HOST=.*|CONTROL_PANEL_HOST=Panel.Example.com|' "${GREMION_ROOT}/etc/env/state.env"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"CONTROL_PANEL_HOST is refused: it is not lowercase"* ]]
+}
+
+@test "control panel host: the app envs must carry the origin of the CONFIGURED host (the default name's origin disagrees)" {
+    control_release; control_ca; control_host_state panel.example.com
+    printf 'COLOUR=blue\nCOMPOSE_FILE=docker-compose.app.yml:docker-compose.control-public.yml\nCONTROL_PANEL_ORIGIN=https://panel.example.com\n' > "${GREMION_ROOT}/etc/env/app-blue.env"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    printf 'COLOUR=green\nCOMPOSE_FILE=docker-compose.app.yml:docker-compose.control-public.yml\nCONTROL_PANEL_ORIGIN=https://control.example.org\n' > "${GREMION_ROOT}/etc/env/app-green.env"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"app-green.env: CONTROL_PANEL_ORIGIN is not https://panel.example.com"* ]]
+    [ ! -e "$(CONTROL_FILE)" ]
+}
+
+@test "control panel host: --control-panel-only and the staging fragment use the configured host too" {
+    control_release; control_ca; control_host_state panel.example.com
+    run "$RENDER" --release "$RELEASE" --control-panel-only
+    [ "$status" -eq 0 ]
+    grep -qF 'Host(`panel.example.com`)' "$(CONTROL_FILE)"
+    # staging: a resolver-less root; the fragment resolves the name the panel is really served on
+    sed -i 's/^TRAEFIK_CERT_RESOLVER=.*/TRAEFIK_CERT_RESOLVER=/' "${GREMION_ROOT}/etc/env/state.env"
+    sed -i '/^CONTROL_PANEL_ORIGIN=/d' "${GREMION_ROOT}/etc/env/state.env"
+    stub_compose_services
+    run "$RENDER" --release "$RELEASE" --staging
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    local out="${GREMION_ROOT}/etc/edge/extra-hosts.yml"
+    [ "$(grep -c '"panel.example.com:127.0.0.1"' "$out")" -eq 3 ]
+    [ "$(grep -c 'control.example.org' "$out")" -eq 0 ]
+}

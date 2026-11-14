@@ -83,7 +83,7 @@ and that code is the authoritative copy.
 | vector | council (logs) | state | `network_mode: none` |
 | mailpit | dev only | state, `profiles: [dev]` | `_state` |
 | gremion-ui, gremion-public | council app | app-`<colour>` | `_edge`, `_state`, `app` |
-| control-panel (TASK-043 Q12: no port, no Traefik route; `gremion-tenant panel` prints the `ssh -L` line) | council app | app-`<colour>` | `_state`, `app` |
+| control-panel (TASK-043 Q12: no port, no Traefik label; `gremion-tenant panel` prints the `ssh -L` line, or on an opt-in install the host `control.<domain>` (or `CONTROL_PANEL_HOST`) behind a client-certificate gate, file-provider router in etc/edge; only that install adds the overlay `docker-compose.control-public.yml`, which puts the panel on `_edge` under its colour alias) | council app | app-`<colour>` | `_state`, `app` (plus `_edge` with the opt-in overlay) |
 | migrate / tenant-create | council one-shot | app-`<colour>` | `_state` / `_state` + `_edge` |
 | grafana, prometheus, loki, tempo, alloy, blackbox | **non-council** | ops | `ops` |
 | stalwart | **non-council** | mail | `mail` |

@@ -1478,3 +1478,32 @@ relay_ops_env() {   # <ALERT_EMAIL_TO>
     # a quote that opens at the end of a line is a raw LF inside $'..' or '..'
     assert_absent "(\$'|printf -- '\[\])\$" "$f" "a raw LF sits inside a quoted escape"
 }
+
+@test "render-ops: the control probe targets CONTROL_PANEL_HOST from state.env (a host outside the platform domain), the default name without it, and an invalid host is refused (exit 2) before anything is written" {
+    write_ops_env
+    printf 'pilot.example.org\n' > "$GREMION_ROOT/etc/tenant-hosts.txt"
+    # no state.env at all, and one without the key: the default
+    run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    grep -q 'https://control.example.org' "$GREMION_ROOT/runtime/ops/targets/blackbox-control.yml"
+    printf 'PLATFORM_DOMAIN=example.org\nCONTROL_PANEL_HOST=\n' > "$GREMION_ROOT/etc/env/state.env"
+    run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    grep -q 'https://control.example.org' "$GREMION_ROOT/runtime/ops/targets/blackbox-control.yml"
+    # set: the probe follows it
+    printf 'PLATFORM_DOMAIN=example.org\nCONTROL_PANEL_HOST="panel.example.com"\n' > "$GREMION_ROOT/etc/env/state.env"
+    run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    grep -q 'https://panel.example.com' "$GREMION_ROOT/runtime/ops/targets/blackbox-control.yml"
+    assert_absent 'control.example.org' "$GREMION_ROOT/runtime/ops/targets/blackbox-control.yml"
+    # invalid, and a customer host: refused, the target list stays as it was
+    cp "$GREMION_ROOT/runtime/ops/targets/blackbox-control.yml" "$BATS_TEST_TMPDIR/before.yml"
+    local bad
+    for bad in Panel.example.com panel.example.com:8443 https://panel.example.com example.org pilot.example.org 10.1.2.3; do
+        printf 'PLATFORM_DOMAIN=example.org\nCONTROL_PANEL_HOST=%s\n' "$bad" > "$GREMION_ROOT/etc/env/state.env"
+        run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+        [ "$status" -eq 2 ] || { echo "host '${bad}': exit ${status}: ${output}"; return 1; }
+        [[ "$output" == *"CONTROL_PANEL_HOST is refused"* ]] || { echo "host '${bad}': ${output}"; return 1; }
+        cmp "$GREMION_ROOT/runtime/ops/targets/blackbox-control.yml" "$BATS_TEST_TMPDIR/before.yml"
+    done
+}

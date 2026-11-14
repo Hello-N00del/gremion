@@ -296,3 +296,55 @@ assert_mode_600() {
     fi
     [ "$(stat -c %a "$f")" = 600 ] || { echo "mode of $f is $(stat -c %a "$f"), expected 600"; return 1; }
 }
+
+# make_opted_in_root <release dir> <panel|nopanel>
+# An install that opted in to the public control panel, for a test that runs the REAL gremion-render (and
+# the real switch): the key in state.env and both app envs, the overlay in their COMPOSE_FILE, a real CA
+# certificate, an edge file with (or without) the panel service, and what the render needs in the release
+# tree <release dir>, which must exist. Used by test/host/deploy.bats and test/host/switch.bats.
+make_opted_in_root() {
+    local fx="$1" c repo
+    repo="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
+    mkdir -p "$fx/docker/pgbouncer" "$fx/docker/keycloak/certs" "$fx/legal" "$fx/infra/host/templates/edge" "${GREMION_ROOT}/etc/edge/mtls"
+    printf '#!/usr/bin/env bash\ncd "$(dirname "$0")"\necho mint > internal-ca.crt; cp internal-ca.crt internal-ca.pem\necho k > internal-ca.key; echo c > keycloak.crt; echo k > keycloak.key\n' \
+        > "$fx/docker/keycloak/certs/gen-internal-ca.sh"
+    chmod +x "$fx/docker/keycloak/certs/gen-internal-ca.sh"
+    tr -d '\r' < "${repo}/legal/legal.env.example" > "$fx/legal/legal.env.example"
+    tr -d '\r' < "${repo}/legal/legal.env.example" | sed \
+        -e 's|^ORG_NAME=.*|ORG_NAME=Beispielgremium|' \
+        -e 's|^ORG_ADDRESS=.*|ORG_ADDRESS=Beispielweg 2, 54321 Beispielstadt|' \
+        -e 's|^ORG_EMAIL=.*|ORG_EMAIL=kontakt@beispiel.example|' \
+        -e 's|^RESPONSIBLE_PERSON=.*|RESPONSIBLE_PERSON=Erika Beispiel|' \
+        -e 's|^RESPONSIBLE_PERSON_EMAIL=.*|RESPONSIBLE_PERSON_EMAIL=datenschutz@beispiel.example|' \
+        -e 's|^DOMAIN=.*|DOMAIN=example.org|' > "${GREMION_ROOT}/etc/legal.env"
+    cp "${repo}/infra/host/templates/edge/control-panel.yml.tmpl" "$fx/infra/host/templates/edge/"
+    cp "${repo}/infra/host/templates/edge/active.yml.tmpl" "$fx/infra/host/templates/edge/"
+    cat >> "${GREMION_ROOT}/etc/env/state.env" <<'ENV'
+ACME_EMAIL=ops@example.org
+TRAEFIK_CERT_RESOLVER=le-http
+EDGE_BIND_IP=127.0.0.1
+EDGE_BIND_IP6=::1
+EDGE_HTTP_PORT=8090
+EDGE_HTTPS_PORT=8443
+MAIL_BIND_IP=127.0.0.1
+MAIL_BIND_IP6=::1
+EDGE_V4_SUBNET=10.90.0.0/24
+EDGE_V6_SUBNET=fd5a:90::/64
+STATE_V4_SUBNET=10.90.1.0/24
+STATE_V6_SUBNET=fd5a:91::/64
+PGBOUNCER_AUTH_PASSWORD=test-secret-pgbouncer
+LIVEKIT_API_KEY=lk-key
+LIVEKIT_API_SECRET=lk-secret
+PILOT_TENANT_HOST=pilot.example.org
+CONTROL_PANEL_ORIGIN=https://control.example.org
+ENV
+    for c in blue green; do
+        touch "${GREMION_ROOT}/etc/env/app-${c}.env"; sed -i "/^COMPOSE_FILE=/d" "${GREMION_ROOT}/etc/env/app-${c}.env"
+        printf 'COMPOSE_FILE=docker-compose.app.yml:docker-compose.control-public.yml:docker-compose.pins.yml\nCONTROL_PANEL_ORIGIN=https://control.example.org\n' >> "${GREMION_ROOT}/etc/env/app-${c}.env"
+    done
+    openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -keyout "${BATS_TEST_TMPDIR}/ca.key" \
+        -out "${GREMION_ROOT}/etc/edge/mtls/operator-ca.pem" -days 30 -subj "/CN=bats operator CA" \
+        -addext "basicConstraints=critical,CA:TRUE" 2>/dev/null
+    printf 'http:\n  services:\n    app:\n      loadBalancer: {}\n' > "${GREMION_ROOT}/etc/edge/active.yml"
+    [ "$2" != "panel" ] || printf '    panel:\n      loadBalancer: {}\n' >> "${GREMION_ROOT}/etc/edge/active.yml"
+}

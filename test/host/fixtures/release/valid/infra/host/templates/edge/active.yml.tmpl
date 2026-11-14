@@ -1,0 +1,7 @@
+# a release tree carries the switch template of ITS release (gremion-deploy step 10 hands it to gremion-switch)
+http:
+  services:
+    panel:
+      loadBalancer:
+        servers:
+          - url: "http://control-panel-${ACTIVE_COLOUR}:3000"
