@@ -5,6 +5,7 @@
   import { Alert } from '$lib/components/ui/alert'
   import { Button } from '$lib/components/ui/button'
   import { closeEditor } from '$lib/files/editor-close'
+  import { readableFileName } from '$lib/files/readable-file-name'
 
   let { data }: { data: PageData } = $props()
 
@@ -98,6 +99,10 @@
     return () => window.removeEventListener('message', handleMessage)
   })
 
+  // The URL carries the name percent-encoded ("Protokoll%20Sitzung.docx"); the header and the frame title show it
+  // the way the person wrote it. Rendered as text only.
+  const displayName = $derived(readableFileName(data.fileName))
+
   const iframeSrc = $derived(`${data.editorUrl}&closebutton=1&lang=de`)
 
   function handleIframeError() {
@@ -110,9 +115,11 @@
 
   // The tab the app opened for this editor closes itself; any other (a bookmark, a pasted link) goes back to the
   // folder of the file. Schließen and Collabora's own close button both land here, and Schließen makes Collabora
-  // answer with App_Close_Requested too, so the close runs once. The latch is only a debounce: if the tab is
-  // still there after the browser had its say (a refused window.close, a leave-page prompt the person
-  // cancelled), Schließen works again.
+  // answer with App_Close_Requested too, so the close runs once. If the browser did not close the tab (it refuses
+  // window.close() for a tab it does not count as script-closable), editor-close navigates to the folder 250 ms
+  // later: the person never stays on a dead editor. The latch is only a debounce for that double call; it lifts
+  // after two seconds, so if the page is still there (a leave-page prompt the person cancelled, a navigation that
+  // was interrupted) Schließen tries again.
   const CLOSE_LATCH_MS = 2000
   let closing = false
   function closeOnce() {
@@ -130,7 +137,7 @@
   }
 </script>
 
-<PageTitle title={data.fileName} />
+<PageTitle title={displayName} />
 
 <!-- The route renders without the app shell (files.slot.ts bareRoutes), so this page owns the whole viewport:
      100dvh follows a phone's visible area as the address bar moves (100vh is taller than what is visible). The
@@ -144,7 +151,7 @@
   style="height: 100dvh; min-height: 0; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);"
 >
   <header data-testid="editor-bar" class="flex items-center gap-3 px-3 border-b bg-paper shrink-0" style="min-height: 44px;">
-    <span class="text-sm font-medium truncate flex-1 min-w-0">{data.fileName}</span>
+    <span class="text-sm font-medium truncate flex-1 min-w-0">{displayName}</span>
     <Button variant="outline" size="sm" onclick={requestClose} class="shrink-0" style="min-height: 44px; min-width: 44px;">
       Schließen
     </Button>
@@ -186,7 +193,7 @@
       src={iframeSrc}
       class="flex-1 w-full border-0"
       style="min-height: 0;"
-      title={data.fileName}
+      title={displayName}
       onerror={handleIframeError}
       allow="clipboard-read; clipboard-write"
     ></iframe>
