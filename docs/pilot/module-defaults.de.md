@@ -1,4 +1,4 @@
-<!-- i18n-sync: source=module-defaults.md sha256=c8ffcf36d0c97295d00ceaea5e1a4b1b99d9c949a9ac3a2af155c85bc6cecce2 -->
+<!-- i18n-sync: source=module-defaults.md sha256=df1352825e06500008e2334dfeda5618a142f5be9d9e855541a6e01aa5ea7cbb -->
 [English](./module-defaults.md) | **Deutsch**
 
 # Modul-Standards im Pilot: was das Repository festhält, was gemessen ist, was übergeben wird
@@ -77,6 +77,10 @@ Moduldatenbank. Ein Gremium kann board in den eigenen Einstellungen weiterhin ni
 bleibt es zurückgehalten. Der Isolationsnachweis für board auf einem laufenden Host wird nach dem
 Einsatz erfasst; solange ein Host ihn für den eingesetzten Release nicht erfasst hat, lehnt das Gate
 board ab wie jedes Modul ohne Nachweis.
+
+Ein Kunde, der ohne angekreuztes board angelegt wird, hat dafür keine Plattformzeile; das board ist
+für ihn also trotzdem eingeschaltet. Um es später auszublenden, auf der Kundenseite zuerst „Modul
+aktivieren“ und dann „Modul deaktivieren“ verwenden.
 
 ## 4. Übergaben
 

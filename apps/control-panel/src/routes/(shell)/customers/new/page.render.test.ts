@@ -26,6 +26,15 @@ function selectedOf(select: string): { value: string; label: string } {
   return { value: m[1]!, label: m[2]! }
 }
 
+describe('Neuer Mandant board hint', () => {
+  it('tells the operator an unticked board is still on and how to hide it', () => {
+    const markup = html()
+    expect(markup).toContain('id="board-hint"')
+    expect(markup).toContain('Modul aktivieren')
+    expect(markup).toContain('Modul deaktivieren')
+  })
+})
+
 describe('Neuer Mandant semester selects', () => {
   it('offers both selects with October and April preselected on a fresh form', () => {
     const markup = html()

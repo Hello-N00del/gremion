@@ -74,6 +74,10 @@ switch board in its own settings: it stays held back there. The isolation eviden
 on a running host is recorded after deployment; until a host has recorded it for the release in
 use, the gate refuses board like any module without evidence.
 
+A customer created with board left unticked has no platform row for it, so the board is still on
+for that customer; to hide it later, use "Modul aktivieren" and then "Modul deaktivieren" on the
+customer page.
+
 ## 4. Hand-offs
 
 | To | What |
