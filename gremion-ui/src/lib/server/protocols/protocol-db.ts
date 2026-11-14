@@ -311,8 +311,11 @@ export async function getResolutionById(id: string): Promise<ProtocolResolution 
   return rows[0] ?? null
 }
 
-export async function listResolutions(protocolId: string): Promise<ProtocolResolution[]> {
-  const sql = getDb()
+export async function listResolutions(
+  protocolId: string,
+  opts?: { tx?: PgTransaction },
+): Promise<ProtocolResolution[]> {
+  const sql = getRunner(opts?.tx)
   return sql<ProtocolResolution[]>`
     SELECT * FROM protocol_resolutions
     WHERE protocol_id = ${protocolId}

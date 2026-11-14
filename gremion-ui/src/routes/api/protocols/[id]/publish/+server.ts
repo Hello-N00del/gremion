@@ -131,13 +131,17 @@ export async function POST(event: RequestEvent) {
         { bodyHtml, nextcloudPublishedPath: publishedDir, pdfNextcloudPath },
         { tx, allowPublished: true },
       )
-      await assignGlobalNrs(protocol.committee_id, year, resolutions.map((r) => r.id), tx)
+      // Re-read the resolutions on the transaction: the list read at the top is from
+      // before the file conversion, and a row edited, un-withdrawn or added in the
+      // meantime would otherwise miss the numbering and the untallied check below.
+      const current = await listResolutions(protocol.id, { tx })
+      await assignGlobalNrs(protocol.committee_id, year, current.map((r) => r.id), tx)
       // INV-5 + INV-1 (#320, ported gremion#22 G2): publish IS adoption. Stamp
       // decided_at on each binding resolution and append a tamper-evident
       // audit_log decision record — on THIS tx, so they commit or roll back
       // atomically with the status→'published' flip. Withdrawn resolutions are
       // skipped inside the helper (not a vote → no decision).
-      await recordResolutionAdoptions(user.id, resolutions, tx)
+      await recordResolutionAdoptions(user.id, current, tx)
       // Returned last so `updated` reflects the final published row.
       const published = await setProtocolStatus(protocol.id, 'published', { tx })
       stmtsDone = true

@@ -103,6 +103,12 @@ async function runLoad() {
 }
 
 type Call = { url: string; method: string; body: Record<string, unknown> | null }
+/** The posted user id; a body without a string id is a bug in the page under test. */
+function postedUserId(c: Call): string {
+  const id = c.body?.userKeycloakId
+  if (typeof id !== 'string') throw new Error('the request carries no userKeycloakId')
+  return id
+}
 /** The API as the page calls it. `api` decides the answer and may change the server. */
 let api: (c: Call) => { status: number; body: unknown }
 let calls: Call[] = []
@@ -130,7 +136,7 @@ beforeEach(() => {
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       const call: Call = {
-        url: String(url),
+        url,
         method: init?.method ?? 'GET',
         body: init?.body ? JSON.parse(init.body as string) : null,
       }
@@ -157,7 +163,7 @@ describe('committee roster: the page data is reloaded from the server', () => {
     api = (c) => {
       if (c.url.startsWith('/api/users')) return { status: 200, body: { data: [{ id: 'u-mia', email: 'mia@example.org' }] } }
       if (c.method === 'POST' && c.url === '/api/governance/committees/ou-1/members') {
-        server.members = [...server.members, memberRow(String(c.body?.userKeycloakId))]
+        server.members = [...server.members, memberRow(postedUserId(c))]
         return { status: 201, body: { success: true, data: { report: { overall: 'ok' } } } }
       }
       return { status: 404, body: {} }
@@ -197,7 +203,7 @@ describe('committee roster: the page data is reloaded from the server', () => {
   it('assign: after the reload the offices are the server\'s, including a recall made elsewhere', async () => {
     api = (c) => {
       if (c.method === 'POST' && c.url === '/api/governance/committees/ou-1/roles/r-vors/assign') {
-        const created = assignment('r-vors', String(c.body?.userKeycloakId))
+        const created = assignment('r-vors', postedUserId(c))
         server.assignments = { ...server.assignments, 'r-vors': created }
         // Meanwhile another admin recalled the Finanzvorstand: the office is vacant
         // on the server and the ended term is in the history.

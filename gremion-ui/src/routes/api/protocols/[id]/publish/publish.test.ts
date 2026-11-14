@@ -524,6 +524,22 @@ describe('POST /api/protocols/[id]/publish — body_html sanitization', () => {
     expect(mockSetProtocolStatus).not.toHaveBeenCalled()
   })
 
+  it('hands the numbering and the adoption record the resolutions as the transaction sees them, not the early read', async () => {
+    // The early read says withdrawn; by the time the transaction runs another admin
+    // took the withdrawal back, so the row is an untallied binding one again.
+    const withdrawn = { ...untallied, result: 'withdrawn' }
+    const unwithdrawn = { ...untallied }
+    mockListResolutions.mockReset()
+    mockListResolutions.mockResolvedValueOnce([withdrawn]).mockResolvedValueOnce([unwithdrawn])
+
+    expect((await POST(makeEvent())).status).toBe(200)
+
+    expect(mockListResolutions).toHaveBeenCalledTimes(2)
+    expect(mockListResolutions.mock.calls[1][1]).toEqual({ tx: { __tx: true } })
+    expect(mockRecordResolutionAdoptions.mock.calls[0][1]).toEqual([unwithdrawn])
+    expect(mockAssignGlobalNrs.mock.calls[0][2]).toEqual(['r2'])
+  })
+
   // F1: no ProtocolDocumentPort (files off) is no longer a 503. With no in-app
   // body either there is nothing to publish -> 400, before any conversion or DB
   // write. (The files-off success path is pinned in publish.nofiles.test.ts.)
