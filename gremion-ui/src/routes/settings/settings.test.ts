@@ -197,6 +197,8 @@ describe('PATCH /api/settings', () => {
     it('the same module is a plain write again once the platform no longer holds it off', async () => {
       const res = await patch({ modules: { board: true } }, { board: false })
       expect(res.status).toBe(200)
+      expect(mockWriteConfig).toHaveBeenCalledTimes(1)
+      expect(mockWriteConfig.mock.calls[0]![0]).toMatchObject({ modules: { board: true } })
     })
 
     it('a module that is already on may be sent as on again', async () => {
