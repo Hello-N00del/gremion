@@ -318,7 +318,13 @@ async function alignOnce(tenant: TenantContext, d: ReconcilerDeps, council: Coun
     // From here on the platform-followed modules are watched for a change of the platform state.
     d.state.followed ??= new Map()
     d.state.followed.set(tenant.id, { at: d.now(), on: seen })
-    for (const [manifestId, on] of Object.entries(seen)) rememberPlatformHeld(tenant.id, manifestId, !on)
+    // The completed alignment is the one place a hold is released. EVERY followed module is settled, not only
+    // the ones this pass saw: a hold published by an earlier blocked pass must not outlive a pass that does not
+    // confirm it (the row is in progress or gone), because followPlatform reads a module without a baseline as
+    // having been on and so would never see the platform's later enable as a change.
+    for (const { manifestId } of alignTargets().filter((t) => PLATFORM_FOLLOWED_CATALOGUE_IDS.includes(t.catalogueId))) {
+      rememberPlatformHeld(tenant.id, manifestId, seen[manifestId] === false)
+    }
   } catch (err) {
     d.state.alignRetryAt.set(tenant.id, d.now() + ALIGN_RETRY_MS)
     console.error(`[module-switch] ${tenant.slug}: aligning config.modules to the platform state failed (retried later):`, errText(err))
