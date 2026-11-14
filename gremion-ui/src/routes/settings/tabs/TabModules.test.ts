@@ -8,6 +8,7 @@ import TabModules from './TabModules.svelte'
 // what the server said and never claims a switch before the request is applied.
 afterEach(() => {
   vi.unstubAllGlobals()
+  sessionStorage.clear()
 })
 
 const item = (over: Partial<ModuleOverviewItem> = {}): ModuleOverviewItem => ({
@@ -356,5 +357,177 @@ describe('TabModules.svelte', () => {
     render(TabModules, { props: { pollMs: 10_000 } })
     expect(await screen.findByText(/Verlauf der Modulanfragen/)).toBeTruthy()
     expect(screen.getByText('Abstimmungen')).toBeTruthy()
+  })
+})
+
+// A switch needs a fresh second factor, and the way there is a full round trip through the sign-in service:
+// the page comes back as a new page that holds nothing. The server keeps the confirmed switch for that trip
+// (modules.test.ts); the page leaves a mark in the tab and, once it is back, asks the server ONCE to carry
+// the kept switch out. The mark carries no content, and every decision is the server's.
+describe('TabModules.svelte: the switch confirmed before the second factor is carried out after it', () => {
+  const MARK = 'gremion.module-switch.resume'
+  const STEP_UP = '/auth/step-up?returnTo=/settings/module'
+  /** The mark the page left when it went to the second factor, `agoMs` ago. */
+  const leaveMark = (agoMs = 40_000) => sessionStorage.setItem(MARK, (Date.now() - agoMs).toString())
+  const isResume = (c: { method: string; body: Record<string, unknown> | null }) => c.method === 'POST' && c.body?.resume === true
+  const needsSecondFactor = () => reply(401, { error: 'STEP_UP_REQUIRED', requiredLoa: 2 })
+  const resumed = () => reply(201, { success: true, resumed: true, requestId: 'r1', moduleId: 'votes', action: 'disable' })
+  const preview = {
+    moduleId: 'votes',
+    moduleLabel: 'Abstimmungen',
+    confirmPhrase: 'Abstimmungen',
+    deletes: [{ key: 'all', label: 'Abstimmungen-Daten', count: null, unit: '' }],
+    retained: [],
+    graceDays: 30,
+    finalDeletionAt: null,
+    recoverable: true,
+  }
+
+  it('switch-on: the 401 leaves the mark in the tab before the browser goes to the second factor', async () => {
+    let markWhenLeaving: string | null = null
+    const navigate = vi.fn(() => {
+      markWhenLeaving = sessionStorage.getItem(MARK)
+    })
+    fetchDouble([ok(overview([item({ dpiaRecorded: true })]))], needsSecondFactor)
+    render(TabModules, { props: { pollMs: 10_000, navigate } })
+    await fireEvent.click(await screen.findByRole('button', { name: 'Einschalten' }))
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith(STEP_UP))
+    expect(markWhenLeaving).not.toBeNull()
+  })
+
+  it('switch-off: the 401 after the typed name leaves the mark too', async () => {
+    const navigate = vi.fn()
+    fetchDouble([ok(overview([item({ enabled: true })], { disableAvailable: true })), ok(preview)], needsSecondFactor)
+    render(TabModules, { props: { pollMs: 10_000, navigate } })
+    await fireEvent.click(await screen.findByRole('button', { name: 'Ausschalten' }))
+    await fireEvent.input(await screen.findByLabelText(/Namen des Moduls/), { target: { value: 'Abstimmungen' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Modul ausschalten' }))
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith(STEP_UP))
+    expect(sessionStorage.getItem(MARK)).not.toBeNull()
+  })
+
+  it('the restore button leaves the mark as well', async () => {
+    const navigate = vi.fn()
+    fetchDouble([ok(overview([item({ enabled: false, karenz: karenzView() })], { disableAvailable: true }))], needsSecondFactor)
+    render(TabModules, { props: { pollMs: 10_000, navigate } })
+    await fireEvent.click(await screen.findByRole('button', { name: 'Modul wieder einschalten' }))
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith(STEP_UP))
+    expect(sessionStorage.getItem(MARK)).not.toBeNull()
+  })
+
+  it('back from the second factor: one { resume: true } goes out before the list is loaded, and the list shows the switch as running', async () => {
+    leaveMark()
+    const navigate = vi.fn()
+    const { calls } = fetchDouble(
+      [ok(overview([item({ enabled: true, pending: [{ requestId: 'r1', action: 'disable', state: 'queued' }] })], { disableAvailable: true }))],
+      resumed,
+    )
+    render(TabModules, { props: { pollMs: 10_000, navigate } })
+    expect(await screen.findByText('Anfrage wird ausgeführt')).toBeTruthy()
+    expect(calls.filter(isResume)).toHaveLength(1)
+    // the resume carries nothing but the word: the kept input is the server's
+    expect(calls.find(isResume)).toMatchObject({ url: '/api/settings/modules', body: { resume: true } })
+    expect(calls.findIndex(isResume)).toBeLessThan(calls.findIndex((c) => c.method === 'GET'))
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(navigate).not.toHaveBeenCalled()
+    expect(sessionStorage.getItem(MARK)).toBeNull()
+  })
+
+  it('exactly once: the mark is spent by the first page, a reload does not resume again', async () => {
+    leaveMark()
+    const { calls } = fetchDouble([ok(overview([item({ enabled: true })]))], resumed)
+    const first = render(TabModules, { props: { pollMs: 10_000 } })
+    expect(await screen.findByText('Abstimmungen')).toBeTruthy()
+    first.unmount()
+    render(TabModules, { props: { pollMs: 10_000 } })
+    expect(await screen.findByText('Abstimmungen')).toBeTruthy()
+    expect(getCount(calls)).toBe(2)
+    expect(calls.filter(isResume)).toHaveLength(1)
+  })
+
+  it('without the mark nothing is resumed: an ordinary visit only loads the list', async () => {
+    const { calls } = fetchDouble([ok(overview([item({ enabled: true })]))])
+    render(TabModules, { props: { pollMs: 10_000 } })
+    expect(await screen.findByText('Abstimmungen')).toBeTruthy()
+    expect(calls.some((c) => c.method === 'POST')).toBe(false)
+  })
+
+  it.each([
+    ['left long ago (the round trip was given up)', () => leaveMark(16 * 60_000)],
+    ['from the future', () => leaveMark(-60_000)],
+    ['not a time at all', () => sessionStorage.setItem(MARK, 'votes:disable')],
+  ])('a mark %s is dropped without asking the server', async (_name, leave) => {
+    leave()
+    const { calls } = fetchDouble([ok(overview([item({ enabled: true })]))])
+    render(TabModules, { props: { pollMs: 10_000 } })
+    expect(await screen.findByText('Abstimmungen')).toBeTruthy()
+    expect(calls.some((c) => c.method === 'POST')).toBe(false)
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(sessionStorage.getItem(MARK)).toBeNull()
+  })
+
+  it('a refused resume shows the reason at its module and never leads to a second round trip', async () => {
+    leaveMark()
+    const navigate = vi.fn()
+    const { calls } = fetchDouble([ok(overview([item({ enabled: true })], { disableAvailable: true }))], () =>
+      reply(409, { success: false, code: 'RESUME_UNCONFIRMED', error: 'Die Zwei-Faktor-Prüfung wurde nicht abgeschlossen.', moduleId: 'votes', action: 'disable' }),
+    )
+    render(TabModules, { props: { pollMs: 10_000, navigate } })
+    expect((await screen.findByRole('alert')).textContent).toContain('Zwei-Faktor-Prüfung wurde nicht abgeschlossen')
+    expect(screen.getByText('Abstimmungen')).toBeTruthy()
+    expect(navigate).not.toHaveBeenCalled()
+    expect(sessionStorage.getItem(MARK)).toBeNull()
+    expect(calls.filter(isResume)).toHaveLength(1)
+  })
+
+  it('a refusal that names no module is shown above the list', async () => {
+    leaveMark()
+    const navigate = vi.fn()
+    fetchDouble([ok(overview([item({ enabled: true })]))], () => reply(409, { success: false, code: 'RESUME_GONE', error: 'Die bestätigte Aktion liegt nicht mehr vor.' }))
+    render(TabModules, { props: { pollMs: 10_000, navigate } })
+    expect((await screen.findByTestId('module-resume-error')).textContent).toContain('liegt nicht mehr vor')
+    expect(await screen.findByText('Abstimmungen')).toBeTruthy()
+    expect(navigate).not.toHaveBeenCalled()
+  })
+
+  it('even a 401 answer to the resume is only shown: the page never starts the second factor by itself', async () => {
+    leaveMark()
+    const navigate = vi.fn()
+    const { calls } = fetchDouble([ok(overview([item({ enabled: true })]))], needsSecondFactor)
+    render(TabModules, { props: { pollMs: 10_000, navigate } })
+    expect((await screen.findByTestId('module-resume-error')).textContent).toContain('Die Anfrage konnte nicht gestellt werden.')
+    expect(await screen.findByText('Abstimmungen')).toBeTruthy()
+    expect(navigate).not.toHaveBeenCalled()
+    expect(sessionStorage.getItem(MARK)).toBeNull()
+    expect(calls.filter(isResume)).toHaveLength(1)
+  })
+
+  it('a resumed switch-on that still needs the DPIA decision opens the DPIA fields of that module', async () => {
+    leaveMark()
+    fetchDouble([ok(overview([item({ enabled: false, dpiaRecorded: false })]))], () =>
+      reply(422, { success: false, code: 'DPIA_REQUIRED', error: 'Für dieses Modul liegt noch keine DPIA-Entscheidung vor.', moduleId: 'votes', action: 'enable' }),
+    )
+    render(TabModules, { props: { pollMs: 10_000 } })
+    expect(await screen.findByLabelText(/Dokumentverweis/)).toBeTruthy()
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('when the server cannot be reached the list is still loaded and the failure is said', async () => {
+    leaveMark()
+    let posted = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        if ((init?.method ?? 'GET') === 'POST') {
+          posted += 1
+          throw new TypeError('network')
+        }
+        return ok(overview([item({ enabled: true })]))
+      }),
+    )
+    render(TabModules, { props: { pollMs: 10_000 } })
+    expect((await screen.findByTestId('module-resume-error')).textContent).toContain('Keine Verbindung zum Server.')
+    expect(await screen.findByText('Abstimmungen')).toBeTruthy()
+    expect(posted).toBe(1)
   })
 })
