@@ -12,7 +12,6 @@
 import net from 'node:net'
 import { existsSync } from 'node:fs'
 
-export const DEFAULT_HOSTD_SOCKET = '/run/gremion/hostd.sock'
 /** A backup (dumps + restic + off-site mirror) may legitimately run for hours. */
 export const DEFAULT_BACKUP_TIMEOUT_MS = 6 * 60 * 60 * 1000
 const CONNECT_TIMEOUT_MS = 3000
@@ -42,9 +41,16 @@ export class HostdUnreachableError extends Error {
   }
 }
 
-export function hostdSocketPath(env: Record<string, string | undefined>): string {
+/**
+ * The socket of the host daemon this installation names, or null when it names
+ * none. The daemon is optional and only an explicit GREMION_HOSTD_SOCKET says
+ * that this installation uses it: no built-in path is ever probed, so what
+ * happens to exist on the machine cannot change the answer, and a daemon that
+ * stops cannot turn "uses the daemon" into "does not".
+ */
+export function hostdSocketPath(env: Record<string, string | undefined>): string | null {
   const configured = env.GREMION_HOSTD_SOCKET?.trim()
-  return configured ? configured : DEFAULT_HOSTD_SOCKET
+  return configured ? configured : null
 }
 
 export function backupTimeoutMs(env: Record<string, string | undefined>): number {
@@ -52,22 +58,37 @@ export function backupTimeoutMs(env: Record<string, string | undefined>): number
   return Number.isFinite(n) && n >= 1000 ? Math.floor(n) : DEFAULT_BACKUP_TIMEOUT_MS
 }
 
+/**
+ * `not_configured`: no host daemon is named, so backups are not managed from the
+ * app here. That is a normal way to run an installation, not a fault.
+ * `unreachable`: a daemon is named but cannot be used, which is a fault.
+ */
+export type TriggerState = 'available' | 'not_configured' | 'unreachable'
+
 export interface TriggerAvailability {
   available: boolean
+  state: TriggerState
   reason?: string
 }
 
-/** Cheap, side-effect-free check used by GET (the real proof is the connect in POST). */
-export function hostdAvailability(path: string): TriggerAvailability {
-  if (!existsSync(path)) {
-    return {
-      available: false,
-      reason:
-        'Der Host-Dienst (hostd) ist nicht erreichbar: sein Socket fehlt. ' +
-        'Auf diesem System kann kein Backup ausgelöst werden.',
-    }
-  }
-  return { available: true }
+export const BACKUPS_NOT_MANAGED_REASON =
+  'Auf dieser Installation werden Backups nicht aus der App gesteuert. ' +
+  'Der Betreiber führt sie außerhalb der App aus.'
+
+/** Says nothing about where the daemon is looked for: that is an internal detail. */
+export const HOSTD_UNREACHABLE_REASON =
+  'Der Host-Dienst (hostd) ist nicht erreichbar. Aus der App kann derzeit kein Backup ausgelöst werden.'
+
+/**
+ * Cheap, side-effect-free check used by GET (the real proof is the connect in POST).
+ * `path` is null where the installation names no host daemon. Only the socket's
+ * presence is looked at here: a present socket that then refuses the connection
+ * is reported by the POST that tries it.
+ */
+export function hostdAvailability(path: string | null): TriggerAvailability {
+  if (path === null) return { available: false, state: 'not_configured', reason: BACKUPS_NOT_MANAGED_REASON }
+  if (existsSync(path)) return { available: true, state: 'available' }
+  return { available: false, state: 'unreachable', reason: HOSTD_UNREACHABLE_REASON }
 }
 
 export function connectHostd(path: string, timeoutMs = CONNECT_TIMEOUT_MS): Promise<net.Socket> {

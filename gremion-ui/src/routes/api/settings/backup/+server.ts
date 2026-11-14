@@ -92,6 +92,8 @@ export const GET: RequestHandler = async ({ locals }) => {
     // F1-FIX-10-K: whether the button can work at all (with the reason when not),
     // the real state of the latest triggered run, and the only trustworthy
     // "last backup" timestamp (written solely from a finished run).
+    // trigger.state tells "backups are not managed from the app on this
+    // installation" (not_configured) apart from a daemon that is down (unreachable).
     trigger: triggerAvailability(deps),
     run: status.run,
     runs_state: status.runs,
@@ -127,6 +129,14 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   }
 
   if (body.action === 'check') {
+    // Where backups are not managed from the app there is no run that could pick
+    // the request up, and with an unreachable daemon none will start: refuse it
+    // instead of recording a request nothing reads.
+    const availability = triggerAvailability(backupDeps())
+    if (!availability.available) {
+      const code = availability.state === 'not_configured' ? 'not_configured' : 'unavailable'
+      return json({ success: false, error: availability.reason, code }, { status: 503 })
+    }
     try {
       const triggerPath = getCheckTriggerPath()
       mkdirSync(dirname(triggerPath), { recursive: true })
