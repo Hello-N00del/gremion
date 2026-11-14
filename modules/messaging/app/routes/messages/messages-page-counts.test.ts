@@ -26,11 +26,11 @@ class FakeEventSource {
 
 import Page from './+page.svelte'
 
-function room(id: string, messageCount: number) {
+function room(id: string, messageCount: number, unreadCount = 0) {
   return {
     roomId: id,
     name: `Raum ${id}`,
-    unreadCount: 0,
+    unreadCount,
     lastMessageTs: 0,
     archived: false,
     messages: Array.from({ length: messageCount }, (_, i) => ({
@@ -86,5 +86,13 @@ describe('/messages — German count labels', () => {
   it('reads "0 Nachrichten" for an empty room', async () => {
     const r = renderWith([room('a', 0)], 'a')
     expect(r.container.querySelector('.chat-head-sub')?.textContent).toMatch(/0 Nachrichten ·/)
+  })
+
+  it('reads "1 ungelesene Nachricht" for one unread message and "2 ungelesene Nachrichten" for two', async () => {
+    const one = renderWith([room('a', 0, 1)], null)
+    expect(one.container.querySelector('.unread')?.getAttribute('aria-label')).toBe('1 ungelesene Nachricht')
+    one.unmount()
+    const two = renderWith([room('a', 0, 2)], null)
+    expect(two.container.querySelector('.unread')?.getAttribute('aria-label')).toBe('2 ungelesene Nachrichten')
   })
 })

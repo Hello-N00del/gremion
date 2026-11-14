@@ -12,7 +12,7 @@
   import { deriveHue, deriveAbbr } from '$lib/governance/committee-color'
   import { toast } from 'svelte-sonner'
   import { senderInitials, senderLabel } from '$lib/components/messaging/sender-label'
-  import { messageCount, roomCount } from '$lib/components/messaging/count'
+  import { messageCount, roomCount, unreadMessageCount } from '$lib/components/messaging/count'
 
   let rooms = $derived(Object.values($roomStore))
   // FLOW-MSG-001 (TASK-009 lane B, row 15): archived rooms move to their own
@@ -528,7 +528,7 @@
           <div class="r-preview">
             <span class="mono r-members">Matrix-Raum</span>
             {#if room.unreadCount > 0}
-              <span class="unread" aria-label="{room.unreadCount} ungelesene Nachrichten">{room.unreadCount}</span>
+              <span class="unread" aria-label={unreadMessageCount(room.unreadCount)}>{room.unreadCount}</span>
             {/if}
           </div>
         </div>

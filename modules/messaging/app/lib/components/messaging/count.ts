@@ -6,3 +6,4 @@ const label = (n: number, singular: string, plural: string): string => `${n} ${n
 
 export const roomCount = (n: number): string => label(n, 'Raum', 'Räume')
 export const messageCount = (n: number): string => label(n, 'Nachricht', 'Nachrichten')
+export const unreadMessageCount = (n: number): string => label(n, 'ungelesene Nachricht', 'ungelesene Nachrichten')
