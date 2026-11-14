@@ -457,9 +457,11 @@ compose_file_names() {
 # --env-file` do, so that KEY="https://control.<domain>" and KEY="" mean the same thing
 # to every tool and to the panel's ORIGIN. A private reader per tool is how one of them
 # took the quotes into the value. A key that appears on more than one line is REFUSED
-# (exit 2 from the calling command substitution, which the callers' set -e passes on),
-# the way load_env refuses a duplicate key: compose would take the last line and a tool
-# that took the first would name another host, and nobody can tell which line was meant.
+# (exit 2 inside the command substitution that calls it: a caller writes
+# `v="$(control_panel_origin_of ...)" || exit $?`, because errexit is off inside a nested
+# substitution and in an `if` or `||` context), the way load_env refuses a duplicate key:
+# compose would take the last line and a tool that took the first would name another host,
+# and nobody can tell which line was meant.
 control_panel_key_of() {
     local f="$1" k="$2" v n
     [[ -f "$f" ]] || return 0

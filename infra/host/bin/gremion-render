@@ -425,7 +425,7 @@ control_panel_env_agreement() {   # <want origin, empty when the install has not
     for colour in blue green; do
         envf="$(gremion_root)/etc/env/app-${colour}.env"
         if [[ ! -f "$envf" ]]; then continue; fi
-        got="$(control_panel_origin_of "$envf")"
+        got="$(control_panel_origin_of "$envf")" || exit $?   # a duplicated key is a refusal
         if [[ "$got" != "$want" ]]; then
             rm -f -- "$out"
             if [[ -z "$want" ]]; then

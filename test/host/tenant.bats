@@ -752,6 +752,7 @@ case " $* " in
     [ -f "$GREMION_ROOT/realm.json" ] || exit 1
     [ -f "$GREMION_ROOT/kc-clients-unreadable" ] && { echo "HTTP error - 500 Internal Server Error" >&2; exit 1; }
     [ -f "$GREMION_ROOT/kc-clients-leaky" ] && { echo "connect failed for http://admin:hunter2@kc.internal:8080/auth token=abc123def" >&2; exit 1; }
+    [ -f "$GREMION_ROOT/kc-clients-notjson" ] && { echo "<html>login page</html>"; exit 0; }
     [ -f "$GREMION_ROOT/kc-clients-noredirect" ] && { echo "[{\"redirectUris\":[]}]"; exit 0; }
     jq "[.clients[] | select(.clientId == \"control-panel\") | {redirectUris}]" "$GREMION_ROOT/realm.json"; exit 0 ;;
   *" get realms/platform "*)
@@ -839,6 +840,21 @@ exit 0'
     [[ "$output" == *"could not be read (connect failed for http://***@kc.internal:8080/auth token=***)"* ]] || { echo "$output"; return 1; }
     [[ "$output" != *"hunter2"* ]]
     [[ "$output" != *"abc123def"* ]]
+}
+
+@test "init --realm-only --keycloak-container: an answer that is not JSON (a jq error) is unreadable, with its own words" {
+    shim_kcadm
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-kc-admin-secret \
+        run "$LAUNCHER" init --realm-only --keycloak-container kc-fixture --panel-origin https://panel.fixture.example
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    jq '.attributes["gremion.ops-realm.sha256"] = "0000000000000000000000000000000000000000000000000000000000000000"' "${GREMION_ROOT}/realm.json" > "${GREMION_ROOT}/realm.json.new"
+    mv "${GREMION_ROOT}/realm.json.new" "${GREMION_ROOT}/realm.json"
+    touch "${GREMION_ROOT}/kc-clients-notjson"
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-kc-admin-secret \
+        run "$LAUNCHER" init --realm-only --keycloak-container kc-fixture --panel-origin https://panel.fixture.example
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"the realm's control-panel client could not be read (the answer could not be parsed), so the origin it was made for is not known"* ]] || { echo "$output"; return 1; }
+    [[ "$output" != *"carries no redirect URI"* ]]
 }
 
 @test "init --realm-only --keycloak-container: a control-panel client that was read and has no redirect URI is 'no redirect URI', not 'unreadable'" {
@@ -1197,6 +1213,25 @@ release_repo() {
     [ "$status" -eq 0 ] || { echo "status=$status $output"; cat "$SHIM_LOG"; return 1; }
     run jq -r '.clients[] | select(.clientId == "control-panel") | [(.redirectUris | tostring), (.webOrigins | tostring)] | @tsv' "${GREMION_ROOT}/realm.json"
     [ "$output" = $'["https://control.guard.example/*"]\t["https://control.guard.example"]' ] || { echo "$output"; return 1; }
+}
+
+@test "control panel: CONTROL_PANEL_ORIGIN on two lines of state.env is a refusal for init and for panel: no realm is created, nothing falls back to the loopback" {
+    shim_kcadm
+    printf 'CONTROL_PANEL_ORIGIN=https://control.guard.example\nCONTROL_PANEL_ORIGIN=https://other.guard.example\n' >> "${GREMION_ROOT}/etc/env/state.env"
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-kc-admin-secret \
+        run "$LAUNCHER" init --realm-only --keycloak-container kc-fixture
+    [ "$status" -eq 2 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"CONTROL_PANEL_ORIGIN is set on 2 lines"* ]] || { echo "$output"; return 1; }
+    [ ! -e "${GREMION_ROOT}/realm.json" ] || { echo "a realm was created"; return 1; }
+    ! grep -q 'create realms' "$SHIM_LOG" || { echo "a realm was created"; return 1; }
+    # an explicit --panel-origin does not read around it either
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-kc-admin-secret \
+        run "$LAUNCHER" init --realm-only --keycloak-container kc-fixture --panel-origin http://127.0.0.1:3043
+    [ "$status" -eq 2 ] || { echo "status=$status $output"; return 1; }
+    [ ! -e "${GREMION_ROOT}/realm.json" ]
+    run "$LAUNCHER" panel
+    [ "$status" -eq 2 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"CONTROL_PANEL_ORIGIN is set on 2 lines"* ]]
 }
 
 @test "control panel: a QUOTED CONTROL_PANEL_ORIGIN is the origin for init and for panel, and a quoted empty one is off (the loopback)" {

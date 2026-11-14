@@ -339,7 +339,9 @@ init_realm_only_kcadm() {   # <container> <origin>
 # realm fingerprint refuses a changed origin on an existing realm.
 panel_origin_of_install() {
     local state="${ROOT}/etc/env/state.env" o=""
-    o="$(control_panel_origin_of "$state")"
+    # Explicit, not left to set -e: this function runs inside a command substitution, where errexit is off, so a
+    # duplicated key (a refusal from the reader) would otherwise fall through to the loopback default.
+    o="$(control_panel_origin_of "$state")" || exit $?
     printf '%s' "${o:-http://127.0.0.1:3043}"
 }
 
@@ -356,7 +358,7 @@ cmd_init() {
     # No flag: the install's own origin. A flag that disagrees with an opted-in
     # install is refused: a realm created for one origin and a panel that
     # answers another cannot sign anyone in, and there is no dual-origin mode.
-    install_origin="$(panel_origin_of_install)"
+    install_origin="$(panel_origin_of_install)" || exit $?
     if [[ -z "$origin" ]]; then
         origin="$install_origin"
     elif [[ "$install_origin" != "http://127.0.0.1:3043" && "$origin" != "$install_origin" ]]; then
@@ -617,7 +619,7 @@ cmd_panel() {
     # An install that opted in answers on its own host name only (the panel's host
     # guard refuses any other Host with 421), so a tunnel to the loopback would be
     # refused: say where it is instead of printing a line that cannot work.
-    public="$(control_panel_origin_of "$state")"
+    public="$(control_panel_origin_of "$state")" || exit $?
     if [[ -n "$public" ]]; then
         info "the control panel of this install is public at ${public}, behind the operator client certificate (docs/runbooks/control-panel-access.md); no tunnel is needed, and one would be refused (the panel answers that host name only)"
         return 0
