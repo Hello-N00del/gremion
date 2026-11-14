@@ -45,13 +45,35 @@ describe('docker-compose.prod.yml traefik labels = platformMiddlewareLabels (hos
     expect(block).not.toMatch(/middlewares\.edge-ratelimit\./)
   })
 
-  it('declares ONE edge-hostpin-* yet, the apex pin the pilot routers chain; www, control and sales stay TASK-034 34b (Qc2)', () => {
+  it('declares exactly two edge-hostpin-* pins: the apex pin the pilot routers chain and the control pin of the opt-in control-panel router; www and sales stay TASK-034 34b (Qc2)', () => {
     // label lines only: the comments name the pins
     const pins = block.split('\n').filter((l) => /^\s*- "/.test(l) && /edge-hostpin-/.test(l))
-    expect(pins).toHaveLength(1)
-    // the value is the platform domain, read from the one guarded key, exactly platformMiddlewareLabels' shape
+    expect(pins).toHaveLength(2)
+    // each value is the host read from the one guarded key, exactly platformMiddlewareLabels' shape
     expect(pins[0]).toContain('traefik.http.middlewares.edge-hostpin-apex.headers.customrequestheaders.X-Forwarded-Host=${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}')
+    // the control pin reads CONTROL_PANEL_HOST (state.env), falling back to control.<apex> from the same guarded key
+    expect(pins[1]).toContain('traefik.http.middlewares.edge-hostpin-control.headers.customrequestheaders.X-Forwarded-Host=${CONTROL_PANEL_HOST:-control.${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}}')
     expect(Object.keys(all).filter((k) => k.includes('.edge-hostpin-apex.'))).toHaveLength(1)
+    expect(all['traefik.http.middlewares.edge-hostpin-control.headers.customrequestheaders.X-Forwarded-Host']).toBe('control.example.org')
+    expect(block).not.toMatch(/edge-hostpin-(www|sales)\./)
+  })
+
+  it('the control pin carries a configured control host (data, like sales) and keeps the default derivation when none is given or the value is empty', () => {
+    const key = 'traefik.http.middlewares.edge-hostpin-control.headers.customrequestheaders.X-Forwarded-Host'
+    const custom = platformMiddlewareLabels({ apex: 'platform.example.org', sales: 'sales.platform.example.org', control: 'panel.example.com' })
+    expect(custom[key]).toBe('panel.example.com')
+    // the other pins do not move with it
+    expect(custom['traefik.http.middlewares.edge-hostpin-apex.headers.customrequestheaders.X-Forwarded-Host']).toBe('platform.example.org')
+    expect(custom['traefik.http.middlewares.edge-hostpin-www.headers.customrequestheaders.X-Forwarded-Host']).toBe('www.platform.example.org')
+    expect(custom['traefik.http.middlewares.edge-hostpin-sales.headers.customrequestheaders.X-Forwarded-Host']).toBe('sales.platform.example.org')
+    for (const control of [undefined, '']) {
+      const dflt = platformMiddlewareLabels({ apex: 'platform.example.org', sales: 'sales.platform.example.org', control })
+      expect(dflt[key]).toBe('control.platform.example.org')
+    }
+    // nothing but that one value differs
+    const base = platformMiddlewareLabels({ apex: 'platform.example.org', sales: 'sales.platform.example.org' })
+    const differing = Object.keys(custom).filter((k) => custom[k] !== base[k])
+    expect(differing).toEqual([key])
   })
 
   it('declares the livekit-sfu-strip middleware on the traefik container (spec B B-09), not on livekit', () => {

@@ -12,8 +12,10 @@
 // production compose labels can all be asserted against one source. TASK-043c
 // landed the HOST-INDEPENDENT half (both HSTS middlewares and the three
 // rate-limit tiers) on the traefik service in docker-compose.prod.yml; the
-// platform host pins (edge-hostpin-*), the static app/portal routers and the
-// retirement of the interim names stay TASK-034's 34b.
+// platform host pins (edge-hostpin-*) are declared there as their routers
+// arrive: apex (the pilot routers) and control (the opt-in control-panel
+// router, etc/edge/control-panel.yml); www and sales, the static app/portal
+// routers and the retirement of the interim names stay TASK-034's 34b.
 
 /** The HSTS max-age both platform HSTS middlewares send (one year). */
 export const HSTS_MAX_AGE_SECONDS = 31536000
@@ -55,6 +57,14 @@ export interface PlatformHosts {
   readonly apex: string
   /** The sales site's host. */
   readonly sales: string
+  /**
+   * The control panel's host (CONTROL_PANEL_HOST in state.env), passed as data like
+   * `sales`: it may lie outside the platform domain. Absent or empty means the
+   * default derivation, `control.<apex>`, so every install that never set it is
+   * unchanged. docker-compose.prod.yml spells the same rule as
+   * `${CONTROL_PANEL_HOST:-control.${PLATFORM_DOMAIN}}`.
+   */
+  readonly control?: string
 }
 
 /**
@@ -68,7 +78,7 @@ export function platformMiddlewareLabels(hosts: PlatformHosts): Record<string, s
   const pinHost: Record<PlatformPin, string> = {
     apex: hosts.apex,
     www: `www.${hosts.apex}`,
-    control: `control.${hosts.apex}`,
+    control: hosts.control !== undefined && hosts.control !== '' ? hosts.control : `control.${hosts.apex}`,
     sales: hosts.sales,
   }
   const labels: Record<string, string> = {}

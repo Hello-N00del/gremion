@@ -151,6 +151,21 @@ services:
       - "traefik.http.routers.keycloak.tls=true"
       - "traefik.http.routers.keycloak.priority=100"
       - "traefik.http.services.keycloak.loadbalancer.server.port=8080"
+      # The OPS realm's login path (realm `platform`: the operator control panel's and Grafana's
+      # sign-in) is the one sign-in that guards the operator surface, so it takes the auth rate
+      # tier (30/min, burst 10 per connection address) that nothing throttled before: a
+      # higher-priority router for exactly that prefix on the same service. The trailing slash
+      # keeps a customer realm whose name merely starts with "platform" on the router above. It
+      # is a full router, so gremion-verify holds it to the universal like any other: its own
+      # certificate resolver, the apex pin FIRST, HSTS, then the rate limit. The static assets
+      # (/auth/resources) are not under this prefix and are not counted.
+      - "traefik.http.routers.keycloak-ops.rule=Host(`${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}`) && PathPrefix(`/auth/realms/platform/`)"
+      - "traefik.http.routers.keycloak-ops.entrypoints=websecure"
+      - "traefik.http.routers.keycloak-ops.tls=true"
+      - "traefik.http.routers.keycloak-ops.tls.certresolver=${TRAEFIK_CERT_RESOLVER-le-http}"
+      - "traefik.http.routers.keycloak-ops.priority=105"
+      - "traefik.http.routers.keycloak-ops.service=keycloak"
+      - "traefik.http.routers.keycloak-ops.middlewares=edge-hostpin-apex@docker,edge-hsts-platform@docker,edge-ratelimit-auth@docker"
       # ADMIN router — Keycloak admin console + Admin REST API. Protected by
       # the kc-admin-allowlist IPAllowList middleware below.
       #
@@ -336,14 +351,19 @@ services:
       - "traefik.http.middlewares.edge-ratelimit-auth.ratelimit.burst=10"
       - "traefik.http.middlewares.edge-ratelimit-auth.ratelimit.period=1m"
       - "traefik.http.middlewares.edge-ratelimit-auth.ratelimit.sourcecriterion.ipstrategy.depth=0"
-      # The pilot's platform-host routers (matrix, livekit; above). edge-hostpin-apex is the ONE
-      # platform pin declared here: it SETS X-Forwarded-Host to the platform host, so a client
-      # value never reaches Synapse, which builds URLs from it. The www, control and sales pins
-      # stay TASK-034 34b's, with the static routers that chain them. livekit-sfu-strip removes
+      # The pilot's platform-host routers (matrix, livekit; above). edge-hostpin-apex is the platform
+      # pin they chain: it SETS X-Forwarded-Host to the platform host, so a client value never reaches
+      # Synapse, which builds URLs from it. edge-hostpin-control is the pin of the opt-in control-panel
+      # router (etc/edge/control-panel.yml, rendered by gremion-render; platformMiddlewareLabels'
+      # `control` entry): declared here unconditionally and harmlessly, because a middleware no router
+      # chains does nothing, while the router file cannot declare it (a file-provider middleware must
+      # be a tenant pin, gremion-verify check_middleware_placement). The www and sales pins stay
+      # TASK-034 34b's, with the static routers that chain them. livekit-sfu-strip removes
       # the /livekit-sfu prefix before LiveKit's signalling socket sees the path; it is
       # declared on this container, not on livekit's own, so it survives livekit being stopped
       # (spec B B-09).
       - "traefik.http.middlewares.edge-hostpin-apex.headers.customrequestheaders.X-Forwarded-Host=${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}"
+      - "traefik.http.middlewares.edge-hostpin-control.headers.customrequestheaders.X-Forwarded-Host=${CONTROL_PANEL_HOST:-control.${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}}"
       - "traefik.http.middlewares.livekit-sfu-strip.stripprefix.prefixes=/livekit-sfu"
 
   # ----------------------------------------------------------

@@ -336,10 +336,24 @@ services:
   # ============================================================
   # SvelteKit 2 (R29-I5). Reachable ONLY from the operator's own realm
   # (`platform`, multi-factor) and never through a customer realm: its hooks
-  # refuse any other issuer. NO Traefik route and NO published port: the
-  # operator reaches it with `gremion-tenant panel`, which prints the
-  # `ssh -L 127.0.0.1:<p>:<ip>:3000` line for this colour's address on
-  # ${STACK}-app-<colour>_app (a public control router is TASK-118's). It
+  # refuse any other issuer. NO Traefik label and NO published port. Two ways
+  # in, one per install:
+  #   - default: the operator reaches it with `gremion-tenant panel`, which
+  #     prints the `ssh -L 127.0.0.1:<p>:<ip>:3000` line for this colour's
+  #     address on ${STACK}-app-<colour>_app;
+  #   - opt-in (CONTROL_PANEL_ORIGIN=https://<control host> in state.env and
+  #     both app envs, plus the operator CA at etc/edge/mtls/operator-ca.pem): that host (CONTROL_PANEL_HOST in state.env, else control.<domain>)
+  #     behind a TLS client-certificate gate at the edge, then the ops-realm
+  #     login. The router and its TLS option are rendered into etc/edge by
+  #     gremion-render (infra/host/templates/edge/control-panel.yml.tmpl); the
+  #     panel's file-provider service `panel` is in active.yml. Traefik dials it
+  #     over the edge network, which the panel joins ONLY through the overlay
+  #     docker-compose.control-public.yml (named in COMPOSE_FILE of both app envs
+  #     on an opted-in install, and gremion-render refuses any mismatch): by
+  #     default the panel is NOT a peer of the services that share the edge
+  #     network. A label here would not do: TLS options cannot be declared by labels.
+  #     Runbook: docs/runbooks/control-panel-access.md.
+  # It
   # executes nothing itself (TASK-043d): PANEL_EXECUTOR is `queue`, so
   # "Neuer Mandant" writes ONE request row through
   # plt.submit_provisioning_request (its database role has SELECT plus that
@@ -369,9 +383,14 @@ services:
     environment:
       COLOUR: ${COLOUR:?COLOUR required}
       INTERNAL_PUSH_SECRET: ${INTERNAL_PUSH_SECRET:-}
-      # The origin the operator's browser uses behind `ssh -L`: SvelteKit's
-      # CSRF check refuses a form POST from any other origin.
-      ORIGIN: http://127.0.0.1:3043
+      # The origin the operator's browser uses: SvelteKit's CSRF check refuses a
+      # form POST from any other origin, and the host guard answers that one host
+      # only. Behind `ssh -L` it is the loopback; with the opt-in it is
+      # https://<control host> (CONTROL_PANEL_HOST, else control.<domain>). CONTROL_PANEL_ORIGIN is empty (off) or exactly
+      # that origin: gremion-render refuses anything else in state.env, and the
+      # panel's own config check refuses a value that is not an origin. One
+      # origin per install, no dual-origin mode.
+      ORIGIN: ${CONTROL_PANEL_ORIGIN:-http://127.0.0.1:3043}
       PANEL_OIDC_ISSUER: https://${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}/auth/realms/platform
       PANEL_OIDC_INTERNAL_BASE: https://keycloak:8443/auth
       NODE_EXTRA_CA_CERTS: /etc/ssl/internal/internal-ca.pem

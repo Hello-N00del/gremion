@@ -669,7 +669,12 @@ step_4_render() {
     # makes the bind source as root.
     ensure_governance_dir
     local prog; prog="$(bin_path gremion-render)"
-    "$prog" --release "$RELEASE_DIR"
+    # --defer-control-panel: the opt-in control-panel router is CHECKED here and
+    # WRITTEN at step 10, after the switch. Rendered now it would route to the
+    # active colour's panel, which still carries the previous ORIGIN, and step 9
+    # would fail on it; with no `panel` service in the edge yet it cannot be
+    # rendered at all.
+    "$prog" --release "$RELEASE_DIR" --defer-control-panel
     ok "host-rendered files produced for $TAG"
     # TASK-024 (Q12): nats-auth init before any colour comes up -- the NATS
     # SYS reload seed and the accounts file on the external nats volumes.
@@ -958,7 +963,10 @@ step_9_verify_colour() {
     # already refused this release tree if neither it nor the tree's own
     # copy exists, so there is nothing left to discover here.
     ledger="$(release_waiver_ledger "$RELEASE_DIR")"
-    GREMION_WAIVER_LEDGER="$ledger" "$prog" --colour "$NEW_COLOUR"
+    # --control-after-switch: the control-panel router does not exist yet on the
+    # first opted-in deploy (step 10 writes it), so its absence is not a failure
+    # here; step 11 holds the whole control path.
+    GREMION_WAIVER_LEDGER="$ledger" "$prog" --colour "$NEW_COLOUR" --control-after-switch
     ok "colour ${NEW_COLOUR} passes the §C contract on the internal entrypoint"
 }
 
@@ -968,12 +976,44 @@ step_9_verify_colour() {
 # is the post-condition it leaves behind.
 step_10_switch() {
     local prog; prog="$(bin_path gremion-switch)"
-    "$prog" "$NEW_COLOUR"
+    # gremion-switch renders the template of `current`, which is still the PREVIOUS
+    # release until step 12, so a service this release adds to active.yml (the
+    # control panel's) would reach the edge one switch late. It is handed this
+    # release's own template; GREMION_EDGE_TEMPLATE is its documented override.
+    local tmpl="${RELEASE_DIR}/infra/host/templates/edge/active.yml.tmpl"
+    if [[ -f "$tmpl" ]]; then
+        GREMION_EDGE_TEMPLATE="$tmpl" "$prog" "$NEW_COLOUR"
+    else
+        "$prog" "$NEW_COLOUR"
+    fi
     local now="none"
     [[ ! -f "$ROOT/runtime/active-colour" ]] || now="$(tr -d '[:space:]' < "$ROOT/runtime/active-colour")"
     [[ "$now" == "$NEW_COLOUR" ]] \
         || die "runtime/active-colour is '${now:-none}' after switching to ${NEW_COLOUR}" 1
     ok "public edge now serves ${NEW_COLOUR}"
+    step_10_control_router
+}
+
+# The opt-in control-panel router (docs/runbooks/control-panel-access.md) names the
+# service `panel@file`, which the switch has just written; a router earlier than its
+# service is a disabled router and a red verify, so gremion-render defers it until
+# now. Renders (or removes) it, then waits for Traefik to load it so that step 11
+# verifies a router that exists. Without the opt-in this renders nothing and waits
+# for nothing.
+step_10_control_router() {
+    local render origin state="$ROOT/etc/env/state.env" api="${TRAEFIK_API:-http://127.0.0.1:8080}"
+    render="$(bin_path gremion-render)"
+    "$render" --release "$RELEASE_DIR" --control-panel-only
+    origin="$(control_panel_origin_of "$state")"
+    [[ -n "$origin" ]] || return 0
+    for _ in $(seq 1 30); do
+        if curl -fsS --max-time 3 "${api}/api/http/routers/control-panel@file" 2>/dev/null | grep -q '"status":"enabled"'; then
+            ok "control router live at ${origin}"
+            return 0
+        fi
+        sleep 1
+    done
+    info "control router is not enabled in traefik after 30 s: gremion-verify (step 11) names why"
 }
 
 # ── step 11 — verify the public routers (§F.4.11) ───────────────────────────

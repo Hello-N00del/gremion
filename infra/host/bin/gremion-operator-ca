@@ -1,0 +1,479 @@
+#!/usr/bin/env bash
+set -euo pipefail
+#
+# gremion-operator-ca — the operator's device-certificate authority for the
+# control panel's client-certificate gate (docs/runbooks/control-panel-access.md).
+#
+#   gremion-operator-ca create  [--dir D] [--days N] [--passfile F]
+#   gremion-operator-ca issue   --name NAME [--dir D] [--out F.p12] [--passfile F] [--p12-passfile F] [--days N] [--compat]
+#   gremion-operator-ca verify  FILE [--ca CA.pem] [--p12-passfile F]
+#   gremion-operator-ca install --ca CA.pem [--add]
+#   gremion-operator-ca status
+#
+# WHERE EACH PART RUNS
+#   create, issue   on the operator's OWN machine, never on the host: the CA's
+#                   private key must not be on a machine an attacker who
+#                   reaches the panel's host could read. Both refuse to run on
+#                   a host (a Gremion root with etc/env/state.env), without an
+#                   override.
+#   install, status on the host. The host receives the CA CERTIFICATE only:
+#                   `install` refuses a file with a private key in it, and
+#                   gremion-render and gremion-verify refuse the same.
+#   verify          anywhere: it needs certificates, never a key.
+#
+# THE MODEL (what to tell a colleague in one breath)
+#   One CA per install. Each operator device gets its own certificate, valid at
+#   most 90 days, handed over as a PKCS#12 bundle. The edge asks for a client
+#   certificate on the control host only and accepts exactly the ones this CA
+#   signed. There is no per-device revocation list: REVOCATION IS ROTATING THE
+#   CA. Make a new CA (`create` into a new --dir), `install` its certificate
+#   (replacing the old one), issue fresh certificates; every certificate the old
+#   CA signed stops working at the edge within seconds. `install --add` keeps the
+#   old CA beside the new one for a staged rotation; remove it by a second plain
+#   `install` once every device has a new certificate.
+#
+# THE CA KEY. Encrypted with a passphrase (--passfile, or the terminal's prompt):
+# `create` refuses to write an unencrypted CA key. It lives in --dir (default
+# ~/.gremion-operator-ca, mode 0700), with ca.pem beside it and issued.log, the
+# list of what was issued (name, serial, expiry, fingerprint; nothing secret).
+#
+# Exit codes: 0 ok · 1 a post-condition failed · 2 usage or a missing precondition.
+
+# The tool needs bash >= 4.4 (an empty array expands under `set -u` only from 4.4; the stock
+# bash of macOS is 3.2: `brew install bash`) and OpenSSL 3 (`brew install openssl@3`; macOS ships
+# LibreSSL). Refused up front with the remedy, not half-way through a key generation.
+if (( BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 4) )); then
+    printf 'gremion-operator-ca: bash >= 4.4 is required (this is %s); on macOS: brew install bash\n' "$BASH_VERSION" >&2
+    exit 2
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/common.sh
+. "$SCRIPT_DIR/../lib/common.sh"
+
+# need_openssl3 — OpenSSL 3.x on PATH (create, issue and verify use its PKCS#12 and -addext).
+need_openssl3() {
+    need_cmd openssl
+    # OpenSSL 3 or newer: `OpenSSL <major>.<minor>...`; LibreSSL (macOS) names itself and does not match
+    openssl version 2>/dev/null | grep -qE '^OpenSSL ([3-9]|[1-9][0-9])\.' \
+        || die "OpenSSL 3 or newer is required (found: $(openssl version 2>/dev/null || echo none)); on macOS: brew install openssl@3 and put it first on PATH" "$GREMION_EXIT_USAGE"
+}
+
+# Git Bash (MSYS) rewrites an argument that starts with a slash into a Windows path,
+# which turns `-subj /O=Gremion/...` into `C:/Program Files/Git/O=Gremion/...`. An
+# argument that starts with /O= is never a path. (No effect anywhere else.)
+export MSYS2_ARG_CONV_EXCL='/O='
+
+CA_DAYS_DEFAULT=1095
+DEVICE_DAYS_MAX=90
+CA_DIR="${GREMION_OPERATOR_CA_DIR:-${HOME:-.}/.gremion-operator-ca}"
+HOST_CA_REL="etc/edge/mtls/operator-ca.pem"
+HOST_ROUTER_REL="etc/edge/control-panel.yml"
+
+usage() {
+    cat <<'EOF'
+usage: gremion-operator-ca <command> [options]
+
+  create   [--dir D] [--days N] [--passfile F]
+           make the operator CA on THIS machine (not the host): an encrypted EC
+           P-256 key and a CA certificate (default 1095 days). Refuses to
+           overwrite an existing CA in D.
+  issue    --name NAME [--dir D] [--out F.p12] [--passfile F] [--p12-passfile F]
+           [--days N] [--compat]
+           one device certificate, valid N days (default and maximum 90), as a
+           PKCS#12 bundle F.p12 (default ./NAME.p12). --passfile unlocks the CA
+           key, --p12-passfile protects the bundle; without them openssl asks on
+           the terminal. --compat writes the old 3DES/SHA1 PKCS#12 for devices
+           that cannot read the AES one.
+  verify   FILE [--ca CA.pem] [--p12-passfile F]
+           FILE is a .p12 or a PEM certificate: is it signed by the CA, usable
+           as a client certificate, and unexpired?
+  install  --ca CA.pem [--add]
+           on the HOST: place the CA certificate at etc/edge/mtls/operator-ca.pem
+           (replacing it; --add keeps the existing ones too) and make Traefik
+           re-read it. A file with a private key in it is refused.
+  status   on the HOST: the installed CA certificate(s) and the opt-in state.
+
+--dir defaults to $GREMION_OPERATOR_CA_DIR, then ~/.gremion-operator-ca.
+EOF
+}
+
+# ── helpers ────────────────────────────────────────────────────────────────
+
+on_host() { [[ -f "$(gremion_root)/etc/env/state.env" ]]; }
+
+refuse_on_host() {
+    if on_host; then
+        die "$1 runs on your own machine, not on this host: the CA's private key must never be on a machine that serves the control panel (this root has etc/env/state.env)" "$GREMION_EXIT_USAGE"
+    fi
+}
+
+# need_file <path> <what> — a regular, non-empty file, else die naming <what>.
+need_file() {
+    [[ -f "$1" && -s "$1" ]] || die "$2 not found or empty: $1" "$GREMION_EXIT_USAGE"
+}
+
+# native_path <path> — the spelling the openssl on PATH can open. Under Git Bash
+# (MSYS) openssl is a native Windows program: it cannot open `/tmp/x` inside a
+# `file:` argument, which the shell does not convert. cygpath turns it into
+# `C:/...`; on Linux there is no cygpath and the path is already native.
+native_path() {
+    if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi
+}
+
+# osl <what> <openssl args...> — runs openssl and, on failure, dies with <what> AND
+# openssl's own message. Nothing is swallowed: "could not generate the CA key" with
+# the reason thrown away cost a debugging session. OSL_CLEANUP names files to remove
+# when it fails (a half-made CA must not be left behind). openssl never prints a
+# passphrase or a key in an error.
+OSL_CLEANUP=()
+osl() {
+    local what="$1" out f; shift
+    if ! out="$(openssl "$@" 2>&1)"; then
+        for f in "${OSL_CLEANUP[@]}"; do rm -f -- "$f"; done
+        die "${what}: ${out//$'\n'/ }" "$GREMION_EXIT_ASSERT"
+    fi
+}
+
+# have_tty — can openssl ask for a passphrase here?
+have_tty() { [[ -t 0 && -t 2 ]]; }
+
+# ask_passphrase <file> <what> — read a passphrase twice at the terminal into <file> (the
+# caller's own 0700 directory, removed by its EXIT trap). The tool asks, not openssl, so the
+# same passphrase is at hand for the read-back of what was just written: openssl's own
+# prompt cannot be repeated inside a captured subshell, which has no terminal.
+ask_passphrase() {
+    local file="$1" what="$2" one two
+    IFS= read -rsp "Enter ${what}: " one || die "no passphrase was read" "$GREMION_EXIT_USAGE"
+    printf '\n' >&2
+    IFS= read -rsp "Verifying - enter ${what}: " two || die "no passphrase was read" "$GREMION_EXIT_USAGE"
+    printf '\n' >&2
+    [[ -n "$one" ]] || die "the ${what} is empty: a bundle holding the device key needs one" "$GREMION_EXIT_USAGE"
+    [[ "$one" == "$two" ]] || die "the two entries of the ${what} did not match" "$GREMION_EXIT_USAGE"
+    (umask 077; printf '%s\n' "$one" > "$file")
+}
+
+# valid_days <n> — a whole number of days, 1 to 99999, else die.
+valid_days() {
+    [[ "$1" =~ ^[1-9][0-9]{0,4}$ ]] || die "--days must be a whole number of days: $1" "$GREMION_EXIT_USAGE"
+}
+
+# fingerprint <pem file> -> sha256 of the first certificate
+fingerprint() {
+    openssl x509 -in "$1" -noout -fingerprint -sha256 | sed 's/^.*Fingerprint=//'
+}
+
+# not_after <pem file> -> "Mon DD HH:MM:SS YYYY GMT"
+not_after() { openssl x509 -in "$1" -noout -enddate | sed 's/^notAfter=//'; }
+
+# check_ca_cert <file> — what the host will accept: PEM certificate(s), every one
+# a CA and unexpired, and NO private key anywhere in the file.
+#   The rules are gremion-render's and gremion-verify's own (ca_bundle_problem in
+#   common.sh) and apply to EVERY certificate in the file. check_ca_cert <file>
+#   takes one CA certificate (what `create` makes and what `install` is given);
+#   check_ca_cert <file> bundle takes several (`install --add`).
+check_ca_cert() {
+    local f="$1" mode="${2:-single}" n problem
+    need_file "$f" "the CA certificate"
+    if ! problem="$(ca_bundle_problem "$f")"; then
+        if [[ "$problem" == "contains a private key" ]]; then
+            die "${f} contains a private key: only the CA CERTIFICATE goes to the host. Send ca.pem, never ca.key" "$GREMION_EXIT_USAGE"
+        fi
+        die "${f} ${problem}" "$GREMION_EXIT_USAGE"
+    fi
+    n="$(grep -c 'BEGIN CERTIFICATE' "$f" || true)"
+    if [[ "$mode" == "single" && "$n" -ne 1 ]]; then
+        die "${f} holds ${n} certificates: give one CA certificate per call (install --add adds it beside the ones already installed)" "$GREMION_EXIT_USAGE"
+    fi
+}
+
+# ── create ─────────────────────────────────────────────────────────────────
+
+cmd_create() {
+    local dir="$CA_DIR" days="$CA_DAYS_DEFAULT" passfile="" subj
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --dir)      [[ $# -ge 2 ]] || die "--dir needs a value" "$GREMION_EXIT_USAGE"; dir="$2"; shift 2 ;;
+            --days)     [[ $# -ge 2 ]] || die "--days needs a value" "$GREMION_EXIT_USAGE"; days="$2"; shift 2 ;;
+            --passfile) [[ $# -ge 2 ]] || die "--passfile needs a value" "$GREMION_EXIT_USAGE"; passfile="$2"; shift 2 ;;
+            *) usage >&2; die "create: unknown argument: $1" "$GREMION_EXIT_USAGE" ;;
+        esac
+    done
+    refuse_on_host create
+    need_openssl3
+    valid_days "$days"
+    if [[ -e "${dir}/ca.key" || -e "${dir}/ca.pem" ]]; then
+        die "a CA already exists in ${dir}: never overwritten. To rotate, create the new one in a new --dir" "$GREMION_EXIT_USAGE"
+    fi
+    if [[ -n "$passfile" ]]; then
+        need_file "$passfile" "the passphrase file"
+    elif ! have_tty; then
+        die "the CA key must be encrypted: pass --passfile F (a file holding the passphrase) or run this in a terminal to be asked" "$GREMION_EXIT_USAGE"
+    fi
+    (umask 077; mkdir -p "$dir")
+    chmod 0700 "$dir"
+    subj="/O=Gremion/CN=Gremion operator CA $(date -u +%Y-%m-%d)"
+    local -a keyargs=(-algorithm EC -pkeyopt ec_paramgen_curve:P-256 -aes-256-cbc -out "$(native_path "${dir}/ca.key")")
+    local -a passin=()
+    if [[ -n "$passfile" ]]; then
+        keyargs+=(-pass "file:$(native_path "$passfile")")
+        passin=(-passin "file:$(native_path "$passfile")")
+    fi
+    OSL_CLEANUP=("${dir}/ca.key" "${dir}/ca.pem")
+    (umask 077; osl "could not generate the CA key" genpkey "${keyargs[@]}")
+    chmod 0600 "${dir}/ca.key"
+    osl "could not make the CA certificate" req -x509 -new -key "$(native_path "${dir}/ca.key")" "${passin[@]}" -days "$days" -subj "$subj" \
+        -addext "basicConstraints=critical,CA:TRUE,pathlen:0" \
+        -addext "keyUsage=critical,keyCertSign,cRLSign" \
+        -addext "subjectKeyIdentifier=hash" \
+        -out "$(native_path "${dir}/ca.pem")"
+    OSL_CLEANUP=()
+    chmod 0644 "${dir}/ca.pem"
+    # The post-conditions, read back: the key is encrypted, the certificate is a CA.
+    grep -q 'ENCRYPTED PRIVATE KEY' "${dir}/ca.key" \
+        || { rm -f "${dir}/ca.key" "${dir}/ca.pem"; die "the CA key on disk is not encrypted: removed" "$GREMION_EXIT_ASSERT"; }
+    check_ca_cert "${dir}/ca.pem"
+    ok "operator CA created in ${dir}"
+    info "certificate: ${dir}/ca.pem  (sha256 $(fingerprint "${dir}/ca.pem"), valid until $(not_after "${dir}/ca.pem"))"
+    info "the key ${dir}/ca.key stays HERE: back it up somewhere offline, never copy it to the host"
+    info "next: install the certificate on the host (scp ca.pem; gremion-operator-ca install --ca ca.pem), then issue a device certificate"
+}
+
+# ── issue ──────────────────────────────────────────────────────────────────
+
+cmd_issue() {
+    local dir="$CA_DIR" name="" out="" days="$DEVICE_DAYS_MAX" passfile="" p12pass="" compat=0 tmp serial fp na
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --dir)         [[ $# -ge 2 ]] || die "--dir needs a value" "$GREMION_EXIT_USAGE"; dir="$2"; shift 2 ;;
+            --name)        [[ $# -ge 2 ]] || die "--name needs a value" "$GREMION_EXIT_USAGE"; name="$2"; shift 2 ;;
+            --out)         [[ $# -ge 2 ]] || die "--out needs a value" "$GREMION_EXIT_USAGE"; out="$2"; shift 2 ;;
+            --days)        [[ $# -ge 2 ]] || die "--days needs a value" "$GREMION_EXIT_USAGE"; days="$2"; shift 2 ;;
+            --passfile)    [[ $# -ge 2 ]] || die "--passfile needs a value" "$GREMION_EXIT_USAGE"; passfile="$2"; shift 2 ;;
+            --p12-passfile) [[ $# -ge 2 ]] || die "--p12-passfile needs a value" "$GREMION_EXIT_USAGE"; p12pass="$2"; shift 2 ;;
+            --compat)      compat=1; shift ;;
+            *) usage >&2; die "issue: unknown argument: $1" "$GREMION_EXIT_USAGE" ;;
+        esac
+    done
+    refuse_on_host issue
+    need_openssl3
+    [[ -n "$name" ]] || die "issue: --name is required (the device, e.g. alices-laptop)" "$GREMION_EXIT_USAGE"
+    [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$ ]] \
+        || die "--name must be letters, digits, dot, dash and underscore (at most 63): $name" "$GREMION_EXIT_USAGE"
+    valid_days "$days"
+    (( days <= DEVICE_DAYS_MAX )) \
+        || die "a device certificate is valid at most ${DEVICE_DAYS_MAX} days (asked for ${days}): issue a fresh one when it runs out" "$GREMION_EXIT_USAGE"
+    need_file "${dir}/ca.key" "the CA key"
+    need_file "${dir}/ca.pem" "the CA certificate"
+    check_ca_cert "${dir}/ca.pem"
+    [[ -n "$out" ]] || out="./${name}.p12"
+    [[ ! -e "$out" ]] || die "${out} exists: never overwritten (remove it, or choose --out)" "$GREMION_EXIT_USAGE"
+    local -a passin=() passout=()
+    if [[ -n "$passfile" ]]; then
+        need_file "$passfile" "the CA passphrase file"
+        passin=(-passin "file:$(native_path "$passfile")")
+    elif ! have_tty; then
+        die "the CA key is encrypted: pass --passfile F, or run this in a terminal to be asked" "$GREMION_EXIT_USAGE"
+    fi
+    if [[ -n "$p12pass" ]]; then
+        need_file "$p12pass" "the bundle passphrase file"
+    elif ! have_tty; then
+        die "the PKCS#12 bundle needs a passphrase: pass --p12-passfile F, or run this in a terminal to be asked" "$GREMION_EXIT_USAGE"
+    fi
+
+    tmp="$(mktemp -d)"
+    # shellcheck disable=SC2064
+    trap "rm -rf -- '${tmp}'" EXIT
+    chmod 0700 "$tmp"
+    if [[ -z "$p12pass" ]]; then
+        # at a terminal: asked here, kept in ${tmp} for the read-back, gone with it
+        ask_passphrase "${tmp}/p12.pass" "passphrase for the PKCS#12 bundle"
+        p12pass="${tmp}/p12.pass"
+    fi
+    passout=(-passout "file:$(native_path "$p12pass")")
+    serial="0x$(openssl rand -hex 16)"
+    printf 'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=clientAuth\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid\n' > "${tmp}/ext.cnf"
+    (umask 077; osl "could not generate the device key" genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$(native_path "${tmp}/device.key")")
+    osl "could not make the certificate request" req -new -key "$(native_path "${tmp}/device.key")" -subj "/O=Gremion operator device/CN=${name}" -out "$(native_path "${tmp}/device.csr")"
+    osl "could not sign the device certificate (wrong CA passphrase?)" x509 -req -in "$(native_path "${tmp}/device.csr")" \
+        -CA "$(native_path "${dir}/ca.pem")" -CAkey "$(native_path "${dir}/ca.key")" "${passin[@]}" \
+        -set_serial "$serial" -days "$days" -extfile "$(native_path "${tmp}/ext.cnf")" -out "$(native_path "${tmp}/device.pem")"
+    local -a p12args=(-export -inkey "$(native_path "${tmp}/device.key")" -in "$(native_path "${tmp}/device.pem")" -certfile "$(native_path "${dir}/ca.pem")" \
+        -name "Gremion operator ${name}" -out "$(native_path "${tmp}/device.p12")")
+    if (( compat )); then
+        p12args+=(-keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1)
+    fi
+    osl "could not write the PKCS#12 bundle" pkcs12 "${p12args[@]}" "${passout[@]}"
+    (umask 077; cp "${tmp}/device.p12" "$out")
+    chmod 0600 "$out"
+    fp="$(fingerprint "${tmp}/device.pem")"
+    na="$(not_after "${tmp}/device.pem")"
+    # Read back from the bundle, not from what was meant to go into it. cmd_verify ends in
+    # `die` (an exit, not a return), so it runs in a SUBSHELL: the `||` below sees its
+    # status, and the bundle, which holds the device private key, is removed when it fails.
+    local -a vargs=(--ca "${dir}/ca.pem" --p12-passfile "$p12pass")
+    local vout
+    if ! vout="$( (cmd_verify "$out" "${vargs[@]}") 2>&1 )"; then
+        rm -f -- "$out"
+        die "the bundle just written does not verify against the CA, so it was removed and nothing was logged: ${vout//$'\n'/ }" "$GREMION_EXIT_ASSERT"
+    fi
+    # the log names only what passed the read-back
+    printf '%s %s serial=%s notAfter=%s sha256=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$name" "${serial#0x}" "$na" "$fp" >> "${dir}/issued.log"
+    ok "device certificate for ${name} written to ${out} (valid until ${na})"
+    info "import the bundle on that device, then delete the file; it is the only copy of the device key"
+    info "no per-device revocation: a lost device means rotating the CA (see the runbook)"
+}
+
+# ── verify ─────────────────────────────────────────────────────────────────
+
+cmd_verify() {
+    local file="" ca="" p12pass="" tmp cert out
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --ca)           [[ $# -ge 2 ]] || die "--ca needs a value" "$GREMION_EXIT_USAGE"; ca="$2"; shift 2 ;;
+            --p12-passfile) [[ $# -ge 2 ]] || die "--p12-passfile needs a value" "$GREMION_EXIT_USAGE"; p12pass="$2"; shift 2 ;;
+            -*) usage >&2; die "verify: unknown argument: $1" "$GREMION_EXIT_USAGE" ;;
+            *)  [[ -z "$file" ]] || die "verify: one file only" "$GREMION_EXIT_USAGE"; file="$1"; shift ;;
+        esac
+    done
+    need_openssl3
+    [[ -n "$file" ]] || die "verify: a .p12 or PEM file is required" "$GREMION_EXIT_USAGE"
+    need_file "$file" "the certificate"
+    if [[ -z "$ca" ]]; then
+        if [[ -f "${CA_DIR}/ca.pem" ]]; then ca="${CA_DIR}/ca.pem"
+        elif [[ -f "$(gremion_root)/${HOST_CA_REL}" ]]; then ca="$(gremion_root)/${HOST_CA_REL}"
+        else die "verify: no CA certificate: pass --ca CA.pem" "$GREMION_EXIT_USAGE"
+        fi
+    fi
+    need_file "$ca" "the CA certificate"
+    tmp="$(mktemp -d)"
+    chmod 0700 "$tmp"
+    cert="${tmp}/cert.pem"
+    case "$file" in
+        *.p12|*.pfx)
+            local -a passin=()
+            if [[ -n "$p12pass" ]]; then
+                need_file "$p12pass" "the bundle passphrase file"
+                passin=(-passin "file:$(native_path "$p12pass")")
+            elif ! have_tty; then
+                rm -rf -- "$tmp"
+                die "verify: the bundle is protected: pass --p12-passfile F" "$GREMION_EXIT_USAGE"
+            fi
+            openssl pkcs12 -in "$file" -clcerts -nokeys "${passin[@]}" -out "$cert" 2>/dev/null \
+                || { rm -rf -- "$tmp"; die "verify: cannot open ${file} (wrong passphrase?)" "$GREMION_EXIT_ASSERT"; } ;;
+        *) cp "$file" "$cert" ;;
+    esac
+    if ! out="$(openssl verify -CAfile "$ca" -purpose sslclient "$cert" 2>&1)"; then
+        rm -rf -- "$tmp"
+        die "verify: ${file} does not verify against ${ca} as a client certificate: ${out//$'\n'/ }" "$GREMION_EXIT_ASSERT"
+    fi
+    if ! openssl x509 -in "$cert" -noout -checkend 0 >/dev/null 2>&1; then
+        rm -rf -- "$tmp"
+        die "verify: ${file} has expired ($(not_after "$cert"))" "$GREMION_EXIT_ASSERT"
+    fi
+    ok "${file}: signed by ${ca}, a client certificate, valid until $(not_after "$cert") (subject $(openssl x509 -in "$cert" -noout -subject | sed 's/^subject= *//'))"
+    rm -rf -- "$tmp"
+}
+
+# ── install (host) ─────────────────────────────────────────────────────────
+
+cmd_install() {
+    local ca="" add=0 root edge dest new fp_new existing f tmp problem
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --ca)  [[ $# -ge 2 ]] || die "--ca needs a value" "$GREMION_EXIT_USAGE"; ca="$2"; shift 2 ;;
+            --add) add=1; shift ;;
+            *) usage >&2; die "install: unknown argument: $1" "$GREMION_EXIT_USAGE" ;;
+        esac
+    done
+    need_cmd openssl
+    [[ -n "$ca" ]] || die "install: --ca CA.pem is required" "$GREMION_EXIT_USAGE"
+    root="$(gremion_root)"
+    edge="${root}/etc/edge"
+    [[ -d "$edge" ]] || die "install runs on the host: ${edge} does not exist" "$GREMION_EXIT_USAGE"
+    # One CA certificate per call, unless --add: a file with several is how a stale or
+    # unintended CA rides along. Every certificate is checked either way.
+    if (( add )); then check_ca_cert "$ca" bundle; else check_ca_cert "$ca" single; fi
+    mkdir -p "${edge}/mtls"
+    chmod 0755 "${edge}/mtls"
+    dest="${root}/${HOST_CA_REL}"
+    new="$(cat "$ca")"
+    if (( add )) && [[ -s "$dest" ]]; then
+        tmp="$(mktemp -d)"
+        # every certificate already installed, one file each, to compare fingerprints
+        awk -v d="$tmp" '/BEGIN CERTIFICATE/ {n++; on=1} on {print > (d "/c" n ".pem")} /END CERTIFICATE/ {on=0}' "$dest"
+        local newdir; newdir="$(mktemp -d)"
+        awk -v d="$newdir" '/BEGIN CERTIFICATE/ {n++; on=1} on {print > (d "/c" n ".pem")} /END CERTIFICATE/ {on=0}' "$ca"
+        for f in "$newdir"/c*.pem; do
+            [[ -e "$f" ]] || continue
+            fp_new="$(fingerprint "$f")"
+            for existing in "$tmp"/c*.pem; do
+                [[ -e "$existing" ]] || continue
+                if [[ "$(fingerprint "$existing")" == "$fp_new" ]]; then
+                    rm -rf -- "$tmp" "$newdir"
+                    die "that CA certificate is already installed (sha256 ${fp_new})" "$GREMION_EXIT_USAGE"
+                fi
+            done
+        done
+        rm -rf -- "$tmp" "$newdir"
+        new="$(cat "$dest")"$'\n'"$(cat "$ca")"
+    fi
+    # The whole result is checked BEFORE it replaces anything (an expired CA already
+    # installed would otherwise make the next render refuse it).
+    tmp="$(mktemp)"
+    printf '%s\n' "$new" > "$tmp"
+    if ! problem="$(ca_bundle_problem "$tmp")"; then
+        rm -f -- "$tmp"
+        die "the CA file this would leave at ${dest} ${problem}: nothing was changed (a staged rotation drops the old certificate with a plain install once every device has a new one)" "$GREMION_EXIT_USAGE"
+    fi
+    rm -f -- "$tmp"
+    printf '%s\n' "$new" | atomic_write "$dest" 0644 || die "cannot write ${dest}" "$GREMION_EXIT_ASSERT"
+    [[ -s "$dest" ]] || die "${dest} is empty after the write" "$GREMION_EXIT_ASSERT"
+    grep -q 'PRIVATE KEY' "$dest" && die "${dest} contains a private key after the write" "$GREMION_EXIT_ASSERT"
+    ok "operator CA certificate installed at ${dest} ($(grep -c 'BEGIN CERTIFICATE' "$dest") certificate(s))"
+    # Traefik reads the CA file when it builds the TLS option, and does NOT watch it
+    # (measured): rewriting the router file is what makes it read the new one.
+    if [[ -f "${root}/${HOST_ROUTER_REL}" ]]; then
+        touch "${root}/${HOST_ROUTER_REL}"
+        ok "touched ${HOST_ROUTER_REL}: traefik re-reads the CA within seconds"
+    else
+        info "no ${HOST_ROUTER_REL} yet: it is rendered by gremion-deploy (step 10) or by gremion-switch (after the switch) once CONTROL_PANEL_ORIGIN is set in state.env and both app envs and docker-compose.control-public.yml is in their COMPOSE_FILE; if the switch said it could not, run gremion-render --release DIR --control-panel-only"
+    fi
+}
+
+# ── status (host) ──────────────────────────────────────────────────────────
+
+cmd_status() {
+    local root dest f tmp n=0 origin
+    need_cmd openssl
+    root="$(gremion_root)"
+    dest="${root}/${HOST_CA_REL}"
+    origin="$(control_panel_origin_of "${root}/etc/env/state.env")"
+    info "opt-in (CONTROL_PANEL_ORIGIN in state.env): ${origin:-off}"
+    if [[ -f "${root}/${HOST_ROUTER_REL}" ]]; then info "router file: ${HOST_ROUTER_REL} present"; else info "router file: ${HOST_ROUTER_REL} absent"; fi
+    if [[ ! -s "$dest" ]]; then
+        info "operator CA: none installed (${HOST_CA_REL})"
+        return 0
+    fi
+    tmp="$(mktemp -d)"
+    awk -v d="$tmp" '/BEGIN CERTIFICATE/ {n++} n {print > (d "/c" n ".pem")}' "$dest"
+    for f in "$tmp"/c*.pem; do
+        [[ -e "$f" ]] || continue
+        n=$((n + 1))
+        info "operator CA #${n}: $(openssl x509 -in "$f" -noout -subject | sed 's/^subject= *//'), sha256 $(fingerprint "$f"), valid until $(not_after "$f")"
+    done
+    rm -rf -- "$tmp"
+    if grep -q 'PRIVATE KEY' "$dest"; then bad "the CA file contains a private key"; return 1; fi
+}
+
+main() {
+    local cmd="${1:-}"
+    case "$cmd" in
+        create|issue|verify|install|status) shift; "cmd_${cmd}" "$@" ;;
+        -h|--help|help) usage ;;
+        "") usage >&2; exit "$GREMION_EXIT_USAGE" ;;
+        *) usage >&2; die "unknown command: ${cmd}" "$GREMION_EXIT_USAGE" ;;
+    esac
+}
+
+main "$@"

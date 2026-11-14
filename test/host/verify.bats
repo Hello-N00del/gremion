@@ -74,7 +74,11 @@ case "$url" in
 esac
 case "$url" in
   */api/http/routers|*/api/http/routers\?*)         cat "$FAKE_HTTP/api-http-routers.json"; exit 0 ;;
-  */api/http/services|*/api/http/services\?*)       cat "$FAKE_HTTP/api-http-services.json"; exit 0 ;;
+  */api/http/services|*/api/http/services\?*)
+    # services.json.next: what traefik reports on the NEXT read (a health probe that lands between two reads)
+    cat "$FAKE_HTTP/api-http-services.json"
+    [ -f "$FAKE_HTTP/api-http-services.json.next" ] && mv "$FAKE_HTTP/api-http-services.json.next" "$FAKE_HTTP/api-http-services.json"
+    exit 0 ;;
   */api/http/middlewares|*/api/http/middlewares\?*) cat "$FAKE_HTTP/api-http-middlewares.json"; exit 0 ;;
   */api/tcp/routers|*/api/tcp/routers\?*)           cat "$FAKE_HTTP/api-tcp-routers.json"; exit 0 ;;
   */api/udp/routers|*/api/udp/routers\?*)           cat "$FAKE_HTTP/api-udp-routers.json"; exit 0 ;;
@@ -84,6 +88,16 @@ s="$(printf "%s" "$url" | tr -c "A-Za-z0-9" "-")"
 # F1-FIX-09 (K6#0): a real curl that cannot connect prints the -w code 000 AND
 # exits non-zero (7). The shim used to print 000 and exit 0, which is the one
 # shape that hid `|| echo 000` appending a second 000 (-> "000000").
+if [ -f "$FAKE_HTTP/probe-$s.tlsrefused" ]; then
+  [ "$want_code" = 1 ] && printf "000"
+  echo "curl: (35) TLS connect error: error:0A000410:SSL routines::ssl/tls alert handshake failure" >&2
+  exit 35
+fi
+if [ -f "$FAKE_HTTP/probe-$s.tlseof" ]; then
+  [ "$want_code" = 1 ] && printf "000"
+  echo "curl: (35) TLS connect error: error:0A000126:SSL routines::unexpected eof while reading" >&2
+  exit 35
+fi
 if [ -f "$FAKE_HTTP/probe-$s.unreachable" ]; then
   [ "$want_code" = 1 ] && printf "000"
   exit 7
@@ -103,6 +117,10 @@ case "$sub" in
   s_client)
       host=""; prev=""
       for a in "$@"; do [ "$prev" = "-servername" ] && host="$a"; prev="$a"; done
+      if [ -f "$FAKE_TLS/$host.flip-after" ]; then
+        n=$(( $(cat "$FAKE_TLS/$host.calls" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$FAKE_TLS/$host.calls"
+        [ "$n" -gt "$(cat "$FAKE_TLS/$host.flip-after")" ] && cp "$FAKE_TLS/$host.good-san" "$FAKE_TLS/$host.san"
+      fi
       cat "$FAKE_TLS/$host.pem" 2>/dev/null || printf "NO-CERT\n"
       ;;
   x509)
@@ -112,6 +130,13 @@ case "$sub" in
         case "$a" in -ext) mode=ext ;; -checkend) mode=checkend ;; esac
         prev="$a"
       done
+      if grep -q "FAKE-CA" "$inf" 2>/dev/null; then
+        case "$mode" in
+          ext) if grep -q "FAKE-CA-LEAF" "$inf"; then printf "X509v3 Basic Constraints: \n    CA:FALSE\n"; else printf "X509v3 Basic Constraints: critical\n    CA:TRUE\n"; fi ;;
+          checkend) grep -q "FAKE-CA-EXPIRING" "$inf" && exit 1 ;;
+        esac
+        exit 0
+      fi
       host="$(sed -n "s/^# host=//p" "$inf" | head -1)"
       case "$mode" in
         ext)      cat "$FAKE_TLS/$host.san" 2>/dev/null ;;
@@ -247,7 +272,9 @@ EOF
   {"name":"edge-ratelimit-app@docker","provider":"docker","type":"ratelimit",
    "rateLimit":{"average":300,"burst":100,"period":"1m"}},
   {"name":"edge-ratelimit-auth@docker","provider":"docker","type":"ratelimit",
-   "rateLimit":{"average":30,"burst":10,"period":"1m"}}
+   "rateLimit":{"average":30,"burst":10,"period":"1m"}},
+  {"name":"edge-ratelimit-portal@docker","provider":"docker","type":"ratelimit",
+   "rateLimit":{"average":100,"burst":50,"period":"1m"}}
 ]
 EOF
     printf '[]\n' > "${FAKE_HTTP}/api-tcp-routers.json"
@@ -272,8 +299,11 @@ fake_traefik() {
     fake_container c9 traefik "traefik" running healthy 0 "" \
         '{"com.docker.compose.service":"traefik","com.docker.compose.project":"staging-state",
           "traefik.http.middlewares.edge-hsts-custom.headers.stsseconds":"31536000",
+          "traefik.http.middlewares.edge-hsts-platform.headers.stsseconds":"31536000",
+          "traefik.http.middlewares.edge-hostpin-control.headers.customrequestheaders.x-forwarded-host":"control.example.org",
           "traefik.http.middlewares.edge-ratelimit-app.ratelimit.average":"300",
-          "traefik.http.middlewares.edge-ratelimit-auth.ratelimit.average":"30"}'
+          "traefik.http.middlewares.edge-ratelimit-auth.ratelimit.average":"30",
+          "traefik.http.middlewares.edge-ratelimit-portal.ratelimit.average":"100"}'
 }
 
 
@@ -308,6 +338,8 @@ setup() {
     export TRAEFIK_API="http://127.0.0.1:8080"
     export VERIFY_MARKER_PATH="/whoami"
     export REBOOT_SETTLE_SECONDS=0
+    export CONTROL_CERT_WAIT_SECONDS=0
+    export PANEL_UP_WAIT_SECONDS=0
     cat > "${GREMION_ROOT}/etc/env/state.env" <<'EOF'
 STACK=staging
 PLATFORM_DOMAIN=example.org
@@ -1546,4 +1578,703 @@ WAIVER_LITEMS=(2 6 4 1 5 5)
     # And the ledger must still refuse to waive it.
     run grep -nE '^\| `[a-z0-9-]+` \| §L:3 \|' "${REPO_ROOT}/docs/ops/release-1-waivers.md"
     [ "$status" -ne 0 ]
+}
+
+
+# ── the control panel's public router (docs/runbooks/control-panel-access.md) ─
+# etc/edge/control-panel.yml is rendered by gremion-render on an opt-in install
+# only. The verifier holds the running system to the whole of it, and treats the
+# control host as the client-certificate host: a TLS handshake refusal WITHOUT a
+# certificate is the expected, ASSERTED result there (never skipped), and an HTTP
+# answer is the failure.
+CONTROL_HOST="control.example.org"
+CONTROL_TEMPLATE="${REPO_ROOT}/infra/host/templates/edge/control-panel.yml.tmpl"
+CONTROL_RULE='Host(`control.example.org`) && !PathPrefix(`/healthz`) && !PathPrefix(`/api/internal`)'
+
+control_file() {
+    sed -e "s/\\\${CONTROL_HOST}/${CONTROL_HOST}/g" -e 's/\${TRAEFIK_CERT_RESOLVER}/le-http/g' \
+        "$CONTROL_TEMPLATE" > "${GREMION_ROOT}/etc/edge/control-panel.yml"
+    grep -qF "Host(\`${CONTROL_HOST}\`)" "${GREMION_ROOT}/etc/edge/control-panel.yml"
+}
+
+control_ca() {
+    mkdir -p "${GREMION_ROOT}/etc/edge/mtls"
+    printf -- '-----BEGIN CERTIFICATE-----\nFAKE-CA\n-----END CERTIFICATE-----\n' > "${GREMION_ROOT}/etc/edge/mtls/operator-ca.pem"
+}
+
+control_live() {
+    api_edit routers '. + [{"name":"control-panel@file","status":"enabled","entryPoints":["websecure"],
+        "rule":"Host(`'"${CONTROL_HOST}"'`) && !PathPrefix(`/healthz`) && !PathPrefix(`/api/internal`)",
+        "service":"panel@file","tls":{"certResolver":"le-http","options":"control-panel-mtls@file"},
+        "middlewares":["edge-hostpin-control@docker","edge-hsts-platform@docker","edge-ratelimit-portal@docker"]}]'
+    api_edit services '. + [{"name":"panel@file","loadBalancer":{"servers":[{"url":"http://control-panel-blue:3000"}]},"serverStatus":{"http://control-panel-blue:3000":"UP"}}]'
+    api_edit middlewares '. + [
+        {"name":"edge-hostpin-control@docker","provider":"docker","type":"headers",
+         "headers":{"customRequestHeaders":{"X-Forwarded-Host":"'"${CONTROL_HOST}"'"}}},
+        {"name":"edge-hsts-platform@docker","provider":"docker","type":"headers","headers":{"stsSeconds":31536000}}]'
+    fake_container c5 control-panel-blue "control-panel-blue" running healthy 0
+    printf 'ORIGIN=https://%s\n' "$CONTROL_HOST" > "${FAKE_DOCKER}/control-panel-blue.env"
+    fake_cert "$CONTROL_HOST" "DNS:${CONTROL_HOST}" 0
+    fake_http "http://${CONTROL_HOST}:8090/.well-known/acme-challenge/probe" 404 ""
+    : > "${FAKE_HTTP}/probe-$(slug "https://${CONTROL_HOST}:8443/").tlsrefused"
+    printf 'CONTROL_PANEL_ORIGIN=https://%s\n' "$CONTROL_HOST" >> "${GREMION_ROOT}/etc/env/state.env"
+    # a host other than the default control.<domain> is the install's CONTROL_PANEL_HOST
+    [ "$CONTROL_HOST" = "control.example.org" ] || printf 'CONTROL_PANEL_HOST=%s\n' "$CONTROL_HOST" >> "${GREMION_ROOT}/etc/env/state.env"
+    printf '%s\n' "$CONTROL_HOST" >> "$HOSTS"
+}
+
+# The same install with the panel on a host OUTSIDE the platform domain (CONTROL_PANEL_HOST).
+custom_control_host() {
+    CONTROL_HOST="panel.example.com"
+    CONTROL_RULE='Host(`panel.example.com`) && !PathPrefix(`/healthz`) && !PathPrefix(`/api/internal`)'
+}
+
+control_all() { control_file; control_ca; control_live; }
+
+@test "control panel: the rendered file, its CA and the live router pass, and the refusal without a client certificate is asserted" {
+    control_all
+    run "$VERIFY" --hosts "$HOSTS"
+    echo "$output"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"https://${CONTROL_HOST}/ refused the handshake without a client certificate (TLS alert)"* ]]
+    # the panel's service is colour-bound: its container is censused like gremion-ui's
+    run jq -r '.routers[] | select(.name == "control-panel@file") | "\(.class) \(.host) \(.san) \(.healthy)"' \
+        "${GREMION_ROOT}/runtime/last-verify.json"
+    [ "$output" = "colour-bound ${CONTROL_HOST} true true" ]
+}
+
+@test "control panel: traefik must report the panel's server UP: a server it cannot reach (DOWN) or one with no status fails, though its container is censused healthy" {
+    control_all
+    # the container answers to the alias on the STATE network and is healthy there, so the census passes; what
+    # fails is Traefik's own dial (the panel is not on the edge network, or not listening)
+    api_edit services 'map(if .name == "panel@file" then .serverStatus = {"http://control-panel-blue:3000":"DOWN"} else . end)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"service panel@file: traefik reports its server http://control-panel-blue:3000 as DOWN"* ]]
+    [[ "$output" == *"docker-compose.control-public.yml"* ]]
+    api_edit services 'map(if .name == "panel@file" then del(.serverStatus) else . end)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"service panel@file: traefik reports no status for its server http://control-panel-blue:3000"* ]]
+    api_edit services 'map(if .name == "panel@file" then .serverStatus = {"http://control-panel-blue:3000":"UP"} else . end)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+}
+
+@test "control panel: opted in, a colour with no panel container fails (the origin cannot be judged), with the router live" {
+    control_all
+    sed -i '/^c5$/d' "${FAKE_DOCKER}/ps"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"no container answers to 'control-panel-blue': the panel the control host routes to is not running"* ]]
+}
+
+@test "control panel, first opted-in deploy: the colour being verified has no panel container, step 9 fails (it was skipped without a word)" {
+    render_step4 nopanel
+    prepare_green_colour
+    run "$VERIFY" --colour green --control-after-switch --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"no container answers to 'control-panel-green': the panel the control host routes to is not running"* ]]
+}
+
+@test "control panel: the control host is certified like any other host (a certificate without its SAN fails)" {
+    control_all
+    fake_cert "$CONTROL_HOST" "DNS:other.example.org" 0
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"certificate for ${CONTROL_HOST} has no matching SAN"* ]]
+}
+
+@test "control panel: a connection WITHOUT a client certificate that gets an HTTP answer fails (the gate is open)" {
+    control_all
+    rm -f "${FAKE_HTTP}/probe-$(slug "https://${CONTROL_HOST}:8443/").tlsrefused"
+    fake_http "https://${CONTROL_HOST}:8443/" 200 "the panel login"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"https://${CONTROL_HOST}/ answered HTTP 200 to a connection WITHOUT a client certificate: the client-certificate gate is open"* ]]
+}
+
+@test "control panel: a host that closes the connection with no TLS alert fails (traefik cannot build the option)" {
+    control_all
+    rm -f "${FAKE_HTTP}/probe-$(slug "https://${CONTROL_HOST}:8443/").tlsrefused"
+    : > "${FAKE_HTTP}/probe-$(slug "https://${CONTROL_HOST}:8443/").tlseof"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"closed the connection with no TLS alert: traefik cannot build the client-certificate option"* ]]
+}
+
+@test "control panel: a host that is down proves no refusal and fails" {
+    control_all
+    rm -f "${FAKE_HTTP}/probe-$(slug "https://${CONTROL_HOST}:8443/").tlsrefused"
+    fake_http_unreachable "https://${CONTROL_HOST}:8443/"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"the refusal of a connection without a client certificate could not be established (curl exit 7)"* ]] \
+        || [[ "$output" == *"could not be established (curl exit"* ]]
+}
+
+@test "control panel: the opt-in key without the rendered file fails" {
+    control_all
+    rm "${GREMION_ROOT}/etc/edge/control-panel.yml"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"CONTROL_PANEL_ORIGIN is set in state.env but etc/edge/control-panel.yml does not exist"* ]]
+    [[ "$output" == *"traefik serves router control-panel@file, but etc/edge/control-panel.yml does not exist"* ]]
+}
+
+@test "control panel: a rendered file without the opt-in key fails (a stale router nobody opted into)" {
+    control_all
+    sed -i '/^CONTROL_PANEL_ORIGIN=/d' "${GREMION_ROOT}/etc/env/state.env"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"etc/edge/control-panel.yml exists but CONTROL_PANEL_ORIGIN is empty in state.env"* ]]
+}
+
+@test "control panel: a weaker clientAuthType in the file fails" {
+    control_all
+    sed -i 's/RequireAndVerifyClientCert/VerifyClientCertIfGiven/' "${GREMION_ROOT}/etc/edge/control-panel.yml"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"clientAuthType must appear once and be RequireAndVerifyClientCert"* ]]
+}
+
+@test "control panel: a second clientAuthType line in the file fails" {
+    control_all
+    sed -i 's/^        clientAuthType: RequireAndVerifyClientCert$/&\n        clientAuthType: NoClientCert/' "${GREMION_ROOT}/etc/edge/control-panel.yml"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"clientAuthType must appear once and be RequireAndVerifyClientCert (found 2)"* ]]
+}
+
+@test "control panel: a rule that does not exclude the probe paths fails, in the file and in what traefik serves" {
+    control_all
+    sed -i 's/ \&\& !PathPrefix(`\/healthz`)//' "${GREMION_ROOT}/etc/edge/control-panel.yml"
+    api_edit routers 'map(if .name == "control-panel@file" then .rule = "Host(`control.example.org`) && !PathPrefix(`/api/internal`)" else . end)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"etc/edge/control-panel.yml: the rule is 'Host(\`control.example.org\`) && !PathPrefix(\`/api/internal\`)', not '${CONTROL_RULE}'"* ]]
+    [[ "$output" == *"router control-panel@file serves rule 'Host(\`control.example.org\`) && !PathPrefix(\`/api/internal\`)', not '${CONTROL_RULE}'"* ]]
+}
+
+@test "control panel: a router that traefik serves without the client-certificate option fails" {
+    control_all
+    api_edit routers 'map(if .name == "control-panel@file" then .tls = {"certResolver":"le-http"} else . end)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router control-panel@file carries TLS option '', not control-panel-mtls: the host would be served without asking for a client certificate"* ]]
+}
+
+@test "control panel: a chain without the portal-tier rate limit, or with the app tier's or the auth tier's, fails" {
+    control_all
+    api_edit routers 'map(if .name == "control-panel@file" then .middlewares |= map(if . == "edge-ratelimit-portal@docker" then "edge-ratelimit-app@docker" else . end) else . end)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router control-panel@file chains 'edge-hostpin-control@docker edge-hsts-platform@docker edge-ratelimit-app@docker', not 'edge-hostpin-control@docker edge-hsts-platform@docker edge-ratelimit-portal@docker'"* ]]
+    # the auth tier is the tier of the sign-in path, not of a host that serves a whole page of assets: it would 429 a first load
+    api_edit routers 'map(if .name == "control-panel@file" then .middlewares |= map(if . == "edge-ratelimit-app@docker" then "edge-ratelimit-auth@docker" else . end) else . end)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router control-panel@file chains 'edge-hostpin-control@docker edge-hsts-platform@docker edge-ratelimit-auth@docker', not 'edge-hostpin-control@docker edge-hsts-platform@docker edge-ratelimit-portal@docker'"* ]]
+}
+
+@test "control panel: a router that targets the app instead of the panel fails" {
+    control_all
+    api_edit routers 'map(if .name == "control-panel@file" then .service = "app@file" else . end)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router control-panel@file targets 'app@file', not panel@file"* ]]
+}
+
+@test "control panel: another router on the control host fails (it would be served without the option)" {
+    control_all
+    api_edit routers '. + [{"name":"stray@docker","status":"enabled","entryPoints":["websecure"],
+        "rule":"Host(`Control.Example.org`) && PathPrefix(`/x`)","service":"keycloak@docker","tls":{"certResolver":"le-http"},
+        "middlewares":["edge-hostpin-a@file","edge-hsts-custom@docker","edge-ratelimit-app@docker"]}]'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router(s) stray@docker name the control host ${CONTROL_HOST}"* ]]
+}
+
+@test "control panel: a router served without its file, on a host that did not opt in, fails" {
+    control_live
+    sed -i '/^CONTROL_PANEL_ORIGIN=/d' "${GREMION_ROOT}/etc/env/state.env"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"traefik serves router control-panel@file, but etc/edge/control-panel.yml does not exist"* ]]
+}
+
+@test "control panel: a file that declares a second router, a service or a certificate store fails" {
+    control_all
+    printf '    other:\n      rule: "Host(`x.example.org`)"\n  services:\n    s:\n      loadBalancer: {}\n' >> "${GREMION_ROOT}/etc/edge/control-panel.yml"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"etc/edge/control-panel.yml declares router other"* ]]
+    [[ "$output" == *"etc/edge/control-panel.yml declares services"* ]]
+}
+
+@test "control panel: a running panel whose ORIGIN is not the opted-in origin fails (read from the container, not from a file)" {
+    control_all
+    printf 'ORIGIN=http://127.0.0.1:3043\n' > "${FAKE_DOCKER}/control-panel-blue.env"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"control-panel-blue: the running panel's ORIGIN is not CONTROL_PANEL_ORIGIN"* ]]
+    # the origin is compared as a literal: a dot is not a wildcard (a regex match let a look-alike pass)
+    printf 'ORIGIN=https://controlXexample.org\n' > "${FAKE_DOCKER}/control-panel-blue.env"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"control-panel-blue: the running panel's ORIGIN is not CONTROL_PANEL_ORIGIN"* ]]
+}
+
+@test "control panel: a missing CA file fails" {
+    control_all
+    rm "${GREMION_ROOT}/etc/edge/mtls/operator-ca.pem"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"etc/edge/mtls/operator-ca.pem is missing or empty"* ]]
+}
+
+@test "control panel: a CA file that holds a private key fails (the host never holds the CA key)" {
+    control_all
+    printf -- '-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----\n' >> "${GREMION_ROOT}/etc/edge/mtls/operator-ca.pem"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"etc/edge/mtls/operator-ca.pem contains a private key"* ]]
+}
+
+@test "control panel: a CA file whose certificate is not a CA, or is about to expire, fails" {
+    control_all
+    printf -- '-----BEGIN CERTIFICATE-----\nFAKE-CA FAKE-CA-LEAF\n-----END CERTIFICATE-----\n' > "${GREMION_ROOT}/etc/edge/mtls/operator-ca.pem"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"holds a certificate (#1 of 1) that is not a CA certificate"* ]]
+    printf -- '-----BEGIN CERTIFICATE-----\nFAKE-CA FAKE-CA-EXPIRING\n-----END CERTIFICATE-----\n' > "${GREMION_ROOT}/etc/edge/mtls/operator-ca.pem"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"holds a certificate (#1 of 1) that expires within"* ]]
+}
+
+@test "control panel: every certificate of the CA file is held to the CA and expiry rules, not only the first" {
+    control_all
+    # a good CA first, a client (non-CA) certificate behind it
+    printf -- '-----BEGIN CERTIFICATE-----\nFAKE-CA\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nFAKE-CA FAKE-CA-LEAF\n-----END CERTIFICATE-----\n' > "${GREMION_ROOT}/etc/edge/mtls/operator-ca.pem"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"holds a certificate (#2 of 2) that is not a CA certificate"* ]]
+    # an old CA that is about to expire, kept beside the new one for a staged rotation
+    printf -- '-----BEGIN CERTIFICATE-----\nFAKE-CA\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nFAKE-CA FAKE-CA-EXPIRING\n-----END CERTIFICATE-----\n' > "${GREMION_ROOT}/etc/edge/mtls/operator-ca.pem"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"holds a certificate (#2 of 2) that expires within"* ]]
+}
+
+# An install that has NOT opted in: the panel is the tunnel's, and its running ORIGIN is the loopback.
+panel_without_optin() {   # <ORIGIN the running panel carries>
+    api_edit services '. + [{"name":"panel@file","loadBalancer":{"servers":[{"url":"http://control-panel-blue:3000"}]}}]'
+    fake_container c5 control-panel-blue "control-panel-blue" running healthy 0
+    printf 'ORIGIN=%s\n' "$1" > "${FAKE_DOCKER}/control-panel-blue.env"
+}
+
+@test "control panel: the key turned off but a colour still running with the public ORIGIN fails (the tunnel would be refused), and the loopback ORIGIN passes" {
+    panel_without_optin "https://${CONTROL_HOST}"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"control-panel-blue: the running panel's ORIGIN is not the loopback default http://127.0.0.1:3043"* ]]
+    panel_without_optin "http://127.0.0.1:3043"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+}
+
+@test "control panel: step 9 judges the colour being verified (its panel is the one the switch puts live), not the live colour's panel" {
+    render_step4 nopanel
+    prepare_green_colour
+    # the LIVE (blue) panel still has the previous release's ORIGIN; the colour about to go live is right
+    api_edit services '. + [{"name":"panel@file","loadBalancer":{"servers":[{"url":"http://control-panel-blue:3000"}]}}]'
+    fake_container c5 control-panel-blue "control-panel-blue" running healthy 0
+    printf 'ORIGIN=http://127.0.0.1:3043\n' > "${FAKE_DOCKER}/control-panel-blue.env"
+    fake_container c6 control-panel-green "control-panel-green" running healthy 0
+    printf 'ORIGIN=https://%s\n' "$CONTROL_HOST" > "${FAKE_DOCKER}/control-panel-green.env"
+    run "$VERIFY" --colour green --control-after-switch --hosts "$HOSTS"
+    echo "$output"
+    [ "$status" -eq 0 ]
+    # the colour about to go live still carries the old ORIGIN: the switch would put an unreachable panel live
+    printf 'ORIGIN=http://127.0.0.1:3043\n' > "${FAKE_DOCKER}/control-panel-green.env"
+    run "$VERIFY" --colour green --control-after-switch --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"control-panel-green: the running panel's ORIGIN is not CONTROL_PANEL_ORIGIN"* ]]
+}
+
+@test "control panel: the router universal still holds the control router (a missing pin fails like any other)" {
+    control_all
+    api_edit routers 'map(if .name == "control-panel@file" then .middlewares |= .[1:] else . end)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router control-panel@file: 0 host pins (expected exactly 1)"* ]]
+}
+
+@test "control panel: a host WITHOUT the opt-in verifies the control host over HTTP exactly as before, and asks for no refusal" {
+    printf '%s\n' "$CONTROL_HOST" >> "$HOSTS"
+    fake_cert "$CONTROL_HOST" "DNS:${CONTROL_HOST}" 0
+    fake_http "https://${CONTROL_HOST}:8443/whoami" 200 "colour=blue xfh=${CONTROL_HOST}"
+    fake_http "https://${CONTROL_HOST}:8443/whoami" 200 "colour=blue xfh=${CONTROL_HOST}" forged
+    fake_http "http://${CONTROL_HOST}:8090/.well-known/acme-challenge/probe" 404 ""
+    run "$VERIFY" --hosts "$HOSTS"
+    echo "$output"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"refused the handshake"* ]]
+    [[ "$output" == *"all checks passed"* ]]
+}
+
+@test "control panel: the control host's certificate is awaited, and one that appears within the wait passes" {
+    control_all
+    # right after the switch the edge still presents the default certificate for the control host
+    fake_cert "$CONTROL_HOST" "DNS:traefik-default.invalid" 0
+    # the edge presents the right certificate from the THIRD time it is asked (the ACME order finishing)
+    printf 'X509v3 Subject Alternative Name: \n    DNS:%s\n' "$CONTROL_HOST" > "${FAKE_TLS}/${CONTROL_HOST}.good-san"
+    printf '2' > "${FAKE_TLS}/${CONTROL_HOST}.flip-after"
+    CONTROL_CERT_WAIT_SECONDS=40 CONTROL_CERT_POLL_SECONDS=1 run "$VERIFY" --hosts "$HOSTS"
+    echo "$output"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"waiting up to 40s for its certificate"* ]]
+    [[ "$output" == *"refused the handshake without a client certificate"* ]]
+}
+
+@test "control panel: a certificate that never appears fails after the wait, with the SAN failure" {
+    control_all
+    fake_cert "$CONTROL_HOST" "DNS:traefik-default.invalid" 0
+    CONTROL_CERT_WAIT_SECONDS=2 CONTROL_CERT_POLL_SECONDS=1 run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"certificate for ${CONTROL_HOST} has no matching SAN"* ]]
+}
+
+# ── the first opted-in deploy: step 4 (render) -> step 9 (verify) -> step 10 ──
+# gremion-deploy renders at step 4 with --defer-control-panel, verifies the new
+# colour at step 9 with --control-after-switch, and only step 10 (after the
+# switch) writes the router. The state in between is "key set, no file, no
+# router in traefik", and step 9 must accept exactly that and nothing wider.
+# Each side was green against its own test while the two contradicted each
+# other; these tests run the REAL render and the REAL verifier on one root.
+RENDER="${REPO_ROOT}/infra/host/bin/gremion-render"
+
+# render_step4 <panel|nopanel> -- the real gremion-render, exactly as deploy step 4
+# calls it, on an opted-in root whose etc/edge/active.yml has (or lacks) the panel
+# service. The render runs with the shims off PATH (it needs the real openssl);
+# the verifier gets its fake CA file back afterwards, since the CA's content is
+# not what is under test here.
+render_step4() {
+    local rel="${GREMION_ROOT}/releases/dist-v1.0.0" realpath="${PATH#"${SHIM_DIR}":}" ca="${BATS_TEST_TMPDIR}/realca"
+    mkdir -p "$rel/docker/pgbouncer" "$rel/docker/keycloak/certs" "$rel/legal" "$rel/infra/host/templates/edge" "$ca" "${GREMION_ROOT}/etc/edge/mtls"
+    printf '#!/usr/bin/env bash\ncd "$(dirname "$0")"\necho mint > internal-ca.crt; cp internal-ca.crt internal-ca.pem\necho k > internal-ca.key; echo c > keycloak.crt; echo k > keycloak.key\n' \
+        > "$rel/docker/keycloak/certs/gen-internal-ca.sh"
+    chmod +x "$rel/docker/keycloak/certs/gen-internal-ca.sh"
+    tr -d '\r' < "${REPO_ROOT}/legal/legal.env.example" > "$rel/legal/legal.env.example"
+    tr -d '\r' < "${REPO_ROOT}/legal/legal.env.example" | sed \
+        -e 's|^ORG_NAME=.*|ORG_NAME=Beispielgremium|' \
+        -e 's|^ORG_ADDRESS=.*|ORG_ADDRESS=Beispielweg 2, 54321 Beispielstadt|' \
+        -e 's|^ORG_EMAIL=.*|ORG_EMAIL=kontakt@beispiel.example|' \
+        -e 's|^RESPONSIBLE_PERSON=.*|RESPONSIBLE_PERSON=Erika Beispiel|' \
+        -e 's|^RESPONSIBLE_PERSON_EMAIL=.*|RESPONSIBLE_PERSON_EMAIL=datenschutz@beispiel.example|' \
+        -e 's|^DOMAIN=.*|DOMAIN=example.org|' > "${GREMION_ROOT}/etc/legal.env"
+    cp "$CONTROL_TEMPLATE" "$rel/infra/host/templates/edge/"
+    cat > "${GREMION_ROOT}/etc/env/state.env" <<'EOF'
+STACK=staging
+COMPOSE_PROJECT_NAME=staging-state
+COMPOSE_FILE=docker-compose.yml
+PLATFORM_DOMAIN=example.org
+ACME_EMAIL=ops@example.org
+TRAEFIK_CERT_RESOLVER=le-http
+EDGE_BIND_IP=127.0.0.1
+EDGE_BIND_IP6=::1
+EDGE_HTTP_PORT=8090
+EDGE_HTTPS_PORT=8443
+MAIL_BIND_IP=127.0.0.1
+MAIL_BIND_IP6=::1
+EDGE_V4_SUBNET=10.90.0.0/24
+EDGE_V6_SUBNET=fd5a:90::/64
+STATE_V4_SUBNET=10.90.1.0/24
+STATE_V6_SUBNET=fd5a:91::/64
+IMAGE_TAG=dist-v1.0.0
+PGBOUNCER_AUTH_PASSWORD=test-secret-pgbouncer
+LIVEKIT_API_KEY=lk-key
+LIVEKIT_API_SECRET=lk-secret
+PILOT_TENANT_HOST=pilot.example.org
+HEALTH_EXEMPT_SERVICES=minio-mc
+CONTROL_PANEL_ORIGIN=https://control.example.org
+EOF
+    if [ "$CONTROL_HOST" != "control.example.org" ]; then
+        sed -i "s|^CONTROL_PANEL_ORIGIN=.*|CONTROL_PANEL_ORIGIN=https://${CONTROL_HOST}|" "${GREMION_ROOT}/etc/env/state.env"
+        printf 'CONTROL_PANEL_HOST=%s\n' "$CONTROL_HOST" >> "${GREMION_ROOT}/etc/env/state.env"
+    fi
+    env PATH="$realpath" openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -keyout "$ca/ca.key" -out "${GREMION_ROOT}/etc/edge/mtls/operator-ca.pem" \
+        -days 30 -subj "/CN=bats operator CA" -addext "basicConstraints=critical,CA:TRUE" 2>/dev/null
+    printf 'http:\n  services:\n    app:\n      loadBalancer: {}\n' > "${GREMION_ROOT}/etc/edge/active.yml"
+    [ "$1" != "panel" ] || printf '    panel:\n      loadBalancer: {}\n' >> "${GREMION_ROOT}/etc/edge/active.yml"
+    run env PATH="$realpath" "$RENDER" --release "$rel" --defer-control-panel
+    echo "$output"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"the router is written after the switch"* ]]
+    [ ! -e "${GREMION_ROOT}/etc/edge/control-panel.yml" ]
+    cp "${GREMION_ROOT}/etc/edge/mtls/operator-ca.pem" "${BATS_TEST_TMPDIR}/real-operator-ca.pem"
+    control_ca
+    printf '%s\n' "$CONTROL_HOST" >> "$HOSTS"
+}
+
+@test "control panel, first opted-in deploy: the real render defers the router and the real step-9 verify accepts that state (no panel service in active.yml yet)" {
+    render_step4 nopanel
+    prepare_green_colour
+    # the colour being verified HAS a panel container (started under the opted-in app env): its ORIGIN is judged
+    fake_container c6 control-panel-green "control-panel-green" running healthy 0
+    printf 'ORIGIN=https://%s\n' "$CONTROL_HOST" > "${FAKE_DOCKER}/control-panel-green.env"
+    run "$VERIFY" --colour green --control-after-switch --hosts "$HOSTS"
+    echo "$output"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"opted in, router not written yet"* ]]
+    [[ "$output" == *"its router is written after the switch"* ]]
+    [[ "$output" != *"CONTROL_PANEL_ORIGIN is set in state.env"* ]]
+    # and the same state with the loopback ORIGIN in that container is a failure, so the pass above judged something
+    printf 'ORIGIN=http://127.0.0.1:3043\n' > "${FAKE_DOCKER}/control-panel-green.env"
+    run "$VERIFY" --colour green --control-after-switch --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"control-panel-green: the running panel's ORIGIN is not CONTROL_PANEL_ORIGIN"* ]]
+}
+
+@test "control panel, opting in on a host that already switched to this release: the same state, the same verdict (panel service already in active.yml)" {
+    render_step4 panel
+    prepare_green_colour
+    fake_container c6 control-panel-green "control-panel-green" running healthy 0
+    printf 'ORIGIN=https://%s\n' "$CONTROL_HOST" > "${FAKE_DOCKER}/control-panel-green.env"
+    run "$VERIFY" --colour green --control-after-switch --hosts "$HOSTS"
+    echo "$output"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"opted in, router not written yet"* ]]
+    printf 'ORIGIN=http://127.0.0.1:3043\n' > "${FAKE_DOCKER}/control-panel-green.env"
+    run "$VERIFY" --colour green --control-after-switch --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"control-panel-green: the running panel's ORIGIN is not CONTROL_PANEL_ORIGIN"* ]]
+}
+
+@test "control panel, a routine redeploy (router already rendered and live): the real step-4 render keeps it, the real step-9 verify holds it to every check, and step 11 passes" {
+    render_step4 panel
+    # an earlier deploy's switch left the router: render it as the deploy's step 10 does, then let traefik serve it
+    cp "${BATS_TEST_TMPDIR}/real-operator-ca.pem" "${GREMION_ROOT}/etc/edge/mtls/operator-ca.pem"
+    run env PATH="${PATH#"${SHIM_DIR}":}" "$RENDER" --release "${GREMION_ROOT}/releases/dist-v1.0.0" --control-panel-only
+    echo "$output"
+    [ "$status" -eq 0 ]
+    [ -s "${GREMION_ROOT}/etc/edge/control-panel.yml" ]
+    control_ca
+    control_live
+    sort -u "${GREMION_ROOT}/etc/env/state.env" > "${BATS_TEST_TMPDIR}/s.env"
+    cp "${BATS_TEST_TMPDIR}/s.env" "${GREMION_ROOT}/etc/env/state.env"
+    prepare_green_colour
+    fake_container c6 control-panel-green "control-panel-green" running healthy 0
+    printf 'ORIGIN=https://%s\n' "$CONTROL_HOST" > "${FAKE_DOCKER}/control-panel-green.env"
+    # step 4 of the next deploy: the router is checked and left in place, not rewritten before the switch
+    cp "${BATS_TEST_TMPDIR}/real-operator-ca.pem" "${GREMION_ROOT}/etc/edge/mtls/operator-ca.pem"
+    run env PATH="${PATH#"${SHIM_DIR}":}" "$RENDER" --release "${GREMION_ROOT}/releases/dist-v1.0.0" --defer-control-panel
+    [ "$status" -eq 0 ]
+    [ -s "${GREMION_ROOT}/etc/edge/control-panel.yml" ]
+    control_ca
+    # step 9 (before the switch)
+    run "$VERIFY" --colour green --control-after-switch --hosts "$HOSTS"
+    echo "$output"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"https://${CONTROL_HOST}/ refused the handshake without a client certificate"* ]]
+    # step 11 (after the switch): no flag, the live colour
+    run "$VERIFY" --hosts "$HOSTS"
+    echo "$output"
+    [ "$status" -eq 0 ]
+}
+
+@test "control panel: the state step 4 leaves is a FAILURE for every later verify (step 11, a cron run): the flag opens nothing else" {
+    render_step4 nopanel
+    prepare_green_colour
+    run "$VERIFY" --colour green --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"CONTROL_PANEL_ORIGIN is set in state.env but etc/edge/control-panel.yml does not exist"* ]]
+    [[ "$output" == *"certificate for ${CONTROL_HOST} has no matching SAN"* ]]
+}
+
+@test "control panel: --control-after-switch tolerates only an absent router: Traefik serving one without its file still fails" {
+    render_step4 nopanel
+    control_live
+    # control_live repeats the key and the host line render_step4 already wrote
+    sort -u "${GREMION_ROOT}/etc/env/state.env" > "${BATS_TEST_TMPDIR}/s.env"
+    cp "${BATS_TEST_TMPDIR}/s.env" "${GREMION_ROOT}/etc/env/state.env"
+    run "$VERIFY" --control-after-switch --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"traefik serves router control-panel@file, but etc/edge/control-panel.yml does not exist"* ]]
+}
+
+@test "control panel: --control-after-switch holds a stray router on the control host" {
+    render_step4 nopanel
+    api_edit routers '. + [{"name":"stray@docker","status":"enabled","entryPoints":["websecure"],
+        "rule":"Host(`control.example.org`) && PathPrefix(`/x`)","service":"keycloak@docker","tls":{"certResolver":"le-http"},
+        "middlewares":["edge-hostpin-a@file","edge-hsts-custom@docker","edge-ratelimit-app@docker"]}]'
+    run "$VERIFY" --control-after-switch --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router(s) stray@docker name the control host ${CONTROL_HOST}"* ]]
+}
+
+@test "control panel: --control-after-switch still holds an EXISTING router to every check (a weaker clientAuthType fails)" {
+    control_all
+    sed -i 's/RequireAndVerifyClientCert/VerifyClientCertIfGiven/' "${GREMION_ROOT}/etc/edge/control-panel.yml"
+    run "$VERIFY" --control-after-switch --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"clientAuthType must appear once and be RequireAndVerifyClientCert"* ]]
+}
+
+@test "control panel: --control-after-switch without the opt-in key changes nothing (a stale router still fails)" {
+    control_all
+    sed -i '/^CONTROL_PANEL_ORIGIN=/d' "${GREMION_ROOT}/etc/env/state.env"
+    run "$VERIFY" --control-after-switch --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"etc/edge/control-panel.yml exists but CONTROL_PANEL_ORIGIN is empty in state.env"* ]]
+}
+
+@test "control panel: a router whose host merely ENDS in control.<domain> is not on the control host (an install without the opt-in stays green)" {
+    api_edit routers '. + [{"name":"bird@docker","status":"enabled","entryPoints":["websecure"],
+        "rule":"Host(`birdcontrol.example.org`)","service":"whoami",
+        "tls":{"certResolver":"le-http"},
+        "middlewares":["edge-hostpin-bird@file","edge-hsts-custom@docker","edge-ratelimit-app@docker"]}]'
+    api_edit middlewares '. + [{"name":"edge-hostpin-bird@file","provider":"file","type":"headers",
+        "headers":{"customRequestHeaders":{"X-Forwarded-Host":"birdcontrol.example.org"}}}]'
+    run "$VERIFY" --hosts "$HOSTS"
+    echo "$output"
+    [[ "$output" != *"name the control host"* ]]
+    [ "$status" -eq 0 ]
+}
+
+# ---------------------------------------------------------------------------
+# CONTROL_PANEL_HOST: the panel on a host OUTSIDE the platform domain. The verifier judges
+# the configured host everywhere it used to judge control.<PLATFORM_DOMAIN>: the default
+# host list, the certificate's SAN, the handshake refusal without a client certificate,
+# the router's rule and the ORIGIN. The real render and the real verifier meet here too.
+# ---------------------------------------------------------------------------
+
+@test "control panel host: the default host list names the configured host, not control.<domain>" {
+    printf 'CONTROL_PANEL_HOST=panel.example.com\n' >> "${GREMION_ROOT}/etc/env/state.env"
+    run "$VERIFY"
+    echo "$output"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"certificate for panel.example.com has no matching SAN"* ]]
+    [[ "$output" != *"control.example.org"* ]]
+}
+
+@test "control panel host: a custom host passes with its own certificate, router rule and ORIGIN, and the refusal without a client certificate is asserted for IT" {
+    custom_control_host
+    control_all
+    run "$VERIFY" --hosts "$HOSTS"
+    echo "$output"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"https://panel.example.com/ refused the handshake without a client certificate (TLS alert)"* ]]
+    run jq -r '.routers[] | select(.name == "control-panel@file") | "\(.class) \(.host) \(.san) \(.healthy)"' \
+        "${GREMION_ROOT}/runtime/last-verify.json"
+    [ "$output" = "colour-bound panel.example.com true true" ]
+}
+
+@test "control panel host: with a custom host the SAN, the handshake, the rule and the ORIGIN are each judged against that host" {
+    custom_control_host
+    control_all
+    # the certificate is for the default name: no SAN for the configured host
+    fake_cert "$CONTROL_HOST" "DNS:control.example.org" 0
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"certificate for panel.example.com has no matching SAN"* ]]
+    fake_cert "$CONTROL_HOST" "DNS:${CONTROL_HOST}" 0
+    # a gate that is open on the configured host
+    rm -f "${FAKE_HTTP}/probe-$(slug "https://${CONTROL_HOST}:8443/").tlsrefused"
+    fake_http "https://${CONTROL_HOST}:8443/" 200 "the panel login"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"https://panel.example.com/ answered HTTP 200 to a connection WITHOUT a client certificate"* ]]
+    : > "${FAKE_HTTP}/probe-$(slug "https://${CONTROL_HOST}:8443/").tlsrefused"
+    # traefik serves the router on the default name instead
+    api_edit routers 'map(if .name == "control-panel@file" then .rule = "Host(`control.example.org`) && !PathPrefix(`/healthz`) && !PathPrefix(`/api/internal`)" else . end)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router control-panel@file serves rule 'Host(\`control.example.org\`)"* ]]
+    [[ "$output" == *"not '${CONTROL_RULE}'"* ]]
+    api_edit routers 'map(if .name == "control-panel@file" then .rule = "Host(`panel.example.com`) && !PathPrefix(`/healthz`) && !PathPrefix(`/api/internal`)" else . end)'
+    # the Traefik container still stamps the default name (its labels are read when it is created, and the
+    # deploy does not recreate it): the host pin of the control router must stamp the configured host
+    api_edit middlewares 'map(if .name == "edge-hostpin-control@docker" then .headers.customRequestHeaders["X-Forwarded-Host"] = "control.example.org" else . end)'
+    run "$VERIFY" --hosts "$HOSTS"
+    echo "$output"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"edge-hostpin-control"* ]]
+    api_edit middlewares 'map(if .name == "edge-hostpin-control@docker" then .headers.customRequestHeaders["X-Forwarded-Host"] = "panel.example.com" else . end)'
+    # the panel runs with the default name's origin
+    printf 'ORIGIN=https://control.example.org\n' > "${FAKE_DOCKER}/control-panel-blue.env"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"the running panel's ORIGIN is not CONTROL_PANEL_ORIGIN (https://panel.example.com)"* ]]
+}
+
+@test "control panel host: CONTROL_PANEL_ORIGIN that is not https://<the configured host> fails, and an invalid host is refused before any check (exit 2)" {
+    custom_control_host
+    control_all
+    sed -i 's|^CONTROL_PANEL_ORIGIN=.*|CONTROL_PANEL_ORIGIN=https://control.example.org|' "${GREMION_ROOT}/etc/env/state.env"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"CONTROL_PANEL_ORIGIN (https://control.example.org) is not https://panel.example.com"* ]]
+    sed -i 's|^CONTROL_PANEL_HOST=.*|CONTROL_PANEL_HOST=Panel.example.com|' "${GREMION_ROOT}/etc/env/state.env"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"CONTROL_PANEL_HOST is refused: it is not lowercase"* ]]
+    sed -i 's|^CONTROL_PANEL_HOST=.*|CONTROL_PANEL_HOST=example.org|' "${GREMION_ROOT}/etc/env/state.env"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"it is the platform domain itself"* ]]
+}
+
+@test "control panel host: the real render and the real verifier agree on a custom host across step 4, step 9 and step 11" {
+    custom_control_host
+    render_step4 panel
+    cp "${BATS_TEST_TMPDIR}/real-operator-ca.pem" "${GREMION_ROOT}/etc/edge/mtls/operator-ca.pem"
+    run env PATH="${PATH#"${SHIM_DIR}":}" "$RENDER" --release "${GREMION_ROOT}/releases/dist-v1.0.0" --control-panel-only
+    echo "$output"
+    [ "$status" -eq 0 ]
+    grep -qF 'Host(`panel.example.com`)' "${GREMION_ROOT}/etc/edge/control-panel.yml"
+    control_ca
+    control_live
+    sort -u "${GREMION_ROOT}/etc/env/state.env" > "${BATS_TEST_TMPDIR}/s.env"
+    cp "${BATS_TEST_TMPDIR}/s.env" "${GREMION_ROOT}/etc/env/state.env"
+    prepare_green_colour
+    fake_container c6 control-panel-green "control-panel-green" running healthy 0
+    printf 'ORIGIN=https://%s\n' "$CONTROL_HOST" > "${FAKE_DOCKER}/control-panel-green.env"
+    run "$VERIFY" --colour green --control-after-switch --hosts "$HOSTS"
+    echo "$output"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"https://panel.example.com/ refused the handshake without a client certificate"* ]]
+    run "$VERIFY" --hosts "$HOSTS"
+    echo "$output"
+    [ "$status" -eq 0 ]
+    # the file the render wrote for panel.example.com is what verify judges: the default name's rule fails on it
+    sed -i 's|panel\.example\.com|control.example.org|' "${GREMION_ROOT}/etc/edge/control-panel.yml"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"etc/edge/control-panel.yml: the rule is 'Host(\`control.example.org\`)"* ]]
+}
+
+# M1: the first health probe of a panel that was just recreated comes a moment after its router loads.
+@test "control panel: a panel server with no verdict yet, or DOWN, is asked about again (bounded) and passes once traefik reports it UP; a verdict that stays bad still fails after the last try" {
+    control_all
+    # a fake curl that has not seen the first probe yet: the service list changes under the verifier
+    api_edit services 'map(if .name == "panel@file" then del(.serverStatus) else . end)'
+    PANEL_UP_TRIES=3 PANEL_UP_WAIT_SECONDS=0 run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    # one "not UP yet" line per extra try: three tries in all
+    [ "$(grep -c 'panel service panel@file: not UP yet' <<<"$output")" -eq 2 ]
+    [[ "$output" == *"traefik reports no status for its server"* ]]
+    PANEL_UP_TRIES=1 PANEL_UP_WAIT_SECONDS=0 run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" != *"not UP yet"* ]]
+    # the first probe lands between the first read and the second: the second read says UP
+    api_edit services 'map(if .name == "panel@file" then .serverStatus = {"http://control-panel-blue:3000":"UP"} else . end)'
+    cp "${FAKE_HTTP}/api-http-services.json" "${FAKE_HTTP}/up.json"
+    api_edit services 'map(if .name == "panel@file" then .serverStatus = {"http://control-panel-blue:3000":"DOWN"} else . end)'
+    cp "${FAKE_HTTP}/up.json" "${FAKE_HTTP}/api-http-services.json.next"
+    PANEL_UP_TRIES=3 PANEL_UP_WAIT_SECONDS=0 run "$VERIFY" --hosts "$HOSTS"
+    echo "$output"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"panel service panel@file: not UP yet (try 1 of 3)"* ]]
 }

@@ -68,7 +68,7 @@ export default defineConfig({
           // hook guard lives beside the script it guards, outside src/. Without this
           // entry the suite is never collected and the gate that runs it passes
           // vacuously — the same shape of failure the guard itself is about.
-          include: ['tests/unit/**/*.test.ts', 'src/**/*.test.ts', 'scripts/install-git-hooks.test.ts', '../packages/db/src/**/*.test.ts', '../packages/ports/src/**/*.test.ts', '../packages/storage/src/**/*.test.ts'],
+          include: ['tests/unit/**/*.test.ts', 'src/**/*.test.ts', 'scripts/install-git-hooks.test.ts', 'scripts/ops-realm-refusal.test.ts', '../packages/db/src/**/*.test.ts', '../packages/ports/src/**/*.test.ts', '../packages/storage/src/**/*.test.ts'],
           // *.integration.test.ts files need a real Postgres — they run separately
           // via `pnpm test:integration` (see vitest.integration.config.ts).
           // *.browser.test.ts files need Chromium — the browser projects below.

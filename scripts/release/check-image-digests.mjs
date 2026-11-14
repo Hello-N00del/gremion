@@ -86,6 +86,8 @@ export const PROJECT_ENV = Object.freeze({
   'docker-compose.override.yml': 'infra/host/templates/env/state.env.tmpl',
   'docker-compose.app.yml': 'infra/host/templates/env/app.env.tmpl',
   'docker-compose.app.dev.yml': 'infra/host/templates/env/app.env.tmpl',
+  // the opt-in control-panel layer of the app project (one network attachment)
+  'docker-compose.control-public.yml': 'infra/host/templates/env/app.env.tmpl',
   // TASK-039: the ops project moved to compose/observability/.
   'compose/observability/docker-compose.yml': 'infra/host/templates/env/ops.env.tmpl',
   'infra/host/mail/docker-compose.yml': 'infra/host/templates/env/mail.env.tmpl',

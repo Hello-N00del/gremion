@@ -76,6 +76,8 @@ usage() {
 usage: gremion-tenant <verb> [args...]
   init [--realm-only] [--panel-origin <origin>]
   init --realm-only --keycloak-container <name> [--panel-origin <origin>]
+      (--panel-origin defaults to CONTROL_PANEL_ORIGIN in state.env, else http://127.0.0.1:3043;
+       a flag that disagrees with the key is refused: one panel origin per install)
   panel
   operator add <email> [--no-mail]
   operator add <email> --no-mail --keycloak-container <name>
@@ -244,7 +246,25 @@ init_realm_only_kcadm() {   # <container> <origin>
             ok "realm platform is present and equal to realm-export.ops.json for ${origin}"
             return 0
         fi
-        die "realm platform exists but differs from realm-export.ops.json for ${origin}: refusing to overwrite an ops realm" "$GREMION_EXIT_ASSERT"
+        # Two causes, two remedies, and the stored fingerprint (template + origin, one hash) cannot tell
+        # them apart. The realm's control-panel client says which origin it was made for (its one redirect
+        # URI is <origin>/*): the CURRENT template with THAT origin hashes to the stored value exactly when
+        # only the origin differs. The TypeScript side (gremion-ui/scripts/ops-realm-refusal.ts) does the same.
+        local have_fp stored_origin="" stored_fp_same
+        have_fp="$(jq -r '.attributes["gremion.ops-realm.sha256"] // ""' <<< "$have" | tr -d '\r')"
+        stored_origin="$(docker exec "$kc" "$KCADM_BIN" get clients -r platform -q clientId=control-panel --fields redirectUris 2>/dev/null \
+            | jq -r '.[0].redirectUris[0] // ""' 2>/dev/null | tr -d '\r' || true)"
+        stored_origin="${stored_origin%/\*}"
+        if [[ -n "$stored_origin" && "$stored_origin" != "$origin" ]]; then
+            stored_fp_same="$( { cat "$tmpl"; printf '\n%s' "$stored_origin"; } | sha256sum | cut -d' ' -f1)"
+            if [[ "$stored_fp_same" == "$have_fp" ]]; then
+                die "realm platform differs from realm-export.ops.json for ${origin}: it was made for the panel origin ${stored_origin}, and an origin cannot change in place (the realm's redirect URIs, web origin and fingerprint are bound to it); this install needs a new ops realm for ${origin}, or its origin put back to ${stored_origin}. The template is not the difference, so step 8a of docs/ops/runbook/upgrade.md does not apply; refusing to overwrite an ops realm" "$GREMION_EXIT_ASSERT"
+            fi
+        fi
+        if [[ "$stored_origin" == "$origin" ]]; then
+            die "realm platform differs from realm-export.ops.json for ${origin}: the origin is the one it was made for, so its template is the difference. A realm made by an earlier release's template is brought up to this one with kcadm, then re-stamped: docs/ops/runbook/upgrade.md, step 8a (read its precondition first); refusing to overwrite an ops realm" "$GREMION_EXIT_ASSERT"
+        fi
+        die "realm platform differs from realm-export.ops.json for ${origin}, and the realm's control-panel client does not say which origin it was made for, or differs in both: either the origin changed (it cannot change in place; the install needs a new ops realm) or the realm was made by an earlier template (docs/ops/runbook/upgrade.md, step 8a, whose precondition tells which); refusing to overwrite an ops realm" "$GREMION_EXIT_ASSERT"
     fi
     if ! grep -qiE 'not found|404' "$err"; then
         local why; why="$(tr -d '\r' < "$err" | tail -n 3 | tr '\n' ' ')"; rm -f "$err"
@@ -280,8 +300,19 @@ init_realm_only_kcadm() {   # <container> <origin>
     ok "realm platform created; the control-panel client secret is in ${secret_file}, the grafana client secret in ${gsecret_file} (0600)"
 }
 
+# The origin the install's control panel answers on: CONTROL_PANEL_ORIGIN in
+# state.env (the opt-in: https://<control host> behind the client-certificate
+# gate), else the loopback of `gremion-tenant panel`'s tunnel. ONE origin per
+# install: the ops realm's control-panel client is created exact to it, and the
+# realm fingerprint refuses a changed origin on an existing realm.
+panel_origin_of_install() {
+    local state="${ROOT}/etc/env/state.env" o=""
+    o="$(control_panel_origin_of "$state")"
+    printf '%s' "${o:-http://127.0.0.1:3043}"
+}
+
 cmd_init() {
-    local realm_only=no origin="http://127.0.0.1:3043" kc=""
+    local realm_only=no origin="" kc="" install_origin
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --realm-only) realm_only=yes; shift ;;
@@ -290,6 +321,15 @@ cmd_init() {
             *) usage >&2; die "init: unknown argument: $1" "$GREMION_EXIT_USAGE" ;;
         esac
     done
+    # No flag: the install's own origin. A flag that disagrees with an opted-in
+    # install is refused: a realm created for one origin and a panel that
+    # answers another cannot sign anyone in, and there is no dual-origin mode.
+    install_origin="$(panel_origin_of_install)"
+    if [[ -z "$origin" ]]; then
+        origin="$install_origin"
+    elif [[ "$install_origin" != "http://127.0.0.1:3043" && "$origin" != "$install_origin" ]]; then
+        die "--panel-origin ${origin} differs from CONTROL_PANEL_ORIGIN (${install_origin}) in state.env: one origin per install; change the key or drop the flag" "$GREMION_EXIT_USAGE"
+    fi
     [[ "$origin" =~ ^https?://[a-z0-9.-]+(:[0-9]+)?$ ]] || die "--panel-origin must be scheme://host[:port], no path, no wildcard" "$GREMION_EXIT_USAGE"
     if [[ -n "$kc" ]]; then
         [[ "$realm_only" == yes ]] || die "--keycloak-container is the --realm-only path (a host without the pooled stack)" "$GREMION_EXIT_USAGE"
@@ -540,8 +580,16 @@ cmd_export() {
 # panel (Q12): the ssh -L line for the active colour's panel; nothing published.
 cmd_panel() {
     active_colour
-    local state stack cid ip port="${PANEL_LOCAL_PORT:-3043}"
+    local state stack cid ip port="${PANEL_LOCAL_PORT:-3043}" public
     state="${ROOT}/etc/env/state.env"
+    # An install that opted in answers on its own host name only (the panel's host
+    # guard refuses any other Host with 421), so a tunnel to the loopback would be
+    # refused: say where it is instead of printing a line that cannot work.
+    public="$(control_panel_origin_of "$state")"
+    if [[ -n "$public" ]]; then
+        info "the control panel of this install is public at ${public}, behind the operator client certificate (docs/runbooks/control-panel-access.md); no tunnel is needed, and one would be refused (the panel answers that host name only)"
+        return 0
+    fi
     stack="$(env_key "$state" STACK)"
     [[ -f "${ROOT}/etc/edge/active.yml" ]] || die "etc/edge/active.yml is absent" "$GREMION_EXIT_USAGE"
     cid="$(docker ps -q --filter "label=com.docker.compose.project=${stack}-app-${COLOUR}" --filter "label=com.docker.compose.service=control-panel")"

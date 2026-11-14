@@ -87,8 +87,12 @@ its tile, and a query without data says "Keine Daten" (never a 0).
 ## Where it runs
 
 - **Pooled stack** (`docker-compose.app.yml`, one per colour, Q12): no
-  published port, no Traefik route; `gremion-tenant panel` prints the
-  `ssh -L 127.0.0.1:<p>:<ip>:3000` line.
+  published port and no Traefik label. By default `gremion-tenant panel` prints
+  the `ssh -L 127.0.0.1:<p>:<ip>:3000` line. An install can opt in
+  (`CONTROL_PANEL_ORIGIN=https://control.<domain>`, or another host named by `CONTROL_PANEL_HOST`) to serve it at that host
+  behind a TLS client-certificate gate at the edge, then this sign-in; `ORIGIN`
+  follows the key and there is no second origin
+  (`docs/runbooks/control-panel-access.md`).
 - **A host without the pooled stack** (`compose/control-panel/standalone.yml`,
   section 11, [D R29-I11]): routed by the host's existing edge Traefik on ONE
   operator-supplied host name (`PANEL_HOST`, env only), TLS by the named

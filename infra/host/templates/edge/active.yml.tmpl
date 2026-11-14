@@ -3,10 +3,20 @@
 # Rendered by gremion-switch and written ATOMICALLY into ${GREMION_ROOT}/etc/edge/,
 # which Traefik watches as its dynamic-configuration directory.
 #
-# It defines exactly four file-provider services and the two loopback-only test
+# It defines exactly five file-provider services and the two loopback-only test
 # routers. ONLY colour-bound routers reference app@file / public@file: the static
 # `app` and `portal` routers and the per-tenant `app` routers. Every other router
 # targets a state-tier service by its stable name and is untouched by a switch.
+#
+# The fifth service, `panel`, is the operator control panel of the ACTIVE colour.
+# Only etc/edge/control-panel.yml (rendered by gremion-render when the install
+# opts in, behind a client-certificate TLS option) has a router for it; on a host
+# without the opt-in no router names it, so no request is ever routed to it. Traefik
+# still runs the health probe below against it, and on such a host (where the panel is
+# not on the edge network, the opt-in overlay being what puts it there) that probe fails
+# and is logged by Traefik as an unhealthy server; the service is reported down and
+# nothing depends on it. It has no -next twin: the inactive colour's panel is not something to verify through a
+# loopback test router, and nothing routes to it.
 #
 # NO MIDDLEWARE MAY BE DECLARED HERE. This file is rewritten on every switch; a
 # middleware declared here would vanish for the instant between the two writes and
@@ -46,6 +56,14 @@ http:
           timeout: "3s"
         servers:
           - url: "http://gremion-public-${ACTIVE_COLOUR}:3000"
+    panel:
+      loadBalancer:
+        healthCheck:
+          path: /healthz
+          interval: "10s"
+          timeout: "3s"
+        servers:
+          - url: "http://control-panel-${ACTIVE_COLOUR}:3000"
     app-next:
       loadBalancer:
         healthCheck:

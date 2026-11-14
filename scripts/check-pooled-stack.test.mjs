@@ -12,7 +12,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { bindRefusesMissingHostDir } from './compose-edge.mjs'
+import { bindRefusesMissingHostDir, readEnvFile } from './compose-edge.mjs'
 import {
   PLACEMENT,
   LEAF_PROFILES,
@@ -25,6 +25,8 @@ import {
   appShapeViolations,
   colourSuffixViolations,
   isolationViolations,
+  controlPublicViolations,
+  CONTROL_PUBLIC_OVERLAY,
   globalNameViolations,
   resolveNet,
   runAll,
@@ -161,6 +163,53 @@ test('publishes: a port with no host address (or a wildcard, in any spelling) is
     assert.equal(v.length, 1, `${JSON.stringify(bad)}: ${v.join(' | ')}`)
     assert.match(v[0], /state\/livekit: publishes 7881->7881\/tcp with no host address/)
   }
+})
+
+// The opted-in render: the same project with docker-compose.control-public.yml layered on.
+function publicRender(colour) {
+  const r = appRender(colour)
+  r.services['control-panel'].networks = { app: null, state: { aliases: [`control-panel-${colour}`] }, edge: { aliases: [`control-panel-${colour}`] } }
+  return r
+}
+
+test('control panel: OFF the edge network by default; the opt-in overlay adds the edge attachment under its colour alias and nothing else', () => {
+  assert.deepEqual(PLACEMENT.app['control-panel'], { class: 'council-app', networks: ['app', 'state'] })
+  const good = appRender('blue')
+  assert.deepEqual(appShapeViolations(good, 'blue', STACK), [])
+  assert.deepEqual(controlPublicViolations(good, publicRender('blue'), 'blue', STACK), [])
+  assert.deepEqual(appShapeViolations(publicRender('blue'), 'blue', STACK), [])
+  // the default render on the edge network: the panel would be a peer of every edge service
+  const leaky = appRender('blue')
+  leaky.services['control-panel'].networks.edge = { aliases: ['control-panel-blue'] }
+  assert.match(controlPublicViolations(leaky, publicRender('blue'), 'blue', STACK).join('\n'), /on teststack_edge WITHOUT the opt-in overlay/)
+  // the placement table is the contract for the default render
+  const rs = allRenders()
+  const app = rs.find((x) => x.id === 'app-blue').render
+  app.services['control-panel'].networks.edge = { aliases: ['control-panel-blue'] }
+  assert.match(isolationViolations(rs, STACK).join('\n'), /app-blue\/control-panel: networks \[[^\]]*teststack_edge[^\]]*\], placement table says/)
+  // the overlay without its colour alias is the one Traefik's `panel` service could not dial
+  const noAlias = publicRender('blue')
+  noAlias.services['control-panel'].networks.edge = null
+  assert.match(controlPublicViolations(appRender('blue'), noAlias, 'blue', STACK).join('\n'), /edge aliases \[\], want \["control-panel-blue"\] only/)
+  assert.match(appShapeViolations(noAlias, 'blue', STACK).join('\n'), /control-panel: no control-panel-blue alias on teststack_edge/)
+  // an overlay that moves any other service, or adds one, is not "the panel's attachment only"
+  const wide = publicRender('blue')
+  wide.services['kernel-api'].networks.edge = { aliases: ['kernel-api-blue'] }
+  assert.match(controlPublicViolations(appRender('blue'), wide, 'blue', STACK).join('\n'), /kernel-api: docker-compose\.control-public\.yml changed its networks/)
+  const extra = publicRender('blue')
+  extra.services.sidecar = { image: 'x:1', networks: { edge: null } }
+  assert.match(controlPublicViolations(appRender('blue'), extra, 'blue', STACK).join('\n'), /sidecar: docker-compose\.control-public\.yml added a service/)
+  // a published port or a docker label on the panel is refused with the overlay too
+  const published = publicRender('blue')
+  published.services['control-panel'].ports = [{ target: 3000, published: '3043', host_ip: '127.0.0.1' }]
+  assert.match(controlPublicViolations(appRender('blue'), published, 'blue', STACK).join('\n'), /publishes a host port/)
+  // a docker label on the panel would survive a colour switch and route to the wrong colour
+  const enabled = appRender('blue')
+  enabled.services['control-panel'].labels['traefik.enable'] = 'true'
+  assert.match(appShapeViolations(enabled, 'blue', STACK).join('\n'), /control-panel: traefik\.enable is "true", want "false"/)
+  const routed = appRender('blue')
+  routed.services['control-panel'].labels['traefik.http.routers.control.rule'] = 'Host(`control.example.org`)'
+  assert.match(appShapeViolations(routed, 'blue', STACK).join('\n'), /control-panel: carries docker-provider labels traefik\.http\.routers\.control\.rule/)
 })
 
 test('leaves: each way a leaf stops being internal-only, or its URL stops resolving, is named', () => {
@@ -487,8 +536,9 @@ test('real renders: the app project without its profiles lists no one-shot (up c
 })
 
 // TASK-043 TDD 17 (Q12): the ops shell of each colour publishes no port, has no
-// Traefik route, sits on app + state only, and is hardened.
-test('real renders: blue and green control-panel publish no ports, carry traefik.enable=false, sit on the app and state networks only', () => {
+// Traefik route, sits on app + state only (the edge network only through the
+// opt-in overlay), and is hardened.
+test('real renders: blue and green control-panel publish no ports, carry traefik.enable=false, sit on the app and state networks only; the opt-in overlay adds exactly the edge attachment under its colour alias', () => {
   const byName = (a, b) => a.localeCompare(b)
   for (const { project, colour } of [
     { project: PROJECTS[1], colour: 'blue' },
@@ -507,6 +557,17 @@ test('real renders: blue and green control-panel publish no ports, carry traefik
     assert.equal(svc.read_only, true)
     assert.deepEqual(svc.cap_drop, ['ALL'])
     assert.match(String(svc.image), /^ghcr\.io\/hello-n00del\/gremion-control-panel:/)
+    // the overlay, layered the way an opted-in install's COMPOSE_FILE layers it
+    const layered = renderProject(project, {
+      env: { COMPOSE_FILE: `${readEnvFile(project.envFile).COMPOSE_FILE}:${CONTROL_PUBLIC_OVERLAY}`, COMPOSE_PATH_SEPARATOR: ':' },
+    })
+    const lsvc = layered.services['control-panel']
+    assert.deepEqual(
+      Object.keys(lsvc.networks ?? {}).map((k) => layered.networks?.[k]?.name ?? k).sort(byName),
+      [`guardstack-app-${colour}_app`, 'guardstack_edge', 'guardstack_state'].sort(byName),
+    )
+    assert.deepEqual(lsvc.networks.edge?.aliases, [`control-panel-${colour}`])
+    assert.deepEqual(controlPublicViolations(render, layered, colour, 'guardstack'), [])
   }
 })
 

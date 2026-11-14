@@ -31,7 +31,7 @@
 // STDOUT carries only machine output (render-router, status, reconcile JSON,
 // one-time secrets); every log line goes to STDERR. EXIT: 0 ok, 1 a failure,
 // 2 usage or a precondition (a missing environment variable is always named).
-import { createHash, randomBytes } from 'node:crypto'
+import { randomBytes } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import postgres from 'postgres'
@@ -94,6 +94,7 @@ import {
   type Tenant,
 } from '../src/lib/server/tenant/registry'
 import { KcProvisionApi, masterAdminClientId, type KcTransport } from '../src/lib/server/tenant/provisioner/kc-admin-api'
+import { opsRealmFingerprint, opsRealmRefusal } from './ops-realm-refusal'
 import { customerAdapters, governanceServer, kernelServer, reconcileKernelAudit } from '../src/lib/server/tenant/provisioner/customer-adapters'
 import { kernelApiSeedDeps, reconcileKernelApiSeed, reconcilePurgerConnect } from '../src/lib/server/tenant/provisioner/reconcile-reensure'
 import { fixtureIdentities } from '../src/lib/server/tenant/provisioner/fixture-identities'
@@ -643,7 +644,7 @@ function panelOrigin(): string {
 async function ensureOpsRealm(kc: KcProvisionApi, raw: KcTransport): Promise<{ created: boolean }> {
   const origin = panelOrigin()
   const templateText = readFileSync(join(kcDir, 'realm-export.ops.json'), 'utf-8')
-  const fingerprint = createHash('sha256').update(templateText).update('\n').update(origin).digest('hex')
+  const fingerprint = opsRealmFingerprint(templateText, origin)
   // The admin calls use Keycloak's internal address: without this, mailed links name that address.
   const frontendUrl = frontendUrlFor(reqEnv('PLATFORM_DOMAIN'), OPS_REALM)
   if (await kc.realmExists(OPS_REALM)) {
@@ -660,7 +661,18 @@ async function ensureOpsRealm(kc: KcProvisionApi, raw: KcTransport): Promise<{ c
       }
       return { created: false }
     }
-    throw new ProvisioningError('PRECONDITION', `realm ${OPS_REALM} exists but differs from realm-export.ops.json for panel origin ${origin} (fingerprint ${have ?? 'absent'}): refusing to overwrite an ops realm by hand`)
+    // An ORIGIN mismatch (the realm was made for another origin: it cannot change in place) and a TEMPLATE
+    // mismatch (an earlier release's template: upgrade runbook step 8a) have different remedies; the realm's
+    // own control-panel client says which origin it was made for.
+    let storedRedirectUris: string[] | undefined
+    try {
+      const clients = (await raw('GET', `/admin/realms/${OPS_REALM}/clients?clientId=control-panel`)) as Array<{ redirectUris?: string[] }> | undefined
+      storedRedirectUris = clients?.[0]?.redirectUris
+    } catch {
+      storedRedirectUris = undefined // unreadable: the refusal then says the cause is not known
+    }
+    const why = opsRealmRefusal({ realm: OPS_REALM, templateText, origin, storedFingerprint: have, storedRedirectUris })
+    throw new ProvisioningError('PRECONDITION', `${why.message}; refusing to overwrite an ops realm by hand`)
   }
   const secretPath = process.env.OPS_CLIENT_SECRET_FILE ?? join(tenantSecretsDir(), 'platform_client_control-panel')
   const secret = genSecret()

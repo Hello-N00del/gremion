@@ -63,7 +63,7 @@ that is **not** this host's mail:
 |---|---|---|
 | apex | `https://example.org/` | 200 |
 | tenant | `https://pilot.example.org/` | 200 |
-| control | `https://control.example.org/` | 200 or 403 |
+| control | `https://control.example.org/`, or the host `CONTROL_PANEL_HOST` names | 200 or 403 |
 | mail | TCP `mail.example.org:25` and `:993` | connect |
 
 Replace `example.org` with the platform domain. Port 25 is deliberately

@@ -60,6 +60,8 @@ export const PROJECTS = [
   { id: 'mail', envFile: `${FIXTURE_DIR}/mail.env`, cwd: 'infra/host/mail' },
 ]
 
+/** The opt-in compose layer that puts the control panel on the edge network. */
+export const CONTROL_PUBLIC_OVERLAY = 'docker-compose.control-public.yml'
 export const APP_SERVICES = ['gremion-ui', 'gremion-public', 'control-panel', 'migrate', 'tenant-create', 'kernel-api', 'kernel-api-migrate']
 export const LONG_RUNNING_APP = ['gremion-ui', 'gremion-public', 'control-panel', 'kernel-api']
 /**
@@ -152,7 +154,11 @@ export const PLACEMENT = {
   app: {
     'gremion-ui': { class: 'council-app', networks: ['app', 'edge', 'state'] },
     'gremion-public': { class: 'council-app', networks: ['app', 'edge', 'state'] },
-    // TASK-043 Q12: no edge network, no published port, no Traefik route.
+    // TASK-043 Q12: no edge network, no published port, no Traefik route. The
+    // opt-in public control router joins the edge network through ONE overlay
+    // (CONTROL_PUBLIC_OVERLAY below), never by default: controlPublicViolations
+    // holds that overlay to adding the edge attachment (under the colour alias)
+    // and nothing else.
     'control-panel': { class: 'council-app', networks: ['app', 'state'] },
     migrate: { class: 'council-oneshot', networks: ['state'] },
     'tenant-create': { class: 'council-oneshot', networks: ['edge', 'state'] },
@@ -398,6 +404,50 @@ export function isolationViolations(renders, stack) {
   return out
 }
 
+// ── the opt-in public control panel overlay ────────────────────────────────
+
+/**
+ * The app project rendered WITH docker-compose.control-public.yml differs from the
+ * default render in one place: the control panel is also on the edge network, under
+ * the colour alias Traefik's `panel` service dials. Any other attachment, any other
+ * service that changed networks, a published port or a docker-provider route on the
+ * panel is a violation. The default render must keep the panel OFF the edge network.
+ */
+export function controlPublicViolations(defaultRender, publicRender, colour, stack, label = `app-${colour}`) {
+  const out = []
+  const edge = `${stack}_edge`
+  const base = defaultRender?.services?.['control-panel']
+  const pub = publicRender?.services?.['control-panel']
+  if (!base || !pub) return [`${label}: control-panel is absent from a render`]
+  if (serviceNetworks(defaultRender, base).includes(edge)) {
+    out.push(`${label}/control-panel: on ${edge} WITHOUT the opt-in overlay: it would be a peer of every service that shares the edge network`)
+  }
+  const want = ['app', 'edge', 'state'].map((n) => resolveNet(n, stack, label)).sort()
+  const got = serviceNetworks(publicRender, pub)
+  if (JSON.stringify(got) !== JSON.stringify(want)) out.push(`${label}/control-panel (with ${CONTROL_PUBLIC_OVERLAY}): networks [${got.join(', ')}], want [${want.join(', ')}]`)
+  const aliases = (pub.networks ?? {}).edge?.aliases ?? []
+  if (JSON.stringify(aliases) !== JSON.stringify([`control-panel-${colour}`])) {
+    out.push(`${label}/control-panel (with ${CONTROL_PUBLIC_OVERLAY}): edge aliases ${JSON.stringify(aliases)}, want ["control-panel-${colour}"] only`)
+  }
+  if (String(labelsOf(pub)['traefik.enable']) !== 'false') out.push(`${label}/control-panel (with ${CONTROL_PUBLIC_OVERLAY}): traefik.enable is not "false"`)
+  if ((pub.ports ?? []).length) out.push(`${label}/control-panel (with ${CONTROL_PUBLIC_OVERLAY}): publishes a host port`)
+  for (const [name, svc] of services(defaultRender)) {
+    if (name === 'control-panel') continue
+    const other = publicRender.services?.[name]
+    if (!other) {
+      out.push(`${label}/${name}: missing from the render with ${CONTROL_PUBLIC_OVERLAY}`)
+      continue
+    }
+    const a = JSON.stringify(serviceNetworks(defaultRender, svc))
+    const b = JSON.stringify(serviceNetworks(publicRender, other))
+    if (a !== b) out.push(`${label}/${name}: ${CONTROL_PUBLIC_OVERLAY} changed its networks ([${a}] -> [${b}]): the overlay may touch the control panel only`)
+  }
+  for (const name of Object.keys(publicRender.services ?? {})) {
+    if (!defaultRender.services?.[name]) out.push(`${label}/${name}: ${CONTROL_PUBLIC_OVERLAY} added a service`)
+  }
+  return out
+}
+
 // ── PUBLISHES (spec A section A: nothing binds 0.0.0.0) ───────────────────
 
 const WILDCARD_HOST_IPS = new Set(['', '0.0.0.0', '::', '[::]'])
@@ -534,6 +584,18 @@ export function runAll({ render = renderProject } = {}) {
             problems.push(`${p.id}: ${name} mounts the governance credential directory`)
           }
         }
+      }
+    }
+    if (p.colour) {
+      // the opt-in overlay (docker-compose.control-public.yml): the same project, one more layer
+      const layered = `${readEnvFile(p.envFile).COMPOSE_FILE ?? ''}:${CONTROL_PUBLIC_OVERLAY}`
+      try {
+        const rp = render(p, { env: { COMPOSE_FILE: layered, COMPOSE_PATH_SEPARATOR: ':' } })
+        problems.push(...controlPublicViolations(r, rp, p.colour, stack, p.id))
+        problems.push(...appShapeViolations(rp, p.colour, stack, `${p.id}+control-public`))
+        problems.push(...colourSuffixViolations(rp, p.colour, `${p.id}+control-public`))
+      } catch (e) {
+        problems.push(`${p.id}+control-public: render failed: ${String(e.message).split('\n')[0]}`)
       }
     }
     if (p.id === 'state') problems.push(...statePurityViolations(r, p.id))

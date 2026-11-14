@@ -394,3 +394,152 @@ executor_unit_action() {
 ' "$action" >&2
     return 0
 }
+
+# ca_bundle_problem <pem file> [seconds] - is <file> fit to be the operator CA
+# bundle the edge verifies client certificates against? Prints the FIRST reason
+# it is not, as a phrase that completes "<file> ...", and returns 1; prints
+# nothing and returns 0 when it is fit. Every certificate in the file is held to
+# the same rules, not only the first: no private key anywhere in the file, at
+# least one PEM certificate, each one readable, a CA (basicConstraints CA:TRUE)
+# and still valid for <seconds> more seconds (default 0: not expired). Used by
+# gremion-render, gremion-verify and gremion-operator-ca, so that the three agree.
+ca_bundle_problem() {
+    local f="$1" secs="${2:-0}" tmp n i c
+    if [[ -d "$f" || ! -f "$f" || ! -s "$f" ]]; then printf 'is missing or empty'; return 1; fi
+    if grep -q 'PRIVATE KEY' "$f"; then printf 'contains a private key'; return 1; fi
+    tmp="$(mktemp -d)" || { printf 'could not be examined (no temporary directory)'; return 1; }
+    awk -v d="$tmp" '/BEGIN CERTIFICATE/ {n++; on=1} on {print > (d "/c" n ".pem")} /END CERTIFICATE/ {on=0}' "$f"
+    n="$(find "$tmp" -name 'c*.pem' | wc -l | tr -d '[:space:]')"
+    if [[ "$n" -lt 1 ]]; then rm -rf -- "$tmp"; printf 'holds no PEM certificate'; return 1; fi
+    for (( i = 1; i <= n; i++ )); do
+        c="${tmp}/c${i}.pem"
+        if ! openssl x509 -in "$c" -noout >/dev/null 2>&1; then
+            rm -rf -- "$tmp"; printf 'holds a certificate (#%s of %s) that cannot be read' "$i" "$n"; return 1
+        fi
+        if ! openssl x509 -in "$c" -noout -ext basicConstraints 2>/dev/null | grep -q 'CA:TRUE'; then
+            rm -rf -- "$tmp"; printf 'holds a certificate (#%s of %s) that is not a CA certificate (basicConstraints CA:TRUE)' "$i" "$n"; return 1
+        fi
+        if ! openssl x509 -in "$c" -noout -checkend "$secs" >/dev/null 2>&1; then
+            rm -rf -- "$tmp"
+            if [[ "$secs" -gt 0 ]]; then printf 'holds a certificate (#%s of %s) that expires within %s days' "$i" "$n" "$(( secs / 86400 ))"
+            else printf 'holds a certificate (#%s of %s) that has expired' "$i" "$n"; fi
+            return 1
+        fi
+    done
+    rm -rf -- "$tmp"
+    return 0
+}
+
+# compose_file_names <env file> -> the basename of every entry of the file's
+# COMPOSE_FILE line (the last one), one per line; nothing when the key is absent.
+# A reader for agreement checks, NOT a validator: gremion-deploy's
+# compose_file_basenames is the strict one that refuses spellings compose reads
+# differently.
+compose_file_names() {
+    local f="$1" v e
+    local -a parts=()
+    [[ -f "$f" ]] || return 0
+    v="$(tr -d '\r' < "$f" | grep -E '^COMPOSE_FILE=' | tail -n 1 || true)"
+    v="${v#COMPOSE_FILE=}"; v="${v#\"}"; v="${v%\"}"
+    [[ -n "$v" ]] || return 0
+    IFS=':' read -r -a parts <<< "$v"
+    for e in "${parts[@]}"; do
+        [[ -n "$e" ]] && printf '%s\n' "${e##*/}"
+    done
+    return 0
+}
+
+# control_panel_key_of <env file> <KEY> -> the value of KEY in the file, nothing when
+# the file or the key is absent. THE reader of the two control panel keys for every
+# tool that does not source the file through load_env (gremion-render for the app
+# envs, gremion-deploy, gremion-tenant, gremion-operator-ca): the last line wins, a
+# trailing CR is dropped and ONE layer of matching quotes is stripped, exactly what
+# `docker compose --env-file` and load_env do, so that KEY="https://control.<domain>"
+# and KEY="" mean the same thing to every tool and to the panel's ORIGIN. A private
+# reader per tool is how one of them took the quotes into the value.
+control_panel_key_of() {
+    local f="$1" k="$2" v
+    [[ -f "$f" ]] || return 0
+    v="$(tr -d '\r' < "$f" | grep -E "^${k}=" | tail -n 1 || true)"
+    v="${v#"${k}"=}"
+    if [[ "$v" == \"*\" || "$v" == \'*\' ]]; then v="${v:1:${#v}-2}"; fi
+    printf '%s' "$v"
+}
+
+control_panel_origin_of() { control_panel_key_of "$1" CONTROL_PANEL_ORIGIN; }
+
+# control_panel_host_of <env file> -> CONTROL_PANEL_HOST in the file, read as above.
+control_panel_host_of() { control_panel_key_of "$1" CONTROL_PANEL_HOST; }
+
+# control_panel_host_problem <host> <platform domain> [<tenant hosts file>] [<pilot host>]
+# -> prints what is wrong with <host> as the control panel's host and returns 1;
+# prints nothing and returns 0 when it is acceptable. A lowercase DNS host name of
+# at least two labels: no wildcard, port, scheme, path, user part, trailing dot,
+# white space or IP literal (the last label of a host name is never all digits,
+# which refuses every IPv4 literal; an IPv6 literal has a colon). It must not be a
+# name the platform or a customer is served on: the platform domain, the platform's
+# own labels (www, sales, mail, rs1, mta-sts, autoconfig, autodiscover), the video
+# relay's customer host (PILOT_TENANT_HOST), or a line of the tenant hosts file. A
+# name the operator gives a customer LATER cannot be seen here: the runbook says not
+# to.
+control_panel_host_problem() {
+    local h="$1" apex="${2:-}" tfile="${3:-}" pilot="${4:-}" label line t
+    local label_re='^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
+    local -a labels=()
+    if [[ -z "$h" ]]; then printf 'it is empty'; return 1; fi
+    if [[ "$h" == *'*'* ]]; then printf 'a wildcard is not a host name'; return 1; fi
+    if [[ "$h" == *://* || "$h" == *'@'* ]]; then printf 'it carries a scheme or a user part: give the bare host name, not a URL'; return 1; fi
+    if [[ "$h" == */* || "$h" == *'?'* || "$h" == *'#'* ]]; then printf 'it carries a path or a query: give the bare host name'; return 1; fi
+    if [[ "$h" == *:* ]]; then printf 'it carries a port (or is an IPv6 literal): give the bare host name'; return 1; fi
+    if [[ "$h" == *. ]]; then printf 'it ends in a dot: give the host name without the trailing dot'; return 1; fi
+    if [[ "$h" == *[[:space:]]* ]]; then printf 'it contains white space'; return 1; fi
+    if [[ "$h" != "${h,,}" ]]; then printf 'it is not lowercase'; return 1; fi
+    if (( ${#h} > 253 )); then printf 'it is longer than 253 characters'; return 1; fi
+    IFS='.' read -r -a labels <<< "$h"
+    if (( ${#labels[@]} < 2 )); then printf 'it is a single label: give a full host name'; return 1; fi
+    for label in "${labels[@]}"; do
+        if [[ ! "$label" =~ $label_re ]]; then
+            printf 'it is not a DNS host name (label "%s": lowercase letters, digits and hyphens only, none at either end)' "$label"
+            return 1
+        fi
+    done
+    if [[ "${labels[${#labels[@]}-1]}" =~ ^[0-9]+$ ]]; then printf 'it is an IP address, not a host name'; return 1; fi
+    if [[ -n "$apex" ]]; then
+        if [[ "$h" == "$apex" ]]; then printf 'it is the platform domain itself'; return 1; fi
+        for label in www sales mail rs1 mta-sts autoconfig autodiscover; do
+            if [[ "$h" == "${label}.${apex}" ]]; then printf 'it is the platform host %s.%s' "$label" "$apex"; return 1; fi
+        done
+    fi
+    if [[ -n "$pilot" && "$h" == "${pilot,,}" ]]; then printf 'it is the customer host PILOT_TENANT_HOST'; return 1; fi
+    if [[ -n "$pilot" && "$h" == "turn.${pilot,,}" ]]; then printf 'it is the video relay host turn.PILOT_TENANT_HOST'; return 1; fi
+    if [[ -n "$tfile" && -f "$tfile" ]]; then
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            t="${line%%#*}"
+            t="$(printf '%s' "$t" | tr -d '[:space:]')"; t="${t,,}"
+            if [[ -n "$t" && "$t" == "$h" ]]; then printf 'it is a customer host (a line of %s)' "$tfile"; return 1; fi
+        done < "$tfile"
+    fi
+    return 0
+}
+
+# resolve_control_panel_host -> prints THE control panel host and returns 0, or prints
+# why it is refused and returns 1. CONTROL_PANEL_HOST (state.env, exported by load_env)
+# empty or absent means the default control.<PLATFORM_DOMAIN>, so an install that never
+# set it behaves exactly as before; set, it names a host that may lie OUTSIDE the
+# platform domain (the pilot's platform domain is a sub-domain, and the operator wants
+# the panel on a name beside it) and is validated by control_panel_host_problem. The one
+# value the router's Host rule, the certificate host, the host pin, the ORIGIN the panel
+# answers and every verifier check are built from.
+resolve_control_panel_host() {
+    local h="${CONTROL_PANEL_HOST:-}" why
+    if [[ -z "$h" ]]; then
+        [[ -n "${PLATFORM_DOMAIN:-}" ]] || { printf 'PLATFORM_DOMAIN is not set'; return 1; }
+        printf 'control.%s' "$PLATFORM_DOMAIN"
+        return 0
+    fi
+    if ! why="$(control_panel_host_problem "$h" "${PLATFORM_DOMAIN:-}" "$(gremion_root)/etc/tenant-hosts.txt" "${PILOT_TENANT_HOST:-}")"; then
+        printf 'CONTROL_PANEL_HOST is refused: %s' "$why"
+        return 1
+    fi
+    printf '%s' "$h"
+}

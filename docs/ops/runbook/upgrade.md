@@ -1,6 +1,6 @@
 # Upgrade: one release onto a running installation
 
-- Version: 9.0.0
+- Version: 9.1.0
 - Status: provisional (see Known gaps)
 - Wall-clock budget: one working day, from step 1 to the asserted post-condition (PRD-PLAT-005)
 - Implements: TRD-200 (upgrade), TRD-206 (the pre-migration dump, R18-4), TRD-189 (blue/green as the deploy path)
@@ -325,6 +325,97 @@ gremion-tenant reconcile "$slug" --apply --reason "upgrade to ${TAG}: re-ensure 
 # [tenant-create] reconcile realm "<realm>" ... ok  purger-connect ... ok  kernel-api-nats-seed ... applied repairs: purger-connect, kernel-api-nats-seed (a rerun: no repairs)
 ```
 
+8a. **Bring the ops realm up to the release's template (installations whose ops
+   realm `platform` was made by an earlier template, once).** `gremion-tenant
+   init` (step 9, and any later run) compares the realm's stored fingerprint
+   with the release's `docker/keycloak/realm-export.ops.json` and the panel
+   origin, and refuses a realm that differs ("exists but differs from
+   realm-export.ops.json"), opted in or not. This release changed the template
+   in four places, so a realm made before it is refused until it is brought up by
+   hand and re-stamped: no self-service password reset (`resetPasswordAllowed`
+   false), the required actions the realm has no use for switched off
+   (`webauthn-register`, `webauthn-register-passwordless`,
+   `CONFIGURE_RECOVERY_AUTHN_CODES`; the other three the template turns off,
+   `TERMS_AND_CONDITIONS`, `delete_account` and `UPDATE_EMAIL`, are already off in
+   a realm Keycloak made from the old one), the `control-panel` client's
+   `minimum.acr.value` and `default.acr.values` set to `loa2`, and that client's
+   description, which the template words differently now. There is no
+   program for it: a clean install needs none of this, and the steps below are
+   exactly those changes, run against a scratch Keycloak that had imported
+   the previous template (the settings read back as the new template has them).
+
+   **Precondition, run it first and act on its answer.** The re-stamp at the end
+   declares the realm equal to the new template, so it is only true for a realm that
+   the release **before** this change created, unchanged since. A realm that differs
+   for any other reason (made for another origin, edited by hand, made by some
+   other template) would be declared equal too, and `init` would then skip it
+   instead of refusing it. The realm carries the fingerprint it was made with, and
+   `init` computes it from the template text, a newline and the panel origin, so the
+   check is: the stored fingerprint must equal the fingerprint of the **previous**
+   release's template for **this** install's origin. The previous template is the
+   `docker/keycloak/realm-export.ops.json` of the last release before this change; the
+   release tree on the host carries no git history, so it is read from a clone of the
+   repository (any workstation) with `git show`:
+
+```bash
+# on a workstation with a clone of the repository: the previous release's template, same recipe as init
+prev="<the tag or commit of the last release before this change>"
+origin="<the install's CONTROL_PANEL_ORIGIN from state.env, or http://127.0.0.1:3043 when it has none>"
+prev_fp="$( { git show "${prev}:docker/keycloak/realm-export.ops.json"; printf '\n%s' "$origin"; } | sha256sum | cut -d' ' -f1)"
+echo "previous template: ${prev_fp}"
+```
+
+   The block below, run on the host as a script (`bash -e`, so that its guard stops
+   it), reads what the realm carries and compares it with that value, which you
+   paste in. Only when they are **equal** does it apply the changes and re-stamp. On
+   **any other value it stops**: if `stored` equals the fingerprint of this release's own template
+   (`{ cat /opt/gremion/current/docker/keycloak/realm-export.ops.json; printf '\n%s' "$origin"; } | sha256sum`)
+   the realm is already current and `init` will not refuse it; otherwise the realm
+   was not made by the previous template for this origin (for another origin it
+   cannot be changed in place, see the control panel runbook; for anything else find
+   out what changed it before touching it), and this step does not apply. Skip the
+   step when `gremion-tenant init` does not refuse the realm, and on an install whose
+   ops realm does not exist yet.
+
+```bash
+# run as a script: bash -e step-8a.sh
+set -euo pipefail
+prev_fp="<the value the workstation printed above>"
+kc="$(cd /opt/gremion/current && docker compose --env-file /opt/gremion/etc/env/state.env ps -q keycloak)"
+kcadm() { docker exec "$kc" /opt/keycloak/bin/kcadm.sh "$@"; }
+trap 'docker exec "$kc" rm -f /opt/keycloak/.keycloak/kcadm.config' EXIT   # the login is not left behind, on a stop either
+KC_CLI_PASSWORD="$KEYCLOAK_ADMIN_PASSWORD" docker exec -e KC_CLI_PASSWORD "$kc" /opt/keycloak/bin/kcadm.sh config credentials \
+  --server http://127.0.0.1:8080/auth --realm master --user "$KEYCLOAK_ADMIN"
+# the precondition: the realm's stored fingerprint must be the previous template's for this origin
+stored="$(kcadm get realms/platform --fields 'attributes(*)' | jq -r '.attributes["gremion.ops-realm.sha256"] // ""' | tr -d '\r')"
+if [ "$stored" != "$prev_fp" ]; then
+  echo "STOP: the realm carries ${stored:-no fingerprint}, not the previous template's ${prev_fp}: this step does not apply" >&2
+  exit 1
+fi
+kcadm update realms/platform -s resetPasswordAllowed=false
+for a in TERMS_AND_CONDITIONS delete_account UPDATE_EMAIL webauthn-register webauthn-register-passwordless CONFIGURE_RECOVERY_AUTHN_CODES; do
+  kcadm update "authentication/required-actions/${a}" -r platform -s enabled=false
+done
+cid="$(kcadm get clients -r platform -q clientId=control-panel --fields id --format csv --noquotes | tr -d '\r')"
+desc="$(jq -r '.clients[] | select(.clientId == "control-panel") | .description' /opt/gremion/current/docker/keycloak/realm-export.ops.json)"
+kcadm update "clients/${cid}" -r platform -s 'attributes."minimum.acr.value"=loa2' -s 'attributes."default.acr.values"=loa2' -s "description=${desc}"
+# the re-stamp: the fingerprint is what init computes, the template's text, a newline, the panel origin
+origin="${CONTROL_PANEL_ORIGIN:-http://127.0.0.1:3043}"
+fp="$( { cat /opt/gremion/current/docker/keycloak/realm-export.ops.json; printf '\n%s' "$origin"; } | sha256sum | cut -d' ' -f1)"
+kcadm update realms/platform -s "attributes.\"gremion.ops-realm.sha256\"=${fp}"
+gremion-tenant init                           # the ops realm is now "present and equal"
+```
+
+   `kcadm update` merges into what the realm and the client already carry, so
+   nothing else is touched (the redirect URIs, the secret, the realm's other
+   attributes stay). The three required actions the old template already had off
+   are set again on purpose: the command is idempotent and the realm then equals
+   the template without an assumption about what Keycloak made it with. The panel
+   origin in the fingerprint is `CONTROL_PANEL_ORIGIN` from `state.env` (the preamble
+   loads it), the loopback origin on an install that has not opted in. A realm made
+   for another origin stays refused, as before, and `init` says so: an origin
+   mismatch is not this step's business.
+
 9. **Bring the governance server up (installations first brought up before
    TASK-084-a, once).** Creating a customer makes it a governance database on
    its own server, `governance-postgres`, and deleting one drops it. That server
@@ -451,6 +542,7 @@ live, a deploy of any other tag stops at its step 5 and prints both commands.
 
 ## Changelog
 
+- 9.1.0 (2026-11-13): the operator control panel behind a client certificate. New step 8a, before the governance step whose `gremion-tenant init` would otherwise refuse it: an ops realm made by the previous template is brought up to the current one by hand with kcadm (no self-service password reset, the unused required actions off, `loa2` as the control-panel client's default and minimum ACR) and re-stamped, because `init` refuses a realm whose fingerprint is not the release's. Step 8a opens with a precondition (the realm's stored fingerprint must be the previous template's for this origin, else stop) and also sets the control-panel client's description; the init refusals tell an origin mismatch from a template mismatch. New optional key `CONTROL_PANEL_HOST` (state.env): the panel on a host outside the platform domain, empty or absent keeps `control.<PLATFORM_DOMAIN>`. Minor: a step added that an install whose ops realm is current skips, and a key every existing install can leave unset.
 - 9.0.0 (2026-11-08): TASK-084-a. New step 9, after the reconcile: bring the governance server up on an installation first brought up before it existed (the two `GOVERNANCE_PG_*` keys in `state.env`, the `governance-postgres` container of the state project, and `gremion-tenant init` for the admin login file and the credential directory), with its post-condition lines. Only a customer create and delete read the governance server; every other `gremion-tenant` verb runs without it. Major: a step added and the post-condition changed.
 - 8.0.0 (2026-11-03): kernel #88, #89, on top of 7.0.0. New step 8, after the PgBouncer recreate: `gremion-tenant reconcile <slug> --apply` for every customer after the switch, which re-ensures what customer creation added since the customer was made (the purger role's `CONNECT` on its kernel database, `USAGE` on schema `public` and `SELECT` + `DELETE` on the purge tables, and the kernel API NATS seed) and reports it as the checks `purger-connect` and `kernel-api-nats-seed`. The post-condition keeps the PgBouncer observations and reads every customer's reconcile report, failing closed: a reconcile that exits non-zero, prints no report line, reports a check without `ok: true` or lacks the checks `purger-connect` and `kernel-api-nats-seed` is no pass. Major: a step added and the post-condition changed.
 - 7.0.0 (2026-11-03): kernel #84, on top of 6.3.0. Step 2 creates, fills and renders `etc/legal.env` once per host, the file `gremion-deploy` now copies into every release tree as `legal/legal.env` (the state project's `legal` service reads it for every compose command); an existing host stops at that step until the file is filled, with values copied by hand from the running release. Major: an existing step changed.

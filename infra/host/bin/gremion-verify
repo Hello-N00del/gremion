@@ -38,6 +38,11 @@ TRAEFIK_API="${TRAEFIK_API:-http://127.0.0.1:8080}"
 INTERNALTEST_PORT="${INTERNALTEST_PORT:-8081}"
 CERT_MIN_DAYS="${CERT_MIN_DAYS:-20}"
 HTTP_TIMEOUT="${HTTP_TIMEOUT:-10}"
+# The control host's certificate is ordered (ACME HTTP-01) when its router first
+# loads, a few seconds after the switch that gremion-deploy verifies right away.
+# Up to this long is spent waiting for it before a missing SAN is a failure.
+CONTROL_CERT_WAIT_SECONDS="${CONTROL_CERT_WAIT_SECONDS:-90}"
+CONTROL_CERT_POLL_SECONDS="${CONTROL_CERT_POLL_SECONDS:-5}"
 REBOOT_SETTLE_SECONDS="${REBOOT_SETTLE_SECONDS:-30}"
 GREMION_LEAVES="${GREMION_LEAVES:-content finance files votes messages newsletter calendar board vault}"
 
@@ -150,6 +155,7 @@ VERIFY_MARKER_PATH="${VERIFY_MARKER_PATH:-/healthz}"
 COLOUR=""
 HOSTS_FILE=""
 REBOOT=0
+CONTROL_AFTER_SWITCH=0
 
 ROUTERS_JSON=""
 SERVICES_JSON=""
@@ -169,14 +175,26 @@ declare -A MARKER_SHA=()
 
 usage() {
     cat >&2 <<'EOF'
-usage: gremion-verify [--colour <blue|green>] [--hosts FILE] [--reboot]
+usage: gremion-verify [--colour <blue|green>] [--hosts FILE] [--reboot] [--control-after-switch]
 
   --colour c   additionally verify the INACTIVE colour c through the loopback
                internaltest entrypoint and from inside its own containers
   --hosts F    one hostname per line; default is PLATFORM_DOMAIN,
-               control.PLATFORM_DOMAIN and every line of etc/tenant-hosts.txt
+               the control host (CONTROL_PANEL_HOST, else control.PLATFORM_DOMAIN)
+               and every line of etc/tenant-hosts.txt
   --reboot     reboot gate: on failure restart the active colour once, re-verify,
                and report the outcome to ALERT_WEBHOOK_URL
+  --control-after-switch
+               gremion-deploy step 9, BEFORE the switch: an install that opted in
+               to the public control panel (CONTROL_PANEL_ORIGIN) has no router
+               yet, because step 10 writes it once the switch has written the
+               panel service. With this flag, and ONLY while etc/edge/control-panel.yml
+               is absent and Traefik serves no control-panel@file, that absence
+               is not a failure and the control host is not probed; everything
+               else about the control path (a router without its file, a stray
+               router on the control host, a file without the opt-in, every check
+               of an existing router) is still held. The step-11 verify and every
+               later run pass no flag and hold the whole path.
 
 It refuses to run without the signed waiver ledger docs/ops/release-1-waivers.md
 and reads it from $GREMION_WAIVER_LEDGER if set, else from its own checkout, else
@@ -275,7 +293,7 @@ check_routers() {
             fail "UNCLASSIFIED router $name: service '$service' is not known to traefik"
         else
             case "$qualified" in
-                app@file|public@file|app-next@file|public-next@file)
+                app@file|public@file|panel@file|app-next@file|public-next@file)
                     ROUTER_CLASS["$name"]="colour-bound" ;;
                 *)  ROUTER_CLASS["$name"]="state-bound" ;;
             esac
@@ -679,6 +697,7 @@ check_emitted_routers() {
         (( nrouters > 0 )) || fail "${rel} declares no router — an emitted file with no router should not exist"
     done
     check_portal_host_file "$dir"
+    check_control_panel_file "$dir"
     return 0
 }
 
@@ -781,6 +800,275 @@ check_portal_host_file() {   # <the etc/edge directory>
     return 0
 }
 
+# ── the control panel's public router (docs/runbooks/control-panel-access.md) ─
+# etc/edge/control-panel.yml is RENDERED by gremion-render, and only on an
+# install that opted in (CONTROL_PANEL_ORIGIN in state.env, plus the operator CA
+# certificate at etc/edge/mtls/operator-ca.pem). It is the only router on the
+# control host and the only thing standing between the internet and the panel's
+# login, so the running system is held to ALL of it, not to the file:
+#   - the file and the opt-in agree: a file without the key, or the key without a
+#     file, is a failure (a stale router is a host nobody decided to open; a
+#     missing one is a render that did not run). Without both, no router named
+#     control-panel@file may exist and no other router may name the control host;
+#   - only the rendered shape: the top keys tls and http, the one TLS option
+#     control-panel-mtls and the one router control-panel; no middleware, service,
+#     certificate or store. Its clientAuthType is read from the file and must be
+#     RequireAndVerifyClientCert, once: VerifyClientCertIfGiven would let a
+#     client with no certificate in, and nothing else would notice;
+#   - Traefik reports control-panel@file enabled, on websecure alone, with the
+#     rule the file carries AND the rule it must be (the host, minus /healthz and
+#     /api/internal), the service panel@file, the TLS option control-panel-mtls,
+#     and exactly the chain pin, HSTS, portal rate limit. The router universal
+#     already demands a resolver, the pin first and both middleware families;
+#   - the CA file holds a CA certificate and no private key (the host never holds
+#     the CA's key), and is not within CERT_MIN_DAYS of expiry.
+# What the file cannot say, the handshake does: check_control_host (below) makes
+# a TLS 1.2 connection WITHOUT a certificate and demands a TLS alert.
+CONTROL_ROUTER_FILE="control-panel.yml"
+CONTROL_ROUTER="control-panel"
+CONTROL_OPTION="control-panel-mtls"
+CONTROL_SERVICE="panel@file"
+CONTROL_CHAIN="edge-hostpin-control@docker edge-hsts-platform@docker edge-ratelimit-portal@docker"
+CONTROL_CA_REL="mtls/operator-ca.pem"
+
+# The control host: CONTROL_PANEL_HOST (state.env) or control.<PLATFORM_DOMAIN>. A value that
+# is set is validated once, by prepare_verify (resolve_control_panel_host), which refuses a bad
+# one before any check runs; every host list, SAN check, handshake probe and router rule below
+# comes from this one function.
+control_host() { printf '%s' "${CONTROL_PANEL_HOST:-control.${PLATFORM_DOMAIN}}"; }
+
+# True when this run must treat the control host as the client-certificate host:
+# the install opted in, or Traefik serves the router.
+control_is_public() {
+    [[ -n "${CONTROL_PANEL_ORIGIN:-}" ]] && return 0
+    printf '%s' "$ROUTERS_JSON" | jq -e --arg n "${CONTROL_ROUTER}@file" 'any(.[]; .name == $n)' >/dev/null 2>&1
+}
+
+# True only for the one state gremion-deploy leaves before its switch on an install
+# that opted in: --control-after-switch given, the key set, no rendered file, and
+# no control-panel@file in Traefik. Any other state is judged in full.
+control_router_pending() {
+    (( CONTROL_AFTER_SWITCH )) || return 1
+    [[ -n "${CONTROL_PANEL_ORIGIN:-}" ]] || return 1
+    [[ ! -e "$(gremion_root)/etc/edge/${CONTROL_ROUTER_FILE}" ]] || return 1
+    ! printf '%s' "$ROUTERS_JSON" | jq -e --arg n "${CONTROL_ROUTER}@file" 'any(.[]; .name == $n)' >/dev/null 2>&1
+}
+
+check_control_panel_file() {   # <the etc/edge directory>
+    local dir="$1" f rel ca live kind obj rest status api_rule want_rule svc chain m opt n bad i problem
+    local nrouters=0 noptions=0 ntype
+    local -a mws=()
+    f="${dir}/${CONTROL_ROUTER_FILE}"
+    rel="etc/edge/${CONTROL_ROUTER_FILE}"
+    ca="${dir}/${CONTROL_CA_REL}"
+    [[ ! -e "${f%.yml}.yaml" ]] \
+        || fail "etc/edge/${CONTROL_ROUTER_FILE%.yml}.yaml: the control panel file with a .yaml suffix — traefik loads it and nothing verifies it; the rendered file is ${CONTROL_ROUTER_FILE}"
+    live="$(printf '%s' "$ROUTERS_JSON" | jq -c --arg n "${CONTROL_ROUTER}@file" '[.[] | select(.name == $n)][0] // null')"
+    want_rule="Host(\`$(control_host)\`) && !PathPrefix(\`/healthz\`) && !PathPrefix(\`/api/internal\`)"
+
+    # The opt-in names ONE host: CONTROL_PANEL_ORIGIN is exactly https://<the control host>.
+    # gremion-render refuses anything else; a state.env edited after that render is caught here.
+    if [[ -n "${CONTROL_PANEL_ORIGIN:-}" && "$CONTROL_PANEL_ORIGIN" != "https://$(control_host)" ]]; then
+        fail "CONTROL_PANEL_ORIGIN (${CONTROL_PANEL_ORIGIN}) is not https://$(control_host): the control host is CONTROL_PANEL_HOST in state.env, else control.${PLATFORM_DOMAIN}"
+    fi
+
+    # No other router may name the control host: it would be served without the
+    # client-certificate option or hand the host to a different backend.
+    # A rule NAMES the host when the host is one of its backtick-quoted tokens, equal:
+    # a substring match would fail every router whose host merely ENDS in the control
+    # host (a tenant called x-control), on installs that never opted in.
+    bad="$(printf '%s' "$ROUTERS_JSON" | jq -r --arg n "${CONTROL_ROUTER}@file" --arg h "$(control_host)" \
+        '.[] | select(.name != $n) | select([(.rule // "") | ascii_downcase | scan("`([^`]*)`") | .[0]] | any(. == ($h | ascii_downcase))) | .name' | paste -sd, -)" \
+        || { fail "control panel: the router list is not JSON"; return 0; }
+    [[ -z "$bad" ]] \
+        || fail "router(s) ${bad} name the control host $(control_host): only ${CONTROL_ROUTER}@file, behind the client-certificate option, may"
+
+    if [[ ! -e "$f" ]]; then
+        [[ "$live" == "null" ]] \
+            || fail "traefik serves router ${CONTROL_ROUTER}@file, but ${rel} does not exist — it comes from a file this check does not read"
+        if control_router_pending; then
+            info "control panel: opted in, router not written yet (gremion-deploy writes it at step 10, after the switch); the public verify at step 11 holds it"
+            check_panel_origin
+            return 0
+        fi
+        if [[ -n "${CONTROL_PANEL_ORIGIN:-}" ]]; then
+            fail "CONTROL_PANEL_ORIGIN is set in state.env but ${rel} does not exist: gremion-render refused or did not run, so the control host is not served"
+        else
+            # not opted in: no router, and the panel must still be the one the tunnel reaches
+            check_panel_origin
+        fi
+        return 0
+    fi
+    [[ -n "${CONTROL_PANEL_ORIGIN:-}" ]] \
+        || fail "${rel} exists but CONTROL_PANEL_ORIGIN is empty in state.env: a control router nobody opted into (gremion-render deletes it on its next run)"
+
+    while IFS=' ' read -r kind obj rest; do
+        case "$kind" in
+            top)
+                [[ "$obj" == "tls" || "$obj" == "http" ]] \
+                    || fail "${rel} declares top-level ${obj} — the control panel file declares only tls and http" ;;
+            section)
+                [[ "$obj" == "options" || "$obj" == "routers" ]] \
+                    || fail "${rel} declares ${obj} — the control panel file declares only the TLS option and the router" ;;
+            options)
+                noptions=$(( noptions + 1 ))
+                [[ "$obj" == "$CONTROL_OPTION" ]] \
+                    || fail "${rel} declares TLS option ${obj} — only ${CONTROL_OPTION} belongs in the control panel file" ;;
+            routers)
+                nrouters=$(( nrouters + 1 ))
+                if [[ "$obj" != "$CONTROL_ROUTER" ]]; then
+                    fail "${rel} declares router ${obj} — the control panel file declares the one router ${CONTROL_ROUTER}"
+                    continue
+                fi
+                status="$(jq -r '.status // "absent"' <<<"$live")"
+                [[ "$status" == "enabled" ]] \
+                    || fail "rendered router ${obj}@file (${rel}) is not live in traefik (status=${status})" ;;
+            rule)
+                [[ "$obj" == "$CONTROL_ROUTER" ]] || continue
+                [[ "$rest" == "$want_rule" ]] \
+                    || fail "${rel}: the rule is '${rest}', not '${want_rule}' — the host without /healthz and /api/internal"
+                api_rule="$(jq -r '.rule // ""' <<<"$live")"
+                [[ -z "$api_rule" || "$api_rule" == "$rest" ]] \
+                    || fail "rendered router ${obj}@file: traefik serves rule '${api_rule}', but ${rel} says '${rest}' — another file's definition won" ;;
+        esac
+    done < <(edge_file_tokens "$f")
+    (( nrouters == 1 )) || fail "${rel} declares ${nrouters} routers (expected exactly 1)"
+    (( noptions == 1 )) || fail "${rel} declares ${noptions} TLS options (expected exactly 1)"
+
+    # The gate itself, read from the file: exactly one clientAuthType, the strict one.
+    ntype="$(tr -d '\r' < "$f" | grep -cE '^[[:space:]]*clientAuthType:' || true)"
+    if [[ "$ntype" != "1" ]] || ! tr -d '\r' < "$f" | grep -qE '^[[:space:]]+clientAuthType: RequireAndVerifyClientCert[[:space:]]*$'; then
+        fail "${rel}: clientAuthType must appear once and be RequireAndVerifyClientCert (found ${ntype}): any weaker mode lets a client without a certificate in"
+    fi
+    tr -d '\r' < "$f" | grep -qE '^[[:space:]]+minVersion: VersionTLS12[[:space:]]*$' \
+        || fail "${rel}: minVersion must be VersionTLS12"
+    tr -d '\r' < "$f" | grep -qE '^[[:space:]]+- /etc/traefik/dynamic/mtls/operator-ca\.pem[[:space:]]*$' \
+        || fail "${rel}: caFiles must be exactly /etc/traefik/dynamic/mtls/operator-ca.pem (the CA certificate the host holds)"
+
+    # What Traefik LOADED: the service, the chain, the option, the entrypoint.
+    if [[ "$live" != "null" ]]; then
+        svc="${ROUTER_SERVICE[${CONTROL_ROUTER}@file]:-}"
+        [[ "$svc" == "$CONTROL_SERVICE" ]] \
+            || fail "router ${CONTROL_ROUTER}@file targets '${svc}', not ${CONTROL_SERVICE}"
+        chain=""
+        mapfile -t mws < <(jq -r '.middlewares // [] | .[]' <<<"$live")
+        for m in "${mws[@]}"; do
+            chain+="${chain:+ }$(qualify_ref "$m" "${CONTROL_ROUTER}@file")"
+        done
+        [[ "$chain" == "$CONTROL_CHAIN" ]] \
+            || fail "router ${CONTROL_ROUTER}@file chains '${chain}', not '${CONTROL_CHAIN}'"
+        opt="$(jq -r '.tls.options // ""' <<<"$live")"
+        [[ "$opt" == "$CONTROL_OPTION" || "$opt" == "${CONTROL_OPTION}@file" ]] \
+            || fail "router ${CONTROL_ROUTER}@file carries TLS option '${opt}', not ${CONTROL_OPTION}: the host would be served without asking for a client certificate"
+        [[ "$(jq -c '.entryPoints // []' <<<"$live")" == '["websecure"]' ]] \
+            || fail "router ${CONTROL_ROUTER}@file is on $(jq -c '.entryPoints // []' <<<"$live"), not websecure alone"
+        api_rule="$(jq -r '.rule // ""' <<<"$live")"
+        [[ "$api_rule" == "$want_rule" ]] \
+            || fail "router ${CONTROL_ROUTER}@file serves rule '${api_rule}', not '${want_rule}'"
+    fi
+
+    # The RUNNING panel, not the compose file (see check_panel_origin), and the panel as
+    # TRAEFIK reaches it (see check_panel_server_up).
+    if [[ "$live" != "null" ]]; then check_panel_server_up; check_panel_origin; fi
+
+    # The CA certificate the host holds: present, every certificate a CA and valid, never the key.
+    if [[ ! -s "$ca" || -d "$ca" ]]; then
+        fail "etc/edge/${CONTROL_CA_REL} is missing or empty: the client-certificate option has no CA, and traefik closes the host"
+    elif grep -q 'PRIVATE KEY' "$ca"; then
+        fail "etc/edge/${CONTROL_CA_REL} contains a private key: the host holds the CA CERTIFICATE only; treat the CA as compromised and rotate it"
+    elif ! problem="$(ca_bundle_problem "$ca" "$(( CERT_MIN_DAYS * 86400 ))")"; then
+        fail "etc/edge/${CONTROL_CA_REL} ${problem} — issue a new CA and install it"
+    fi
+    return 0
+}
+
+# Can TRAEFIK reach the panel? The container census (check_containers) finds the panel's
+# container by any of its network aliases and asks Docker for its health, so a panel that
+# answers to its colour alias on the state network alone passes it, while Traefik, which
+# lives on the edge network, cannot dial it (the edge-network overlay missing). Traefik
+# health-checks the panel service (active.yml.tmpl) and reports each server in
+# serverStatus: every server of panel@file must be UP. Judged only while the control
+# router is live: an install that has not opted in does not put the panel on the edge
+# network, and Traefik rightly reports that server DOWN.
+#   A panel that was just recreated has no verdict yet: Traefik's first health probe of
+#   its server comes a moment after the router loads (gremion-deploy's step 11 runs
+#   right behind step 10's render), so "no status" and "DOWN" are looked at again, up to
+#   PANEL_UP_TRIES times PANEL_UP_WAIT_SECONDS apart (3 times over about 30 s), with a
+#   fresh read of the service list each time. Only a verdict that stays bad is a failure.
+PANEL_UP_TRIES="${PANEL_UP_TRIES:-3}"
+PANEL_UP_WAIT_SECONDS="${PANEL_UP_WAIT_SECONDS:-15}"
+
+# panel_server_problems -> one message per server of panel@file that is not UP, in the
+# current SERVICES_JSON; nothing when all are UP or the service is unknown.
+panel_server_problems() {
+    local svc url st
+    svc="$(printf '%s' "$SERVICES_JSON" | jq -c --arg n "$CONTROL_SERVICE" '[.[] | select(.name == $n)][0] // null')"
+    [[ "$svc" != "null" ]] || return 0   # a router on an unknown service is already UNCLASSIFIED
+    while IFS= read -r url; do
+        [[ -n "$url" ]] || continue
+        st="$(jq -r --arg u "$url" '.serverStatus[$u] // "none"' <<<"$svc")"
+        case "$st" in
+            UP) ;;
+            none) printf '%s\n' "service ${CONTROL_SERVICE}: traefik reports no status for its server ${url}: the panel service is not health-checked, so nothing shows that traefik can reach the panel" ;;
+            *) printf '%s\n' "service ${CONTROL_SERVICE}: traefik reports its server ${url} as ${st}: it cannot reach the panel (the panel must join the edge network under its colour alias: docker-compose.control-public.yml in the COMPOSE_FILE of both app envs, then recreate the colour)" ;;
+        esac
+    done < <(jq -r '.loadBalancer.servers // [] | .[].url' <<<"$svc")
+    return 0
+}
+
+check_panel_server_up() {
+    local problems line tries=1
+    problems="$(panel_server_problems)"
+    while [[ -n "$problems" ]] && (( tries < PANEL_UP_TRIES )); do
+        info "panel service ${CONTROL_SERVICE}: not UP yet (try ${tries} of ${PANEL_UP_TRIES}); asking traefik again in ${PANEL_UP_WAIT_SECONDS}s"
+        sleep "$PANEL_UP_WAIT_SECONDS"
+        SERVICES_JSON="$(api_list /api/http/services)" || exit $?
+        problems="$(panel_server_problems)"
+        tries=$(( tries + 1 ))
+    done
+    while IFS= read -r line; do
+        [[ -n "$line" ]] && fail "$line"
+    done <<<"$problems"
+    return 0
+}
+
+# The RUNNING panel carries the ORIGIN this install decided, read with docker exec env
+# (never the compose file): CONTROL_PANEL_ORIGIN on an install that opted in, the
+# loopback default http://127.0.0.1:3043 on one that did not. A panel with another ORIGIN
+# refuses the host it is asked for with 421: with the public origin on an install that
+# turned the key off, the tunnel is dead; with the loopback one on an opted-in install, the
+# control host is unreachable behind the gate, which the gate's own handshake check never
+# gets far enough to see.
+#   Which container: the colour that is LIVE (the panel@file service's host), so a run with
+#   no flag judges what the edge serves. gremion-deploy's step 9 runs BEFORE the switch with
+#   --control-after-switch: the live panel is the previous release's and says nothing about
+#   this one, so it judges the colour being verified (--colour), whose panel is the one the
+#   switch is about to put live. Step 11 and every later run judge the live one.
+check_panel_origin() {
+    local want="${CONTROL_PANEL_ORIGIN:-http://127.0.0.1:3043}" target="" purl pname
+    if (( CONTROL_AFTER_SWITCH )); then
+        [[ -n "$COLOUR" ]] || return 0
+        target="control-panel-${COLOUR}"
+    else
+        purl="$(printf '%s' "$SERVICES_JSON" | jq -r --arg n "$CONTROL_SERVICE" '[.[] | select(.name == $n)][0].loadBalancer.servers[0].url // ""')"
+        target="${purl#*://}"; target="${target%%/*}"; target="${target%%:*}"
+    fi
+    [[ -n "$target" ]] || return 0
+    if ! pname="$(container_for_alias "$target")"; then
+        # An install that has not opted in may have no panel at all (nothing to judge). One that
+        # has, routes the control host to this alias: no container behind it is a failure, not a skip.
+        [[ -z "${CONTROL_PANEL_ORIGIN:-}" ]] && return 0
+        fail "no container answers to '${target}': the panel the control host routes to is not running (CONTROL_PANEL_ORIGIN is set; deploy the colour, its app env and docker-compose.control-public.yml must agree)"
+        return 0
+    fi
+    if docker exec "$pname" env 2>/dev/null | tr -d '\r' | grep -qxF "ORIGIN=${want}"; then return 0; fi
+    if [[ -n "${CONTROL_PANEL_ORIGIN:-}" ]]; then
+        fail "${pname}: the running panel's ORIGIN is not CONTROL_PANEL_ORIGIN (${want}): it would refuse the control host with 421 (docker exec env; the app env and the compose project must agree, then recreate the colour)"
+    else
+        fail "${pname}: the running panel's ORIGIN is not the loopback default ${want}, but this install has not opted in to the public control panel: the tunnel (gremion-tenant panel) would be refused with 421 (the colour still carries an earlier opt-in; recreate it from the app env)"
+    fi
+}
+
 host_list() {
     local tf
     if [[ -n "$HOSTS_FILE" ]]; then
@@ -788,7 +1076,7 @@ host_list() {
         grep -Ev '^[[:space:]]*(#|$)' "$HOSTS_FILE"
         return 0
     fi
-    printf '%s\n' "$PLATFORM_DOMAIN" "control.${PLATFORM_DOMAIN}"
+    printf '%s\n' "$PLATFORM_DOMAIN" "$(control_host)"
     tf="$(gremion_root)/etc/tenant-hosts.txt"
     if [[ -f "$tf" ]]; then
         grep -Ev '^[[:space:]]*(#|$)' "$tf" || true
@@ -889,6 +1177,15 @@ check_host_http() {
         fail "host-pin: forged X-Forwarded-Host: ${other} changed the response for ${h} (${code}/${fcode})"
     fi
 
+    check_host_acme "$h"
+
+    rm -f "$clean" "$forged"
+}
+
+# Port 80 answers the ACME challenge path with a 404 from acme-http@internal and
+# never a redirect: the control host's certificate is ordered the same way.
+check_host_acme() {
+    local h="$1" acme
     acme="$(curl -sS --max-time "$HTTP_TIMEOUT" \
                 --resolve "${h}:${EDGE_HTTP_PORT}:${EDGE_BIND_IP}" \
                 -o /dev/null -w '%{http_code}' \
@@ -896,8 +1193,63 @@ check_host_http() {
     acme="$(http_status "$acme")"
     [[ "$acme" == "404" ]] \
         || fail "acme-challenge probe for ${h} returned ${acme} (expected 404 from acme-http@internal, never a redirect)"
+}
 
-    rm -f "$clean" "$forged"
+# The control host is the client-certificate host: a connection WITHOUT a
+# certificate must be refused during the TLS handshake. That refusal is the
+# expected result and is asserted, never skipped: an HTTP answer here means the
+# gate is open. TLS 1.2 is forced because there the refusal is a handshake
+# alert before any HTTP exists; under 1.3 a client sees the handshake finish
+# and the alert only on its first read. The server certificate was already
+# judged by check_cert (it is presented before the client is asked for one).
+# The three outcomes are told apart on purpose:
+#   - an HTTP status: served without a certificate -> failure;
+#   - a TLS alert (handshake failure, certificate required, bad certificate,
+#     unknown ca): the gate works -> pass;
+#   - an unexpected EOF: traefik CLOSED the host, which it does when the TLS
+#     option cannot be built (a missing or unreadable CA file) -> failure;
+#   - anything else (refused, timeout): the host is down, which no refusal
+#     proves -> failure.
+# wait_control_cert <host> — poll until the edge presents a certificate whose SAN
+# names the host, at most CONTROL_CERT_WAIT_SECONDS. Judges nothing itself:
+# check_cert, called next, fails if the wait ran out.
+wait_control_cert() {
+    local h="$1" waited=0 f
+    while (( waited < CONTROL_CERT_WAIT_SECONDS )); do
+        f="$(cert_file "$h")"
+        if openssl x509 -in "$f" -noout -ext subjectAltName 2>/dev/null | tr -d '[:space:]' | tr ',' '\n' \
+            | sed 's/^.*Name://' | grep -qxF "DNS:${h}"; then
+            rm -f "$f"
+            return 0
+        fi
+        rm -f "$f"
+        (( waited > 0 )) || info "control host ${h}: waiting up to ${CONTROL_CERT_WAIT_SECONDS}s for its certificate (ordered when the router first loaded)"
+        sleep "$CONTROL_CERT_POLL_SECONDS"
+        waited=$(( waited + CONTROL_CERT_POLL_SECONDS ))
+    done
+    return 0
+}
+
+check_control_host() {
+    local h="$1" err rc=0 code msg
+    err="$(mktemp)"
+    code="$(curl -k -sS --max-time "$HTTP_TIMEOUT" --tlsv1.2 --tls-max 1.2 \
+                --resolve "${h}:${EDGE_HTTPS_PORT}:${EDGE_BIND_IP}" \
+                -o /dev/null -w '%{http_code}' \
+                "https://${h}:${EDGE_HTTPS_PORT}/" 2>"$err")" || rc=$?
+    code="$(http_status "$code")"
+    msg="$(tr '\n' ' ' < "$err" | cut -c1-200)"
+    rm -f "$err"
+    if (( rc == 0 )); then
+        fail "https://${h}/ answered HTTP ${code} to a connection WITHOUT a client certificate: the client-certificate gate is open"
+    elif grep -qiE 'alert (handshake failure|certificate required|bad certificate|unknown ca)' <<<"$msg"; then
+        ok "https://${h}/ refused the handshake without a client certificate (TLS alert)"
+    elif grep -qiE 'unexpected eof|connection reset|closed' <<<"$msg"; then
+        fail "https://${h}/ closed the connection with no TLS alert: traefik cannot build the client-certificate option (is etc/edge/${CONTROL_CA_REL} present and PEM?): ${msg}"
+    else
+        fail "https://${h}/: the refusal of a connection without a client certificate could not be established (curl exit ${rc}): ${msg}"
+    fi
+    check_host_acme "$h"
 }
 
 # A marker endpoint that answers the same bytes for every host makes the host-pin
@@ -933,8 +1285,16 @@ check_hosts() {
         else
             other="forged.${PLATFORM_DOMAIN}"
         fi
-        check_cert "$h"
-        check_host_http "$h" "$other"
+        if [[ "$h" == "$(control_host)" ]] && control_router_pending; then
+            info "control host ${h}: its router is written after the switch (gremion-deploy step 10); not probed in this pass"
+        elif [[ "$h" == "$(control_host)" ]] && control_is_public; then
+            wait_control_cert "$h"
+            check_cert "$h"
+            check_control_host "$h"
+        else
+            check_cert "$h"
+            check_host_http "$h" "$other"
+        fi
     done
     check_marker_discriminates
 }
@@ -1282,6 +1642,10 @@ prepare_verify() {
     for k in PLATFORM_DOMAIN EDGE_BIND_IP EDGE_HTTP_PORT EDGE_HTTPS_PORT; do
         [[ -n "${!k:-}" ]] || die "$k is not set in etc/env/state.env" 2
     done
+    if [[ -n "${CONTROL_PANEL_HOST:-}" ]]; then
+        local why
+        why="$(resolve_control_panel_host)" || die "etc/env/state.env: ${why}" 2
+    fi
 }
 
 main() {
@@ -1290,6 +1654,7 @@ main() {
             --colour) COLOUR="${2:-}"; shift 2 ;;
             --hosts)  HOSTS_FILE="${2:-}"; shift 2 ;;
             --reboot) REBOOT=1; shift ;;
+            --control-after-switch) CONTROL_AFTER_SWITCH=1; shift ;;
             -h|--help) usage ;;
             *) bad "unknown argument: $1"; usage ;;
         esac

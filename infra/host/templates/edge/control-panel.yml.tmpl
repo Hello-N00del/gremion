@@ -1,0 +1,92 @@
+# control-panel.yml -- the operator control panel on its own host, behind a TLS
+# CLIENT CERTIFICATE gate at the edge. RENDERED by gremion-render into
+# etc/edge/control-panel.yml under the Gremion root, after the switch that has
+# written the `panel` service (gremion-deploy step 10, or gremion-switch itself on a host
+# built by hand; `gremion-render --control-panel-only` is the same step by hand); never edited by hand and never placed by hand.
+# Runbook: docs/runbooks/control-panel-access.md.
+#
+# It exists on a host ONLY when the install opts in, and gremion-render decides
+# between three outcomes, always deleting a stale file first:
+#   - CONTROL_PANEL_ORIGIN is empty or absent in state.env: the install has not
+#     opted in. The file is deleted and the render SUCCEEDS (exit 0): no router, the
+#     panel stays behind `gremion-tenant panel`, exactly as before.
+#   - CONTROL_PANEL_ORIGIN is exactly https://<the control host> (CONTROL_PANEL_HOST
+#     in state.env, else control.<PLATFORM_DOMAIN>) and the
+#     opt-in is complete (the operator CA certificate at etc/edge/mtls/operator-ca.pem,
+#     the same origin and docker-compose.control-public.yml in both app envs, a
+#     certificate resolver): this file is written.
+#   - the key is set but anything of that is missing or wrong, or the key is
+#     off while an app env still carries the opt-in: the file is deleted and the
+#     render REFUSES (exit 2). A half-configured opt-in never leaves a router.
+#
+# WHY A FILE AND NOT LABELS. A TLS option cannot be declared by a Traefik docker
+# label, so it needs the file provider. The router sits in this file for the same
+# reason: a router can name `control-panel-mtls` only from the provider that
+# declares it. active.yml (rewritten by gremion-switch) carries only the
+# colour-bound service `panel`, and NO middleware may live there; this file
+# declares none either. The three it chains are declared on the Traefik
+# container's labels (docker-compose.prod.yml), the only container guaranteed to
+# exist whenever a router does.
+#
+# What each part buys (all MEASURED against the pinned Traefik by
+# test/host/integration/control-panel-mtls-proof.sh, not read from the docs):
+#   - clientAuthType RequireAndVerifyClientCert: a connection without a
+#     certificate, or with one another CA signed, never gets an HTTP response;
+#   - the option is per host (SNI): every other host on websecure keeps the
+#     default option and asks nobody for a certificate. A request whose SNI is
+#     another host but whose Host header is this one is answered 421, never
+#     routed;
+#   - a CA file that is missing or not PEM does not open the host: Traefik
+#     closes every connection to it (a "special closing route") and logs an
+#     error. It does NOT re-read the file when only the file changes; a changed
+#     CA takes effect when this file (or any file in this directory) is
+#     rewritten, which `gremion-operator-ca install` does;
+#   - the rule leaves out /healthz and /api/internal/: the first answers anyone,
+#     the second is the colour switch's evict endpoint. Neither belongs on the
+#     internet; Traefik answers 404 for both (and for every spelling it
+#     normalises to them). The panel's own gate still authenticates everything
+#     else;
+#   - the chain is the host pin FIRST (gremion-verify holds every router to
+#     it), then HSTS, then edge-ratelimit-portal (100/min, burst 50, per
+#     connection address). The tier is chosen for what this host SERVES: a page
+#     of the panel is the document plus about a dozen scripts, styles and data
+#     requests, sent at once from one address, and the auth tier (30/min, burst
+#     10) would answer the tail of every first load with 429 (measured by
+#     test/host/integration/control-panel-mtls-proof.sh, check 10). The password
+#     and the second factor are checked by Keycloak on the PLATFORM host, whose
+#     ops-realm login path carries the auth tier (router keycloak-ops in
+#     docker-compose.prod.yml); this host sends the browser there and takes the
+#     code back, behind the client-certificate gate;
+#   - HSTS stays edge-hsts-platform, which sends includeSubDomains. A browser
+#     applies that to the host that sent it and the names BELOW it, never to its
+#     parent or its siblings: on the default host control.<PLATFORM_DOMAIN> that is
+#     nothing the platform does not own, and on a CONTROL_PANEL_HOST outside the
+#     platform domain (panel.example.com) it covers panel.example.com and its own
+#     sub-names only, not example.com and not any customer host.
+#
+# Tokens (the two in the router below, in dollar-brace form): CONTROL_HOST, the
+# control host gremion-render resolved (CONTROL_PANEL_HOST in state.env, else
+# control.<PLATFORM_DOMAIN>; it may lie outside the platform domain), and
+# TRAEFIK_CERT_RESOLVER. Nothing else is substituted. gremion-verify holds the
+# rendered file to exactly this shape (check_control_panel_file).
+tls:
+  options:
+    control-panel-mtls:
+      minVersion: VersionTLS12
+      clientAuth:
+        caFiles:
+          - /etc/traefik/dynamic/mtls/operator-ca.pem
+        clientAuthType: RequireAndVerifyClientCert
+http:
+  routers:
+    control-panel:
+      entryPoints: ["websecure"]
+      rule: "Host(`${CONTROL_HOST}`) && !PathPrefix(`/healthz`) && !PathPrefix(`/api/internal`)"
+      service: "panel@file"
+      middlewares:
+        - "edge-hostpin-control@docker"
+        - "edge-hsts-platform@docker"
+        - "edge-ratelimit-portal@docker"
+      tls:
+        certResolver: "${TRAEFIK_CERT_RESOLVER}"
+        options: "control-panel-mtls"

@@ -113,8 +113,11 @@ without them. `IMAGE_TAG` then names the commit that was built.
 Run after the create request succeeded, once per install (it is idempotent).
 Order of the whole install: `bootstrap.sh`, `gremion-init-secrets`, operator
 keys filled, `gremion-render`, `nats-auth init`, images built from the pinned
-commit, state and app up, `gremion-switch <colour>`, `gremion-tenant init`,
-the isolation evidence (`gremion-isolation run`, then `record`), the create
+commit, state and app up, `gremion-switch <colour>` (on an install that opted in
+to the public control panel the switch also renders the control router, from
+`current`: the router can only be written once the switch has written the panel
+service; if the switch says it did not, run `gremion-render --release <dir>
+--control-panel-only` and read what it refuses), `gremion-tenant init`, the isolation evidence (`gremion-isolation run`, then `record`), the create
 request from the panel, `gremion-services wire <slug>`, then the vertical seed
 and the member import.
 
