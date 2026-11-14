@@ -539,6 +539,18 @@ describe('POST /api/protocols/[id]/publish — body_html sanitization', () => {
     expect(mockAssignGlobalNrs.mock.calls[0][2]).toEqual(['r1', 'r3'])
   })
 
+  it('runs the in-transaction quorum check on the transaction handle, not the pool', async () => {
+    // A quorum query on the pool would wait for the connection the transaction holds
+    // (a pool of one never returns), so the second check must be handed the tx.
+    mockListResolutions.mockResolvedValue([countedPassed])
+
+    expect((await POST(makeEvent())).status).toBe(200)
+
+    expect(mockGetQuorumContext).toHaveBeenCalledTimes(2)
+    expect(mockGetQuorumContext.mock.calls[0][1]).toBeUndefined() // early check: pool
+    expect(mockGetQuorumContext.mock.calls[1][1]).toEqual({ __tx: true }) // transaction re-check
+  })
+
   it('refuses (422) and flips nothing when the transaction re-read holds an untallied row the early read did not', async () => {
     // The early read says withdrawn; by the time the transaction runs another admin
     // took the withdrawal back, so the row is an untallied binding one again.

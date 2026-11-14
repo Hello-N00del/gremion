@@ -12,6 +12,7 @@ import { convertOdtToHtml, convertOdtToPdf } from '$lib/server/documents/collabo
 import { getProtocolDocumentPort } from '$lib/server/modules/runtime-registry'
 import { getDb } from '$lib/server/db'
 import { getQuorumContext } from '$lib/server/governance/quorum'
+import type { PgTransaction } from '$lib/server/db/tx'
 import { sanitizeRichHtml } from '$lib/server/security/html-sanitize'
 import { untalliedResolutionsMessage, UNTALLIED_RESOLUTION_CODE } from '$lib/governance/resolution-vote-state'
 import { UntalliedResolutionError, UNTALLIED_RESOLUTION_MESSAGE } from '$lib/server/protocols/untallied-resolution'
@@ -39,12 +40,16 @@ function requireAuth(event: RequestEvent): SessionUser {
  * all. A consent resolution with an empty tally is adopted (silence adopts) and
  * passes. A withdrawn resolution is not a vote and needs no quorum. Throws 422.
  */
-async function assertAdoptable(protocolId: string, resolutions: readonly ProtocolResolution[]): Promise<void> {
+async function assertAdoptable(
+  protocolId: string,
+  resolutions: readonly ProtocolResolution[],
+  tx?: PgTransaction,
+): Promise<void> {
   const untallied = untalliedResolutionsMessage(resolutions)
   if (untallied) throw error(422, { message: untallied, code: UNTALLIED_RESOLUTION_CODE })
 
   if (resolutions.some((r) => r.result !== 'withdrawn')) {
-    const quorum = await getQuorumContext(protocolId)
+    const quorum = await getQuorumContext(protocolId, tx)
     if (!quorum.quorate) {
       throw error(
         422,
@@ -141,12 +146,13 @@ export async function POST(event: RequestEvent) {
         { tx, allowPublished: true },
       )
       // Re-read the resolutions on the transaction, after updateProtocol took the
-      // protocol row: the list read at the top is from before the file conversion, and
-      // a row edited, un-withdrawn or added in the meantime must pass the SAME gates
-      // (untallied, quorum) as the early read before it is numbered and adopted. A 422
-      // here rolls the transaction back.
+      // protocol row: the list read at the top is from before the file conversion, so
+      // the rows as this transaction sees them must pass the SAME gates (untallied,
+      // quorum) as the early read before they are numbered and adopted. Edits made
+      // after this re-read are serialised by the row lock. The quorum check runs on
+      // the transaction handle, never on the pool. A 422 here rolls the transaction back.
       const current = await listResolutions(protocol.id, { tx })
-      await assertAdoptable(protocol.id, current)
+      await assertAdoptable(protocol.id, current, tx)
       await assignGlobalNrs(protocol.committee_id, year, current.map((r) => r.id), tx)
       // INV-5 + INV-1 (#320, ported gremion#22 G2): publish IS adoption. Stamp
       // decided_at on each binding resolution and append a tamper-evident
