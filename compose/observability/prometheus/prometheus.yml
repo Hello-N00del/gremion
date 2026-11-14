@@ -37,9 +37,13 @@ scrape_configs:
         replacement: blackbox:9115
 
   # The control host (CONTROL_PANEL_HOST, else control.<domain>) has no route unless the install opted in to the public
-  # control panel (docs/runbooks/control-panel-access.md); then the edge asks
-  # for a client certificate and ends a handshake without one. A 403 or 200
-  # counts as up here; the certificate gate itself is checked by gremion-verify.
+  # control panel (docs/runbooks/control-panel-access.md); then the edge DEMANDS a client certificate and ends the
+  # handshake of a client without one, and this prober has none. So this probe cannot pass on an opted-in host:
+  # its probe_success is 0 and it publishes no certificate-expiry series, by design; on a host that has not opted in
+  # the name has no route and answers 404, which the module does not accept either. Nothing alerts on this job's
+  # probe_success: a red target here is not an outage. Whether the host is up behind its gate is judged by
+  # gremion-verify (check_control_host asserts the TLS refusal), not by this probe. (A 200 or 403 from it would
+  # mean the host answered a client without a certificate: the gate is open, which gremion-verify fails.)
   - job_name: "blackbox-control"
     metrics_path: /probe
     params:

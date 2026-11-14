@@ -1,6 +1,6 @@
 # Upgrade: one release onto a running installation
 
-- Version: 9.1.0
+- Version: 9.1.1
 - Status: provisional (see Known gaps)
 - Wall-clock budget: one working day, from step 1 to the asserted post-condition (PRD-PLAT-005)
 - Implements: TRD-200 (upgrade), TRD-206 (the pre-migration dump, R18-4), TRD-189 (blue/green as the deploy path)
@@ -329,8 +329,9 @@ gremion-tenant reconcile "$slug" --apply --reason "upgrade to ${TAG}: re-ensure 
    realm `platform` was made by an earlier template, once).** `gremion-tenant
    init` (step 9, and any later run) compares the realm's stored fingerprint
    with the release's `docker/keycloak/realm-export.ops.json` and the panel
-   origin, and refuses a realm that differs ("exists but differs from
-   realm-export.ops.json"), opted in or not. This release changed the template
+   origin, and refuses a realm that differs ("realm platform differs from
+   realm-export.ops.json for panel origin <origin>", then the cause: the origin, the
+   template, both, or a client it could not read), opted in or not. This release changed the template
    in four places, so a realm made before it is refused until it is brought up by
    hand and re-stamped: no self-service password reset (`resetPasswordAllowed`
    false), the required actions the realm has no use for switched off
@@ -403,8 +404,15 @@ kcadm update "clients/${cid}" -r platform -s 'attributes."minimum.acr.value"=loa
 origin="${CONTROL_PANEL_ORIGIN:-http://127.0.0.1:3043}"
 fp="$( { cat /opt/gremion/current/docker/keycloak/realm-export.ops.json; printf '\n%s' "$origin"; } | sha256sum | cut -d' ' -f1)"
 kcadm update realms/platform -s "attributes.\"gremion.ops-realm.sha256\"=${fp}"
-gremion-tenant init                           # the ops realm is now "present and equal"
+gremion-tenant init --realm-only             # the ops realm is now "present and equal"
 ```
+
+   The last line is `init --realm-only`, not the plain `init`: the plain one also
+   renders the customer-create credentials and stops on the governance keys
+   (`GOVERNANCE_PG_PASSWORD`) of a host that still needs step 9, so step 8a would
+   end on a refusal that has nothing to do with the realm. `--realm-only` reads
+   only what the ops realm needs; step 9's own `gremion-tenant init` then does the rest.
+   On a host that does not need step 9 nothing else is owed after it.
 
    `kcadm update` merges into what the realm and the client already carry, so
    nothing else is touched (the redirect URIs, the secret, the realm's other
@@ -542,6 +550,7 @@ live, a deploy of any other tag stops at its step 5 and prints both commands.
 
 ## Changelog
 
+- 9.1.1 (2026-11-14): step 8a ends with `gremion-tenant init --realm-only` (the plain `init` stops on the governance keys of a host that also needs step 9, so the step could not complete) and quotes the init refusal as it now reads. Patch: a command and a quotation corrected, no step added or removed.
 - 9.1.0 (2026-11-13): the operator control panel behind a client certificate. New step 8a, before the governance step whose `gremion-tenant init` would otherwise refuse it: an ops realm made by the previous template is brought up to the current one by hand with kcadm (no self-service password reset, the unused required actions off, `loa2` as the control-panel client's default and minimum ACR) and re-stamped, because `init` refuses a realm whose fingerprint is not the release's. Step 8a opens with a precondition (the realm's stored fingerprint must be the previous template's for this origin, else stop) and also sets the control-panel client's description; the init refusals tell an origin mismatch from a template mismatch. New optional key `CONTROL_PANEL_HOST` (state.env): the panel on a host outside the platform domain, empty or absent keeps `control.<PLATFORM_DOMAIN>`. Minor: a step added that an install whose ops realm is current skips, and a key every existing install can leave unset.
 - 9.0.0 (2026-11-08): TASK-084-a. New step 9, after the reconcile: bring the governance server up on an installation first brought up before it existed (the two `GOVERNANCE_PG_*` keys in `state.env`, the `governance-postgres` container of the state project, and `gremion-tenant init` for the admin login file and the credential directory), with its post-condition lines. Only a customer create and delete read the governance server; every other `gremion-tenant` verb runs without it. Major: a step added and the post-condition changed.
 - 8.0.0 (2026-11-03): kernel #88, #89, on top of 7.0.0. New step 8, after the PgBouncer recreate: `gremion-tenant reconcile <slug> --apply` for every customer after the switch, which re-ensures what customer creation added since the customer was made (the purger role's `CONNECT` on its kernel database, `USAGE` on schema `public` and `SELECT` + `DELETE` on the purge tables, and the kernel API NATS seed) and reports it as the checks `purger-connect` and `kernel-api-nats-seed`. The post-condition keeps the PgBouncer observations and reads every customer's reconcile report, failing closed: a reconcile that exits non-zero, prints no report line, reports a check without `ok: true` or lacks the checks `purger-connect` and `kernel-api-nats-seed` is no pass. Major: a step added and the post-condition changed.

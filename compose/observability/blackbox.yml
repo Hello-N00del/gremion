@@ -12,6 +12,9 @@ modules:
       preferred_ip_protocol: ip4
       ip_protocol_fallback: true
 
+  # The control host's probe (job blackbox-control). It carries no client certificate, so on an opted-in host the edge
+  # ends the handshake and the probe fails by design; see compose/observability/prometheus/prometheus.yml. The codes below
+  # are what an OPEN gate would answer, not what a healthy host shows.
   http_control:
     prober: http
     timeout: 10s
