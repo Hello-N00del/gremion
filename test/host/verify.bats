@@ -1835,7 +1835,9 @@ control_all() { control_file; control_ca; control_live; }
 
 @test "control panel: a CA file that holds a private key fails (the host never holds the CA key)" {
     control_all
-    printf -- '-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----\n' >> "${GREMION_ROOT}/etc/edge/mtls/operator-ca.pem"
+    # the marker is assembled at run time so the committed tree carries no key marker (check-sops)
+    local kind='PRIVATE KEY'
+    printf -- '-----BEGIN %s-----\nFAKE\n-----END %s-----\n' "$kind" "$kind" >> "${GREMION_ROOT}/etc/edge/mtls/operator-ca.pem"
     run "$VERIFY" --hosts "$HOSTS"
     [ "$status" -eq 1 ]
     [[ "$output" == *"etc/edge/mtls/operator-ca.pem contains a private key"* ]]

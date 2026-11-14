@@ -15,6 +15,7 @@
         "gremion-ui/tests/unit/**/*.test.ts",
         "gremion-ui/src/**/*.test.ts",
         "gremion-ui/scripts/install-git-hooks.test.ts",
+        "gremion-ui/scripts/ops-realm-refusal.test.ts",
         "packages/db/src/**/*.test.ts",
         "packages/ports/src/**/*.test.ts",
         "modules/board/app/**/*.test.ts",
