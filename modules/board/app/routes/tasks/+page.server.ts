@@ -15,7 +15,7 @@ import type { CardView, StackView, BoardView, MemberOption } from '$lib/componen
 // can type against it.
 // The in-process backend reads the DATE column through the kernel pool, whose driver parses it
 // to a JS Date (UTC midnight); the service backend sends an ISO string. String(Date) would give
-// "Tue Dec 15 ..." and break the date input and the due pill, so a Date is formatted explicitly.
+// "Tue Dec 15 ..." and break the editor's date field and the due pill, so a Date is formatted explicitly.
 function dayOf(v: unknown): string | null {
   if (!v) return null
   if (v instanceof Date) return Number.isNaN(v.getTime()) ? null : v.toISOString().slice(0, 10)
@@ -91,7 +91,15 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   }
 
   return {
-    boards: boards.map((b) => ({ id: b.id, org_unit_id: b.org_unit_id, name: b.name, archived: b.archived })),
+    // org_unit_name: the switcher tells boards with the same title apart by their committee. The
+    // boards are already limited to the user's own scope, so the name is one they may see.
+    boards: boards.map((b) => ({
+      id: b.id,
+      org_unit_id: b.org_unit_id,
+      org_unit_name: ouNames.get(b.org_unit_id) ?? '',
+      name: b.name,
+      archived: b.archived,
+    })),
     archivedCount,
     creatable,
     deck,

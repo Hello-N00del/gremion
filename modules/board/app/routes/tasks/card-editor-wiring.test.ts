@@ -36,3 +36,14 @@ describe('the tasks page offers one create control', () => {
     expect(page).not.toMatch(/Board für \{u\.name\} anlegen/)
   })
 })
+
+// The switcher (tested on its own) names the committee next to a duplicate title; the page must
+// list its boards through it and hand it the loader's boards, which carry the committee name.
+describe('the tasks page lists its boards through the switcher', () => {
+  it('renders BoardSwitcher with the loaded boards and no hand-made board chips', () => {
+    expect(page).toMatch(/<BoardSwitcher[^>]*boards=\{data\.boards\}/)
+    expect(page).toMatch(/<BoardSwitcher[^>]*selectedId=\{selectedBoardId\}/)
+    expect(page).toMatch(/<BoardSwitcher[^>]*onselect=\{selectBoard\}/)
+    expect(page).not.toContain('class="board-chip"')
+  })
+})

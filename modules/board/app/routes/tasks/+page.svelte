@@ -6,6 +6,7 @@
   import PromoteDialog from '$lib/components/board/PromoteDialog.svelte'
   import CardEditor from '$lib/components/board/CardEditor.svelte'
   import BoardCreate from '$lib/components/board/BoardCreate.svelte'
+  import BoardSwitcher from '$lib/components/board/BoardSwitcher.svelte'
   import { cardCount, stackCount } from '$lib/components/board/count'
   import { deriveHue } from '$lib/governance/committee-color'
   import { dueState } from '$lib/components/board/due'
@@ -151,16 +152,7 @@
 {:else}
   <nav class="board-bar" aria-label="Board auswählen">
     <span class="eyebrow" style="margin-right:4px"><Icon name="sitemap" size={13} /> Board</span>
-    {#each data.boards as b (b.id)}
-      <button
-        class="board-chip"
-        class:on={b.id === selectedBoardId}
-        style="--c-hue: {deriveHue(b.org_unit_id)}"
-        onclick={() => selectBoard(b.id)}
-      >
-        <span class="swatch"></span>{b.name}
-      </button>
-    {/each}
+    <BoardSwitcher boards={data.boards} selectedId={selectedBoardId} onselect={selectBoard} />
     <span class="deck-grow"></span>
     <BoardCreate units={data.creatable} busy={creatingFor !== null} oncreate={createBoard} />
     {#if data.archivedCount > 0}

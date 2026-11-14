@@ -78,10 +78,11 @@ describe('the card editor', () => {
     expect(screen.getByLabelText('Titel')).toHaveValue('Plakate drucken')
     expect(screen.getByLabelText('Beschreibung')).toHaveValue('DIN A2, 40 Stück')
     expect(screen.getByLabelText('Zuständig')).toHaveValue(U_ANNA)
-    // the date control takes and gives ISO; the browser shows it in the user's own format
+    // the due date reads in German order whatever the browser language is; the data stays ISO
     const due = screen.getByLabelText('Fällig am') as HTMLInputElement
-    expect(due.type).toBe('date')
-    expect(due.value).toBe('2026-12-01')
+    expect(due.type).toBe('text')
+    expect(due.value).toBe('01.12.2026')
+    expect(due.placeholder).toBe('TT.MM.JJJJ')
   })
 
   it('offers "Niemand" and exactly the committee members as assignees', () => {
@@ -94,7 +95,7 @@ describe('the card editor', () => {
     const { onsaved } = open()
     await fireEvent.input(screen.getByLabelText('Titel'), { target: { value: 'Plakate und Flyer drucken' } })
     await fireEvent.change(screen.getByLabelText('Zuständig'), { target: { value: U_BERT } })
-    await fireEvent.input(screen.getByLabelText('Fällig am'), { target: { value: '2026-12-15' } })
+    await fireEvent.input(screen.getByLabelText('Fällig am'), { target: { value: '15.12.2026' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Speichern' }))
 
     await waitFor(() => expect(onsaved).toHaveBeenCalledTimes(1))
@@ -102,7 +103,7 @@ describe('the card editor', () => {
     const [url, init] = fetchMock.mock.calls[0]
     expect(url).toBe('/api/board/b1/cards')
     expect(init.method).toBe('PATCH')
-    // the description was not touched, so it is not sent; the date goes out as ISO
+    // the description was not touched, so it is not sent; the date was typed in German order and goes out as ISO
     expect(sentBody()).toEqual({
       cardId: 'c1',
       title: 'Plakate und Flyer drucken',
@@ -118,6 +119,67 @@ describe('the card editor', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Speichern' }))
     await waitFor(() => expect(fetchMock).toHaveBeenCalled())
     expect(sentBody()).toEqual({ cardId: 'c1', assigneeKeycloakId: null, dueDate: null })
+  })
+
+  it('reads a date typed without leading zeros and tidies it when the field is left', async () => {
+    open()
+    const due = screen.getByLabelText('Fällig am') as HTMLInputElement
+    await fireEvent.input(due, { target: { value: '5.1.2027' } })
+    await fireEvent.blur(due)
+    expect(due.value).toBe('05.01.2027')
+    await fireEvent.click(screen.getByRole('button', { name: 'Speichern' }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    expect(sentBody()).toEqual({ cardId: 'c1', dueDate: '2027-01-05' })
+  })
+
+  // A text that is no date must never reach the server as "no due date": that would silently
+  // remove the date the card already has.
+  it.each(['31.02.2026', '12/15/2026', '2026-12-15', 'morgen'])('does not save "%s" as a due date and says which format it wants', async (typed) => {
+    const { onsaved, onclose } = open()
+    const due = screen.getByLabelText('Fällig am')
+    await fireEvent.input(due, { target: { value: typed } })
+    expect(due).toHaveAttribute('aria-invalid', 'true')
+    await fireEvent.click(screen.getByRole('button', { name: 'Speichern' }))
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(onsaved).not.toHaveBeenCalled()
+    expect(onclose).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert')).toHaveTextContent('TT.MM.JJJJ')
+  })
+
+  it('saves again once the date is corrected', async () => {
+    open()
+    const due = screen.getByLabelText('Fällig am')
+    await fireEvent.input(due, { target: { value: '31.02.2026' } })
+    await fireEvent.input(due, { target: { value: '28.02.2026' } })
+    expect(due).not.toHaveAttribute('aria-invalid')
+    await fireEvent.click(screen.getByRole('button', { name: 'Speichern' }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    expect(sentBody()).toEqual({ cardId: 'c1', dueDate: '2026-02-28' })
+  })
+
+  // The calendar button opens the browser's own picker as a convenience; what it picks is shown
+  // in German order like a typed date.
+  it('takes a day picked in the calendar and shows it in German order', async () => {
+    const { container } = render(CardEditor, { boardId: 'b1', card: CARD, members: MEMBERS, onclose: vi.fn(), onsaved: vi.fn() })
+    expect(screen.getByRole('button', { name: 'Fälligkeit im Kalender wählen' })).toBeInTheDocument()
+    const native = container.querySelector('input[type="date"]') as HTMLInputElement
+    // the native control is a helper only: out of the tab order and hidden from assistive tech
+    expect(native).toHaveAttribute('aria-hidden', 'true')
+    expect(native.tabIndex).toBe(-1)
+    await fireEvent.change(native, { target: { value: '2026-12-24' } })
+    expect(screen.getByLabelText('Fällig am')).toHaveValue('24.12.2026')
+    await fireEvent.click(screen.getByRole('button', { name: 'Speichern' }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    expect(sentBody()).toEqual({ cardId: 'c1', dueDate: '2026-12-24' })
+  })
+
+  it('shows an empty date field for a card without a due date and sends nothing for it', async () => {
+    open({ ...CARD, due_date: null })
+    expect(screen.getByLabelText('Fällig am')).toHaveValue('')
+    await fireEvent.input(screen.getByLabelText('Titel'), { target: { value: 'Neu' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Speichern' }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    expect(sentBody()).toEqual({ cardId: 'c1', title: 'Neu' })
   })
 
   it('sends nothing and just closes when nothing changed', async () => {
