@@ -59,6 +59,9 @@ import { POST as promote } from '../../../routes/api/board/[id]/promote/+server'
 import { load as tasksLoad } from '../../../routes/tasks/+page.server'
 import { getBoardBackend } from './backend'
 
+// Guard at import like every harness that creates or drops a database; the isolation suite derives DATABASE_URL from the throwaway server.
+assertNonProductionDbUrl(process.env.DATABASE_URL ?? '', 'DATABASE_URL')
+
 // The display-name lookup asks Keycloak: not data access, and out of scope here.
 vi.mock('$lib/server/identity/display-names', () => ({
   getDisplayNameResolver: () => ({ resolveMany: async () => new Map<string, string>() }),
