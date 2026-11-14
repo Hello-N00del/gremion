@@ -19,11 +19,22 @@ vi.mock('$lib/server/keycloak-admin', () => ({
 	getKeycloakAdminClientForCurrentTenant: () => ({ getGroupMembers }),
 }))
 
+// The org units own the Keycloak groups g1 and g2 (the provisioning ledger).
+const listOrgUnits = vi.fn()
+vi.mock('$lib/server/governance/org-units-db', () => ({
+	listOrgUnits: (...a: unknown[]) => listOrgUnits(...a),
+}))
+vi.mock('$lib/server/governance/provisioning/ledger', () => ({
+	getResource: async (unitId: string, subsystem: string) =>
+		subsystem === 'keycloak' ? { external_id: unitId.replace('u-', '') } : null,
+}))
+
 import { resolvePostRecipients } from './recipients'
 
 beforeEach(() => {
 	vi.clearAllMocks()
 	filterUnsubscribed.mockResolvedValue(new Set())
+	listOrgUnits.mockResolvedValue([{ id: 'u-g1' }, { id: 'u-g2' }])
 })
 
 describe('resolvePostRecipients', () => {
@@ -118,5 +129,61 @@ describe('resolvePostRecipients', () => {
 
 		const out = await resolvePostRecipients('p1')
 		expect(out).toEqual([{ email: 'noname@example.org', name: null }])
+	})
+
+	// --- only the groups of the customer's org units are mailed -----------------
+
+	it('leaves out a stored group that belongs to no org unit and never asks for its members', async () => {
+		getPostRecipients.mockResolvedValue([
+			{ id: 'r1', post_id: 'p1', mailing_list_id: 'l1', keycloak_group_id: null },
+			{ id: 'r2', post_id: 'p1', mailing_list_id: null, keycloak_group_id: 'kc-admin' },
+			{ id: 'r3', post_id: 'p1', mailing_list_id: null, keycloak_group_id: 'g2' },
+		])
+		listMembers.mockResolvedValue([{ email: 'alice@example.org', name: 'Alice' }])
+		getGroupMembers.mockImplementation(async (id: string) =>
+			id === 'g2'
+				? [{ email: 'bob@example.org', firstName: 'Bob', lastName: 'Builder' }]
+				: [{ email: 'operator@example.org', firstName: 'Op', lastName: 'Erator' }],
+		)
+
+		const out = await resolvePostRecipients('p1')
+		expect(out).toEqual([
+			{ email: 'alice@example.org', name: 'Alice' },
+			{ email: 'bob@example.org', name: 'Bob Builder' },
+		])
+		expect(getGroupMembers).toHaveBeenCalledTimes(1)
+		expect(getGroupMembers).toHaveBeenCalledWith('g2')
+	})
+
+	it('resolves nobody and asks Keycloak nothing when the org units cannot be read', async () => {
+		getPostRecipients.mockResolvedValue([
+			{ id: 'r1', post_id: 'p1', mailing_list_id: 'l1', keycloak_group_id: null },
+			{ id: 'r2', post_id: 'p1', mailing_list_id: null, keycloak_group_id: 'g1' },
+		])
+		listMembers.mockResolvedValue([{ email: 'alice@example.org', name: 'Alice' }])
+		listOrgUnits.mockRejectedValue(new Error('db down'))
+
+		// A send to the lists alone would look complete; the whole resolve fails instead.
+		await expect(resolvePostRecipients('p1')).rejects.toThrow(/org units/)
+		expect(getGroupMembers).not.toHaveBeenCalled()
+	})
+
+	it('reads the org units once for several groups, and not at all for lists only', async () => {
+		getPostRecipients.mockResolvedValue([
+			{ id: 'r1', post_id: 'p1', mailing_list_id: null, keycloak_group_id: 'g1' },
+			{ id: 'r2', post_id: 'p1', mailing_list_id: null, keycloak_group_id: 'g2' },
+		])
+		getGroupMembers.mockResolvedValue([])
+		await resolvePostRecipients('p1')
+		expect(listOrgUnits).toHaveBeenCalledTimes(1)
+
+		listOrgUnits.mockClear()
+		getPostRecipients.mockResolvedValue([
+			{ id: 'r1', post_id: 'p1', mailing_list_id: 'l1', keycloak_group_id: null },
+		])
+		listMembers.mockResolvedValue([{ email: 'alice@example.org', name: 'Alice' }])
+		listOrgUnits.mockRejectedValue(new Error('db down'))
+		await expect(resolvePostRecipients('p1')).resolves.toEqual([{ email: 'alice@example.org', name: 'Alice' }])
+		expect(listOrgUnits).not.toHaveBeenCalled()
 	})
 })

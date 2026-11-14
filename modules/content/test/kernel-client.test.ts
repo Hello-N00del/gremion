@@ -94,7 +94,8 @@ describe('createKernelClient — header forwarding', () => {
     expect(c.url).toBe('http://kernel.internal/api/internal/newsletter/resolve-group')
     expect(c.headers['x-internal-auth']).toBe('s')
     expect(c.headers['x-correlation-id']).toBe('7')
-    expect(JSON.parse(c.body!)).toEqual({ groupId: 'grp-9' })
+    // The content leaf always asks for the groups of the org units only.
+    expect(JSON.parse(c.body!)).toEqual({ groupId: 'grp-9', orgUnitOnly: true })
     // No proxy-trust config → NEITHER proxy-trust header (dev path / byte-identical no-op).
     expect(c.headers['x-proxy-trust']).toBeUndefined()
     expect(c.headers['x-forwarded-host']).toBeUndefined()

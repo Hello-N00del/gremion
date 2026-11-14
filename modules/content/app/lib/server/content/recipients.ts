@@ -4,7 +4,8 @@
 // which targets EXACTLY one of (XOR enforced by the DB CHECK):
 //   - a content mailing list  → every `content.mailing_list_members` row, or
 //   - a Keycloak group        → every email-bearing member of that group
-//     (via getKeycloakAdminClientForCurrentTenant().getGroupMembers).
+//     (via getKeycloakAdminClientForCurrentTenant().getGroupMembers), if it is
+//     the group of an org unit; any other stored group resolves to nobody.
 //
 // `resolvePostRecipients` unions those, dedupes by *lowercased* email (first
 // occurrence wins for the display name), then drops anyone on the tenant's
@@ -20,6 +21,7 @@
 
 import { getKeycloakAdminClientForCurrentTenant } from '$lib/server/keycloak-admin'
 import { filterUnsubscribed, getPostRecipients, listMembers } from './content-db'
+import { listOrgUnitGroupIds } from './recipient-groups'
 
 /** A resolved email recipient. */
 export interface Recipient {
@@ -43,11 +45,29 @@ export async function resolvePostRecipients(postId: string): Promise<Recipient[]
 		if (!byEmail.has(key)) byEmail.set(key, { email: key, name })
 	}
 
+	// Only the group of an org unit is mailed (recipient-groups.ts). The org units
+	// are read once, and only when the post targets a group. If they cannot be
+	// read, the whole resolve fails before anyone is mailed: a send to the lists
+	// alone would look complete.
+	let orgUnitGroupIds: ReadonlySet<string> = new Set()
+	if (targets.some((t) => t.keycloak_group_id)) {
+		try {
+			orgUnitGroupIds = await listOrgUnitGroupIds()
+		} catch (err) {
+			throw new Error('org units unreadable; group recipients not resolved', { cause: err })
+		}
+	}
+
 	for (const target of targets) {
 		if (target.mailing_list_id) {
 			const members = await listMembers(target.mailing_list_id)
 			for (const m of members) add(m.email, m.name)
 		} else if (target.keycloak_group_id) {
+			// A stored group that is no org-unit group (any more) has no recipients.
+			if (!orgUnitGroupIds.has(target.keycloak_group_id)) {
+				console.warn(`[content:recipients] post ${postId}: a stored group is no org-unit group, left out`)
+				continue
+			}
 			const kc = getKeycloakAdminClientForCurrentTenant()
 			const raw = await kc.getGroupMembers(target.keycloak_group_id)
 			for (const m of raw) {

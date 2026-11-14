@@ -188,7 +188,14 @@
       publishError.email = 'Bitte mindestens einen Empfänger auswählen.'
       return false
     }
-    return saveRecipients()
+    if (!(await saveRecipients())) return false
+    // The saved audience is not the one that was ticked: the author looks at it
+    // before anything is sent.
+    if (recipientsRemovedNote) {
+      publishError.email = 'Die Empfänger haben sich geändert. Bitte prüfen und den Vorgang wiederholen.'
+      return false
+    }
+    return true
   }
 
   async function publishNow(ch: ChannelId) {
@@ -304,6 +311,7 @@
   let recipientsLoaded = $state(false)
   let recipientsSaving = $state(false)
   let recipientsSaved = $state(false)
+  let recipientsRemovedNote = $state('')
   let groupIdInput = $state('')
 
   async function loadRecipients() {
@@ -368,9 +376,24 @@
     return g.path && g.path !== g.id ? g.path : g.name
   }
 
+  // The server leaves out a stored group that belongs to no org unit any more.
+  // The picker must not keep showing it as a ticked recipient.
+  function dropRemovedGroups(ids: string[]) {
+    if (ids.length === 0) return
+    const next = new Set(selectedRecipients)
+    for (const id of ids) next.delete(`group:${id}`)
+    selectedRecipients = next
+    availableGroups = availableGroups.filter((g) => !ids.includes(g.id))
+    recipientsRemovedNote =
+      ids.length === 1
+        ? 'Eine Gruppe gehört zu keinem Gremium mehr und wurde aus den Empfängern entfernt.'
+        : `${ids.length} Gruppen gehören zu keinem Gremium mehr und wurden aus den Empfängern entfernt.`
+  }
+
   async function saveRecipients(): Promise<boolean> {
     recipientsSaving = true
     recipientsSaved = false
+    recipientsRemovedNote = ''
     const recipients = [...selectedRecipients].map((key) => {
       const [kind, id] = key.split(/:(.*)/s)
       return kind === 'list' ? { mailing_list_id: id } : { keycloak_group_id: id }
@@ -382,12 +405,16 @@
         body: JSON.stringify({ recipients }),
       })
       recipientsSaved = res.ok
+      const d = (await res.json().catch(() => null)) as { message?: string; removed?: unknown } | null
       if (!res.ok) {
-        const d = (await res.json().catch(() => null)) as { message?: string } | null
-        // Only a 400 carries a German message the author can act on; the generic
-        // texts of 401, 403 and 5xx are English.
+        // Only a 400, and the 503 of this endpoint (the groups cannot be checked
+        // right now), carry a German message the author can act on; the generic
+        // texts of 401, 403 and the other 5xx are English or not JSON at all.
         publishError.email =
-          (res.status === 400 && d?.message) || 'Empfänger konnten nicht gespeichert werden.'
+          ((res.status === 400 || res.status === 503) && d?.message) ||
+          'Empfänger konnten nicht gespeichert werden.'
+      } else if (Array.isArray(d?.removed) && d.removed.length > 0) {
+        dropRemovedGroups(d.removed.filter((id): id is string => typeof id === 'string'))
       }
       return res.ok
     } catch {
@@ -563,6 +590,7 @@
               {recipientsSaving ? 'Speichert…' : 'Empfänger speichern'}
             </button>
             {#if recipientsSaved}<span class="ok-note">Gespeichert</span>{/if}
+            {#if recipientsRemovedNote}<p class="warn" role="status">{recipientsRemovedNote}</p>{/if}
           {/if}
         </div>
 
