@@ -3,6 +3,7 @@
   import { invalidateAll, goto } from '$app/navigation'
   import { t } from '$lib/i18n'
   import { Dialog, DialogHeader, DialogTitle } from '$lib/components/ui/dialog'
+  import { DateTimeFieldDe } from '$lib/components/ui/date-field'
   import { buildRevokeRequest } from '$lib/governance/recall-action'
 
   let { data }: { data: PageData } = $props()
@@ -172,8 +173,11 @@
   // office is the recall above ("Abberufen"), which records a reason.
   let assignTarget = $state<{ roleId: string; roleName: string } | null>(null)
   let assignUserId = $state('')
+  // The term as ISO dates (YYYY-MM-DD). The fields show and take German order and leave '' here
+  // while the typed text is not a real date, so an unreadable or reversed term is never sent.
   let assignStart = $state('')
   let assignEnd = $state('')
+  const assignTermValid = $derived(assignStart !== '' && assignEnd !== '' && assignEnd > assignStart)
   let assignError = $state('')
   let assignNotice = $state('')
   let assigning = $state(false)
@@ -194,7 +198,7 @@
   }
 
   async function confirmAssign() {
-    if (!assignTarget || assigning || !assignUserId) return
+    if (!assignTarget || assigning || !assignUserId || !assignTermValid) return
     assigning = true
     assignError = ''
     try {
@@ -593,14 +597,14 @@
             {/each}
           </select>
         </div>
-        <div class="flex gap-3">
-          <div class="flex-1 space-y-1">
+        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div class="space-y-1">
             <label for="assign-start" class="text-sm font-medium">Amtszeit von</label>
-            <input id="assign-start" type="date" bind:value={assignStart} class="w-full rounded-md border border-border-strong bg-paper px-3 py-2 text-sm" />
+            <DateTimeFieldDe id="assign-start" label="Beginn der Amtszeit" dateOnly bind:value={assignStart} />
           </div>
-          <div class="flex-1 space-y-1">
+          <div class="space-y-1">
             <label for="assign-end" class="text-sm font-medium">Amtszeit bis</label>
-            <input id="assign-end" type="date" bind:value={assignEnd} class="w-full rounded-md border border-border-strong bg-paper px-3 py-2 text-sm" />
+            <DateTimeFieldDe id="assign-end" label="Ende der Amtszeit" dateOnly bind:value={assignEnd} />
           </div>
         </div>
       </div>
@@ -619,7 +623,7 @@
         <button
           type="button"
           onclick={confirmAssign}
-          disabled={assigning || !assignUserId || !assignStart || !assignEnd || assignEnd <= assignStart}
+          disabled={assigning || !assignUserId || !assignTermValid}
           class="rounded-md border border-accent/40 px-3 py-1.5 text-xs font-medium text-accent hover:bg-accent/10 disabled:opacity-50"
         >
           {assigning ? 'Wird zugewiesen…' : 'Zuweisen'}
