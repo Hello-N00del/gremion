@@ -31,6 +31,7 @@ import { lookupModuleVersion, type LifecycleModule } from '@gremion/tenant-store
 import { verifyCouncilRequest } from '../src/lib/server/tenant/provisioner/council-verify'
 import type { KcTransport } from '../src/lib/server/tenant/provisioner/kc-admin-api'
 import { verifyRequestEvidence } from '../src/lib/server/tenant/provisioner/request-verify'
+import { reservedHostCheck } from '../src/lib/server/tenant/reserved-hosts'
 
 export interface RequestVerbContext {
   /** process.argv after the verb */
@@ -138,7 +139,8 @@ async function requestVerify(ctx: RequestVerbContext): Promise<void> {
     // 1. the kind and its args (pure; reuses the engine's own validation)
     const verdict: RequestVerdict = verifyRequestArgs(
       { kind: row.kind, customerSlug: row.customer_slug, args: row.args, operatorId: row.operator_id },
-      { catalogueIds: catalogue.map((m) => m.id), disabledIds: disabledModuleIds(ctx.modulesDir) },
+      // a create naming the platform's reserved names or the control panel's own host (CONTROL_PANEL_HOST) is refused
+      { catalogueIds: catalogue.map((m) => m.id), disabledIds: disabledModuleIds(ctx.modulesDir), isReservedHost: reservedHostCheck(process.env) },
     )
     if (verdict.verdict === 'refused') return refuse(verdict.reason)
     const notLoaded = await loadedCheck(verdict.args)

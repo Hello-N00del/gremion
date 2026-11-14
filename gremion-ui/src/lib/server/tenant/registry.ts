@@ -6,6 +6,7 @@
 import { getControlDb } from './control-db'
 import { validateSlug } from './slug'
 import { normaliseHost } from './host'
+import { controlPanelHosts } from './reserved-hosts'
 import {
   TENANT_EVICT_CHANNEL,
   type TenantDomain,
@@ -883,6 +884,12 @@ export async function addTenantDomain(
 ): Promise<TenantDomain> {
   return tdAdd(getControlDb(), tenantId, rawHost, opts, {
     platformDomain: platformEnv('PLATFORM_DOMAIN') ?? '',
+    // the control panel's own host (CONTROL_PANEL_HOST, else its origin) may lie outside the platform
+    // domain: it is reserved too, read next to PLATFORM_DOMAIN
+    controlPanelHosts: controlPanelHosts({
+      CONTROL_PANEL_HOST: platformEnv('CONTROL_PANEL_HOST'),
+      CONTROL_PANEL_ORIGIN: platformEnv('CONTROL_PANEL_ORIGIN'),
+    }),
     onEvict: evictTenantRuntime,
   })
 }

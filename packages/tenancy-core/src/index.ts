@@ -5,7 +5,8 @@
 // No SvelteKit, no env, no I/O of its own: every DB handle and log sink is
 // passed in (gremion-ui's kernel-portable.guard.test.ts scans this tree).
 export { hostFromIssuer, normaliseHost } from './host.ts'
-export { isReservedPlatformHost, RESERVED_PLATFORM_LABELS, reservedPlatformHosts } from './reserved-hosts.ts'
+export { controlPanelHosts, isReservedPlatformHost, RESERVED_PLATFORM_LABELS, reservedHostCheck, reservedPlatformHosts } from './reserved-hosts.ts'
+export type { ControlPanelEnv } from './reserved-hosts.ts'
 export {
   __testing,
   addTenantDomain,

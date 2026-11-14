@@ -80,10 +80,22 @@ function refOf(row: ControlRow, host: string): CustomerRef {
 }
 
 /** Validation shared by every phase: the inputs, before any write. */
-export function validateCreate(spec: CreateSpec, catalogueIds: readonly string[]): { slug: string; host: string; token: string; enable: string[]; admins: AdminSpec[] } {
+/**
+ * `isReservedHost` (the platform's reserved names and the control panel's own host, built by the caller from the
+ * environment next to PLATFORM_DOMAIN) refuses a host that may never be a customer's, BEFORE any write: the registry
+ * refuses it too, but only after the tenant row exists. Absent: not checked (tests).
+ */
+export function validateCreate(
+  spec: CreateSpec,
+  catalogueIds: readonly string[],
+  isReservedHost?: (host: string) => boolean,
+): { slug: string; host: string; token: string; enable: string[]; admins: AdminSpec[] } {
   const slug = assertCustomerSlug(spec.slug)
   const token = tokenFor(slug)
   const host = assertHost(spec.host)
+  if (isReservedHost?.(host)) {
+    throw new ProvisioningError('INVALID_INPUT', `host ${JSON.stringify(host)} is reserved for the platform or is the control panel's own host and can never be a customer host`)
+  }
   assertUuid(spec.operatorId, 'operator id')
   const enable = assertEnableList(spec.enable, catalogueIds)
   const admins = assertAdmins(spec.admins)
@@ -133,7 +145,7 @@ export interface PhaseOutcome {
 }
 
 export async function createPhaseA(spec: CreateSpec, deps: ProvisioningDeps): Promise<PhaseOutcome & { registered: boolean }> {
-  const v = validateCreate(spec, deps.modules.catalogueIds())
+  const v = validateCreate(spec, deps.modules.catalogueIds(), deps.isReservedHost)
   await assertEnableLoaded(v.enable, deps)
   // TASK-044 D2: a stale tip, a missing pass or a missing DPIA decision fails before a realm exists
   await preflightGate(v.enable, spec.dpia, (await deps.control.getBySlug(v.slug))?.id ?? null, spec.operatorId, deps.gate)
@@ -272,7 +284,7 @@ export async function assertSmtpStamped(c: CustomerRef, deps: ProvisioningDeps):
 }
 
 export async function createPhaseB(spec: CreateSpec, deps: ProvisioningDeps): Promise<PhaseOutcome & { enabled: string[]; reloaded: boolean; activated: boolean }> {
-  const v = validateCreate(spec, deps.modules.catalogueIds())
+  const v = validateCreate(spec, deps.modules.catalogueIds(), deps.isReservedHost)
   await assertEnableLoaded(v.enable, deps)
   const c = await requireCustomer(deps, v.slug)
   if (c.host !== v.host) throw new ProvisioningError('CUSTOMER_STATE', `customer ${v.slug} is bound to ${c.host}, not ${v.host}`)

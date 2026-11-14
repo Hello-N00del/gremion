@@ -81,7 +81,7 @@ import {
 import { MODULE_MANIFESTS } from '../src/lib/modules/registry'
 import { dbNameForSlug, validateSlug } from '../src/lib/server/tenant/slug'
 import { normaliseHost } from '../src/lib/server/tenant/host'
-import { isReservedPlatformHost } from '../src/lib/server/tenant/reserved-hosts'
+import { reservedHostCheck } from '../src/lib/server/tenant/reserved-hosts'
 import {
   getTenantBySlug,
   updateTenantStatus,
@@ -550,6 +550,8 @@ async function liveDeps(opts: { configFile?: string; bodyName?: string; needEdge
     })
     const deps: ProvisioningDeps = {
       platformDomain: env.platformDomain,
+      // the platform's reserved names and the control panel's own host (CONTROL_PANEL_HOST) are never a customer's
+      isReservedHost: reservedHostCheck(process.env),
       mailSender: mailStampExpectation(),
       ledger: pgLedger(platform),
       // TASK-044: the level-1 gate over gremion_platform, on the host's derived release tip
@@ -827,14 +829,14 @@ async function cmdRenderRouter(): Promise<void> {
   if (!tenant) throw new UsageError(`unknown tenant ${v.slug}`)
   const primary = await primaryHostForTenant(tenant.id)
   if (!primary) throw new UsageError(`${v.slug} has no primary host`)
-  const platformDomain = reqEnv('PLATFORM_DOMAIN')
+  reqEnv('PLATFORM_DOMAIN') // the named exit-2 failure when unset; reservedHostCheck reads it below
   const yaml = renderCustomerRouter({
     slug: v.slug,
     hosts: (await listTenantDomains(tenant.id)).map((d) => d.host),
     primaryHost: primary,
     certResolver: reqEnv('TRAEFIK_CERT_RESOLVER'),
     normaliseHost: (h) => normaliseHost(h),
-    isReservedHost: (h) => isReservedPlatformHost(h, platformDomain),
+    isReservedHost: reservedHostCheck(process.env),
   })
   process.stdout.write(yaml)
 }

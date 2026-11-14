@@ -17,7 +17,13 @@ import { isPerTenantEnvName } from './per-tenant-env-names.js'
  * TENANT_DATA_ROOT is the directory holding every tenant's `<slug>/config.json`
  * (default `/data`, the image's volume); it names no tenant, so it is platform.
  */
-export const PLATFORM_ENV_NAMES: readonly string[] = ['NATS_URL', 'PLATFORM_DOMAIN', 'TENANT_DATA_ROOT']
+export const PLATFORM_ENV_NAMES: readonly string[] = [
+  'CONTROL_PANEL_HOST',
+  'CONTROL_PANEL_ORIGIN',
+  'NATS_URL',
+  'PLATFORM_DOMAIN',
+  'TENANT_DATA_ROOT',
+]
 
 /**
  * Read one deployment-global variable. Returns `undefined` when it is unset
