@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+set -euo pipefail
+#
+# gremion-cd -- continuous deployment of the host: the dispatcher.
+#
+#   gremion-cd VERB [ARGS]
+#
+# This file only maps a verb to a function and loads the config; the work lives in
+# lib/cd/*.sh, one file per area, each owned by one unit. Verb x-y runs cd_cmd_x_y, so a
+# library adds a verb by defining the function and this file never changes. The libraries
+# are sourced from lib/cd/ in sorted order, core.sh first; apply-root.sh in that directory
+# is the one script that runs as root (only by its own unit) and is never sourced here.
+#
+# Verbs of this unit: help, version, status, hold, resume. See `gremion-cd help` for what
+# is installed.
+#
+# EXIT CODES  0 ok - 1 an assertion or post-condition failed - 2 usage, a missing
+# precondition, a bad config or an unknown state version - 3 busy or blocked, retry later
+#
+# TEST HOOK. With GREMION_CD_TESTING=1 (and only then) cd-stubs.sh in the directory named by
+# GREMION_CD_STUBS_DIR is sourced after the libraries, and the fake clock of core.sh is
+# honoured. Without the flag both are ignored.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/common.sh
+. "$SCRIPT_DIR/../lib/common.sh"
+
+# a stable glob order whatever the host locale is
+export LC_ALL=C
+
+CD_LIB_DIR="$SCRIPT_DIR/../lib/cd"
+# shellcheck source=../lib/cd/core.sh
+. "$CD_LIB_DIR/core.sh"
+# The sourced path is built as <dir>/<name>.sh from a name found by the glob, so every
+# dotted path ends in a literal .sh: these are libraries, never an env file.
+for cd_lib_file in "$CD_LIB_DIR"/*.sh; do
+    [[ -f "$cd_lib_file" ]] || continue
+    cd_lib_name="${cd_lib_file##*/}"
+    cd_lib_name="${cd_lib_name%.sh}"
+    case "$cd_lib_name" in
+        core | apply-root) continue ;;
+    esac
+    # shellcheck source=/dev/null
+    . "$CD_LIB_DIR/${cd_lib_name}.sh"
+done
+unset cd_lib_file cd_lib_name
+if [[ "${GREMION_CD_TESTING:-}" == 1 && -n "${GREMION_CD_STUBS_DIR:-}" ]]; then
+    # shellcheck source=/dev/null
+    . "${GREMION_CD_STUBS_DIR}/cd-stubs.sh"
+fi
+cd_paths_init
+
+main() {
+    local verb="${1:-}" fn rc=0
+    if [[ -z "$verb" ]]; then
+        cd_cmd_help >&2
+        exit 2
+    fi
+    case "$verb" in
+        -h | --help) verb=help ;;
+    esac
+    if [[ ! "$verb" =~ ^[a-z][a-z0-9-]*$ ]]; then
+        cd_die 2 "not a verb (gremion-cd help)"
+    fi
+    shift
+    fn="cd_cmd_${verb//-/_}"
+    if ! declare -F "$fn" >/dev/null 2>&1; then
+        cd_die 2 "unknown verb: ${verb} (gremion-cd help)"
+    fi
+    # help and version need no config; every other verb refuses to run on a bad one, and a
+    # tick-like verb also writes the ALERT file so a rejected config cannot silence the timer
+    case "$verb" in
+        help | version) ;;
+        *)
+            if ! cd_cfg_load; then
+                case "$verb" in
+                    tick | watchdog) cd_alert "config rejected by gremion-cd ${verb}" ;;
+                esac
+                exit 2
+            fi
+            ;;
+    esac
+    "$fn" "$@" || rc=$?
+    exit "$rc"
+}
+
+main "$@"
