@@ -88,6 +88,11 @@ describe('getBoardBackend() factory', () => {
     process.env.BOARD_BACKEND = 'inprocess'
     await getBoardBackend().getBoard('b1')
     expect(readLocation).not.toHaveBeenCalled()
+    // the service client refuses to run without its URL and secret; it must do so without a flag read
+    delete process.env.BOARD_SERVICE_URL
+    process.env.BOARD_BACKEND = 'service'
+    await getBoardBackend().getBoard('b1').catch(() => undefined)
+    expect(readLocation).not.toHaveBeenCalled()
   })
 
   it('returns InprocessBoardClient when BOARD_BACKEND=inprocess', () => {

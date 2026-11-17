@@ -1,8 +1,9 @@
 // gremion-ui/src/lib/server/board/backend/route-parity.test.ts
-// T1 — byte-identical delegation guard for the default (inprocess) path.
+// T1 — byte-identical delegation guard for the in-process client.
 //
 // Every consumer of the board subsystem now calls the BoardBackendPort via
-// getBoardBackend(). With BOARD_BACKEND unset the port IS InprocessBoardClient,
+// getBoardBackend(). With BOARD_BACKEND=inprocess (or, for a customer whose board
+// lives in the kernel tables, the router's kernel path) the port IS InprocessBoardClient,
 // which must delegate to the SAME boardDb the routes previously imported
 // directly — argument-for-argument, result passed straight through — so the
 // four pre-existing board route/db tests stay green UNMODIFIED (the proof of

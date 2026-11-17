@@ -1,7 +1,7 @@
 // The location flag against a real migrated database (pnpm test:integration, throwaway Postgres):
 // the table of migration 0066, its constraints, the reader's 5 second cache and its database-clock
 // rule for a stale 'moving', and the router over the real kernel tables.
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterAll } from 'vitest'
 import { getDb } from '../db'
 import { createOrgUnit } from '../governance/org-units-db'
 import { getBoardBackend } from './backend'
@@ -15,6 +15,14 @@ async function setFlag(location: 'kernel' | 'moving' | 'module', ageSeconds = 0)
     VALUES (true, ${location}, now() - make_interval(secs => ${ageSeconds}))
     ON CONFLICT (id) DO UPDATE SET location = EXCLUDED.location, changed_at = EXCLUDED.changed_at`
 }
+
+// The integration database is shared by every file of the suite: leave no flag row behind, a
+// leftover 'moving' row would refuse the next file's board writes.
+afterAll(async () => {
+  resetBoardLocationCacheForTests()
+  await sql()`DELETE FROM board_location`
+  await sql()`TRUNCATE card, stack, board RESTART IDENTITY CASCADE`
+})
 
 beforeEach(async () => {
   resetBoardLocationCacheForTests()

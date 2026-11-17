@@ -14,6 +14,8 @@ const state = vi.hoisted(() => ({
   // one scripted answer per query: rows, or an Error to reject with
   script: [] as Array<unknown[] | Error>,
   fallback: [] as unknown[],
+  // runs while a query is "in flight", e.g. to let fake time pass during a slow read
+  onQuery: undefined as undefined | (() => void),
 }))
 
 vi.mock('$lib/server/tenant/context', () => ({
@@ -25,6 +27,7 @@ vi.mock('$lib/server/tenant/context', () => ({
 vi.mock('$lib/server/db', () => ({
   getDb: () => async (strings: TemplateStringsArray) => {
     state.queries.push(strings.join('?'))
+    state.onQuery?.()
     const next = state.script.shift()
     if (next instanceof Error) throw next
     return next ?? state.fallback
@@ -49,6 +52,7 @@ beforeEach(() => {
   state.queries = []
   state.script = []
   state.fallback = []
+  state.onQuery = undefined
   resetBoardLocationCacheForTests()
   vi.spyOn(console, 'error').mockImplementation(() => {})
 })
@@ -185,6 +189,37 @@ describe('getBoardLocation: the 5 second cache', () => {
     state.script = [row('moving', 100), row('kernel')]
     expect(await getBoardLocation()).toBe('moving')
     vi.advanceTimersByTime(BOARD_LOCATION_CACHE_TTL_MS - 1)
+    expect(await getBoardLocation()).toBe('moving')
+  })
+})
+
+describe('getBoardLocation: the 5 seconds are counted from the start of the read', () => {
+  // guard: watched RED by stamping the entry when the read ENDS
+  it('a slow read does not stretch the cache: the answer is as old as the moment it was asked', async () => {
+    state.script = [row('kernel'), row('module')]
+    state.onQuery = () => vi.advanceTimersByTime(4000) // the database takes 4 s to answer
+    expect(await getBoardLocation()).toBe('kernel')
+    state.onQuery = undefined
+    vi.advanceTimersByTime(BOARD_LOCATION_CACHE_TTL_MS - 4000 - 1)
+    expect(await getBoardLocation()).toBe('kernel') // 4999 ms after it was asked
+    vi.advanceTimersByTime(1)
+    expect(await getBoardLocation()).toBe('module') // 5000 ms after it was asked
+    expect(state.queries).toHaveLength(2)
+  })
+
+  it('a clock that steps back never keeps an entry fresh', async () => {
+    state.script = [row('kernel'), row('module')]
+    expect(await getBoardLocation()).toBe('kernel')
+    vi.setSystemTime(new Date('2029-12-31T00:00:00Z')) // a day back
+    expect(await getBoardLocation()).toBe('module')
+  })
+})
+
+describe('getBoardLocation: a running move refreshes its row and never goes stale', () => {
+  it('the same moving row is kernel at 301 seconds and moving again once the move refreshed it', async () => {
+    state.script = [row('moving', 301), row('moving', 2)]
+    expect(await getBoardLocation()).toBe('kernel')
+    vi.advanceTimersByTime(BOARD_LOCATION_CACHE_TTL_MS)
     expect(await getBoardLocation()).toBe('moving')
   })
 })

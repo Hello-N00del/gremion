@@ -11,7 +11,7 @@
 // running copy of the app, old colour and new colour alike, gives the same answer without being
 // told by a restart or a setting. Two rules make that answer safe, and both are read by the move:
 //
-//   - a read is held for 5 seconds per customer, so a flip is seen within 5 seconds;
+//   - a read is held for 5 seconds per customer, counted from the moment it was started, so a flip is seen within 5 seconds;
 //   - a 'moving' row that has not been refreshed for more than 300 seconds is the trace of a move
 //     that died, and reads as 'kernel'. The age is measured by the DATABASE (now() - changed_at),
 //     the same clock the move's own checks use, never by this process.
@@ -117,12 +117,20 @@ export async function getBoardLocation(): Promise<BoardLocation> {
   }
 
   const hit = cache.get(tenant)
-  if (hit && Date.now() - hit.at < BOARD_LOCATION_CACHE_TTL_MS) return hit.value
+  if (hit) {
+    // a clock that stepped back makes the age negative: that is expired, never "fresh for ever"
+    const age = Date.now() - hit.at
+    if (age >= 0 && age < BOARD_LOCATION_CACHE_TTL_MS) return hit.value
+  }
 
   const pending = inflight.get(tenant)
   if (pending) return pending
 
   const read = (async () => {
+    // The entry is stamped with the time the read STARTED, not the time it ended: the answer is
+    // as old as the moment the database was asked, so a slow read cannot stretch the 5 seconds
+    // the move's waits and its flip check are built on.
+    const startedAt = Date.now()
     try {
       const value = await readFresh()
       if (cache.size >= CACHE_MAX) {
@@ -130,7 +138,7 @@ export async function getBoardLocation(): Promise<BoardLocation> {
         for (const [k, e] of cache) if (now - e.at >= BOARD_LOCATION_CACHE_TTL_MS) cache.delete(k)
         if (cache.size >= CACHE_MAX) cache.clear()
       }
-      cache.set(tenant, { value, at: Date.now() })
+      cache.set(tenant, { value, at: startedAt })
       return value
     } catch (err) {
       // the cause is on the error; the log line names the failure class only, never a customer
