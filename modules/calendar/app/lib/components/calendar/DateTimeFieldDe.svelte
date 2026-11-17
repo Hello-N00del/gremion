@@ -91,8 +91,17 @@
       oninput={typed}
       onblur={tidy}
     />
-    <button type="button" class="cal" onclick={openPicker} aria-label="{label} im Kalender wählen">
-      Kalender
+    <button
+      type="button"
+      class="cal"
+      onclick={openPicker}
+      aria-label="{label} im Kalender wählen"
+      title="Kalender"
+    >
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="3" y="5" width="18" height="16" rx="2" />
+        <path d="M3 10h18M8 3v4M16 3v4" />
+      </svg>
     </button>
     <input
       bind:this={picker}
@@ -124,7 +133,8 @@
   }
   .text { flex: 1 1 auto; min-width: 0; width: 100%; padding: 0 0.75rem; }
   .text[aria-invalid='true'] { border-color: var(--rust); }
-  .cal { flex: 0 0 auto; padding: 0 0.75rem; cursor: pointer; }
+  /* An icon-only button: a text button took ~90px of the half-width field and cut the time off. */
+  .cal { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 2.5rem; padding: 0; cursor: pointer; }
   .native { position: absolute; right: 0; bottom: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
   .hint { margin: 4px 0 0; font-size: 0.75rem; color: var(--rust); }
 </style>
