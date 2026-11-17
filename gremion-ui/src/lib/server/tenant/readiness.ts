@@ -61,6 +61,19 @@ export function isFleetPopulated(): boolean {
   return _fleetPopulated
 }
 
+/**
+ * Counts only, for the internal /readyz answer: how many tenants the readiness
+ * map holds and how many of them are not `ready` (failed or pending). Never a slug,
+ * an id or an error text. The map is filled by the boot fleet run and then changes
+ * only through the request-driven lazy re-migration, so a tenant registered after
+ * boot is not counted until something resolves it.
+ */
+export function getTenantReadinessCounts(): { total: number; notReady: number } {
+  let notReady = 0
+  for (const entry of _readiness.values()) if (entry.state !== 'ready') notReady++
+  return { total: _readiness.size, notReady }
+}
+
 /** A tenant the fleet never saw (e.g. registered after boot) is `pending`. */
 export function getTenantReadiness(tenantId: string): TenantReadiness {
   return _readiness.get(tenantId)?.state ?? 'pending'

@@ -698,7 +698,11 @@ describe('authGuard boot gate (TASK-023 item 3)', () => {
     expect(h.reached).toBe(true)
     expect(h.res.status).toBe(200)
 
-    for (const path of ['/dashboard', '/api/health', '/healthzx', '/api/members']) {
+    // The readiness probe is answered DURING boot by its own handler (not the generic boot 503 body).
+    const r = await guard(mod, '/readyz')
+    expect(r.reached).toBe(true)
+
+    for (const path of ['/dashboard', '/api/health', '/healthzx', '/readyzx', '/api/readyz', '/api/members']) {
       const o = await guard(mod, path)
       expect(o.reached, path).toBe(false)
       expect(o.res.status).toBe(503)
