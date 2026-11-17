@@ -318,10 +318,10 @@
   // Why there is no "Amt zuweisen" on the page: no office exists, or every office is taken.
   const officeAssignHint = $derived.by(() => {
     if (roles.length === 0) {
-      return 'Für dieses Gremium sind keine Ämter angelegt, deshalb gibt es kein „Amt zuweisen". Ämter lassen sich auf dieser Seite nicht anlegen.'
+      return 'Für dieses Gremium sind keine Ämter angelegt, deshalb gibt es kein „Amt zuweisen“. Ämter lassen sich auf dieser Seite nicht anlegen.'
     }
     if (roles.every((r) => r.currentAssignment)) {
-      return 'Alle Ämter sind besetzt. Ein Amt wird mit „Abberufen" frei und lässt sich danach neu zuweisen.'
+      return 'Alle Ämter sind besetzt. Ein Amt wird mit „Abberufen“ frei und lässt sich danach neu zuweisen.'
     }
     return ''
   })
