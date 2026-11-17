@@ -63,7 +63,7 @@ const fullNav = () => filterNavForSession(navSchema, makeAuthHelpers({ user: { g
 async function shell(opts: { request: Locale; locale?: Locale; pageLocale?: Locale; nav?: ReturnType<typeof fullNav> }): Promise<string> {
   const request = new Request('http://pilot.test/settings')
   localeOf.set(request, opts.request)
-  const props = { nav: opts.nav ?? fullNav(), roles: everyRole, userName: 'X', locale: opts.locale, pageLocale: opts.pageLocale, children }
+  const props = { nav: opts.nav ?? fullNav(), roles: everyRole, userName: 'X', locale: opts.locale, pageLocale: opts.pageLocale, children: children as never }
   const response = await paraglideMiddleware(request, () => new Response(render(AppShell, { props }).body))
   return await response.text()
 }
