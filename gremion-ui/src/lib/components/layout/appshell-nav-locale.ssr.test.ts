@@ -74,8 +74,11 @@ describe('the shell navigation follows the interface locale (server render)', ()
     for (const label of ['Workspace', 'Overview', 'Calendar', 'Tasks', 'Documents', 'Committees', 'Minutes &amp; resolutions', 'Settings', 'System status', 'Administration', 'Members']) {
       expect(html, label).toContain(`>${label}<`)
     }
+    // The rail itself (the top bar's breadcrumbs are a separate area).
+    const rail = html.slice(html.indexOf('<nav class="sb-nav'), html.indexOf('</nav>', html.indexOf('<nav class="sb-nav')))
+    expect(rail.length).toBeGreaterThan(200)
     for (const german of ['Arbeitsbereich', 'Übersicht', 'Kalender', 'Einstellungen', 'Systemstatus', 'Verwaltung', 'Mitglieder', 'Protokolle &amp; Beschlüsse']) {
-      expect(html, german).not.toContain(`>${german}<`)
+      expect(rail, german).not.toContain(`>${german}<`)
     }
   })
 
@@ -109,16 +112,18 @@ describe('the shell navigation follows the interface locale (server render)', ()
 })
 
 /** The opening tag of the navigation column. */
-const columnTag = (html: string) => /<div[^>]*nav-col[^>]*>/.exec(html)?.[0] ?? 'NO NAV COLUMN'
+const columnTag = (html: string) => /<div[^>]*nav-col[^>]*>/.exec(html)?.[0] ?? 'NO NAV COLUMN'
 
 describe('language of parts (WCAG 3.1.2): chrome that differs from the page is marked', () => {
   test('English chrome around a German-declared page carries lang="en"', async () => {
     const html = await shell({ request: 'en', locale: 'en', pageLocale: 'de' })
-    expect(html).toMatch(/<aside[^>]*\blang="en"/)
+    expect(columnTag(html)).toMatch(/\blang="en"/)
+    // The hamburger is chrome too (it only shows below the column breakpoint).
+    expect(/<button[^>]*nav-hamburger[^>]*>/.exec(html)?.[0]).toMatch(/\blang="en"/)
   })
 
   test('chrome in the page language needs no lang attribute', async () => {
     const html = await shell({ request: 'de', locale: 'de', pageLocale: 'de' })
-    expect(html).not.toMatch(/<aside[^>]*\blang=/)
+    expect(columnTag(html)).not.toMatch(/\blang=/)
   })
 })

@@ -85,15 +85,16 @@
   let counts = $derived(data.counts ?? { approvals: 0, liveVotes: 0, unread: 0 })
   let activeHref = $derived($page.url.pathname)
 
-  // The language the current page is written in; the shell chrome speaks it
-  // too, so a page declared lang="de" carries no English chrome. The shell
-  // stays mounted across client-side navigation, hence a reactive prop. On the
-  // server $lang is already the request's content locale (i18n-handle.ts), and
-  // contentLocaleFor is idempotent over it; in the browser the person's locale
-  // is read back from <html> (data-ui-locale, else lang).
-  let pageLocale = $derived(
-    contentLocaleFor($page.route.id, browser ? uiLocaleOf(document.documentElement) : $lang)
-  )
+  // Two languages, kept apart (locale-en): the person's locale, which the shell
+  // chrome and every catalogue string render in on every page, and the language
+  // the current page is DECLARED in (`<html lang>`), which stays German until the
+  // page is proven translated. Where they differ the shell marks its own parts
+  // with their lang (WCAG 3.1.2). On the server $lang is the person's locale
+  // (i18n-handle.ts runs Paraglide in it); in the browser it is read back from
+  // <html> (data-ui-locale, else lang). The shell stays mounted across
+  // client-side navigation, hence a reactive prop for the page's language.
+  let uiLocale = $derived(browser ? uiLocaleOf(document.documentElement) : $lang)
+  let pageLocale = $derived(contentLocaleFor($page.route.id, uiLocale))
 
   // No shell on auth/legal/setup pages, nor on a route a module renders full-viewport (its slot's bareRoutes).
   const bareRoutes = moduleSlots.flatMap((s) => s.bareRoutes ?? [])
@@ -125,7 +126,7 @@
 {/snippet}
 
 {#if isShellRoute && user}
-  <AppShell {nav} {counts} {activeHref} {roles} {userName} {groups} brand={data.brand} sourceUrl={data.sourceUrl} locale={pageLocale} {topbarModules} {children} />
+  <AppShell {nav} {counts} {activeHref} {roles} {userName} {groups} brand={data.brand} sourceUrl={data.sourceUrl} locale={uiLocale} {pageLocale} {topbarModules} {children} />
   {#each overlaySlots as Overlay, i (i)}<Overlay {user} />{/each}
 {:else}
   {@render children()}

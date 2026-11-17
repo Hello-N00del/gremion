@@ -8,10 +8,16 @@
 // is listed in TRANSLATED_ROUTE_IDS as rendering from the catalogue. A new
 // route is German until someone translates it and adds it here;
 // content-locale.test.ts scans every +page.svelte and fails when the list and
-// the pages disagree in either direction. On a German page the catalogue
-// strings around it (shell chrome, +error) render German too: the handle runs
-// Paraglide in the content locale, and the root layout hands AppShell the same
-// locale, so the whole document speaks one language.
+// the pages disagree in either direction.
+//
+// This decides what the page is DECLARED in, not what the catalogue strings
+// render in. Since the locale-en unit every string that has a message renders
+// in the person's locale on every route (the handle runs Paraglide in it), so an
+// English person who switched the language reads the shell navigation and every
+// catalogue string in English, also on a page that is still declared German.
+// Where the two differ the shell marks its own parts with their language
+// (AppShell `pageLocale`, WCAG 3.1.2); the hard-coded German inside a page
+// stays German until TASK-161 migrates it.
 //
 // The decision is keyed by the SvelteKit route id (event.route.id on the
 // server, navigation.to.route.id on the client), not by pathname prefix: a

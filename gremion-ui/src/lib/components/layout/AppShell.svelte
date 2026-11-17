@@ -9,12 +9,13 @@
   import type { Brand } from '$lib/brand'
   import type { TopbarModuleSlot } from './topbar-slot'
   import { onMount, tick, untrack } from 'svelte'
-  import { t, translate, type Language } from '$lib/i18n'
+  import { lang, t, translate, type Language } from '$lib/i18n'
   import { resolveSourceUrl } from '$lib/source-offer'
   import { MQ_COLUMN, MQ_WIDE, navShellCss } from './nav-constants'
   import { applyNavPrefClass, createNavPrefStore, modeFromMatches, type NavMode, type NavPref } from './nav-state'
   import { navHrefs, resolveActiveHref } from './nav-active'
   import { navLabels } from './nav-labels'
+  import { localizeNav } from './nav-localize'
 
   let {
     nav = [],
@@ -28,6 +29,7 @@
     topbarModules,
     bodyContext,
     locale,
+    pageLocale,
     children
   }: {
     nav?: NavItem[]
@@ -44,16 +46,28 @@
     /** TASK-208: the TopBar's body-context slot. */
     bodyContext?: Snippet
     /**
-     * R26-TRAIN4-FIX (WCAG 3.1.1): the language of the page the shell wraps
-     * (root +layout.svelte, content-locale.ts). The chrome speaks it, so a
-     * German page carries no English chrome. Reactive: the shell stays mounted
-     * across client-side navigation. Unset: the current locale, as before.
+     * The language the chrome speaks: the person's locale (root +layout.svelte).
+     * The navigation labels and the chrome's own strings render in it on every
+     * page, including a page that is still declared German (content-locale.ts).
+     * Reactive: the shell stays mounted across client-side navigation.
+     * Unset: the current locale, as before.
      */
     locale?: Language
+    /**
+     * The language the page itself is declared in (`<html lang>`). Where it
+     * differs from the chrome's, the chrome parts are marked with their own
+     * lang (WCAG 3.1.2), so a German-declared page does not carry unmarked
+     * English chrome. Unset: no marking.
+     */
+    pageLocale?: Language
     children: Snippet
   } = $props()
 
+  let chromeLocale = $derived(locale ?? $lang)
   let tr = $derived(locale ? translate(locale) : $t)
+  // The rail's German source labels, in the chrome's language (nav-localize.ts).
+  let navView = $derived(localizeNav(nav, chromeLocale, tr))
+  let chromeLang = $derived(pageLocale && pageLocale !== chromeLocale ? chromeLocale : undefined)
 
   const DRAWER_ID = 'nav-drawer'
   // The whole layout-critical CSS comes from nav-constants.ts, so SSR's <head>
@@ -160,7 +174,7 @@
      TASK-208: .app-shell is 100dvh, with a vh fallback line — see navShellCss. -->
 <div class="app-shell" style="background: var(--paper);" data-nav-ready={ready ? '' : undefined} bind:this={shell}>
   <Sidebar
-    {nav}
+    nav={navView}
     {activeHref}
     {counts}
     {userName}
@@ -172,14 +186,16 @@
     ontoggle={toggleSidebar}
     suppressCurrent={drawerOpen}
     labels={navLabels(tr)}
+    lang={chromeLang}
   />
   <div class="app-shell-body">
-    <TopBar {brand} {nav} unread={counts.unread} modules={topbarModules} {bodyContext}>
+    <TopBar {brand} nav={navView} unread={counts.unread} modules={topbarModules} {bodyContext}>
       {#snippet leading()}
         <button
           bind:this={hamburger}
           type="button"
           class="nav-hamburger nav-drawer-only"
+          lang={chromeLang}
           aria-label={tr('nav.menu')}
           aria-expanded={drawerOpen}
           aria-controls={drawerOpen ? DRAWER_ID : undefined}
@@ -196,7 +212,8 @@
   {#if drawerOpen}
     <NavDrawer
       id={DRAWER_ID}
-      {nav}
+      nav={navView}
+      lang={chromeLang}
       {counts}
       {currentHref}
       activePath={activeHref}

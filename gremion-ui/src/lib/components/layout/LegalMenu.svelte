@@ -62,7 +62,8 @@
   >
     <Icon name="scale" size={18} />
   </button>
-  <ul class="legal-list sb-legal" class:open id="{idPrefix}-legal">
+  <!-- The legal pages and the source offer are written in German only (content-locale.ts), whatever the chrome around them speaks (WCAG 3.1.2). -->
+  <ul class="legal-list sb-legal" class:open id="{idPrefix}-legal" lang="de">
     {#each LINKS as l (l.href)}
       <li><a href={l.href} onclick={(e) => onnavigate?.(l.href, e)}>{l.label}</a></li>
     {/each}

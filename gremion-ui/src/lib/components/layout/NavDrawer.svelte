@@ -30,7 +30,8 @@
     roles = [],
     brand: brandProp,
     sourceUrl,
-    onclose
+    onclose,
+    lang
   }: {
     id: string
     nav?: NavItem[]
@@ -43,6 +44,8 @@
     brand?: Partial<Brand> | null
     sourceUrl: string
     onclose: (reason: DrawerCloseReason) => void
+    /** The language of the drawer when it differs from the page's (WCAG 3.1.2); unset: the page's. */
+    lang?: string
   } = $props()
 
   let brand = $derived(resolveBrand(brandProp))
@@ -77,6 +80,7 @@
   <div class="nav-scrim" aria-hidden="true" onclick={() => onclose('scrim')}></div>
   <div
     {id}
+    {lang}
     class="nav-drawer scroll-themed"
     role="dialog"
     aria-modal="true"
