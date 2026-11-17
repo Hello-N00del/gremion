@@ -1,4 +1,4 @@
-<!-- i18n-sync: source=README.md sha256=9b8c8ae505a939011bb9d47d7fe1805569fe951a52cef3444a46ceb58579ebf4 -->
+<!-- i18n-sync: source=README.md sha256=495079f70c7090781620554371afbcc8d986a2bfbabe9f14fda4eaadae546235 -->
 [English](./README.md) | **Deutsch**
 
 # board
@@ -107,8 +107,11 @@ Keine außer dem Kernel (und im Service-Modus dem PostgreSQL-Server des Leaf).
   aus: Er setzt `config.modules.board = false` innerhalb von etwa einer Minute. Er läuft nur,
   wenn `PLATFORM_MODULES_DATABASE_URL` gesetzt ist; die Deploy-Verdrahtung lässt sie leer, wenn
   `UI_MODULES_DB_PASSWORD` nicht gesetzt ist, und die App meldet dann `module self-service
-  reconciler off`. Auf einem solchen Host blendet ein Plattform-Disable das Board nicht aus: Es
-  bleibt erreichbar, bis `config.modules.board` von Hand auf false gesetzt wird. Nach einem
+  reconciler off`. Auf einem solchen Host weist das Verb `disable-module` `board` ab (bevor
+  etwas geschrieben wird; die Meldung nennt `UI_MODULES_DB_PASSWORD`), ein Plattform-Disable
+  wird also nie als erledigt gemeldet, während das Board erreichbar bleibt; zuerst die Variable
+  setzen, `init` ausführen und die App-Container neu erstellen, oder `config.modules.board` von
+  Hand auf false setzen. Nach einem
   Neustart der App ist die Sperre der Plattform bis zum ersten Abgleichlauf vergessen; in
   diesem kurzen Fenster kann eine Einstellungsänderung das Board noch einschalten, der Lauf
   schaltet es wieder aus.

@@ -49,6 +49,22 @@ export const HELD_BACK_CATALOGUE_IDS: Readonly<Record<string, string>> = Object.
 })
 
 /**
+ * Catalogue ids that follow the PLATFORM enablement although a council may not switch them (they are in
+ * HELD_BACK_CATALOGUE_IDS, never in SWITCHABLE_CATALOGUE_IDS, and no council request can name them).
+ *
+ * The board: it is served in-process on the tenant's kernel tables and owns no module database, so a
+ * platform-level disable_module of it blocks nothing and, without this, left config.modules.board true
+ * (the board stayed reachable). Following the platform hides it: config.modules.board false, and every
+ * board page and api answers as for any disabled module. Nothing is deleted: the rows stay in the tenant
+ * database, and an enable brings the board back with its data.
+ *
+ * The reconciler (module-switch/reconciler.ts) is the only thing that follows, and it runs only where the council
+ * requester role is wired (PLATFORM_MODULES_DATABASE_URL), so the host-side disable-module verb refuses these ids
+ * where it is not (tenant-provision-gate.ts).
+ */
+export const PLATFORM_FOLLOWED_CATALOGUE_IDS: readonly string[] = Object.freeze(['board'])
+
+/**
  * The manifest id (config.modules key) each HELD-BACK catalogue id registers under; they differ for messaging
  * (messages) and publishing (newsletter). Display only: the settings page lists these modules as managed by the
  * operator. Nothing refuses or accepts a switch through this map: manifestIdOf and catalogueIdOf stay the only
