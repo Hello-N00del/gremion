@@ -213,6 +213,8 @@ export interface VerifyContext {
   disabledIds: readonly string[]
   /** Tests only: overrides COUNCIL_DISABLE_ALLOWED for a council disable_module. */
   councilDisableAllowed?: boolean
+  /** True for a host that may never be a customer's (the platform's reserved names, the control panel's own host): a create naming it is refused. Absent: not checked. */
+  isReservedHost?: (host: string) => boolean
 }
 
 // the library's rule (assertDpiaDecisionInput): 1-20 codes, snake_case
@@ -407,6 +409,7 @@ function verifyCreate(e: RequestEnvelope, ctx: VerifyContext): CreateRequestArgs
       ],
     },
     ctx.catalogueIds,
+    ctx.isReservedHost,
   )
   for (const id of v.enable) {
     if (ctx.disabledIds.includes(id) && !DEFAULT_DENY.has(id)) throw new Refused(`module ${id} is disabled in this build (modules/disabled.json)`)

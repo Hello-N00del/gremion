@@ -11,7 +11,7 @@ import { env } from '$env/dynamic/private'
 import { evidenceFromRequest } from '$lib/server/auth'
 import { loadConfig, newCustomerDisabledReason, type PanelConfig } from '$lib/server/config'
 import { platformDb } from '$lib/server/customers'
-import { heartbeatAgeSeconds, listModuleChoices, submitCreate, SubmitRefused, validateNewCustomer, type ModuleChoice, type NewCustomerInput } from '$lib/server/requests'
+import { heartbeatAgeSeconds, listModuleChoices, reservedHostCheck, submitCreate, SubmitRefused, validateNewCustomer, type ModuleChoice, type NewCustomerInput } from '$lib/server/requests'
 import type { Actions, PageServerLoad } from './$types'
 
 /** A text field, trimmed; a file part or an absent field is the empty string (never "[object File]"). */
@@ -98,7 +98,7 @@ export const actions: Actions = {
       dpia,
     }
     const key = textField(form, 'key')
-    const errors = validateNewCustomer(input, undefined, s.modules.filter((m) => m.denied === null).map((m) => m.id))
+    const errors = validateNewCustomer(input, undefined, s.modules.filter((m) => m.denied === null).map((m) => m.id), reservedHostCheck(env))
     if (Object.keys(errors).length) return fail(400, { disabled: null, errors, values: input, key })
     // the signed sign-in, read server-side from the encrypted session; never sent to the browser
     const evidence = await evidenceFromRequest(request, r.config)

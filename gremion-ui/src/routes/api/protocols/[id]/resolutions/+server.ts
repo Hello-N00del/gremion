@@ -2,8 +2,8 @@ import { error, json } from '@sveltejs/kit'
 import type { RequestEvent } from '@sveltejs/kit'
 import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth'
-import { getProtocol, addResolution } from '$lib/server/protocols/protocol-db'
-import type { AdoptionMode, RequiredMajority } from '$lib/server/protocols/protocol-db'
+import { getProtocol, addResolution, ProtocolNotEditableError } from '$lib/server/protocols/protocol-db'
+import type { AdoptionMode, ProtocolResolution, RequiredMajority } from '$lib/server/protocols/protocol-db'
 import { requireUuidParams } from '$lib/server/protocols/route-ids'
 import { requireResolutionText } from '$lib/server/protocols/resolution-text'
 import { decideResolution } from '$lib/server/governance/resolution-decision'
@@ -21,11 +21,30 @@ function requireAdmin(event: RequestEvent): SessionUser {
   return user
 }
 
+const NOT_EDITABLE_MESSAGE = 'Nicht bearbeitbar'
+
+/**
+ * The early check below is a read; a publish can commit between it and the
+ * INSERT. The status guard inside addResolution's statement is what closes that
+ * window and reports it as ProtocolNotEditableError: answer it like the early
+ * check does (403), never as a 500 and never by adding to a published protocol.
+ */
+async function addToEditableProtocol(
+  ...args: Parameters<typeof addResolution>
+): Promise<ProtocolResolution> {
+  try {
+    return await addResolution(...args)
+  } catch (err) {
+    if (err instanceof ProtocolNotEditableError) throw error(403, NOT_EDITABLE_MESSAGE)
+    throw err
+  }
+}
+
 export async function POST(event: RequestEvent) {
   requireAdmin(event)
   requireUuidParams(event, 'id')
   const protocol = await getProtocol(event.params.id!)
-  if (!protocol || protocol.status === 'published') throw error(403, 'Nicht bearbeitbar')
+  if (!protocol || protocol.status === 'published') throw error(403, NOT_EDITABLE_MESSAGE)
   const body = await event.request.json()
   // A decision is stored only with its text (editor: entry form, not an empty row).
   const text = requireResolutionText(body.text)
@@ -83,7 +102,7 @@ export async function POST(event: RequestEvent) {
     if (providedVotes !== 0 && providedVotes !== 3) {
       throw error(400, 'Informative Stimmzahlen entweder vollständig (Ja/Nein/Enthaltung) oder gar nicht angeben')
     }
-    const resolution = await addResolution(protocol.id, {
+    const resolution = await addToEditableProtocol(protocol.id, {
       text,
       votesYes: providedVotes === 3 ? body.votesYes : null,
       votesNo: providedVotes === 3 ? body.votesNo : null,
@@ -124,7 +143,7 @@ export async function POST(event: RequestEvent) {
     throw err
   })
 
-  const resolution = await addResolution(protocol.id, {
+  const resolution = await addToEditableProtocol(protocol.id, {
     text,
     votesYes,
     votesNo,

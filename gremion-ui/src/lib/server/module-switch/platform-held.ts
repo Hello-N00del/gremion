@@ -5,7 +5,7 @@
 // module back on while the platform still says disabled.
 //
 // Kept in its own small module so the settings routes do not pull in the reconciler and its database
-// access. Process-local, like the reconciler's own state: it is rebuilt by the first alignment pass.
+// access. Process-local, like the reconciler's own state: it is rebuilt by the first alignment pass (holds are published as soon as the platform state is read, even when the alignment is then blocked; a release waits for the completed alignment).
 import { getTenant } from '$lib/server/tenant/context'
 
 const held = new Map<string, Set<string>>()

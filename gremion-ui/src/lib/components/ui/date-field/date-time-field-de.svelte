@@ -35,15 +35,24 @@
   const show = (v: string): string => (dateOnly ? formatDateDe(v) : formatLocalInputDe(v))
   const read = (t: string): string | null => (dateOnly ? parseDateDe(t) : parseDateTimeDe(t))
 
-  let text = $state(untrack(() => show(value)))
-  let emitted = untrack(() => value)
+  // The field's own rule: the bound value is a real ISO value the field would have typed, or ''.
+  // A value from outside (initial, form reset) or the picker is held to the same rule.
+  const accepted = (v: string): string => (v !== '' && read(show(v)) === v ? v : '')
+  // What to show for a value: the German text, or the raw value when it breaks the rule (never blank).
+  const shown = (v: string): string => (accepted(v) !== '' ? show(v) : v)
+
+  let text = $state(untrack(() => shown(value)))
+  let emitted = untrack(() => accepted(value))
   let picker = $state<HTMLInputElement>()
 
-  // The value changed from outside (a form reset, a new default): show it again.
+  // The value changed from outside (a form reset, a new default): show it again, and
+  // drop it when it breaks the field's rules (year below 1000, not in this field's form).
   $effect(() => {
     if (value !== emitted) {
-      emitted = value
-      text = show(value)
+      const ok = accepted(value)
+      text = shown(value)
+      emitted = ok
+      if (ok !== value) value = ok
     }
   })
 
@@ -70,10 +79,13 @@
   }
 
   function picked() {
-    if (!picker?.value) return
-    emitted = picker.value
+    const native = picker?.value
+    if (!native) return
+    // like typed text: a day the field refuses (year below 1000, an unexpected form) binds '' and
+    // shows the hint, with the picked value left in the text for correction
+    emitted = accepted(native)
     value = emitted
-    text = show(value)
+    text = shown(native)
   }
 
   const control = 'h-10 rounded-md border border-border-strong bg-paper px-3 text-sm'
@@ -85,7 +97,7 @@
       {id}
       class={cn(control, 'w-full min-w-0 flex-1 aria-invalid:border-rust')}
       type="text"
-      inputmode="numeric"
+      inputmode="text"
       autocomplete="off"
       placeholder={pattern}
       aria-label={inputLabel}
@@ -107,6 +119,8 @@
       bind:this={picker}
       class="pointer-events-none absolute bottom-0 right-0 h-px w-px opacity-0"
       type={dateOnly ? 'date' : 'datetime-local'}
+      min={dateOnly ? '1000-01-01' : '1000-01-01T00:00'}
+      max={dateOnly ? '9999-12-31' : '9999-12-31T23:59'}
       tabindex="-1"
       aria-hidden="true"
       onchange={picked}

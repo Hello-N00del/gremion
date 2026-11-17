@@ -11,6 +11,7 @@ import {
   DENIED_BY_NAME,
   HELD_BACK_CATALOGUE_IDS,
   HELD_BACK_MANIFEST_IDS,
+  PLATFORM_FOLLOWED_CATALOGUE_IDS,
   SWITCHABLE_CATALOGUE_IDS,
   TOGGLEABLE_PAIRS,
   catalogueIdOf,
@@ -106,6 +107,17 @@ describe('manifestIdOf / catalogueIdOf', () => {
   it('every held-back id carries a reason', () => {
     for (const [id, reason] of Object.entries(HELD_BACK_CATALOGUE_IDS)) {
       expect(reason.length, id).toBeGreaterThan(20)
+    }
+  })
+})
+
+describe('PLATFORM_FOLLOWED_CATALOGUE_IDS (followed by the reconciler, refused by the disable-module verb where none runs)', () => {
+  it('names only held-back ids a council cannot switch, each with a toggleable manifest of the same id', () => {
+    expect([...PLATFORM_FOLLOWED_CATALOGUE_IDS]).toEqual(['board'])
+    for (const id of PLATFORM_FOLLOWED_CATALOGUE_IDS) {
+      expect(id in HELD_BACK_CATALOGUE_IDS, `${id} must be held back`).toBe(true)
+      expect(SWITCHABLE_CATALOGUE_IDS.has(id)).toBe(false)
+      expect(MODULE_MANIFESTS.find((m) => m.id === id)?.toggleable, `${id} manifest`).toBe(true)
     }
   })
 })

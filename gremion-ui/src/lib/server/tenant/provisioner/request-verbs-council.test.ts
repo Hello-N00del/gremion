@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT, type JWK } from 'jose'
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const held = vi.hoisted(() => ({ row: undefined as Record<string, unknown> | undefined, jwks: undefined as unknown, queries: 0 }))
 
@@ -72,6 +72,7 @@ function ctx(args: string[] = [REQUEST_ID], over: Partial<RequestVerbContext> = 
   return {
     args,
     reqEnv: (n) => (n === 'PLATFORM_DOMAIN' ? 'platform.example' : 'x'),
+    optEnv: () => undefined,
     directPostgresUrl: (_n, v) => v,
     loadModules: () => ['calendar', 'elections', 'files', 'votes'].map((id) => ({ id, moduleJson: { runtime: { version: '1.0.0' } } })) as never,
     modulesDir: join(process.cwd(), '..', 'modules'),
@@ -177,6 +178,51 @@ describe('request-verify: panel and host rows are byte-identical to before (gold
   })
 })
 
+// The control panel's own host may lie OUTSIDE the platform domain: a create naming it (or the default
+// control.<platform>) is refused at request-verify, read through the context's env seam; another host still verifies.
+describe('request-verify: a create naming the control panel host', () => {
+  const createRow = (host: string) => ({
+    ...baseRow,
+    kind: 'create',
+    origin: 'host',
+    actor_kind: 'operator',
+    evidence_acr: null,
+    evidence_auth_time: null,
+    evidence_token: null,
+    host_actor: 'ops',
+    reason: 'recovery',
+    args: {
+      slug: 'musterstadt',
+      host,
+      itAdmin: 'it@musterstadt.example',
+      councilAdmin: 'rat@musterstadt.example',
+      bodyName: 'Stadtrat',
+      brand: { product: 'Ratsportal', orgShort: 'MS' },
+      enable: ['calendar'],
+    },
+  })
+  const withEnv = (extra: Record<string, string | undefined>) => ctx([REQUEST_ID], { optEnv: (n) => extra[n] })
+
+  it('the configured custom host (outside the platform domain) is refused', async () => {
+    for (const host of ['panel.proof.example']) {
+      held.row = createRow(host)
+      expect(await verdictOf(withEnv({ CONTROL_PANEL_HOST: 'panel.proof.example' })), host).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/control panel/) })
+    }
+  })
+
+  it('the host of CONTROL_PANEL_ORIGIN is refused too', async () => {
+    held.row = createRow('panel.proof.example')
+    expect(await verdictOf(withEnv({ CONTROL_PANEL_ORIGIN: 'https://panel.proof.example' }))).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/control panel/) })
+  })
+
+  it('the default control.<platform> stays refused without any setting; another host verifies', async () => {
+    held.row = createRow('control.platform.example')
+    expect(await verdictOf(withEnv({}))).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/control panel/) })
+    held.row = createRow('rat.proof.example')
+    expect(await verdictOf(withEnv({ CONTROL_PANEL_HOST: 'panel.proof.example' }))).toMatchObject({ verdict: 'ok', kind: 'create' })
+  })
+})
+
 function gateCtx(positional: string[], flags: Record<string, string>, over: Partial<GateVerbContext> = {}): GateVerbContext {
   return {
     releaseTip: () => null,
@@ -237,6 +283,52 @@ describe('enable-module / disable-module --actor-kind', () => {
     expect(disableCustomerModule).toHaveBeenCalledWith('musterstadt', 'votes', { operatorId: PERSON, actorKind: 'person' }, { marker: 'deps' })
     expect(JSON.parse(out[0]!)).toMatchObject({ verb: 'disable-module', actorKind: 'person' })
     vi.unstubAllEnvs()
+  })
+
+  describe('a platform disable of a module only the module-switch reconciler can follow (the board)', () => {
+    const DISABLED = { moduleKey: 'board', noop: false, dropped: false, blocked: false, finalAt: null, database: null, export: null, enabled: [], reloaded: false }
+    const logs: string[] = []
+    const run = (module: string) => runGateVerb('disable-module', { ...gateCtx(['musterstadt', module], { '--operator': PERSON }), log: (l) => void logs.push(l) })
+    beforeEach(() => {
+      logs.length = 0
+      vi.mocked(disableCustomerModule).mockResolvedValue(DISABLED as never)
+      vi.stubEnv('TENANT_EXPORT_DIR', '/exports')
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+    })
+    afterEach(() => vi.unstubAllEnvs())
+
+    it('is refused, before anything is touched, when the app has no council requester role (UI_MODULES_DB_PASSWORD empty)', async () => {
+      vi.stubEnv('UI_MODULES_DB_PASSWORD', '')
+      await expect(run('board')).rejects.toThrow(/USAGE disable-module board.*UI_MODULES_DB_PASSWORD.*nothing was touched/s)
+      expect(disableCustomerModule).not.toHaveBeenCalled()
+    })
+
+    it('is refused too when UI_MODULES_DB_PASSWORD is unset or only blanks', async () => {
+      vi.stubEnv('UI_MODULES_DB_PASSWORD', undefined)
+      await expect(run('board')).rejects.toThrow(/nothing was touched/)
+      vi.stubEnv('UI_MODULES_DB_PASSWORD', '  ')
+      await expect(run('board')).rejects.toThrow(/nothing was touched/)
+      expect(disableCustomerModule).not.toHaveBeenCalled()
+    })
+
+    it('the refusal line survives the executor credential filter, so the operator sees it in the request events', async () => {
+      vi.stubEnv('UI_MODULES_DB_PASSWORD', '')
+      const err = await run('board').catch((e: unknown) => e as Error)
+      // infra/host/bin/gremion-executor SECRET_LINE_RE: a line matching it is replaced by a "withheld" notice
+      expect(String((err as Error).message).toUpperCase()).not.toMatch(/(PASSWORD|SECRET|TOKEN)[ \t]*[:=]/)
+    })
+
+    it('goes through when the requester role is wired, which is what lets the reconciler follow it', async () => {
+      vi.stubEnv('UI_MODULES_DB_PASSWORD', 'set')
+      await run('board')
+      expect(disableCustomerModule).toHaveBeenCalledWith('musterstadt', 'board', { operatorId: PERSON, actorKind: 'operator' }, { marker: 'deps' })
+    })
+
+    it('does not touch a module the platform disable itself takes away (votes), whatever the password says', async () => {
+      vi.stubEnv('UI_MODULES_DB_PASSWORD', '')
+      await run('votes')
+      expect(disableCustomerModule).toHaveBeenCalledTimes(1)
+    })
   })
 
   it('disable-module prints blocked and finalAt, and its log line says "blocked until <date>" (Karenz)', async () => {

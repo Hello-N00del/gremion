@@ -31,11 +31,14 @@ import { lookupModuleVersion, type LifecycleModule } from '@gremion/tenant-store
 import { verifyCouncilRequest } from '../src/lib/server/tenant/provisioner/council-verify'
 import type { KcTransport } from '../src/lib/server/tenant/provisioner/kc-admin-api'
 import { verifyRequestEvidence } from '../src/lib/server/tenant/provisioner/request-verify'
+import { reservedHostCheck } from '../src/lib/server/tenant/reserved-hosts'
 
 export interface RequestVerbContext {
   /** process.argv after the verb */
   args: readonly string[]
   reqEnv(name: string): string
+  /** An optional variable (undefined when unset): CONTROL_PANEL_HOST and CONTROL_PANEL_ORIGIN. */
+  optEnv(name: string): string | undefined
   directPostgresUrl(name: string, value: string): string
   loadModules(): LifecycleModule[]
   modulesDir: string
@@ -96,6 +99,15 @@ function print(v: Record<string, unknown>): void {
   process.stdout.write(`${JSON.stringify(v)}\n`)
 }
 
+/** The values reservedHostCheck reads, taken through the context's env seam (PLATFORM_DOMAIN is required, the panel host is not). */
+export function panelHostEnv(ctx: Pick<RequestVerbContext, 'reqEnv' | 'optEnv'>): { PLATFORM_DOMAIN: string; CONTROL_PANEL_HOST: string | undefined; CONTROL_PANEL_ORIGIN: string | undefined } {
+  return {
+    PLATFORM_DOMAIN: ctx.reqEnv('PLATFORM_DOMAIN'),
+    CONTROL_PANEL_HOST: ctx.optEnv('CONTROL_PANEL_HOST'),
+    CONTROL_PANEL_ORIGIN: ctx.optEnv('CONTROL_PANEL_ORIGIN'),
+  }
+}
+
 async function requestVerify(ctx: RequestVerbContext): Promise<void> {
   const id = ctx.args.find((a) => !a.startsWith('--'))
   if (!id || !UUID.test(id)) throw ctx.usage('request-verify <request-id> (a uuid)')
@@ -138,7 +150,9 @@ async function requestVerify(ctx: RequestVerbContext): Promise<void> {
     // 1. the kind and its args (pure; reuses the engine's own validation)
     const verdict: RequestVerdict = verifyRequestArgs(
       { kind: row.kind, customerSlug: row.customer_slug, args: row.args, operatorId: row.operator_id },
-      { catalogueIds: catalogue.map((m) => m.id), disabledIds: disabledModuleIds(ctx.modulesDir) },
+      // a create naming the platform's reserved names or the control panel's own host (CONTROL_PANEL_HOST) is refused;
+      // read through the context's env seam, like the issuer above
+      { catalogueIds: catalogue.map((m) => m.id), disabledIds: disabledModuleIds(ctx.modulesDir), isReservedHost: reservedHostCheck(panelHostEnv(ctx)) },
     )
     if (verdict.verdict === 'refused') return refuse(verdict.reason)
     const notLoaded = await loadedCheck(verdict.args)

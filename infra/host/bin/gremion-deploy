@@ -1004,7 +1004,7 @@ step_10_control_router() {
     local render origin state="$ROOT/etc/env/state.env" api="${TRAEFIK_API:-http://127.0.0.1:8080}"
     render="$(bin_path gremion-render)"
     "$render" --release "$RELEASE_DIR" --control-panel-only
-    origin="$(control_panel_origin_of "$state")"
+    origin="$(control_panel_origin_of "$state")" || exit $?   # a duplicated key is a refusal: explicit, errexit is off in some callers
     [[ -n "$origin" ]] || return 0
     for _ in $(seq 1 30); do
         if curl -fsS --max-time 3 "${api}/api/http/routers/control-panel@file" 2>/dev/null | grep -q '"status":"enabled"'; then

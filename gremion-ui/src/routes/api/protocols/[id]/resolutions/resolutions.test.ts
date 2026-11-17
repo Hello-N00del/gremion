@@ -26,7 +26,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const {
-  mockGetProtocol, mockAddResolution, mockUpdateResolution, mockDeleteResolution, ResolutionPublishedError, ResolutionNotFoundError,
+  mockGetProtocol, mockAddResolution, mockUpdateResolution, mockDeleteResolution, ResolutionPublishedError, ResolutionNotFoundError, ProtocolNotEditableError,
 } = vi.hoisted(() => ({
   mockGetProtocol: vi.fn(),
   mockAddResolution: vi.fn(),
@@ -47,6 +47,12 @@ const {
       this.name = 'ResolutionNotFoundError'
     }
   },
+  ProtocolNotEditableError: class ProtocolNotEditableError extends Error {
+    constructor(public readonly protocolId: string) {
+      super(`Protocol ${protocolId} takes no more resolutions`)
+      this.name = 'ProtocolNotEditableError'
+    }
+  },
 }))
 vi.mock('$lib/server/protocols/protocol-db', () => ({
   getProtocol: mockGetProtocol,
@@ -55,6 +61,7 @@ vi.mock('$lib/server/protocols/protocol-db', () => ({
   deleteResolution: mockDeleteResolution,
   ResolutionPublishedError,
   ResolutionNotFoundError,
+  ProtocolNotEditableError,
 }))
 
 // decideResolution runs REAL; only its quorum lookup is stubbed (quorate by
@@ -549,6 +556,33 @@ describe('resolution PATCH/DELETE — publish committed between the check and th
     mockSql.mockResolvedValue([draftRow])
     mockUpdateResolution.mockRejectedValueOnce(new Error('connection reset'))
     await expect(PATCH(makePatchEvent({ text: 'X' }))).rejects.toThrow('connection reset')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Publish race on POST: getProtocol reads, THEN addResolution inserts. A publish
+// committing in between passes the early check; the status guard inside the
+// INSERT refuses it and the db layer reports ProtocolNotEditableError. The route
+// answers 403 with the same text as the early check, never a 500.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('resolution POST — publish committed between the check and the insert → 403', () => {
+  it('tally: the insert is refused by the guard → 403 with the same text as the early check', async () => {
+    mockAddResolution.mockRejectedValueOnce(new ProtocolNotEditableError(PID))
+    await expect(POST(makePostEvent({ text: 'Antrag', votesYes: 3, votesNo: 1, votesAbstain: 0 })))
+      .rejects.toMatchObject({ status: 403, body: { message: 'Nicht bearbeitbar' } })
+  })
+
+  it('acclamation: the insert is refused by the guard → 403', async () => {
+    mockAddResolution.mockRejectedValueOnce(new ProtocolNotEditableError(PID))
+    await expect(POST(makePostEvent({ text: 'Antrag', adoption_mode: 'acclamation', declared_result: 'passed' })))
+      .rejects.toMatchObject({ status: 403, body: { message: 'Nicht bearbeitbar' } })
+  })
+
+  it('an unrelated insert failure is NOT mapped to 403', async () => {
+    mockAddResolution.mockRejectedValueOnce(new Error('connection reset'))
+    await expect(POST(makePostEvent({ text: 'Antrag', votesYes: 3, votesNo: 1, votesAbstain: 0 })))
+      .rejects.toThrow('connection reset')
   })
 })
 

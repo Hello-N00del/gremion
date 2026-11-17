@@ -932,6 +932,70 @@ describe('the board follows the platform enablement', () => {
     expect(platformHeldOffModules(TENANT_ID)).toEqual([])
   })
 
+  it('the hold of a platform-disabled board is published although the alignment is blocked by another module\'s failing pre-apply hook, so a settings write cannot turn it back on meanwhile', async () => {
+    registerPreApplyHook(async (e) => {
+      if (e.moduleId === 'votes') throw new Error('erasure replay failed')
+    })
+    r.platform.state = CATALOGUE.map((k) => (k === 'votes' ? st(k, 'enabled', true) : k === 'board' ? st(k, 'disabled', true) : st(k)))
+    r.config.modules = { votes: false, board: true }
+    const deps = r.deps()
+    await runModuleSwitchPass(tenant, deps)
+    // blocked: votes stays off and the alignment is retried later, but the platform's hold on the board is already known
+    expect(r.config.modules).toEqual({ votes: false, board: false })
+    expect(platformHeldOffModules(TENANT_ID)).toEqual(['board'])
+    // still blocked inside the backoff: the hold stays
+    r.store.clock += 1_000
+    await runModuleSwitchPass(tenant, deps)
+    expect(platformHeldOffModules(TENANT_ID)).toEqual(['board'])
+  })
+
+  it('a hold published by a blocked alignment is released when the completing pass does not see the board (in progress), and the platform enable then lets a settings write through', async () => {
+    let votesHookFails = true
+    registerPreApplyHook(async (e) => {
+      if (e.moduleId === 'votes' && votesHookFails) throw new Error('erasure replay failed')
+    })
+    const withBoard = (boardState: string) => CATALOGUE.map((k) => (k === 'votes' ? st(k, 'enabled', true) : k === 'board' ? st(k, boardState, true) : st(k)))
+    r.platform.state = withBoard('disabled')
+    r.config.modules = { votes: false, board: true }
+    const deps = r.deps()
+    await runModuleSwitchPass(tenant, deps) // blocked, the hold is published
+    expect(platformHeldOffModules(TENANT_ID)).toEqual(['board'])
+
+    // the hook is fixed and the board row is in an in-progress state, so the completing pass does not see the board at all
+    votesHookFails = false
+    r.platform.state = withBoard('awaiting_isolation_test')
+    r.store.clock += 61_000
+    await runModuleSwitchPass(tenant, deps)
+    expect(r.config.modules.votes).toBe(true) // the alignment completed
+    // the platform's hold is not confirmed by the completing pass: it is released, not left until a restart
+    expect(platformHeldOffModules(TENANT_ID)).toEqual([])
+
+    // the platform then enables the board: it is followed and stays released
+    r.platform.state = withBoard('enabled')
+    for (let i = 0; i < 3; i++) {
+      r.store.clock += 61_000
+      await runModuleSwitchPass(tenant, deps)
+    }
+    expect(platformHeldOffModules(TENANT_ID)).toEqual([])
+  })
+
+  it('the hold is published although the migration catch-up after the alignment failed', async () => {
+    r.platform.state = CATALOGUE.map((k) => (k === 'calendar' ? st(k, 'enabled', true) : k === 'board' ? st(k, 'disabled', true) : st(k)))
+    r.config.modules = { calendar: false, board: true }
+    r.migrateResult = { ok: false, error: 'migration down' }
+    await runModuleSwitchPass(tenant, r.deps())
+    expect(platformHeldOffModules(TENANT_ID)).toEqual(['board'])
+  })
+
+  it('the hold is published although the alignment write failed', async () => {
+    r.platform.state = boardState('disabled')
+    r.config.modules = { board: true }
+    r.writeError = { err: new Error('EACCES'), times: 1 }
+    await runModuleSwitchPass(tenant, r.deps())
+    expect(r.config.modules.board).toBe(true)
+    expect(platformHeldOffModules(TENANT_ID)).toEqual(['board'])
+  })
+
   it('a platform row in an in-progress state (awaiting the isolation test, test failed) neither hides a running board nor re-enables a hidden one', async () => {
     r.platform.state = boardState('enabled')
     r.config.modules = { board: true }

@@ -165,9 +165,10 @@ that module. The tasks board is different since the board wave of 2026-11-11:
   recording is a post-deployment step. Two things follow from the in-process design. Hiding the
   board after a platform `disable_module` is done by the app's module-switch reconciler, which runs
   only when `PLATFORM_MODULES_DATABASE_URL` is set (the deploy wiring leaves it empty when
-  `UI_MODULES_DB_PASSWORD` is unset); on a host without it a platform disable does not hide the
-  board. And a customer created with board unticked has no platform enablement, so nothing follows
-  the platform and the board stays on by default, as it does for votes, files and calendar.
+  `UI_MODULES_DB_PASSWORD` is unset); on a host without it the `disable-module` verb refuses
+  `board`, so a platform disable is never reported as done while the board stays reachable. And a
+  customer created with board unticked has no platform enablement, so nothing follows the
+  platform and the board stays on by default, as it does for votes, files and calendar.
 - Native password vault: off by default; may be enabled later in the pilot once its isolation test
   passes [D R19-D13, D R19-D37]. Vaultwarden (the council's own externally-operated instance, per
   TRD §11's reading of PRD §12.1a) remains the supported alternative credential tool for the pilot

@@ -32,7 +32,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import { REPO_ROOT, renderState } from './compose-edge.mjs'
@@ -309,11 +309,39 @@ test('upgrade runbook step 8a: the by-hand ops-realm upgrade names every setting
   assert.ok(commands.some((l) => l.includes('git show "${prev}:docker/keycloak/realm-export.ops.json"')), 'the previous template is read from git')
   assert.ok(commands.some((l) => l.startsWith('prev_fp="$( { git show') && l.includes("printf '\\n%s' \"$origin\"") && l.includes('sha256sum')), 'the previous fingerprint uses the recipe init uses (template, newline, origin)')
   assert.ok(commands.some((l) => l.startsWith('fp="$( { cat /opt/gremion/current/docker/keycloak/realm-export.ops.json; printf')), 'the re-stamp uses the same recipe on the current template')
+  // step 8a must COMPLETE on a host that also needs step 9: its last command is the realm-only init, never the plain one
+  // (the plain one stops on the governance keys step 9 adds)
+  assert.equal(commands.at(-1)?.startsWith('gremion-tenant init --realm-only'), true, 'step 8a ends with gremion-tenant init --realm-only')
+  assert.ok(!commands.some((l) => /^gremion-tenant init(\s|$)(?!--realm-only)/.test(l)), 'step 8a runs no plain gremion-tenant init')
+  assert.ok(!step.includes('exists but differs'), 'step 8a quotes the refusal init prints today')
+  assert.ok(step.includes('realm platform differs from'), 'step 8a quotes the current refusal text')
   for (const rel of ['infra/host/bin/gremion-tenant', 'gremion-ui/scripts/ops-realm-refusal.ts']) {
     assert.ok(read(rel).includes('docs/ops/runbook/upgrade.md, step 8a'), `${rel}: the ops-realm refusal must name step 8a`)
   }
   // the TypeScript side imports the shared refusal, so the message cannot drift from the tested one
   assert.ok(read('gremion-ui/scripts/tenant-provision.ts').includes('opsRealmRefusal('), 'tenant-provision.ts builds its ops-realm refusal with opsRealmRefusal')
+})
+
+test('the ops-realm refusal says the same words on the TypeScript path and the kcadm path, and an unreadable client is never worded as "names no origin"', () => {
+  const ts = read('gremion-ui/scripts/ops-realm-refusal.ts')
+  const sh = read('infra/host/bin/gremion-tenant')
+  for (const phrase of [
+    'realm-export.ops.json for panel origin',
+    "the realm's control-panel client could not be read (",
+    "the realm's control-panel client carries no redirect URI of the form <origin>/*, so the origin it was made for is not known",
+    "its fingerprint is not the current template's for",
+    'so the origin and the template both differ',
+    'so its template is the difference',
+    'an origin cannot change in place',
+    'step 8a of docs/ops/runbook/upgrade.md does not apply',
+    'either the origin changed (it cannot change in place; the install needs a new ops realm) or the realm was made by an earlier template (docs/ops/runbook/upgrade.md, step 8a, whose precondition tells which)',
+  ]) {
+    assert.ok(ts.includes(phrase), `ops-realm-refusal.ts says: ${phrase}`)
+    assert.ok(sh.includes(phrase), `gremion-tenant says: ${phrase}`)
+  }
+  for (const [rel, text] of [['ops-realm-refusal.ts', ts], ['gremion-tenant', sh]]) {
+    assert.ok(!text.includes('does not say which origin'), `${rel} no longer words an unreadable client as "does not say which origin"`)
+  }
 })
 
 test('CONTROL_PANEL_HOST: the key an operator sets is documented where they look, and every reader of the control host takes it from the one resolver', () => {
@@ -325,8 +353,68 @@ test('CONTROL_PANEL_HOST: the key an operator sets is documented where they look
     assert.ok(runbook.includes(need), `the runbook says "${need}"`)
   }
   // no tool builds the control host by hand any more: each takes it from the resolved value
-  for (const rel of ['infra/host/bin/gremion-render', 'infra/host/bin/gremion-verify', 'infra/host/ops/render-ops.sh']) {
-    assert.ok(!/["'`]control\.\$\{PLATFORM_DOMAIN\}["'`]/.test(read(rel).replace(/printf 'control\.%s'[^\n]*|control\.\$\{PLATFORM_DOMAIN\}\}/g, '')), `${rel} builds control.<domain> by hand`)
+  const offenders = []
+  for (const rel of hostToolFiles()) offenders.push(...handBuiltControlHosts(rel, read(rel)).map((l) => `${rel}: ${l}`))
+  assert.deepEqual(offenders, [], 'these lines build control.<domain> by hand; resolve_control_panel_host (infra/host/lib/common.sh) is the one place that knows the default')
+})
+
+/** Every file under infra/host (tools, libraries, templates): a hand-built control host can hide in any of them. */
+function hostToolFiles(dir = 'infra/host') {
+  const out = []
+  for (const e of readdirSync(path.join(REPO_ROOT, dir), { withFileTypes: true })) {
+    const rel = `${dir}/${e.name}`
+    if (e.isDirectory()) out.push(...hostToolFiles(rel))
+    else out.push(rel)
+  }
+  return out
+}
+
+/** The one line that may spell the default control host: the resolver, matched by its exact text. */
+const CONTROL_HOST_RESOLVER = { file: 'infra/host/lib/common.sh', line: `printf 'control.%s' "$PLATFORM_DOMAIN"` }
+
+/**
+ * The lines of <text> that spell the control host's default by hand: control.${PLATFORM_DOMAIN}
+ * (after a quote, after ://, after a :- default, anywhere), control.$PLATFORM_DOMAIN, a modified
+ * expansion (${PLATFORM_DOMAIN:-x}, ${PLATFORM_DOMAIN%.}), a quoted or split-quote spelling
+ * (control."$PLATFORM_DOMAIN", "control"."$PLATFORM_DOMAIN"), another variable that holds a domain
+ * (control.${domain}), or a printf format control.%s. Only the resolver's own line in common.sh is
+ * exempt, by exact text.
+ */
+function handBuiltControlHosts(rel, text) {
+  const spelled = /control["']?\.["']?(\$\{?\w*domain|%s)/i
+  return text
+    .split('\n')
+    .map((l, i) => ({ l: l.replace(/\r$/, ''), n: i + 1 }))
+    .filter(({ l }) => spelled.test(l))
+    .filter(({ l }) => !(rel === CONTROL_HOST_RESOLVER.file && l.trim() === CONTROL_HOST_RESOLVER.line))
+    .map(({ l, n }) => `line ${n}: ${l.trim()}`)
+}
+
+test('no tool builds the control host by hand: the guard flags every spelling it was written for (negative fixtures)', () => {
+  const tool = 'infra/host/bin/gremion-fixture'
+  const bad = [
+    'want="https://control.${PLATFORM_DOMAIN}"',
+    '    write_targets blackbox-control.yml "https://control.${PLATFORM_DOMAIN}"',
+    `control_host() { printf 'control.%s' "$PLATFORM_DOMAIN"; }`,
+    `control_host() { printf '%s' "\${CONTROL_PANEL_HOST:-control.\${PLATFORM_DOMAIN}}"; }`,
+    'host="control.$PLATFORM_DOMAIN"',
+    "host='control.${PLATFORM_DOMAIN}'",
+    'url=`echo https://control.${PLATFORM_DOMAIN}/x`',
+    'host=control.${PLATFORM_DOMAIN:-example.org}',
+    'host="control.${PLATFORM_DOMAIN%.}"',
+    'host=control."${PLATFORM_DOMAIN}"',
+    'host="control"."$PLATFORM_DOMAIN"',
+    'host="control.${domain}"',
+  ]
+  for (const line of bad) assert.equal(handBuiltControlHosts(tool, line).length, 1, `the guard must flag: ${line}`)
+  // the resolver's own line is exempt by exact text, in common.sh only
+  const resolver = `        ${CONTROL_HOST_RESOLVER.line}`
+  assert.equal(handBuiltControlHosts(CONTROL_HOST_RESOLVER.file, resolver).length, 0)
+  assert.equal(handBuiltControlHosts(tool, resolver).length, 1, 'the same line in another file is a hand-built host')
+  assert.equal(handBuiltControlHosts(CONTROL_HOST_RESOLVER.file, `${resolver} # copy`).length, 1, 'the exemption is the exact text, not a prefix')
+  // the placeholders prose and docs use are not spellings of the default
+  for (const ok of ['# the control host (CONTROL_PANEL_HOST, else control.<PLATFORM_DOMAIN>)', 'echo "https://${control_host}"']) {
+    assert.equal(handBuiltControlHosts(tool, ok).length, 0, `not flagged: ${ok}`)
   }
 })
 
@@ -354,4 +442,12 @@ test('no allow-list key: the control host is gated by the client certificate, no
     assert.ok(!/CONTROL_ALLOWLIST_CIDRS/.test(read(rel)), `${rel} must not name CONTROL_ALLOWLIST_CIDRS`)
   }
   assert.ok(!/allowlist is enforced/i.test(read('compose/observability/prometheus/prometheus.yml')), 'the probe comment must not claim an allow-list')
+  // The probe has no client certificate, so on an opted-in host it cannot pass; a comment that says a 403 or 200 "counts as up"
+  // describes a probe that does not exist.
+  const prom = read('compose/observability/prometheus/prometheus.yml')
+  assert.ok(!/counts as up/i.test(prom), 'the control probe comment must not say a 200 or 403 counts as up')
+  assert.ok(prom.includes('this probe cannot pass on an opted-in host'), 'the control probe comment says the probe cannot pass on an opted-in host')
+  assert.ok(read('compose/observability/blackbox.yml').includes('fails by design'), 'blackbox.yml says the control module fails by design on an opted-in host')
+  // and nothing alerts on that job's probe_success, which is what makes "fails by design" harmless
+  assert.ok(!/probe_success\{[^}]*blackbox-control/.test(read('compose/observability/prometheus/rules.yml')), 'no alert reads the control probe success')
 })

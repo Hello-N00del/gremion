@@ -81,7 +81,7 @@ import {
 import { MODULE_MANIFESTS } from '../src/lib/modules/registry'
 import { dbNameForSlug, validateSlug } from '../src/lib/server/tenant/slug'
 import { normaliseHost } from '../src/lib/server/tenant/host'
-import { isReservedPlatformHost } from '../src/lib/server/tenant/reserved-hosts'
+import { reservedHostCheck } from '../src/lib/server/tenant/reserved-hosts'
 import {
   getTenantBySlug,
   updateTenantStatus,
@@ -94,7 +94,7 @@ import {
   type Tenant,
 } from '../src/lib/server/tenant/registry'
 import { KcProvisionApi, masterAdminClientId, type KcTransport } from '../src/lib/server/tenant/provisioner/kc-admin-api'
-import { opsRealmFingerprint, opsRealmRefusal } from './ops-realm-refusal'
+import { opsRealmFingerprint, opsRealmRefusal, readStoredPanelClient } from './ops-realm-refusal'
 import { customerAdapters, governanceServer, kernelServer, reconcileKernelAudit } from '../src/lib/server/tenant/provisioner/customer-adapters'
 import { kernelApiSeedDeps, reconcileKernelApiSeed, reconcilePurgerConnect } from '../src/lib/server/tenant/provisioner/reconcile-reensure'
 import { fixtureIdentities } from '../src/lib/server/tenant/provisioner/fixture-identities'
@@ -133,6 +133,22 @@ function reqEnv(name: string): string {
   const v = process.env[name]
   if (!v) throw new UsageError(`required env ${name} is not set (tenant-create env contract, docs/ops/pooled-stack-layout.md)`)
   return v
+}
+/** An optional variable: undefined when unset or empty. */
+function optEnv(name: string): string | undefined {
+  return process.env[name] || undefined
+}
+/**
+ * The check every path that binds a host to a customer asks: the platform's reserved names and the control panel's
+ * own host (CONTROL_PANEL_HOST, which may lie outside the platform domain; the host of CONTROL_PANEL_ORIGIN names the
+ * same one), read through the same env seam as PLATFORM_DOMAIN. PLATFORM_DOMAIN unset is the named exit-2 failure.
+ */
+function reservedHosts(): (host: string) => boolean {
+  return reservedHostCheck({
+    PLATFORM_DOMAIN: reqEnv('PLATFORM_DOMAIN'),
+    CONTROL_PANEL_HOST: optEnv('CONTROL_PANEL_HOST'),
+    CONTROL_PANEL_ORIGIN: optEnv('CONTROL_PANEL_ORIGIN'),
+  })
 }
 /** A *_FILE variable: the file must exist and be non-empty; its content, trimmed. */
 function reqFileEnv(name: string): string {
@@ -550,6 +566,8 @@ async function liveDeps(opts: { configFile?: string; bodyName?: string; needEdge
     })
     const deps: ProvisioningDeps = {
       platformDomain: env.platformDomain,
+      // the platform's reserved names and the control panel's own host (CONTROL_PANEL_HOST) are never a customer's
+      isReservedHost: reservedHosts(),
       mailSender: mailStampExpectation(),
       ledger: pgLedger(platform),
       // TASK-044: the level-1 gate over gremion_platform, on the host's derived release tip
@@ -663,15 +681,11 @@ async function ensureOpsRealm(kc: KcProvisionApi, raw: KcTransport): Promise<{ c
     }
     // An ORIGIN mismatch (the realm was made for another origin: it cannot change in place) and a TEMPLATE
     // mismatch (an earlier release's template: upgrade runbook step 8a) have different remedies; the realm's
-    // own control-panel client says which origin it was made for.
-    let storedRedirectUris: string[] | undefined
-    try {
-      const clients = (await raw('GET', `/admin/realms/${OPS_REALM}/clients?clientId=control-panel`)) as Array<{ redirectUris?: string[] }> | undefined
-      storedRedirectUris = clients?.[0]?.redirectUris
-    } catch {
-      storedRedirectUris = undefined // unreadable: the refusal then says the cause is not known
-    }
-    const why = opsRealmRefusal({ realm: OPS_REALM, templateText, origin, storedFingerprint: have, storedRedirectUris })
+    // own control-panel client says which origin it was made for. A client that cannot be read (a 403, a 500,
+    // an expired session, an unparsable answer) is not "the client names no origin": readStoredPanelClient
+    // returns the short, masked error, and it goes to the refusal with the rest (ops-realm-frontend.test.ts).
+    const stored = await readStoredPanelClient(raw, OPS_REALM)
+    const why = opsRealmRefusal({ realm: OPS_REALM, templateText, origin, storedFingerprint: have, ...stored })
     throw new ProvisioningError('PRECONDITION', `${why.message}; refusing to overwrite an ops realm by hand`)
   }
   const secretPath = process.env.OPS_CLIENT_SECRET_FILE ?? join(tenantSecretsDir(), 'platform_client_control-panel')
@@ -827,14 +841,13 @@ async function cmdRenderRouter(): Promise<void> {
   if (!tenant) throw new UsageError(`unknown tenant ${v.slug}`)
   const primary = await primaryHostForTenant(tenant.id)
   if (!primary) throw new UsageError(`${v.slug} has no primary host`)
-  const platformDomain = reqEnv('PLATFORM_DOMAIN')
   const yaml = renderCustomerRouter({
     slug: v.slug,
     hosts: (await listTenantDomains(tenant.id)).map((d) => d.host),
     primaryHost: primary,
     certResolver: reqEnv('TRAEFIK_CERT_RESOLVER'),
     normaliseHost: (h) => normaliseHost(h),
-    isReservedHost: (h) => isReservedPlatformHost(h, platformDomain),
+    isReservedHost: reservedHosts(),
   })
   process.stdout.write(yaml)
 }
@@ -1225,7 +1238,7 @@ async function main(): Promise<void> {
     case 'materialize-config':
       return cmdMaterializeConfig()
     case 'request-verify':
-      return requestVerb(verb, { args: process.argv.slice(3), reqEnv, directPostgresUrl, loadModules, modulesDir: MODULES_DIR, kcInternalBase, provisionerTransport: rawProvisionerTransport, customerRealmForSlug, usage: (m) => new UsageError(m), log })
+      return requestVerb(verb, { args: process.argv.slice(3), reqEnv, optEnv, directPostgresUrl, loadModules, modulesDir: MODULES_DIR, kcInternalBase, provisionerTransport: rawProvisionerTransport, customerRealmForSlug, usage: (m) => new UsageError(m), log })
     case 'provision':
       throw new UsageError('provision is retired (TASK-043): a customer is created from the control panel ("Neuer Mandant"), which the host-side executor runs (phase-a, the host mail step, record-step, phase-b, the router; TASK-043d)')
     // TASK-044: the level-1 gate's verbs (tenant-provision-gate.ts)
