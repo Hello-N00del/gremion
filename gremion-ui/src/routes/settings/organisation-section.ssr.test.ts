@@ -68,3 +68,27 @@ describe('settings section "Organisation": no logo promise', () => {
     expect(body).not.toMatch(/logo/i)
   })
 })
+
+// The organisation name feeds only the browser-tab title (brand.orgName -> page-title). The header
+// shows the product/short name and the public portal takes its name from deployment config, so the
+// branding text must not promise either place. Checked on the rendered German page and on both
+// locale files, so a revert of de.json or en.json alone turns it red.
+describe('settings section "Organisation": branding text says only what is true', () => {
+  const FALSE_PLACES = /Kopfzeile|Portal|Header|header|E-Mail|e-?mail/
+
+  test('the rendered branding text names the browser tab and no other place', () => {
+    const { body } = render(SettingsBody, { props: { data: data(undefined) as never, activeSection: 'organisation' } })
+    const sub = body.match(/<p class="text-xs text-ink-muted">(Name der Studierendenschaft[^<]*)<\/p>/)?.[1]
+    expect(sub, 'branding sub text not found').toBeDefined()
+    expect(sub).toMatch(/Browser/)
+    expect(sub).not.toMatch(FALSE_PLACES)
+  })
+
+  test.each(['de', 'en'])('%s.json settings.org.branding.sub does not claim header, portal or e-mail', async (lang) => {
+    const msgs = (await import(`../../lib/i18n/messages/${lang}.json`)).default as Record<string, string>
+    const sub = msgs['settings.org.branding.sub']
+    expect(sub).toMatch(/browser/i)
+    expect(sub).not.toMatch(FALSE_PLACES)
+    expect(sub).not.toMatch(/logo/i)
+  })
+})
