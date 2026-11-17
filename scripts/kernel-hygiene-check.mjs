@@ -1222,9 +1222,30 @@ check('t2 no login-theme message key carries the retired product token', () => {
     : null
 })
 
-// Keys Keycloak renders itself (through `message.summary`) that the theme must
-// still translate; see t3b. They are never named by a .ftl, so t3 exempts them.
-const SERVER_RENDERED_KEYS = ['reauthenticate', 'acrNotFulfilled']
+// Keys Keycloak renders itself (through `message.summary`) on the sign-in,
+// re-authentication, step-up and deny screens, mapped to the English text the
+// pinned Keycloak 26.6.1 base login theme answers with (read from its jar). The
+// theme must translate every one; see t3b. A .ftl names only `access-denied`, so
+// t3 exempts the rest from its dead-key rule.
+const SERVER_RENDERED_KEYS = {
+  reauthenticate: 'Please re-authenticate to continue',
+  acrNotFulfilled: 'Authentication requirements not fulfilled',
+  invalidUserMessage: 'Invalid username or password.',
+  invalidUsernameMessage: 'Invalid username.',
+  invalidPasswordMessage: 'Invalid password.',
+  invalidTotpMessage: 'Invalid authenticator code.',
+  accountTemporarilyDisabledMessage: 'Invalid username or password.',
+  accountPermanentlyDisabledMessage: 'Invalid username or password.',
+  accountTemporarilyDisabledMessageTotp: 'Invalid authenticator code.',
+  accountPermanentlyDisabledMessageTotp: 'Invalid authenticator code.',
+  missingUsernameMessage: 'Please specify username.',
+  missingPasswordMessage: 'Please specify password.',
+  missingTotpMessage: 'Please specify authenticator code.',
+  expiredCodeMessage: 'Login timeout. Please sign in again.',
+  expiredActionMessage: 'Action expired. Please continue with login now.',
+  loginTimeout: 'Your login attempt timed out. Login will start from the beginning.',
+  'access-denied': 'Access denied',
+}
 
 check('t3 the three message bundles agree and carry no dead key', () => {
   const theme = themeName()
@@ -1245,31 +1266,41 @@ check('t3 the three message bundles agree and carry no dead key', () => {
   const markup = themeFtls(theme).map((r) => read(r)).join('\n')
   const used = new Set([...markup.matchAll(/msg\(\s*"([^"]+)"/g)].map((m) => m[1]))
   for (const k of base) {
-    if (!used.has(k) && !SERVER_RENDERED_KEYS.includes(k)) problems.push(`${k} is defined but referenced by no .ftl`)
+    if (!used.has(k) && !(k in SERVER_RENDERED_KEYS)) problems.push(`${k} is defined but referenced by no .ftl`)
   }
   return problems.length ? `${problems.length} message-bundle problem(s): ${problems.join(' | ')}` : null
 })
 
-// t3b - the Keycloak-rendered notices on the re-authentication and step-up
-// screens are German in EVERY locale bundle. Keycloak itself puts these keys into
-// `message.summary`, which our markup prints, so no .ftl names them and t3 cannot
-// see them. Without an override the base theme answers, and for a request whose
-// language is the supported non-default one (en) that answer is English: the
-// step-up prompt read "Please re-authenticate to continue" while everything
-// around it was German. Key names are the ones the pinned Keycloak 26.6.1 base
-// login theme ships (`reauthenticate`, `acrNotFulfilled`), read from its jar.
-check('t3b the re-authentication and step-up notices are overridden in every bundle', () => {
+// t3b - the Keycloak-rendered notices and errors on the sign-in, re-authentication,
+// step-up and deny screens are German in EVERY locale bundle. Keycloak itself puts
+// these keys into `message.summary`, which our markup prints, so no .ftl names them
+// (bar access-denied) and t3 cannot see them. Without an override the base theme
+// answers, and for a request whose language is the supported non-default one (en)
+// that answer is English: the step-up prompt read "Please re-authenticate to
+// continue", a wrong password "Invalid username or password.", while everything
+// around it was German. A key must be present, non-empty, identical across the
+// three bundles and not the English base text (a pasted English string counts as
+// untranslated). Key names and base texts are the ones the pinned Keycloak 26.6.1
+// base login theme ships.
+check('t3b the sign-in, re-authentication and step-up notices are German in every bundle', () => {
   const theme = themeName()
   const loginDir = `${THEME_ROOT}/${theme}/login`
+  const bundles = ['messages.properties', 'messages_de.properties', 'messages_en.properties']
   const problems = []
-  for (const b of ['messages.properties', 'messages_de.properties', 'messages_en.properties']) {
+  /** @type {Map<string, Set<string>>} */
+  const values = new Map(Object.keys(SERVER_RENDERED_KEYS).map((k) => [k, new Set()]))
+  for (const b of bundles) {
     const text = read(`${loginDir}/messages/${b}`)
-    for (const k of SERVER_RENDERED_KEYS) {
+    for (const [k, english] of Object.entries(SERVER_RENDERED_KEYS)) {
       const m = new RegExp(`^${k}=(.*)$`, 'm').exec(text)
+      const v = m ? m[1].trim() : ''
       if (!m) problems.push(`${k} missing from ${b}`)
-      else if (m[1].trim() === '') problems.push(`${k} is empty in ${b}`)
+      else if (v === '') problems.push(`${k} is empty in ${b}`)
+      else if (v.toLowerCase() === english.toLowerCase()) problems.push(`${k} is still the English base text in ${b}`)
+      else values.get(k)?.add(v)
     }
   }
+  for (const [k, vs] of values) if (vs.size > 1) problems.push(`${k} differs between the bundles`)
   return problems.length ? `${problems.length} untranslated Keycloak notice(s): ${problems.join(' | ')}` : null
 })
 
