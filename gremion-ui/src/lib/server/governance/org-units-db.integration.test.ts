@@ -4,8 +4,9 @@ import {
   createOrgUnit, getOrgUnit, getChildOrgUnits,
   updateOrgUnit, deleteOrgUnit,
   addOrgUnitMember, listOrgUnitMembers, removeOrgUnitMember,
-  isMemberOf, getOrgUnitIdsForUser
+  isMemberOf, getOrgUnitIdsForUser, getOrgUnitIdsWithOfficesForUser
 } from './org-units-db'
+import { createRole, createAssignment } from './governance-db'
 
 describe('org-units-db', () => {
   beforeEach(async () => {
@@ -165,5 +166,25 @@ describe('org-units-db', () => {
       await addOrgUnitMember(tx, { orgUnitId: unitId, userKeycloakId: 'u-tx-add', membershipType: 'elected', termStart: null, termEnd: null })
     })
     expect(await isMemberOf(unitId, 'u-tx-add')).toBe(true)
+  })
+  it('getOrgUnitIdsWithOfficesForUser adds units held by a live office; getOrgUnitIdsForUser stays roster-only', async () => {
+    const roster = await seedUnit()
+    const office = await seedUnit()
+    const expired = await seedUnit()
+    await addOrgUnitMember({ orgUnitId: roster, userKeycloakId: 'u-office', membershipType: 'elected', termStart: null, termEnd: null })
+    const hold = async (unitId: string, status: string) => {
+      const role = await createRole({ orgUnitId: unitId, name: 'Vorsitz', electionMethod: 'manual', isElected: false, gracePeriodDays: 0 })
+      const a = await createAssignment({
+        roleId: role.id, userKeycloakId: 'u-office',
+        startDate: new Date('2026-01-01'), endDate: new Date('2027-01-01'),
+        assignedByKeycloakId: 'admin-1', heliosElectionId: null,
+      })
+      await getDb()`UPDATE role_assignments SET status = ${status} WHERE id = ${a.id}`
+    }
+    await hold(office, 'active')
+    await hold(roster, 'grace')
+    await hold(expired, 'expired')
+    expect([...(await getOrgUnitIdsForUser('u-office'))]).toEqual([roster])
+    expect([...(await getOrgUnitIdsWithOfficesForUser('u-office'))].sort()).toEqual([roster, office].sort())
   })
 })
