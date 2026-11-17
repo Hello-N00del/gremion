@@ -674,7 +674,17 @@ describe('votesDeletionPreview', () => {
     const items = await votesDeletionPreview({ id: TENANT } as unknown as TenantContext)
     expect(items).toEqual([
       { key: 'open_polls', label: 'Offene Umfragen', count: 2, unit: 'Umfragen' },
-      { key: 'closed_polls', label: 'Abgeschlossene Umfragen', count: 1, unit: 'Umfragen' },
+      { key: 'closed_polls', label: 'Abgeschlossene Umfragen', count: 1, unit: 'Umfrage' },
+    ])
+  })
+
+  it('uses the singular unit for exactly one poll and the plural for none and several', async () => {
+    const { votesDeletionPreview } = await import('./karenz')
+    seed({ expire: T0_EPOCH + 600 })
+    const items = await votesDeletionPreview({ id: TENANT } as unknown as TenantContext)
+    expect(items).toEqual([
+      { key: 'open_polls', label: 'Offene Umfragen', count: 1, unit: 'Umfrage' },
+      { key: 'closed_polls', label: 'Abgeschlossene Umfragen', count: 0, unit: 'Umfragen' },
     ])
   })
 })

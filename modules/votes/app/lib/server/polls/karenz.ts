@@ -315,13 +315,17 @@ async function finalize(ctx: KarenzContext, opts: { dryRun: boolean }): Promise<
 
 export const votesKarenz: KarenzParticipant = { catalogueId: 'votes', switchOff, restore, finalize }
 
+/** German noun for a poll count: the dialog prints "<count> <unit>", so exactly 1 reads "1 Umfrage". */
+const pollUnit = (n: number): string => (n === 1 ? 'Umfrage' : 'Umfragen')
+
 /** The counts the council sees before it switches votes off (phase 1 preview seam). */
 export const votesDeletionPreview: DeletionPreviewProvider = async (tenant) => {
   const all = await createPollsClient({ tenantId: tenant.id }).listPolls()
   const open = all.filter((p) => !p.status.expired).length
+  const closed = all.length - open
   const items: DeletionItem[] = [
-    { key: 'open_polls', label: 'Offene Umfragen', count: open, unit: 'Umfragen' },
-    { key: 'closed_polls', label: 'Abgeschlossene Umfragen', count: all.length - open, unit: 'Umfragen' },
+    { key: 'open_polls', label: 'Offene Umfragen', count: open, unit: pollUnit(open) },
+    { key: 'closed_polls', label: 'Abgeschlossene Umfragen', count: closed, unit: pollUnit(closed) },
   ]
   return items
 }
