@@ -51,10 +51,21 @@ describe('TabEmail.svelte — password notice (K2#8)', () => {
     expect(container.textContent).not.toMatch(/EMAIL_HOST_PASSWORD/)
   })
 
-  it('names the real mechanism (registry passwordRef) and the runbook', () => {
+  // Finding 19: the notice named the registry field and a runbook path. A council
+  // admin cannot act on either; the page must say in plain German what is set here
+  // and that the operator sets the login, without internal names.
+  it('shows no developer text (registry field, runbook path, secret plumbing)', () => {
     const { container } = render(TabEmail, { props: { smtp: SMTP } })
-    expect(container.textContent).toMatch(/passwordRef/)
-    expect(container.textContent).toMatch(/email-smtp/)
+    const text = container.textContent ?? ''
+    expect(text).not.toMatch(/passwordRef|domain_profile|runbook|email-smtp|\.md\b|docs\//i)
+    expect(text).not.toMatch(/Registry|Geheimnis|Umgebungsvariable/i)
+    expect(container.querySelector('code')).toBeNull()
+  })
+
+  it('tells the admin plainly that the operator sets the mail login', () => {
+    const { container } = render(TabEmail, { props: { smtp: SMTP } })
+    expect(container.textContent).toMatch(/Betreiber/)
+    expect(container.textContent).toMatch(/Benutzername und Passwort/)
   })
 })
 
