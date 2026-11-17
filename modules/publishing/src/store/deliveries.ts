@@ -5,6 +5,7 @@
 // API:
 //   claimRecipient(pool, newsletterId, emailLower) → 'fresh' | 'already-sent' | 'in-flight'
 //   markSent(pool, newsletterId, emailLower, messageId) → void
+//   releaseClaim(pool, newsletterId, emailLower) → void   (a definitive failure: gives the claim back)
 //
 // Semantics:
 //   - 'fresh':        caller may send (INSERT succeeded or stale-takeover succeeded).

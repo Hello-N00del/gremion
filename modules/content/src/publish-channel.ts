@@ -37,7 +37,7 @@ import type { ContentEvent } from '@gremion/ports/broker'
 import type { Sql, TenantRef } from './tenant-store.js'
 import { MailUnconfiguredError, type KernelClient } from './kernel-client.js'
 import { enqueueOutbox } from './outbox.js'
-import { mailCauseText, mailErrorFields } from './mail-error.js'
+import { isLoginRefused, mailCauseText, mailErrorFields } from './mail-error.js'
 import { checkLinkBase } from './link-base.js'
 import {
   getPost,
@@ -343,18 +343,19 @@ async function publishEmail(
       // The claim token keeps a late failure off a claim another worker took over.
       await markFailed(sql, postId, emailLower, message, claimedAt ?? undefined)
       failedCount += 1
-      warnings.push(`send to ${emailLower} failed: ${message}`)
       // Name the cause (class, SMTP code, response code, command, HTTP status);
       // never the address or message, which can echo the recipient.
       console.error(`[publish-channel] email send (post ${postId}) failed`, mailErrorFields(err))
       // A refused LOGIN is the same for every recipient, and mail servers lock
       // the account after a few refused logins: stop at the first one. Nobody
       // after this recipient is claimed, so a publish after the login is
-      // corrected reaches all of them.
-      if (mailErrorFields(err).code === 'EAUTH') {
+      // corrected reaches all of them. Its own warning is the refused-login text
+      // below, not a per-recipient line (an error message can echo the address).
+      if (isLoginRefused(err)) {
         loginRefused = err
         break
       }
+      warnings.push(`send to ${emailLower} failed: ${message}`)
       continue
     }
 
@@ -399,13 +400,19 @@ async function publishEmail(
   if (loginRefused !== null) {
     await flagChannelFailed(sql, postId)
     const refusedText = `SMTP login refused, send stopped after the first attempt${mailCauseText(loginRefused)} — correct the SMTP login, then publish again`
+    // Recipients that failed for their own reason before the stop keep their
+    // warnings (like the kernel renderer). The operator-facing list names no
+    // address, so it carries their count instead. The refused recipient is the
+    // last one counted in failedCount.
+    const failedBeforeStop = failedCount - 1
+    const beforeStop = failedBeforeStop > 0 ? [`${failedBeforeStop} recipient(s) failed before the stop`] : []
     return {
       result: {
         channel: 'email',
         status: 'failed',
         recipientCount: sentCount,
-        warnings: [refusedText],
-        operatorWarnings: [refusedText],
+        warnings: [...warnings, refusedText],
+        operatorWarnings: [...beforeStop, refusedText],
         detail: 'SMTP login refused',
       },
     }
