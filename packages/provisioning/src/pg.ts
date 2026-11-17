@@ -17,6 +17,7 @@ import {
 } from '@gremion/tenant-store/lifecycle'
 import { loadCatalogueRows, provisionalNote, type CatalogueModule, type CatalogueRowsResult } from './catalogue-rows.ts'
 import { ProvisioningError } from './errors.ts'
+import { exportHold } from './export-hold.ts'
 import type { ActorKind, CustomerRef, ModulesPort } from './ports.ts'
 
 /**
@@ -66,6 +67,7 @@ export function pgModules(opts: {
         ...(opts.lifecycle.exportStorage ? { exportStorage: opts.lifecycle.exportStorage } : {}),
         finalDeletion: o.finalDeletion,
         deadlineMs: o.deadlineMs,
+        exportHold,
         ...(opts.lifecycle.log ? { log: opts.lifecycle.log } : {}),
       })
     },
