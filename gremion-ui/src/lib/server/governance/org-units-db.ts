@@ -324,6 +324,27 @@ export async function getOrgUnitIdsForUser(userKeycloakId: string): Promise<read
   return rows.map((r) => r.org_unit_id)
 }
 
+/**
+ * The units a person belongs to for DISPLAY: roster rows plus the units where they hold a
+ * live office (role_assignments status active|grace, via committee_roles.org_unit_id).
+ * Roles and membership are independent (assigning an office does not seat the holder, and
+ * removing a member does not end their office), so a Vorstand office holder can sit in a body
+ * without a roster row. Dashboard counts use this union so the figure matches the bodies the
+ * person sees themselves in. It must NOT feed authorisation: access to a unit stays with
+ * getOrgUnitIdsForUser (roster only).
+ */
+export async function getOrgUnitIdsWithOfficesForUser(userKeycloakId: string): Promise<readonly string[]> {
+  const rows = await getDb()<Array<{ org_unit_id: string }>>`
+    SELECT org_unit_id FROM org_unit_members WHERE user_keycloak_id = ${userKeycloakId}
+    UNION
+    SELECT cr.org_unit_id
+    FROM role_assignments ra
+    JOIN committee_roles cr ON cr.id = ra.role_id
+    WHERE ra.user_keycloak_id = ${userKeycloakId}
+      AND ra.status IN ('active', 'grace')`
+  return rows.map((r) => r.org_unit_id)
+}
+
 export async function getMemberCounts(): Promise<ReadonlyMap<string, number>> {
   const rows = await getDb()<Array<{ org_unit_id: string; count: string }>>`
     SELECT org_unit_id, COUNT(*)::text AS count FROM org_unit_members GROUP BY org_unit_id`
