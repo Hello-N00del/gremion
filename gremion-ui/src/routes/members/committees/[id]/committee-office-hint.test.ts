@@ -49,7 +49,7 @@ describe('committee page: an admin is told when there is no office to assign', (
     expect(screen.queryByRole('button', { name: /Amt zuweisen/ })).toBeNull()
     const hint = screen.getByTestId('office-assign-hint')
     expect(hint.textContent).toContain('keine Ämter angelegt')
-    expect(hint.textContent).toContain('lassen sich hier keine Ämter anlegen')
+    expect(hint.textContent).toContain('Ämter lassen sich auf dieser Seite nicht anlegen')
   })
 
   it('a committee whose offices are all taken says how one becomes free', () => {
