@@ -105,3 +105,12 @@ test/host/fixtures/release/*/docs/ops/*.md text eol=lf
 # TOM annex (TRD-141): the generator emits LF; golden fixtures and the committed annex must match byte for byte on Windows checkouts too.
 scripts/fixtures/tom-annex/** text eol=lf
 docs/compliance/tom-annex.md text eol=lf
+
+# test/host/fixtures/** is executed by the Linux bats runner: fixtures carry
+# extensionless docker/curl shims (a shebang script, no extension) and probe
+# scripts that no rule above reaches, so core.autocrlf=true checked them out
+# with CRLF on Windows and test/host/executor.bats died inside the container
+# ("syntax error near unexpected token $'in\r'" in the docker shim) while
+# passing in CI. test/host/no-host-literals.bats fails if a text fixture is
+# left without this attribute.
+test/host/fixtures/** text eol=lf
