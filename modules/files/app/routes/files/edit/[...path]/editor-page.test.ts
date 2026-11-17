@@ -135,6 +135,8 @@ describe('document editor page', () => {
     expect(getByTestId('editor-bar').textContent).toContain('Protokoll Sitzung.docx')
     expect(getByTestId('editor-bar').textContent).not.toContain('%20')
     expect((container.querySelector('iframe') as HTMLIFrameElement).getAttribute('title')).toBe('Protokoll Sitzung.docx')
+    expect(document.title).toContain('Protokoll Sitzung.docx')
+    expect(document.title).not.toContain('%20')
   })
 
   it('shows a malformed escape unchanged', () => {

@@ -99,8 +99,9 @@
     return () => window.removeEventListener('message', handleMessage)
   })
 
-  // The URL carries the name percent-encoded ("Protokoll%20Sitzung.docx"); the header and the frame title show it
-  // the way the person wrote it. Rendered as text only.
+  // SvelteKit decodes the path parameter once; a link encoded twice still carries "Protokoll%20Sitzung.docx". The
+  // header, the frame title and the tab title show the name decoded once more, the way the loader opens it.
+  // Rendered as text only.
   const displayName = $derived(readableFileName(data.fileName))
 
   const iframeSrc = $derived(`${data.editorUrl}&closebutton=1&lang=de`)
