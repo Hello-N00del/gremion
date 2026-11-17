@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # infra/host/lib/cd/docker.sh - the compose and docker plumbing of the continuous
-# deployment program (unit U1b).
+# deployment program.
 #
 # SOURCED, NEVER EXECUTED. Like common.sh it does not set shell options: the
 # program that sources it owns them. It depends on NOTHING else of the cd
@@ -12,8 +12,8 @@
 # Every function RETURNS, none exits and none prints a secret: an error is one
 # line on stderr naming the function and the reason. Return codes: 0 ok, 1 the
 # thing asked for is not there or is not as expected, 2 usage or a missing
-# precondition (a file, a key, a tool), 3 timed out waiting, 124 a compose call
-# that hit CD_DC_TIMEOUT. Unknown is never success: a missing key, an unparseable
+# precondition (a file, a key, a tool), 3 timed out waiting, 124 (or 137, see
+# cd_dc) a compose call that hit CD_DC_TIMEOUT. Unknown is never success: a missing key, an unparseable
 # answer or a docker that will not answer is a non-zero return, never a default.
 #
 # Exported for callers: CD_WAIT_BAD (set by cd_wait_healthy).
@@ -127,7 +127,7 @@ cd_set_env_key() {
     return 0
 }
 
-# cd_dc TREE PROJECT VERB [ARGS...] - THE one compose shape (F3):
+# cd_dc TREE PROJECT VERB [ARGS...] - THE one compose shape:
 #   cd <TREE> && docker compose --env-file <env of PROJECT> [--profile '*'] VERB ARGS
 # never -f, never -p, stdin from /dev/null. The star is passed for exactly
 # `build`, `pull --ignore-buildable` and `config` (the one-shot images are
@@ -139,7 +139,8 @@ cd_set_env_key() {
 # never end. VERB must be the first word and must not start with a dash, and
 # no argument may be a global option of compose, so the shape cannot be
 # changed from outside. CD_DC_TIMEOUT (whole seconds, 0 or unset = none) bounds
-# the call; a call that hits it returns 124.
+# the call; a call that hits it returns 124, or 137 when compose ignored the
+# TERM and was killed ten seconds later: both mean "timed out".
 cd_dc() {
     local tree="${1:-}" proj="${2:-}" envf verb a tmo root
     local -a star=() t=()
@@ -187,7 +188,8 @@ cd_dc() {
 }
 
 # cd_svc_cid PROJECT SERVICE - the first RUNNING container of a compose
-# service, printed; nothing printed and 0 when there is none; 2 when docker
+# service, printed (a `compose run` one-off container never counts); nothing
+# printed and 0 when there is none; 2 when docker
 # cannot be asked or the arguments are bad.
 cd_svc_cid() {
     local proj="${1:-}" svc="${2:-}" cp out
@@ -195,7 +197,8 @@ cd_svc_cid() {
     cd_envfile "$proj" >/dev/null || return 2
     cp="$(_cd_docker_proj "$proj")" || return 2
     out="$(docker ps -q --filter "label=com.docker.compose.project=${cp}" \
-        --filter "label=com.docker.compose.service=${svc}" </dev/null)" || {
+        --filter "label=com.docker.compose.service=${svc}" \
+        --filter "label=com.docker.compose.oneoff=False" </dev/null)" || {
         _cd_docker_err "cd_svc_cid: docker did not answer"
         return 2
     }
@@ -204,13 +207,15 @@ cd_svc_cid() {
 }
 
 # cd_project_cids PROJECT - the ids of every RUNNING container of a compose
-# project, one per line; nothing and 0 when there is none; 2 when docker
+# project, one per line, one-off containers (`compose run`) left out; nothing
+# and 0 when there is none; 2 when docker
 # cannot be asked.
 cd_project_cids() {
     local proj="${1:-}" cp out
     cd_envfile "$proj" >/dev/null || return 2
     cp="$(_cd_docker_proj "$proj")" || return 2
-    out="$(docker ps -q --filter "label=com.docker.compose.project=${cp}" </dev/null)" || {
+    out="$(docker ps -q --filter "label=com.docker.compose.project=${cp}" \
+        --filter "label=com.docker.compose.oneoff=False" </dev/null)" || {
         _cd_docker_err "cd_project_cids: docker did not answer"
         return 2
     }
@@ -218,11 +223,16 @@ cd_project_cids() {
     return 0
 }
 
-# cd_wait_healthy PROJECT SECONDS [TREE] - wait until EVERY service the env
+# cd_wait_healthy PROJECT SECONDS TREE - wait until EVERY service the env
 # file declares has a running container whose healthcheck reads healthy (a
 # running service whose image declares no healthcheck, livekit, counts as
-# healthy). TREE defaults to <root>/current. Returns 0 healthy, 3 when the
-# window ends first, 2 for a usage error or a compose that renders no service.
+# healthy). TREE is the release tree whose compose files name the services;
+# it is required, there is no default: the current link moves only at the
+# commit point, so a default would read the services of the OLD release.
+# The services listed are those of the profile set the env file declares (the
+# set that is expected to run), not the profile-gated one-shots.
+# Returns 0 healthy, 3 when the window ends first, 2 for a usage error (a
+# missing tree included) or a compose that renders no service.
 # Sets CD_WAIT_BAD to the services that were not: " name(absent)
 # name(running starting)". Only service names and states appear there and in
 # the message on stderr, never a container id or name. Call it directly, not
@@ -235,7 +245,7 @@ cd_wait_healthy() {
     CD_WAIT_BAD=''
     [[ "$secs" =~ ^[0-9]+$ ]] || { _cd_docker_err "cd_wait_healthy: SECONDS must be a whole number"; return 2; }
     [[ "$poll" =~ ^[0-9]+(\.[0-9]+)?$ ]] || { _cd_docker_err "cd_wait_healthy: CD_WAIT_POLL_S is not a number"; return 2; }
-    [[ -n "$tree" ]] || tree="$(_cd_docker_root)/current"
+    [[ -n "$tree" ]] || { _cd_docker_err "cd_wait_healthy: usage: PROJECT SECONDS TREE (the tree is required)"; return 2; }
     cd_envfile "$proj" >/dev/null || return 2
     local listing
     listing="$(cd_dc "$tree" "$proj" config --services)" || {

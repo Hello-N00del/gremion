@@ -1,10 +1,11 @@
 #!/usr/bin/env bats
-# Unit tests for infra/host/lib/cd/docker.sh (continuous deployment, unit U1b):
-# the one compose shape (F3), the env-file helpers, the health wait and the
+# Unit tests for infra/host/lib/cd/docker.sh (continuous deployment):
+# the one compose shape, the env-file helpers, the health wait and the
 # Traefik reads. Nothing here touches a real docker, curl or network: both are
 # recording shims (test_helper/host.bash) and the host layout is a temp
 # $GREMION_ROOT.
 
+bats_require_minimum_version 1.5.0
 load 'test_helper/host'
 
 FIX="${BATS_TEST_DIRNAME}/fixtures/cd/docker"
@@ -69,6 +70,9 @@ case "$1" in
         label=com.docker.compose.service=*) svc="${a#label=com.docker.compose.service=}" ;;
       esac
     done
+    # A one-off container (compose run) is listed unless the caller filters
+    # the oneoff label to False, as the real daemon does.
+    case " $* " in *" label=com.docker.compose.oneoff=False "*) ;; *) [ -f "$DK/oneoff.$proj" ] && cat "$DK/oneoff.$proj" ;; esac
     if [ -n "$svc" ]; then [ -f "$DK/cid.$proj.$svc" ] && cat "$DK/cid.$proj.$svc"
     else [ -f "$DK/cids.$proj" ] && cat "$DK/cids.$proj"; fi
     exit 0 ;;
@@ -139,7 +143,7 @@ load_lib() {
     [ ! -s "$DK/stdin.log" ]
 }
 
-@test "cd_dc build carries exactly one --profile '*' and the one-shot image is built (F3 guard)" {
+@test "cd_dc build carries exactly one --profile '*' and the profile-gated one-shot image is built" {
     load_lib
     cd_dc "$TREE" app-green build --pull
     [ "$(last_argv)" = "compose|--env-file|${GREMION_ROOT}/etc/env/app-green.env|--profile|*|build|--pull" ]
@@ -392,7 +396,7 @@ mk_envfile() { printf 'A=1\nIMAGE_TAG=old\nIMAGE_TAG_OLD=keep\n# IMAGE_TAG=comme
     run cd_svc_cid app-blue gremion-ui
     [ "$status" -eq 0 ]
     [ "$output" = c111 ]
-    [ "$(last_argv)" = "ps|-q|--filter|label=com.docker.compose.project=teststack-app-blue|--filter|label=com.docker.compose.service=gremion-ui" ]
+    [ "$(last_argv)" = "ps|-q|--filter|label=com.docker.compose.project=teststack-app-blue|--filter|label=com.docker.compose.service=gremion-ui|--filter|label=com.docker.compose.oneoff=False" ]
 }
 
 @test "cd_svc_cid prints nothing and returns 0 when the service has no container" {
@@ -425,7 +429,7 @@ mk_envfile() { printf 'A=1\nIMAGE_TAG=old\nIMAGE_TAG_OLD=keep\n# IMAGE_TAG=comme
     run cd_project_cids app-green
     [ "$status" -eq 0 ]
     [ "$output" = "$(printf 'c111\nc222')" ]
-    [ "$(last_argv)" = "ps|-q|--filter|label=com.docker.compose.project=teststack-app-green" ]
+    [ "$(last_argv)" = "ps|-q|--filter|label=com.docker.compose.project=teststack-app-green|--filter|label=com.docker.compose.oneoff=False" ]
     run cd_project_cids app-blue
     [ "$status" -eq 0 ]
     [ "$output" = "" ]
@@ -551,13 +555,17 @@ svc_state() {
     grep -q "cwd=${TREE} " "$DK/ctx.log"
 }
 
-@test "cd_wait_healthy defaults the tree to <root>/current" {
+@test "cd_wait_healthy has no default tree: a missing or empty tree is a usage error and compose is never asked" {
     load_lib
     mkdir -p "${GREMION_ROOT}/current"
     printf 'gremion-ui\n' > "$DK/services"
     svc_state gremion-ui 'running healthy'
-    cd_wait_healthy app-green 0
-    grep -q "cwd=${GREMION_ROOT}/current " "$DK/ctx.log"
+    run cd_wait_healthy app-green 0
+    [ "$status" -eq 2 ]
+    run cd_wait_healthy app-green 0 ''
+    [ "$status" -eq 2 ]
+    [ ! -e "$DK/argv.log" ]
+    [ ! -e "$DK/ctx.log" ]
 }
 
 @test "cd_wait_healthy returns 2 for a project that renders no service, a compose failure or bad arguments" {
@@ -732,4 +740,65 @@ svc_state() {
     "
     [ "$status" -eq 0 ]
     [[ "$output" == *green* && "$output" == *"18080"* ]]
+}
+
+# A `compose run` container (label oneoff=True) is never "the" container of a
+# service and never one of the project's containers: a migration that is still
+# running must not be mistaken for the service it shares a name with.
+@test "cd_svc_cid and cd_project_cids leave out one-off containers" {
+    load_lib
+    printf 'run999\n' > "$DK/oneoff.teststack-app-blue"
+    printf 'c111\n' > "$DK/cid.teststack-app-blue.gremion-ui"
+    printf 'c111\n' > "$DK/cids.teststack-app-blue"
+    run cd_svc_cid app-blue gremion-ui
+    [ "$status" -eq 0 ]
+    [ "$output" = c111 ]
+    run cd_project_cids app-blue
+    [ "$status" -eq 0 ]
+    [ "$output" = c111 ]
+    rm -f "$DK/cid.teststack-app-blue.gremion-ui"
+    run cd_svc_cid app-blue gremion-ui
+    [ "$output" = "" ]
+}
+
+# ------------------------------- cd_set_env_key: refusals that keep the file
+
+@test "cd_set_env_key refuses a symbolic link and leaves the target alone" {
+    load_lib
+    f="${BATS_TEST_TMPDIR}/real.env"
+    mk_envfile "$f"
+    ln -s "$f" "${BATS_TEST_TMPDIR}/link.env"
+    before="$(cksum < "$f")"
+    run cd_set_env_key "${BATS_TEST_TMPDIR}/link.env" IMAGE_TAG changed
+    [ "$status" -eq 2 ]
+    [ "$(cksum < "$f")" = "$before" ]
+    [ -L "${BATS_TEST_TMPDIR}/link.env" ]
+}
+
+@test "cd_set_env_key refuses to replace a file whose owner it cannot keep" {
+    [ "$(id -u)" = 0 ] || skip "needs root to give a file a foreign owner"
+    load_lib
+    f="${BATS_TEST_TMPDIR}/x.env"
+    mk_envfile "$f"
+    chown 1234:4321 "$f"
+    shim chown 'exit 0'
+    hash -r
+    before="$(cksum < "$f")"
+    run cd_set_env_key "$f" IMAGE_TAG changed
+    [ "$status" -eq 1 ]
+    [ "$(cksum < "$f")" = "$before" ]
+    [ "$(stat -c %u:%g "$f")" = 1234:4321 ]
+    [ "$(ls "${BATS_TEST_TMPDIR}" | grep -c '^x.env')" = 1 ]
+}
+
+@test "cd_set_env_key reports a copy that does not read back as written" {
+    load_lib
+    f="${BATS_TEST_TMPDIR}/x.env"
+    mk_envfile "$f"
+    # a mv that puts something else in place of the finished copy
+    shim mv 'for last; do :; done; printf "garbage\n" > "$last"'
+    hash -r
+    run --separate-stderr cd_set_env_key "$f" IMAGE_TAG changed
+    [ "$status" -eq 1 ]
+    [[ "$stderr" == *"does not read back"* ]]
 }
