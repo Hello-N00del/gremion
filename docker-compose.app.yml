@@ -240,11 +240,14 @@ services:
       # this ONE read-only bind mount (live: a new tenant's file appears
       # without a recreate).
       - ${TENANT_SECRETS_DIR:-./secrets/tenants}:/run/secrets/tenants:ro
-      # The worker gate: the host writes /opt/gremion/runtime/workers/<colour>
-      # (content `off` stops this colour's background ticks; absent or anything
-      # else means on). A bind mount, read-only, so no named volume is added and
-      # the gate state survives a restart or a reboot of the colour.
-      - ${GREMION_WORKERS_DIR:-/opt/gremion/runtime/workers}:/run/gremion/workers:ro
+      # The worker gate directory: the host writes <GREMION_ROOT>/runtime/workers/<colour>
+      # and this colour sees it read-only at /run/gremion/workers/<colour>. This
+      # line only provides the mount (the contract: a file with the content `off`
+      # means off, absent or anything else means on); nothing in the app reads it
+      # yet, so today it has no effect. A bind mount, so no named volume is added
+      # and the gate state survives a restart or a reboot of the colour. The host
+      # must create the directory (owned by the deploy user) before the colour starts.
+      - ${GREMION_WORKERS_DIR:-${GREMION_ROOT:-/opt/gremion}/runtime/workers}:/run/gremion/workers:ro
       # G-080: internal CA trust anchor (minted by
       # docker/keycloak/certs/gen-internal-ca.sh).
       - ./docker/keycloak/certs/internal-ca.pem:/etc/ssl/internal/internal-ca.pem:ro

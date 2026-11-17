@@ -11,7 +11,7 @@ import { getTenantReadinessCounts } from '$lib/server/tenant/readiness'
  * /healthz is liveness: a still-booting or boot-failed process also answers 200.
  * This is the probe a release gate can believe. `ready` means: boot has finished
  * AND the control database answers a ping. The tenant state is NOT part of it
- * (a customer whose tenant is failed or pending would otherwise fail every
+ * (a customer whose tenant is failed would otherwise fail every
  * release for a reason the release did not cause); the internal answer carries
  * the counts so the caller can compare them with the live colour instead.
  *

@@ -8,8 +8,8 @@ import { fileURLToPath } from 'node:url'
  *
  * Public answer, readable by anyone through any customer host: exactly
  * {"ready":true} (200) or {"ready":false} (503). `ready` = boot complete AND the
- * control database answers (a ping memoised for 5 s). A tenant that is failed or
- * pending is NOT part of `ready`. With the bearer INTERNAL_PUSH_SECRET the body
+ * control database answers (a ping memoised for 5 s). A failed tenant is NOT part
+ * of `ready`. With the bearer INTERNAL_PUSH_SECRET the body
  * also carries colour, release, tenant counts and the reasons: counts only,
  * never a slug, a host, an address or an error message.
  */
@@ -171,6 +171,13 @@ describe('GET /readyz readiness rule', () => {
     const res = await get(route)
     expect(res.status).toBe(200)
   })
+
+  it('a pending tenant (never seen by the fleet) is absent from the map and so in neither count', async () => {
+    const { readiness } = await load()
+    readiness.setTenantReadinessFromFleet(new Map([['00000000-0000-4000-8000-000000000001', { ok: true }]] as never))
+    expect(readiness.getTenantReadiness('00000000-0000-4000-8000-0000000000aa')).toBe('pending')
+    expect(readiness.getTenantReadinessCounts()).toEqual({ total: 1, notReady: 0 })
+  })
 })
 
 describe('GET /readyz internal answer', () => {
@@ -327,7 +334,11 @@ describe('docker-compose.app.yml (gremion-ui)', () => {
   })
 
   it('bind-mounts the worker gate directory read-only, no named volume', () => {
-    expect(block).toContain('- ${GREMION_WORKERS_DIR:-/opt/gremion/runtime/workers}:/run/gremion/workers:ro')
+    // The default follows GREMION_ROOT like every other host bind of this file: on a
+    // host with a non-default root the colour must mount the directory the host writes.
+    expect(block).toContain(
+      '- ${GREMION_WORKERS_DIR:-${GREMION_ROOT:-/opt/gremion}/runtime/workers}:/run/gremion/workers:ro',
+    )
     const topVolumes = compose.slice(compose.search(/^volumes:/m))
     expect(topVolumes).not.toMatch(/workers/)
   })

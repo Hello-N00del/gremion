@@ -142,9 +142,13 @@ skips Auth.js and the session guard, and is answered while the process boots:
   tenant database, module service or Matrix. A caller that presents the bearer
   `INTERNAL_PUSH_SECRET` also gets the colour, the release ref
   (`GREMION_RELEASE_REF`), tenant counts (total and not ready, never a slug) and
-  the reasons (`boot`, `control_db`). A tenant that is failed or pending does not
+  the reasons (`boot`, `control_db`). A tenant that is failed does not
   make the process not ready; the counts exist so a caller can compare them with
-  another colour.
+  another colour. The counts come from the boot-filled readiness map, which holds
+  only `ready` and `failed` entries: a tenant registered after boot and not yet
+  resolved is in neither number, a later migration of the live colour changes its
+  `notReady` only through the lazy re-migration, and a swap (one tenant heals,
+  another breaks) leaves the counts unchanged.
 - `/api/internal/…` only when the request names no tenant (no
   `x-forwarded-host`, no `x-tenant-id`), e.g. the switch's evict fan-out on the
   container network. A leaf callback or an internal hop that names a tenant is
