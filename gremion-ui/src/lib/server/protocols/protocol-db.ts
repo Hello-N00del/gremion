@@ -25,6 +25,19 @@ export class ResolutionPublishedError extends Error {
 }
 
 /**
+ * Thrown by addResolution when the protocol takes no new resolution: it is
+ * published (or being published: the add waited for the publish and read the
+ * committed status) or it does not exist. The route answers with the same 403
+ * as for any protocol that is not editable.
+ */
+export class ProtocolNotEditableError extends Error {
+  constructor(public readonly protocolId: string) {
+    super(`Protokoll ${protocolId} ist veröffentlicht oder nicht vorhanden und nimmt keine Beschlüsse mehr auf`)
+    this.name = 'ProtocolNotEditableError'
+  }
+}
+
+/**
  * Thrown by updateResolution / deleteResolution when the write matched no row
  * because the resolution does not exist (any more), e.g. another admin deleted
  * it between the route's check and the write. The routes map it to a 404.
@@ -335,19 +348,30 @@ export async function addResolution(protocolId: string, input: {
   decisionRuleParams?: Record<string, unknown> | null
 }): Promise<ProtocolResolution> {
   const sql = getDb()
+  // The status check is part of the INSERT itself (same idea as the publish lock
+  // in updateResolution): the rows come from a SELECT on the parent protocol that
+  // carries FOR SHARE. FOR SHARE conflicts with the row lock the publish's UPDATE of
+  // the protocol holds, so an add that starts while a publish is open waits for it;
+  // when the publish commits, Postgres re-checks this statement's WHERE against the
+  // newest version of the locked row, sees 'published' and inserts nothing. A route
+  // level read-then-insert would leave a window between the two statements.
+  // Zero rows means the protocol is published or gone: ProtocolNotEditableError.
   const rows = await sql<ProtocolResolution[]>`
     INSERT INTO protocol_resolutions
       (protocol_id, sequence_nr, text, votes_yes, votes_no, votes_abstain, result, required_majority,
        adoption_mode, decision_rule_params)
-    VALUES (
-      ${protocolId},
-      (SELECT COALESCE(MAX(sequence_nr), 0) + 1 FROM protocol_resolutions WHERE protocol_id = ${protocolId}),
+    SELECT
+      p.id,
+      (SELECT COALESCE(MAX(sequence_nr), 0) + 1 FROM protocol_resolutions WHERE protocol_id = p.id),
       ${input.text}, ${input.votesYes}, ${input.votesNo}, ${input.votesAbstain}, ${input.result}, ${input.requiredMajority},
       ${input.adoptionMode ?? 'tally'},
       ${input.decisionRuleParams != null ? (sql.json(input.decisionRuleParams as never) as never) : null}
-    )
+    FROM protocols p
+    WHERE p.id = ${protocolId} AND p.status <> 'published'
+    FOR SHARE OF p
     RETURNING *
   `
+  if (!rows[0]) throw new ProtocolNotEditableError(protocolId)
   return rows[0]
 }
 
