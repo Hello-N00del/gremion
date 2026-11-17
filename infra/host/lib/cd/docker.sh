@@ -1,0 +1,320 @@
+#!/usr/bin/env bash
+# infra/host/lib/cd/docker.sh - the compose and docker plumbing of the continuous
+# deployment program (unit U1b).
+#
+# SOURCED, NEVER EXECUTED. Like common.sh it does not set shell options: the
+# program that sources it owns them. It depends on NOTHING else of the cd
+# family (not core.sh, not common.sh): it reads GREMION_ROOT (default
+# /opt/gremion) and STACK, and calls docker, curl, jq and coreutils. The one
+# optional hook is `cd_now`: when core.sh has defined it, the wait loop reads
+# time through it (a fake clock for tests); otherwise it uses date.
+#
+# Every function RETURNS, none exits and none prints a secret: an error is one
+# line on stderr naming the function and the reason. Return codes: 0 ok, 1 the
+# thing asked for is not there or is not as expected, 2 usage or a missing
+# precondition (a file, a key, a tool), 3 timed out waiting, 124 a compose call
+# that hit CD_DC_TIMEOUT. Unknown is never success: a missing key, an unparseable
+# answer or a docker that will not answer is a non-zero return, never a default.
+#
+# Exported for callers: CD_WAIT_BAD (set by cd_wait_healthy).
+
+CD_WAIT_BAD=''
+
+_cd_docker_err() { printf 'cd-docker: %s\n' "$*" >&2; }
+
+_cd_docker_root() { printf '%s' "${GREMION_ROOT:-/opt/gremion}"; }
+
+# Epoch seconds. cd_now when core.sh provides one that answers an integer.
+_cd_docker_epoch() {
+    local t=''
+    if declare -F cd_now >/dev/null 2>&1; then
+        t="$(cd_now 2>/dev/null)" || t=''
+    fi
+    if [[ "$t" =~ ^[0-9]+$ ]]; then
+        printf '%s' "$t"
+    else
+        date +%s
+    fi
+}
+
+# The compose project name of a project: <STACK>-<project>. The env file does
+# not carry it; STACK is the stack name of the host.
+_cd_docker_proj() {
+    local proj="$1"
+    [[ -n "${STACK:-}" ]] || { _cd_docker_err "STACK is not set"; return 2; }
+    [[ "$STACK" =~ ^[a-z0-9][a-z0-9_-]*$ ]] || { _cd_docker_err "STACK is not a valid project prefix"; return 2; }
+    printf '%s-%s' "$STACK" "$proj"
+}
+
+# cd_envfile PROJECT - the env file of a compose project: state, app-blue or
+# app-green. Prints the path; it does not say the file exists.
+cd_envfile() {
+    local proj="${1:-}"
+    case "$proj" in
+        state | app-blue | app-green) ;;
+        *) _cd_docker_err "cd_envfile: unknown project '${proj}' (state, app-blue, app-green)"; return 2 ;;
+    esac
+    printf '%s/etc/env/%s.env\n' "$(_cd_docker_root)" "$proj"
+}
+
+# cd_kv_get FILE KEY - one non-secret value of an env file: the text after
+# KEY=, one pair of matching quotes and a trailing CR removed. Returns 1 (and
+# prints nothing) when the key is absent or declared more than once: a reader
+# that could pick a different line than compose does must not answer.
+cd_kv_get() {
+    local f="${1:-}" k="${2:-}" n v
+    [[ "$k" =~ ^[A-Z][A-Z0-9_]*$ ]] || { _cd_docker_err "cd_kv_get: bad key name"; return 2; }
+    [[ -f "$f" && -r "$f" ]] || { _cd_docker_err "cd_kv_get: no readable file $(basename -- "$f")"; return 2; }
+    n="$(grep -c -- "^${k}=" "$f")" || true
+    if [[ "$n" -ne 1 ]]; then
+        _cd_docker_err "cd_kv_get: ${k} is declared ${n} times in $(basename -- "$f")"
+        return 1
+    fi
+    v="$(sed -n "s/^${k}=//p" "$f" | head -n 1)"
+    v="${v%$'\r'}"
+    if [[ "${#v}" -ge 2 && ( "$v" == \"*\" || "$v" == \'*\' ) ]]; then
+        v="${v:1:${#v}-2}"
+    fi
+    printf '%s\n' "$v"
+}
+
+# cd_set_env_key FILE KEY VALUE - replace or append one KEY=VALUE, keeping
+# owner and mode, leaving exactly one declaration. A bad key name, a value with
+# a newline or a carriage return, a missing file, a file that already declares
+# the key more than once and a copy that does not read back exactly are all
+# refused with the file untouched (the check of the duplicate runs BEFORE the
+# edit). The value reaches awk through the environment, so no value touches a
+# command line or an escape sequence.
+cd_set_env_key() {
+    local f="${1:-}" k="${2:-}" v="${3-}" tmp n owner_ref owner_new
+    [[ "$#" -eq 3 ]] || { _cd_docker_err "cd_set_env_key: usage: FILE KEY VALUE"; return 2; }
+    [[ "$k" =~ ^[A-Z][A-Z0-9_]*$ ]] || { _cd_docker_err "cd_set_env_key: bad key name"; return 2; }
+    case "$v" in
+        *$'\n'* | *$'\r'*) _cd_docker_err "cd_set_env_key: ${k}: the value holds a line break"; return 2 ;;
+    esac
+    [[ -f "$f" && -r "$f" && ! -L "$f" ]] || { _cd_docker_err "cd_set_env_key: no regular file $(basename -- "$f")"; return 2; }
+    n="$(grep -c -- "^${k}=" "$f")" || true
+    if [[ "$n" -gt 1 ]]; then
+        _cd_docker_err "cd_set_env_key: ${k} is declared ${n} times in $(basename -- "$f"); refusing to guess"
+        return 1
+    fi
+    tmp="$(mktemp "${f}.XXXXXX")" || { _cd_docker_err "cd_set_env_key: cannot create a temporary copy"; return 1; }
+    if ! K="$k" V="$v" awk 'BEGIN { k = ENVIRON["K"]; v = ENVIRON["V"]; n = 0 }
+            index($0, k "=") == 1 { print k "=" v; n++; next }
+            { print }
+            END { if (n == 0) print k "=" v }' "$f" >"$tmp"; then
+        rm -f -- "$tmp"
+        return 1
+    fi
+    # Mode first (mktemp made the copy 0600, so nothing is ever more open than
+    # the original), then owner. A chown that is not allowed is tolerated only
+    # when the owner already matches.
+    chmod --reference="$f" "$tmp" || { rm -f -- "$tmp"; return 1; }
+    chown --reference="$f" "$tmp" 2>/dev/null || true
+    owner_ref="$(stat -c '%u:%g' "$f")"
+    owner_new="$(stat -c '%u:%g' "$tmp")"
+    if [[ "$owner_ref" != "$owner_new" ]]; then
+        rm -f -- "$tmp"
+        _cd_docker_err "cd_set_env_key: cannot keep the owner of $(basename -- "$f")"
+        return 1
+    fi
+    mv -f -T -- "$tmp" "$f" || { rm -f -- "$tmp"; return 1; }
+    n="$(grep -c -- "^${k}=" "$f")" || true
+    if [[ "$n" -ne 1 ]] || ! grep -Fxq -- "${k}=${v}" "$f"; then
+        _cd_docker_err "cd_set_env_key: ${k} does not read back as written in $(basename -- "$f")"
+        return 1
+    fi
+    return 0
+}
+
+# cd_dc TREE PROJECT VERB [ARGS...] - THE one compose shape (F3):
+#   cd <TREE> && docker compose --env-file <env of PROJECT> [--profile '*'] VERB ARGS
+# never -f, never -p, stdin from /dev/null. The star is passed for exactly
+# `build`, `pull --ignore-buildable` and `config` (the one-shot images are
+# profile-gated and the env file sets only COMPOSE_PROFILES=production) and
+# for nothing else: `up`, `run`, `down`, `ps`, `exec` and a plain `pull` get
+# none. One exception inside `config`: `config --services` lists the services
+# of the profile set the env file declares, the set that is expected to run;
+# with the star it would list the one-shots too, and a wait for them could
+# never end. VERB must be the first word and must not start with a dash, and
+# no argument may be a global option of compose, so the shape cannot be
+# changed from outside. CD_DC_TIMEOUT (whole seconds, 0 or unset = none) bounds
+# the call; a call that hits it returns 124.
+cd_dc() {
+    local tree="${1:-}" proj="${2:-}" envf verb a tmo root
+    local -a star=() t=()
+    [[ "$#" -ge 3 ]] || { _cd_docker_err "cd_dc: usage: TREE PROJECT VERB [ARGS...]"; return 2; }
+    shift 2
+    verb="$1"
+    [[ "$verb" =~ ^[a-z][a-z-]*$ ]] || { _cd_docker_err "cd_dc: the first argument must be a compose verb"; return 2; }
+    for a in "$@"; do
+        case "$a" in
+            --profile | --profile=* | --project-name | --project-name=* | --file | --file=* \
+                | --env-file | --env-file=* | --project-directory | --project-directory=*)
+                _cd_docker_err "cd_dc: ${a%%=*} is not allowed; the compose shape is fixed"
+                return 2
+                ;;
+        esac
+    done
+    [[ -d "$tree" ]] || { _cd_docker_err "cd_dc: no release tree directory"; return 2; }
+    envf="$(cd_envfile "$proj")" || return 2
+    [[ -f "$envf" ]] || { _cd_docker_err "cd_dc: no env file for ${proj}"; return 2; }
+    case "$verb" in
+        build) star=(--profile '*') ;;
+        pull)
+            for a in "$@"; do
+                [[ "$a" == --ignore-buildable ]] && star=(--profile '*')
+            done
+            ;;
+        config)
+            star=(--profile '*')
+            for a in "$@"; do
+                [[ "$a" == --services ]] && star=()
+            done
+            ;;
+        *) ;;
+    esac
+    tmo="${CD_DC_TIMEOUT:-0}"
+    [[ "$tmo" =~ ^[0-9]+$ ]] || { _cd_docker_err "cd_dc: CD_DC_TIMEOUT is not a whole number of seconds"; return 2; }
+    if [[ "$tmo" -gt 0 ]]; then
+        t=(timeout -k 10 "$tmo")
+    fi
+    root="$(_cd_docker_root)"
+    (
+        cd "$tree" || exit 2
+        GREMION_ROOT="$root" exec ${t[@]+"${t[@]}"} docker compose --env-file "$envf" ${star[@]+"${star[@]}"} "$@"
+    ) </dev/null
+}
+
+# cd_svc_cid PROJECT SERVICE - the first RUNNING container of a compose
+# service, printed; nothing printed and 0 when there is none; 2 when docker
+# cannot be asked or the arguments are bad.
+cd_svc_cid() {
+    local proj="${1:-}" svc="${2:-}" cp out
+    [[ "$svc" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || { _cd_docker_err "cd_svc_cid: bad service name"; return 2; }
+    cd_envfile "$proj" >/dev/null || return 2
+    cp="$(_cd_docker_proj "$proj")" || return 2
+    out="$(docker ps -q --filter "label=com.docker.compose.project=${cp}" \
+        --filter "label=com.docker.compose.service=${svc}" </dev/null)" || {
+        _cd_docker_err "cd_svc_cid: docker did not answer"
+        return 2
+    }
+    printf '%s\n' "$out" | head -n 1 | sed -e '/^[[:space:]]*$/d' || true
+    return 0
+}
+
+# cd_project_cids PROJECT - the ids of every RUNNING container of a compose
+# project, one per line; nothing and 0 when there is none; 2 when docker
+# cannot be asked.
+cd_project_cids() {
+    local proj="${1:-}" cp out
+    cd_envfile "$proj" >/dev/null || return 2
+    cp="$(_cd_docker_proj "$proj")" || return 2
+    out="$(docker ps -q --filter "label=com.docker.compose.project=${cp}" </dev/null)" || {
+        _cd_docker_err "cd_project_cids: docker did not answer"
+        return 2
+    }
+    printf '%s\n' "$out" | sed -e '/^[[:space:]]*$/d' || true
+    return 0
+}
+
+# cd_wait_healthy PROJECT SECONDS [TREE] - wait until EVERY service the env
+# file declares has a running container whose healthcheck reads healthy (a
+# running service whose image declares no healthcheck, livekit, counts as
+# healthy). TREE defaults to <root>/current. Returns 0 healthy, 3 when the
+# window ends first, 2 for a usage error or a compose that renders no service.
+# Sets CD_WAIT_BAD to the services that were not: " name(absent)
+# name(running starting)". Only service names and states appear there and in
+# the message on stderr, never a container id or name. Call it directly, not
+# in $(...), or CD_WAIT_BAD is lost with the subshell. CD_WAIT_POLL_S (default
+# 5) is the pause between two looks.
+cd_wait_healthy() {
+    local proj="${1:-}" secs="${2:-}" tree="${3:-}" poll="${CD_WAIT_POLL_S:-5}"
+    local deadline s c st
+    local -a svcs=()
+    CD_WAIT_BAD=''
+    [[ "$secs" =~ ^[0-9]+$ ]] || { _cd_docker_err "cd_wait_healthy: SECONDS must be a whole number"; return 2; }
+    [[ "$poll" =~ ^[0-9]+(\.[0-9]+)?$ ]] || { _cd_docker_err "cd_wait_healthy: CD_WAIT_POLL_S is not a number"; return 2; }
+    [[ -n "$tree" ]] || tree="$(_cd_docker_root)/current"
+    cd_envfile "$proj" >/dev/null || return 2
+    local listing
+    listing="$(cd_dc "$tree" "$proj" config --services)" || {
+        _cd_docker_err "cd_wait_healthy: the ${proj} project did not render"
+        return 2
+    }
+    mapfile -t svcs < <(printf '%s\n' "$listing" | sed -e '/^[[:space:]]*$/d')
+    [[ ${#svcs[@]} -gt 0 ]] || { _cd_docker_err "cd_wait_healthy: the ${proj} project renders no service"; return 2; }
+    deadline=$(( $(_cd_docker_epoch) + secs ))
+    while :; do
+        CD_WAIT_BAD=''
+        for s in "${svcs[@]}"; do
+            if ! c="$(cd_svc_cid "$proj" "$s" 2>/dev/null)"; then
+                CD_WAIT_BAD+=" ${s}(docker_error)"
+                continue
+            fi
+            if [[ -z "$c" ]]; then
+                CD_WAIT_BAD+=" ${s}(absent)"
+                continue
+            fi
+            if ! st="$(docker inspect -f '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}nohealthcheck{{end}}' "$c" 2>/dev/null </dev/null)"; then
+                CD_WAIT_BAD+=" ${s}(inspect_failed)"
+                continue
+            fi
+            [[ "$st" == 'running healthy' || "$st" == 'running nohealthcheck' ]] || CD_WAIT_BAD+=" ${s}(${st})"
+        done
+        [[ -z "$CD_WAIT_BAD" ]] && return 0
+        if [[ "$(_cd_docker_epoch)" -ge "$deadline" ]]; then
+            _cd_docker_err "cd_wait_healthy: ${proj} not healthy after ${secs}s:${CD_WAIT_BAD}"
+            return 3
+        fi
+        sleep "$poll"
+    done
+}
+
+# cd_image_id REF - the image id (sha256:<64 hex>) the reference names right
+# now. Returns 1 with nothing printed when there is no such image or the answer
+# is not an image id.
+cd_image_id() {
+    local ref="${1:-}" id
+    [[ -n "$ref" && "$ref" != -* ]] || { _cd_docker_err "cd_image_id: usage: REF"; return 2; }
+    id="$(docker image inspect -f '{{.Id}}' "$ref" 2>/dev/null </dev/null)" || return 1
+    [[ "$id" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
+    printf '%s\n' "$id"
+}
+
+# cd_colour_other COLOUR - blue prints green, green prints blue.
+cd_colour_other() {
+    case "${1:-}" in
+        blue) printf 'green\n' ;;
+        green) printf 'blue\n' ;;
+        *) _cd_docker_err "cd_colour_other: the colour is blue or green"; return 2 ;;
+    esac
+}
+
+# cd_traefik_api - the base URL of the Traefik API of this host:
+# http://127.0.0.1:<TRAEFIK_API_PORT of state.env>. A state.env without the
+# key, with a value that is not a port, or no state.env fails closed (2); there
+# is no default port.
+cd_traefik_api() {
+    local f port
+    f="$(cd_envfile state)" || return 2
+    [[ -f "$f" ]] || { _cd_docker_err "cd_traefik_api: no state.env"; return 2; }
+    port="$(cd_kv_get "$f" TRAEFIK_API_PORT 2>/dev/null)" || { _cd_docker_err "cd_traefik_api: state.env has no single TRAEFIK_API_PORT"; return 2; }
+    if ! [[ "$port" =~ ^[0-9]{1,5}$ ]] || [[ "$((10#$port))" -lt 1 || "$((10#$port))" -gt 65535 ]]; then
+        _cd_docker_err "cd_traefik_api: TRAEFIK_API_PORT is not a port"
+        return 2
+    fi
+    printf 'http://127.0.0.1:%s\n' "$((10#$port))"
+}
+
+# cd_traefik_service NAME - the JSON object Traefik reports for one service
+# (for example app@file). Returns 1 with nothing printed when the call fails or
+# the answer is not a JSON object.
+cd_traefik_service() {
+    local name="${1:-}" api body
+    [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._@-]*$ ]] || { _cd_docker_err "cd_traefik_service: bad service name"; return 2; }
+    api="$(cd_traefik_api)" || return 2
+    body="$(curl -fsS --max-time 10 "${api}/api/http/services/${name}" </dev/null)" || return 1
+    printf '%s' "$body" | jq -e 'type == "object"' >/dev/null 2>&1 || return 1
+    printf '%s\n' "$body"
+}
