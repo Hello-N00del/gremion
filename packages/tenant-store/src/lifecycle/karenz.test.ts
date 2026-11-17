@@ -15,7 +15,6 @@ import {
   KARENZ_DAYS,
   verifyRowExport,
   type DueRow,
-  type ExportHoldContext,
   type FinalizeDeps,
   type KarenzState,
 } from './karenz.js'
@@ -218,7 +217,7 @@ describe('finalizeDueKarenz: the export hold is decided from the row', () => {
     })
     const admin = {
       unsafe: async (text: string) => {
-        if (/^SELECT pg_catalog\.format/.test(text)) return [{ stmt: 'DROP DATABASE IF EXISTS x' }]
+        if (text.startsWith('SELECT pg_catalog.format')) return [{ stmt: 'DROP DATABASE IF EXISTS x' }]
         events.push('db-dropped')
         return []
       },

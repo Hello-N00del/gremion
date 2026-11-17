@@ -6,7 +6,7 @@
 import { spawnSync } from 'node:child_process'
 import { readFileSync, existsSync, rmSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname } from 'node:path'
 import type { Sql } from '@gremion/db'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { disableModule, enableModule } from '../../src/lifecycle/index.js'

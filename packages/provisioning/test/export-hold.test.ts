@@ -53,7 +53,7 @@ describe('exportKeptUntil and exportHold', () => {
     expect(Object.isFrozen(EXPORT_KEEP_DAYS)).toBe(true)
     expect(() => {
       ;(EXPORT_KEEP_DAYS as Record<string, number>).calendar = 5
-    }).toThrow()
+    }).toThrow(TypeError)
   })
 })
 
@@ -99,8 +99,8 @@ describe('the modules port hands the export hold to the day-30 job', () => {
     expect(passed.finalDeletion).toBe(true)
     expect(typeof passed.exportHold).toBe('function')
     const finalAt = new Date('2026-12-01T10:00:00Z')
-    expect((await passed.exportHold!(T, 'board', ctx(finalAt)))?.getTime()).toBe(finalAt.getTime() + EXPORT_KEEP_DAYS.board! * DAY)
-    expect(await passed.exportHold!(T, 'calendar', ctx(finalAt))).toBeNull()
+    expect(passed.exportHold!(T, 'board', ctx(finalAt))?.getTime()).toBe(finalAt.getTime() + EXPORT_KEEP_DAYS.board! * DAY)
+    expect(passed.exportHold!(T, 'calendar', ctx(finalAt))).toBeNull()
   })
 
   it('a dry run still passes the hold (the job itself never asks it in a dry run)', async () => {
