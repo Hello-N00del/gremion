@@ -327,6 +327,20 @@ describe('create (phases A, host, B)', () => {
     await expect(createPhaseA(spec({ host: 'other.example' }), d)).rejects.toMatchObject({ code: 'CUSTOMER_STATE' })
   })
 
+  // A control panel host OUTSIDE the platform domain is no reserved label: the caller's isReservedHost carries it.
+  it('refuses a reserved host (the control panel host) in phase A and B before anything is written; another host still creates', async () => {
+    const PANEL = 'panel.musterstadt.example'
+    const isReservedHost = (h: string) => h === PANEL || h === 'control.platform.example'
+    const w = world()
+    const d = { ...deps(w), isReservedHost }
+    await expect(createPhaseA(spec({ host: PANEL }), d)).rejects.toMatchObject({ code: 'INVALID_INPUT', message: expect.stringContaining('control panel') })
+    await expect(createPhaseA(spec({ host: 'control.platform.example' }), d)).rejects.toMatchObject({ code: 'INVALID_INPUT' })
+    await expect(createPhaseB(spec({ host: PANEL }), d)).rejects.toMatchObject({ code: 'INVALID_INPUT' })
+    expect(w.control.size).toBe(0) // no tenant row, so nothing to clean up
+    await createAll(w, d) // rat.musterstadt.example is not reserved
+    expect(w.control.get('musterstadt')!.host).toBe('rat.musterstadt.example')
+  })
+
   it('refuses a bad host, a missing admin role, a non-uuid operator', async () => {
     const d = deps(world())
     await expect(createPhaseA(spec({ host: 'Not A Host' }), d)).rejects.toMatchObject({ code: 'INVALID_INPUT' })

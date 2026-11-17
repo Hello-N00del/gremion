@@ -408,6 +408,10 @@ services:
       # Shown on "Neuer Mandant" as the host this install is built for (the host-side create refuses any other);
       # empty: no hint.
       PILOT_TENANT_HOST: ${PILOT_TENANT_HOST:-}
+      # "Neuer Mandant" refuses the platform's reserved names and the panel's own host (CONTROL_PANEL_HOST, else
+      # control.<PLATFORM_DOMAIN>) as a customer host, before a request is written.
+      PLATFORM_DOMAIN: ${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}
+      CONTROL_PANEL_HOST: ${CONTROL_PANEL_HOST:-}
     volumes:
       - ${GREMION_ROOT:-/opt/gremion}/etc/secrets/control-panel:/run/secrets/control-panel:ro
       - ./docker/keycloak/certs/internal-ca.pem:/etc/ssl/internal/internal-ca.pem:ro
@@ -538,6 +542,10 @@ services:
       # (exit 2); none has a default. gremion_platform is reached DIRECT (the
       # one runner refuses the pooler), as its owner role.
       PLATFORM_DOMAIN: ${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}
+      # The control panel's own host (CONTROL_PANEL_HOST, else control.<PLATFORM_DOMAIN>; its origin names the same host):
+      # every create and every host binding refuses it as a customer host. Empty is the default name, which is refused too.
+      CONTROL_PANEL_HOST: ${CONTROL_PANEL_HOST:-}
+      CONTROL_PANEL_ORIGIN: ${CONTROL_PANEL_ORIGIN:-}
       PLATFORM_DATABASE_URL: postgresql://${PLATFORM_DB_USER:-gremion_platform}:${PLATFORM_DB_PASSWORD:?PLATFORM_DB_PASSWORD required}@postgres-${STACK:?STACK required}:5432/gremion_platform
       # TASK-044 LOW: the scratch-fixture gate refuses when its stack IS the production stack.
       GREMION_PRODUCTION_STACK: ${GREMION_PRODUCTION_STACK:-}

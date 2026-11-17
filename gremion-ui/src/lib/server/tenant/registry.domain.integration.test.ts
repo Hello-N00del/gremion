@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, beforeEach } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest'
 import { getControlDb } from './control-db'
 import { runControlMigrations } from './control-migrations'
 import {
@@ -189,6 +189,49 @@ describe('reserved platform hosts are refused by addTenantDomain', () => {
   it('still accepts an ordinary tenant host under the same apex', async () => {
     const d = await addTenantDomain(tenantId, `musterstadt.${process.env.PLATFORM_DOMAIN}`)
     expect(d.host).toBe(`musterstadt.${process.env.PLATFORM_DOMAIN}`)
+  })
+
+  // The control panel's host (CONTROL_PANEL_HOST) may lie OUTSIDE the platform domain, where none of the
+  // nine labels reaches it: the registry reads it next to PLATFORM_DOMAIN and refuses it as a customer host.
+  describe('the control panel host (CONTROL_PANEL_HOST / CONTROL_PANEL_ORIGIN)', () => {
+    const PANEL = 'panel.beside-the-platform.example'
+    const saved = { host: process.env.CONTROL_PANEL_HOST, origin: process.env.CONTROL_PANEL_ORIGIN }
+    const restore = (key: 'CONTROL_PANEL_HOST' | 'CONTROL_PANEL_ORIGIN', v: string | undefined) => {
+      if (v === undefined) delete process.env[key]
+      else process.env[key] = v
+    }
+    afterEach(() => {
+      restore('CONTROL_PANEL_HOST', saved.host)
+      restore('CONTROL_PANEL_ORIGIN', saved.origin)
+    })
+
+    it('refuses the configured host in any spelling, and writes no row', async () => {
+      process.env.CONTROL_PANEL_HOST = PANEL
+      for (const spelling of [PANEL, PANEL.toUpperCase(), `${PANEL}.`, `${PANEL}:443`]) {
+        await expect(addTenantDomain(tenantId, spelling)).rejects.toThrow(/reserved platform host/)
+      }
+      expect(await listTenantDomains(tenantId)).toEqual([])
+    })
+
+    it('refuses the host of the opt-in origin when CONTROL_PANEL_HOST is not set', async () => {
+      delete process.env.CONTROL_PANEL_HOST
+      process.env.CONTROL_PANEL_ORIGIN = `https://${PANEL}`
+      await expect(addTenantDomain(tenantId, PANEL)).rejects.toThrow(/reserved platform host/)
+    })
+
+    it('still refuses the default control.<platform> and still takes another host', async () => {
+      process.env.CONTROL_PANEL_HOST = PANEL
+      await expect(addTenantDomain(tenantId, `control.${process.env.PLATFORM_DOMAIN}`)).rejects.toThrow(/reserved platform host/)
+      const d = await addTenantDomain(tenantId, 'rat.musterstadt.example')
+      expect(d.host).toBe('rat.musterstadt.example')
+    })
+
+    it('without the setting the same name is an ordinary host (the registry does not guess)', async () => {
+      delete process.env.CONTROL_PANEL_HOST
+      delete process.env.CONTROL_PANEL_ORIGIN
+      const d = await addTenantDomain(tenantId, PANEL)
+      expect(d.host).toBe(PANEL)
+    })
   })
 })
 

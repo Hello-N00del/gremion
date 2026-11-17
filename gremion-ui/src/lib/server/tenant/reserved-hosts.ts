@@ -5,4 +5,5 @@
 // packages/tenancy-core/src/reserved-hosts.ts (shared with the kernel API).
 // Export names are byte-identical; reserved-hosts.test.ts still asserts the
 // list equals RESERVED_HOSTS in infra/host/templates/env/state.env.tmpl.
-export { isReservedPlatformHost, RESERVED_PLATFORM_LABELS, reservedPlatformHosts } from '@gremion/tenancy-core/reserved-hosts'
+export { controlPanelHosts, isReservedPlatformHost, RESERVED_PLATFORM_LABELS, reservedHostCheck, reservedPlatformHosts } from '@gremion/tenancy-core/reserved-hosts'
+export type { ControlPanelEnv } from '@gremion/tenancy-core/reserved-hosts'

@@ -69,6 +69,41 @@ export const DENY_REASONS: Readonly<Record<string, string>> = Object.freeze({
   vault: 'vault (Tresor) bleibt im Pilotbetrieb abgeschaltet und kann nicht aktiviert werden (PRD-PLAT-012).',
 })
 
+/** Mirror of @gremion/tenancy-core's RESERVED_PLATFORM_LABELS (reserved-hosts.ts); requests.test.ts pins the two equal. */
+export const RESERVED_PLATFORM_LABELS: readonly string[] = Object.freeze(['www', 'control', 'rs1', 'mail', 'mta-sts', 'autoconfig', 'autodiscover', '_dmarc'])
+
+/** The spellings the registry collapses: trimmed, lowercased, one trailing dot and a port dropped. */
+const hostSpelling = (v: string | undefined): string => (v ?? '').trim().toLowerCase().replace(/:[0-9]{1,5}$/, '').replace(/\.$/, '')
+
+/**
+ * Is `host` a name no customer may have: the platform domain, its reserved labels, or the control panel's own host
+ * (CONTROL_PANEL_HOST, which may lie OUTSIDE the platform domain, and the host of the panel's origin)? Mirror of
+ * @gremion/tenancy-core's reservedHostCheck (the panel image has no such dependency); requests.test.ts runs both over
+ * one corpus and pins the two differences, both deliberate: the panel also reads ORIGIN (compose hands the panel its
+ * CONTROL_PANEL_ORIGIN under that name, so it is the host the panel is served on), and an unset PLATFORM_DOMAIN does
+ * not throw here (a form must not answer 500). The executor's request-verify and the registry refuse the same names
+ * and fail closed, so this only spares the operator a request that would be refused later.
+ */
+export function reservedHostCheck(env: Readonly<Record<string, string | undefined>>): (host: string) => boolean {
+  const names = new Set<string>()
+  const apex = hostSpelling(env.PLATFORM_DOMAIN)
+  if (apex) {
+    names.add(apex)
+    for (const l of RESERVED_PLATFORM_LABELS) names.add(`${l}.${apex}`)
+  }
+  const custom = hostSpelling(env.CONTROL_PANEL_HOST)
+  if (custom) names.add(custom)
+  for (const origin of [env.CONTROL_PANEL_ORIGIN, env.ORIGIN]) {
+    try {
+      const fromOrigin = hostSpelling(new URL((origin ?? '').trim()).hostname)
+      if (fromOrigin) names.add(fromOrigin)
+    } catch {
+      // no origin or not an origin: the panel's own config check refuses it
+    }
+  }
+  return (host) => names.has(hostSpelling(host))
+}
+
 /** True when `v` is 1 to `max` printable characters (not only blanks), as request-verify requires. */
 function printable(v: string, max: number): boolean {
   return v.trim() !== '' && v.length <= max && PRINTABLE.test(v)
@@ -83,6 +118,8 @@ export function validateNewCustomer(
   deny: Readonly<Record<string, string>> = DENY_REASONS,
   /** The module ids the form offered (plt.module toggleable rows); null: not checked. */
   known: readonly string[] | null = null,
+  /** True for a host no customer may have (reservedHostCheck); absent: not checked. */
+  isReservedHost?: (host: string) => boolean,
 ): Record<string, string> {
   const errors: Record<string, string> = {}
   if (!SLUG.test(input.slug) || input.slug.length < 3 || input.slug.length > 30) {
@@ -95,6 +132,7 @@ export function validateNewCustomer(
   }
   if (NON_ASCII.test(input.host)) errors.host = 'Hostname nur in ASCII (a-z, 0-9, Punkt, Bindestrich); Umlaute und IDN-Namen sind im Pilotbetrieb nicht möglich, kein Punycode.'
   else if (!HOST.test(input.host.toLowerCase())) errors.host = 'Hostname in Kleinbuchstaben, z. B. rat.musterstadt.de.'
+  else if (isReservedHost?.(input.host)) errors.host = 'Dieser Hostname ist für die Plattform oder das Panel reserviert und kann keinem Mandanten gehören.'
   if (!EMAIL.test(input.itAdmin.toLowerCase())) errors.itAdmin = 'E-Mail-Adresse der IT-Administration.'
   if (!EMAIL.test(input.councilAdmin.toLowerCase())) errors.councilAdmin = 'E-Mail-Adresse der Gremienverwaltung.'
   // the printable-character rule request-verify applies, so a bad value is refused HERE, not later

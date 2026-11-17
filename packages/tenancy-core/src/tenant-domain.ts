@@ -148,6 +148,9 @@ export interface AddTenantDomainOptions {
 export interface TenantDomainWriteDeps {
   /** The apex under which the nine platform names are reserved (PLATFORM_DOMAIN). */
   platformDomain: string
+  /** The control panel's host(s) beyond control.<apex> (controlPanelHosts): reserved like the nine, so a
+   *  panel host OUTSIDE the platform domain can never be bound to a customer. Absent: none. */
+  controlPanelHosts?: readonly string[]
   /** Invoked AFTER the transaction commits, with the tenant id whose runtime
    *  (resolution caches, pools, KC/JWKS/mail clients, …) must be evicted.
    *  Never called for a refused write. */
@@ -221,11 +224,12 @@ async function addTenantDomainImpl(
   // ONE error shape for both call sites: an operator must never be told a
   // reserved name is merely malformed.
   const platformDomain = deps.platformDomain
+  const controlHosts = deps.controlPanelHosts ?? []
   const refuseReserved = (candidate: string) => {
-    if (isReservedPlatformHost(candidate, platformDomain)) {
+    if (isReservedPlatformHost(candidate, platformDomain, controlHosts)) {
       throw new Error(
         `addTenantDomain: reserved platform host: ${candidate} — reserved for the platform ` +
-        `under PLATFORM_DOMAIN=${platformDomain}, it can never be a tenant host (spec A §C)`,
+        `under PLATFORM_DOMAIN=${platformDomain} or the control panel's own host, it can never be a tenant host (spec A §C)`,
       )
     }
   }

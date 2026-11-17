@@ -238,6 +238,8 @@ export type MailStampExpectation =
 
 export interface ProvisioningDeps {
   platformDomain: string
+  /** True for a host that may never be a customer's: the platform's reserved names and the control panel's own host. Absent: not checked. */
+  isReservedHost?: (host: string) => boolean
   /** The sender the host stamped (default stalwart). */
   mailSender?: MailStampExpectation
   ledger: LedgerPort

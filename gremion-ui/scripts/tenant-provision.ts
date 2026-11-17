@@ -81,7 +81,7 @@ import {
 import { MODULE_MANIFESTS } from '../src/lib/modules/registry'
 import { dbNameForSlug, validateSlug } from '../src/lib/server/tenant/slug'
 import { normaliseHost } from '../src/lib/server/tenant/host'
-import { isReservedPlatformHost } from '../src/lib/server/tenant/reserved-hosts'
+import { reservedHostCheck } from '../src/lib/server/tenant/reserved-hosts'
 import {
   getTenantBySlug,
   updateTenantStatus,
@@ -133,6 +133,22 @@ function reqEnv(name: string): string {
   const v = process.env[name]
   if (!v) throw new UsageError(`required env ${name} is not set (tenant-create env contract, docs/ops/pooled-stack-layout.md)`)
   return v
+}
+/** An optional variable: undefined when unset or empty. */
+function optEnv(name: string): string | undefined {
+  return process.env[name] || undefined
+}
+/**
+ * The check every path that binds a host to a customer asks: the platform's reserved names and the control panel's
+ * own host (CONTROL_PANEL_HOST, which may lie outside the platform domain; the host of CONTROL_PANEL_ORIGIN names the
+ * same one), read through the same env seam as PLATFORM_DOMAIN. PLATFORM_DOMAIN unset is the named exit-2 failure.
+ */
+function reservedHosts(): (host: string) => boolean {
+  return reservedHostCheck({
+    PLATFORM_DOMAIN: reqEnv('PLATFORM_DOMAIN'),
+    CONTROL_PANEL_HOST: optEnv('CONTROL_PANEL_HOST'),
+    CONTROL_PANEL_ORIGIN: optEnv('CONTROL_PANEL_ORIGIN'),
+  })
 }
 /** A *_FILE variable: the file must exist and be non-empty; its content, trimmed. */
 function reqFileEnv(name: string): string {
@@ -550,6 +566,8 @@ async function liveDeps(opts: { configFile?: string; bodyName?: string; needEdge
     })
     const deps: ProvisioningDeps = {
       platformDomain: env.platformDomain,
+      // the platform's reserved names and the control panel's own host (CONTROL_PANEL_HOST) are never a customer's
+      isReservedHost: reservedHosts(),
       mailSender: mailStampExpectation(),
       ledger: pgLedger(platform),
       // TASK-044: the level-1 gate over gremion_platform, on the host's derived release tip
@@ -827,14 +845,13 @@ async function cmdRenderRouter(): Promise<void> {
   if (!tenant) throw new UsageError(`unknown tenant ${v.slug}`)
   const primary = await primaryHostForTenant(tenant.id)
   if (!primary) throw new UsageError(`${v.slug} has no primary host`)
-  const platformDomain = reqEnv('PLATFORM_DOMAIN')
   const yaml = renderCustomerRouter({
     slug: v.slug,
     hosts: (await listTenantDomains(tenant.id)).map((d) => d.host),
     primaryHost: primary,
     certResolver: reqEnv('TRAEFIK_CERT_RESOLVER'),
     normaliseHost: (h) => normaliseHost(h),
-    isReservedHost: (h) => isReservedPlatformHost(h, platformDomain),
+    isReservedHost: reservedHosts(),
   })
   process.stdout.write(yaml)
 }
@@ -1225,7 +1242,7 @@ async function main(): Promise<void> {
     case 'materialize-config':
       return cmdMaterializeConfig()
     case 'request-verify':
-      return requestVerb(verb, { args: process.argv.slice(3), reqEnv, directPostgresUrl, loadModules, modulesDir: MODULES_DIR, kcInternalBase, provisionerTransport: rawProvisionerTransport, customerRealmForSlug, usage: (m) => new UsageError(m), log })
+      return requestVerb(verb, { args: process.argv.slice(3), reqEnv, optEnv, directPostgresUrl, loadModules, modulesDir: MODULES_DIR, kcInternalBase, provisionerTransport: rawProvisionerTransport, customerRealmForSlug, usage: (m) => new UsageError(m), log })
     case 'provision':
       throw new UsageError('provision is retired (TASK-043): a customer is created from the control panel ("Neuer Mandant"), which the host-side executor runs (phase-a, the host mail step, record-step, phase-b, the router; TASK-043d)')
     // TASK-044: the level-1 gate's verbs (tenant-provision-gate.ts)

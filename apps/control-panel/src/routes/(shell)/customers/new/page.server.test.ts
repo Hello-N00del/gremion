@@ -67,6 +67,8 @@ function failed(r: Awaited<ReturnType<typeof post>>) {
 beforeEach(() => {
   submitCreate.mockClear()
   delete ENV.PILOT_TENANT_HOST
+  delete ENV.PLATFORM_DOMAIN
+  delete ENV.CONTROL_PANEL_HOST
 })
 
 describe('Neuer Mandant action: validation before any request row', () => {
@@ -168,6 +170,31 @@ describe('Neuer Mandant action: validation before any request row', () => {
     const o = failed(await post({ ...GOOD, slug: 'keycloak' }))
     expect(o.data.errors.slug).toBeDefined()
     expect(submitCreate).not.toHaveBeenCalled()
+  })
+})
+
+describe('Neuer Mandant: the control panel host is no customer host (the action reads it from the panel env)', () => {
+  it('the configured custom host (outside the platform domain) is a host field error, nothing is submitted', async () => {
+    ENV.PLATFORM_DOMAIN = 'platform.proof.example'
+    ENV.CONTROL_PANEL_HOST = 'panel.proof.example'
+    const o = failed(await post({ ...GOOD, host: 'panel.proof.example' }))
+    expect(o.status).toBe(400)
+    expect(o.data.errors.host).toMatch(/reserviert/)
+    expect(submitCreate).not.toHaveBeenCalled()
+  })
+
+  it('the default control.<platform> stays refused with no CONTROL_PANEL_HOST set', async () => {
+    ENV.PLATFORM_DOMAIN = 'platform.proof.example'
+    const o = failed(await post({ ...GOOD, host: 'control.platform.proof.example' }))
+    expect(o.data.errors.host).toMatch(/reserviert/)
+    expect(submitCreate).not.toHaveBeenCalled()
+  })
+
+  it('another host is still submitted when the panel host is configured', async () => {
+    ENV.PLATFORM_DOMAIN = 'platform.proof.example'
+    ENV.CONTROL_PANEL_HOST = 'panel.proof.example'
+    await post(GOOD)
+    expect(submitCreate).toHaveBeenCalledTimes(1)
   })
 })
 
