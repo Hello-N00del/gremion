@@ -1222,6 +1222,10 @@ check('t2 no login-theme message key carries the retired product token', () => {
     : null
 })
 
+// Keys Keycloak renders itself (through `message.summary`) that the theme must
+// still translate; see t3b. They are never named by a .ftl, so t3 exempts them.
+const SERVER_RENDERED_KEYS = ['reauthenticate', 'acrNotFulfilled']
+
 check('t3 the three message bundles agree and carry no dead key', () => {
   const theme = themeName()
   const loginDir = `${THEME_ROOT}/${theme}/login`
@@ -1240,8 +1244,33 @@ check('t3 the three message bundles agree and carry no dead key', () => {
   }
   const markup = themeFtls(theme).map((r) => read(r)).join('\n')
   const used = new Set([...markup.matchAll(/msg\(\s*"([^"]+)"/g)].map((m) => m[1]))
-  for (const k of base) if (!used.has(k)) problems.push(`${k} is defined but referenced by no .ftl`)
+  for (const k of base) {
+    if (!used.has(k) && !SERVER_RENDERED_KEYS.includes(k)) problems.push(`${k} is defined but referenced by no .ftl`)
+  }
   return problems.length ? `${problems.length} message-bundle problem(s): ${problems.join(' | ')}` : null
+})
+
+// t3b - the Keycloak-rendered notices on the re-authentication and step-up
+// screens are German in EVERY locale bundle. Keycloak itself puts these keys into
+// `message.summary`, which our markup prints, so no .ftl names them and t3 cannot
+// see them. Without an override the base theme answers, and for a request whose
+// language is the supported non-default one (en) that answer is English: the
+// step-up prompt read "Please re-authenticate to continue" while everything
+// around it was German. Key names are the ones the pinned Keycloak 26.6.1 base
+// login theme ships (`reauthenticate`, `acrNotFulfilled`), read from its jar.
+check('t3b the re-authentication and step-up notices are overridden in every bundle', () => {
+  const theme = themeName()
+  const loginDir = `${THEME_ROOT}/${theme}/login`
+  const problems = []
+  for (const b of ['messages.properties', 'messages_de.properties', 'messages_en.properties']) {
+    const text = read(`${loginDir}/messages/${b}`)
+    for (const k of SERVER_RENDERED_KEYS) {
+      const m = new RegExp(`^${k}=(.*)$`, 'm').exec(text)
+      if (!m) problems.push(`${k} missing from ${b}`)
+      else if (m[1].trim() === '') problems.push(`${k} is empty in ${b}`)
+    }
+  }
+  return problems.length ? `${problems.length} untranslated Keycloak notice(s): ${problems.join(' | ')}` : null
 })
 
 // t4 - the theme's own fallback literal for realm.displayName.
