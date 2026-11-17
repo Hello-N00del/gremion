@@ -1,5 +1,5 @@
 #!/bin/sh
-# before-starting hook: runs on EVERY container start, after pin-overwrite-host.sh.
+# before-starting hook: runs on EVERY container start (before pin-overwrite-host.sh, by name).
 #
 # The document editor posts its messages (save, close, UI_Close) to the origin
 # Nextcloud recorded when it minted the WOPI token: the host of the request that
