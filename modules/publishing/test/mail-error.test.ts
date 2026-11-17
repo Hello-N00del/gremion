@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mailCauseText, mailErrorFields } from '../src/mail-error.ts'
+import { isLoginRefused, mailCauseText, mailErrorFields } from '../src/mail-error.ts'
 
 // What a mail failure may put in a log: its class name and the cause fields,
 // never its message or response (those can echo the recipient).
@@ -48,5 +48,20 @@ describe('mailCauseText', () => {
 
   it('names a non-Error by its type only', () => {
     expect(mailCauseText('a@example.org')).toBe(' (string)')
+  })
+})
+
+describe('isLoginRefused', () => {
+  it('is true for a refused login (EAUTH), whatever carries the code', () => {
+    expect(isLoginRefused(Object.assign(new Error('x'), { code: 'EAUTH', responseCode: 535 }))).toBe(true)
+    expect(isLoginRefused({ code: 'EAUTH' })).toBe(true)
+  })
+
+  it('is false for every other failure', () => {
+    expect(isLoginRefused(Object.assign(new Error('x'), { code: 'EENVELOPE', responseCode: 550 }))).toBe(false)
+    expect(isLoginRefused(Object.assign(new Error('EAUTH'), { code: 'ETIMEDOUT' }))).toBe(false)
+    expect(isLoginRefused(new Error('x'))).toBe(false)
+    expect(isLoginRefused('EAUTH')).toBe(false)
+    expect(isLoginRefused(null)).toBe(false)
   })
 })

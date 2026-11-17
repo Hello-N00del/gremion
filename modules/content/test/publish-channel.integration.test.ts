@@ -39,7 +39,7 @@ const TENANT: TenantRef = {
 // ── fakes ───────────────────────────────────────────────────────────────────
 
 function makeFakeEmailTransport(
-  opts: { failFor?: Set<string>; mailUnconfigured?: boolean; refuseLogin?: boolean } = {},
+  opts: { failFor?: Set<string>; mailUnconfigured?: boolean; refuseLogin?: boolean; refuseLoginFor?: Set<string> } = {},
 ): ChannelTransport & { sent: Array<{ to: string }>; attempts: string[]; countFor(email: string): number } {
   const attempts: string[] = []
   const sent: Array<{ to: string; subject: string; html: string }> = []
@@ -52,7 +52,7 @@ function makeFakeEmailTransport(
     },
     async send(msg: { to?: string; subject?: string; html?: string }): Promise<{ id: string }> {
       if (opts.mailUnconfigured) throw new MailUnconfiguredError()
-      if (opts.refuseLogin) {
+      if (opts.refuseLogin || opts.refuseLoginFor?.has(msg.to ?? '')) {
         attempts.push(msg.to ?? '')
         throw Object.assign(new Error('kernel send-mail failed: 500'), {
           name: 'MailSendError', code: 'EAUTH', responseCode: 535, command: 'AUTH LOGIN', httpStatus: 500,
@@ -303,6 +303,31 @@ describe('publishChannel — email, the mail server refuses the login (EAUTH)', 
     const again = await publishChannel(TENANT, postId, 'email', deps(sql, makeFakeKernel(), healthy))
     expect(again.status).toBe('sent')
     expect(healthy.sent.map((m) => m.to).sort()).toEqual(['a@x.com', 'b@x.com', 'c@x.com'])
+  })
+
+  it('keeps the warnings of recipients that failed before the stop, and names no address to the operator', async () => {
+    const postId = await makePost()
+    await enableChannel(postId, 'email')
+    await addEmailRecipients(postId, ['a@x.com', 'b@x.com', 'c@x.com'])
+    // a fails for its own reason, b is the first to see the refused login, c is never tried.
+    const transport = makeFakeEmailTransport({ failFor: new Set(['a@x.com']), refuseLoginFor: new Set(['b@x.com']) })
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    let result
+    try {
+      result = await publishChannel(TENANT, postId, 'email', deps(sql, makeFakeKernel(), transport))
+    } finally {
+      spy.mockRestore()
+    }
+
+    expect(result).toMatchObject({ channel: 'email', status: 'failed', detail: 'SMTP login refused' })
+    expect(transport.attempts).toEqual(['b@x.com'])
+    // The warning of the recipient that failed before the stop is kept (like the kernel renderer) ...
+    expect(result.warnings.some((w) => w.includes('a@x.com') && w.includes('failed'))).toBe(true)
+    expect(result.warnings.some((w) => /SMTP login refused/.test(w))).toBe(true)
+    // ... and the operator-facing list counts it instead of naming it.
+    expect(result.operatorWarnings!.some((w) => /^1 recipient\(s\) failed before the stop/.test(w))).toBe(true)
+    expect(result.operatorWarnings!.some((w) => /SMTP login refused/.test(w))).toBe(true)
+    expect(JSON.stringify(result.operatorWarnings)).not.toMatch(/@x\.com/)
   })
 })
 
