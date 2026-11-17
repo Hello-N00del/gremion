@@ -94,7 +94,7 @@ describe('the modules port hands the export hold to the day-30 job', () => {
 
   it('finalizeDue passes an exportHold that keeps board for its days after final_at and no other module', async () => {
     lifecycle.finalizeDueKarenz.mockResolvedValue({ due: 0, finalized: 0, kept: 0, dryRun: true, errors: [], orphanedExports: [] })
-    await modules().finalizeDue({ finalDeletion: true, deadlineMs: 1000 })
+    await modules().finalizeDue!({ finalDeletion: true, deadlineMs: 1000 })
     const passed = lifecycle.finalizeDueKarenz.mock.calls[0]![0] as { exportHold?: typeof exportHold; finalDeletion: boolean }
     expect(passed.finalDeletion).toBe(true)
     expect(typeof passed.exportHold).toBe('function')
@@ -105,7 +105,7 @@ describe('the modules port hands the export hold to the day-30 job', () => {
 
   it('a dry run still passes the hold (the job itself never asks it in a dry run)', async () => {
     lifecycle.finalizeDueKarenz.mockResolvedValue({ due: 0, finalized: 0, kept: 0, dryRun: true, errors: [], orphanedExports: [] })
-    await modules().finalizeDue({ finalDeletion: false, deadlineMs: 1000 })
+    await modules().finalizeDue!({ finalDeletion: false, deadlineMs: 1000 })
     expect(typeof (lifecycle.finalizeDueKarenz.mock.calls[0]![0] as { exportHold?: unknown }).exportHold).toBe('function')
   })
 })

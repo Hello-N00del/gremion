@@ -33,6 +33,7 @@ const row = (exportDir: string) => ({
   platform_done_at: null,
   tenant_done_at: null,
   retained_ok_at: null,
+  final_at: new Date('2026-11-01T00:00:00Z'),
 })
 
 describe('verifyRowExport: an lstat error other than a missing component is its own refusal', () => {

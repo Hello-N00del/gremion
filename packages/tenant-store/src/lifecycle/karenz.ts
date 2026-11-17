@@ -216,9 +216,11 @@ async function finalizeRow(
   const tenantId = r.customer_id
   const moduleKey = r.module_key
   const platformSide = r.state === 'open' || (r.state === 'finalizing' && r.platform_done_at === null)
-  // Read for every row, not only the ones whose platform side is still open: the export hold below asks whether
-  // the database is gone, and a row that a crash left half done has no blocked database any more.
-  const md = await readModuleDatabase(deps.platform, tenantId, r.module_id)
+  // Read for every row of a module that declares a database, not only the ones whose platform side is still open:
+  // the export hold below asks whether the database is gone, and a row that a crash left half done has no blocked
+  // database any more. A module that declares none never has its module_database row touched.
+  const declaresDatabase = deps.catalogue.find((m) => m.id === moduleKey)?.moduleJson.runtime.database != null
+  const md = declaresDatabase ? await readModuleDatabase(deps.platform, tenantId, r.module_id) : null
   let databaseDropped = md?.state === 'dropped'
 
   let blockedDb: { dbName: string; admin: Sql } | null = null
