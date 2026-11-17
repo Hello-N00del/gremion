@@ -39,6 +39,12 @@ $CONFIG = [
         explode(',', getenv('NEXTCLOUD_TRUSTED_PROXIES') ?: '172.16.0.0/12')
     ),
 
+    // New users start with an empty home: an empty skeleton directory means no
+    // sample files (Readme.md, Nextcloud.png) are copied. A before-starting hook
+    // (empty-skeleton.sh) re-asserts this on every start, because this file reaches
+    // a persistent volume only on the first install. Existing users keep their files.
+    'skeletondirectory' => '',
+
     // Regional defaults.
     'default_phone_region' => 'DE',
     'default_locale'       => 'de_DE',
