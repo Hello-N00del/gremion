@@ -56,13 +56,13 @@ const FOREIGN_BASENAMES = [
 ]
 
 describe('kernel data-plane migration block', () => {
-  it('holds exactly the 37 kernel-block basenames', () => {
+  it('holds exactly the 36 kernel-block basenames', () => {
     const onDisk = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql')).sort()
     expect(onDisk).toEqual([...KERNEL_BLOCK_BASENAMES].sort())
   })
 
-  it('is 38 files', () => {
-    expect(KERNEL_BLOCK_BASENAMES.length).toBe(38)
+  it('is 39 files', () => {
+    expect(KERNEL_BLOCK_BASENAMES.length).toBe(39)
   })
 
   it('carries no module-owned or unshipped file', () => {
