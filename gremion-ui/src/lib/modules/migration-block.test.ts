@@ -44,6 +44,8 @@ export const KERNEL_BLOCK_BASENAMES = [
   '0064_module_karenz.sql',
   // Module self-service: the confirmed switch that waits for the second factor (claimed through register.mjs).
   '0065_module_switch_pending.sql',
+  // Board: where a customer's board lives, the location flag (claimed through register.mjs).
+  '0066_board_location.sql',
 ]
 
 /** Module-owned or unshipped numbers that must never appear in the kernel block. */
@@ -54,7 +56,7 @@ const FOREIGN_BASENAMES = [
 ]
 
 describe('kernel data-plane migration block', () => {
-  it('holds exactly the 36 kernel-block basenames', () => {
+  it('holds exactly the 37 kernel-block basenames', () => {
     const onDisk = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql')).sort()
     expect(onDisk).toEqual([...KERNEL_BLOCK_BASENAMES].sort())
   })
@@ -98,7 +100,7 @@ export const PORTED_BASENAMES = [
  * through the TASK-029 register. They are neither pre-port-back nor ported, so
  * they must not move the pre-port-back high-water mark.
  */
-export const POST_PORT_BACK_BASENAMES = ['0059_audit_log_chain_anchor.sql', '0060_erasure_report.sql', '0061_audit_log_actor_uuid_check.sql', '0062_vorstand_role_backfill.sql', '0063_module_switch_request.sql', '0064_module_karenz.sql', '0065_module_switch_pending.sql']
+export const POST_PORT_BACK_BASENAMES = ['0059_audit_log_chain_anchor.sql', '0060_erasure_report.sql', '0061_audit_log_actor_uuid_check.sql', '0062_vorstand_role_backfill.sql', '0063_module_switch_request.sql', '0064_module_karenz.sql', '0065_module_switch_pending.sql', '0066_board_location.sql']
 const PRE_PORT_BACK_BASENAMES = KERNEL_BLOCK_BASENAMES.filter(
   (f) => !PORTED_BASENAMES.includes(f) && !POST_PORT_BACK_BASENAMES.includes(f),
 )

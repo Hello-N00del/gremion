@@ -114,9 +114,11 @@ export interface BoardBackendPort {
   /**
    * Discriminant identifying which implementation is in use.
    * 'inprocess' = in-process boardDb calls (byte-identical to the monolith);
-   * 'service' = HTTP calls to the board leaf service.
+   * 'service' = HTTP calls to the board leaf service;
+   * 'routed' = the router, which picks one of the two per call from the customer's
+   * location flag (routed-client.ts).
    */
-  readonly kind: 'inprocess' | 'service'
+  readonly kind: 'inprocess' | 'service' | 'routed'
 
   /** Boards for the given org-unit scope. Empty scope → []. */
   listBoardsForOrgUnits(orgUnitIds: readonly string[]): Promise<readonly Board[]>
