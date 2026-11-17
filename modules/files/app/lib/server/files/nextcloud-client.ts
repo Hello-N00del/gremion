@@ -640,34 +640,42 @@ export class NextcloudClient {
    * extracts the WOPI token and urlsrc from the embedded initial state, and
    * constructs the direct Collabora URL that the browser CAN embed.
    *
+   * `opts.publicOrigin` is the origin the person's browser has for this app
+   * (the customer host). Nextcloud stores the host of the request that mints
+   * the WOPI token and hands it to Collabora as the target of every message the
+   * editor posts to its page (save, close, UI_Close). That request is this
+   * server-side fetch, which names Nextcloud by its in-network name, so without
+   * the origin Collabora posts to `http://nextcloud` and the browser drops each
+   * message. The origin travels as X-Forwarded-Host / X-Forwarded-Proto, which
+   * Nextcloud honours from a trusted proxy (the state network) once no
+   * overwritehost pins the host (docker/nextcloud/hooks/before-starting/
+   * pin-editor-origin.sh). Nextcloud ignores a host that is not one of its
+   * trusted domains and the page then carries no editor state; the fetch is
+   * repeated without the origin so editing still opens.
+   *
    * Returns { editorUrl, tokenTtl } where:
    *   - editorUrl: full Collabora URL with WOPISrc + access_token + access_token_ttl
    *   - tokenTtl:  Unix seconds timestamp when the WOPI token expires */
   async getCollaboraEditorUrl(
     fileId: number,
-    userId: string
+    userId: string,
+    opts: { publicOrigin?: string } = {}
   ): Promise<{ editorUrl: string; tokenTtl: number }> {
-    const directUrl = await this.getDirectEditUrl(fileId, userId)
-
-    const pageRes = await fetch(directUrl)
-    if (!pageRes.ok) {
-      const snippet = await pageRes.text().then((t) => t.slice(0, 200)).catch(() => '')
-      throw new Error(`Nextcloud direct view page → ${pageRes.status}: ${snippet}`)
+    const forwarded = forwardedOriginHeaders(opts.publicOrigin)
+    let state: EditorState
+    if (Object.keys(forwarded).length === 0) {
+      state = await this.fetchEditorState(fileId, userId, {})
+    } else {
+      try {
+        state = await this.fetchEditorState(fileId, userId, forwarded)
+      } catch (err) {
+        console.warn(
+          `Nextcloud editor page refused the public origin ${opts.publicOrigin} (${err instanceof Error ? err.message : 'unknown error'}); opening the editor without it. Is the host one of Nextcloud's trusted_domains?`
+        )
+        state = await this.fetchEditorState(fileId, userId, {})
+      }
     }
-    const html = await pageRes.text()
-
-    const doc = extractInitialState<{
-      token: string
-      token_ttl: number
-      urlsrc: string
-      fileId: string
-    }>(html, 'richdocuments-document')
-
-    const callbackUrl = extractInitialState<string>(html, 'richdocuments-wopi_callback_url')
-
-    if (!doc?.token || !doc?.urlsrc || !doc?.fileId || !callbackUrl) {
-      throw new Error('Collabora editor data missing from Nextcloud direct view page')
-    }
+    const { doc, callbackUrl } = state
 
     const wopiSrc =
       callbackUrl.replace(/\/$/, '') +
@@ -680,6 +688,54 @@ export class NextcloudClient {
 
     return { editorUrl, tokenTtl: doc.token_ttl }
   }
+
+  /** One round of createDirect and the direct-view fetch. The direct token is single-use, so a
+   *  repeat needs a fresh one. */
+  private async fetchEditorState(
+    fileId: number,
+    userId: string,
+    extraHeaders: Record<string, string>
+  ): Promise<EditorState> {
+    const directUrl = await this.getDirectEditUrl(fileId, userId)
+
+    const pageRes = await fetch(
+      directUrl,
+      Object.keys(extraHeaders).length > 0 ? { headers: extraHeaders } : undefined
+    )
+    if (!pageRes.ok) {
+      const snippet = await pageRes.text().then((t) => t.slice(0, 200)).catch(() => '')
+      throw new Error(`Nextcloud direct view page → ${pageRes.status}: ${snippet}`)
+    }
+    const html = await pageRes.text()
+
+    const doc = extractInitialState<EditorState['doc']>(html, 'richdocuments-document')
+    const callbackUrl = extractInitialState<string>(html, 'richdocuments-wopi_callback_url')
+
+    if (!doc?.token || !doc?.urlsrc || !doc?.fileId || !callbackUrl) {
+      throw new Error('Collabora editor data missing from Nextcloud direct view page')
+    }
+    return { doc, callbackUrl }
+  }
+}
+
+interface EditorState {
+  doc: { token: string; token_ttl: number; urlsrc: string; fileId: string }
+  callbackUrl: string
+}
+
+/** X-Forwarded-Host and X-Forwarded-Proto for an origin the browser has. Empty when the value is
+ *  not an http(s) origin with a plain host: an empty or malformed value never reaches Nextcloud. */
+export function forwardedOriginHeaders(origin: string | undefined): Record<string, string> {
+  if (!origin) return {}
+  let url: URL
+  try {
+    url = new URL(origin)
+  } catch {
+    return {}
+  }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') return {}
+  if (!/^[a-z0-9.-]+(:\d{1,5})?$/.test(url.host)) return {}
+  return { 'X-Forwarded-Host': url.host, 'X-Forwarded-Proto': url.protocol.slice(0, -1) }
 }
 
 /** Extract and JSON-parse a Nextcloud initial-state value from HTML.

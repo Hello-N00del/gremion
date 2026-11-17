@@ -5,7 +5,7 @@ import { buildWebdavPath } from '$lib/server/files/webdav-path'
 import { isEditableFile } from '$lib/files/editable-types'
 import type { SessionUser } from '$lib/auth'
 
-export const load: PageServerLoad = async ({ params, locals }) => {
+export const load: PageServerLoad = async ({ params, locals, url }) => {
   const user = locals.user as SessionUser | undefined
   if (!user) throw redirect(302, '/auth/login')
 
@@ -29,7 +29,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
   const nc = createNextcloudClient({ webdavBearer: locals.accessToken ?? undefined })
   try {
     const fileId = await nc.getFileId(webdavPath, username)
-    const { editorUrl, tokenTtl } = await nc.getCollaboraEditorUrl(fileId, username)
+    const { editorUrl, tokenTtl } = await nc.getCollaboraEditorUrl(fileId, username, { publicOrigin: url.origin })
     // paramPath flows back to the client so the editor can call
     // /api/files/edit-token/<path> for silent token refresh without
     // reconstructing the URL-encoded path on its own.

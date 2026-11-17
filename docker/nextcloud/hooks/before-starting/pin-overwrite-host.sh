@@ -3,8 +3,9 @@
 # upgrade step, before apache accepts traffic).
 #
 # 'overwritehost' and 'overwrite.cli.url' pin the host Nextcloud uses when it cannot
-# detect one from an HTTP request: cron jobs, occ, and getCollaboraEditorUrl's
-# server-side fetch of the direct-view page. config/custom.config.php sets both from
+# detect one from an HTTP request: cron jobs and occ (the compose file sets only
+# the CLI url; a pinned overwritehost would hide the editor origin, see
+# pin-editor-origin.sh). config/custom.config.php sets both from
 # NEXTCLOUD_OVERWRITEHOST / NEXTCLOUD_OVERWRITECLIURL, but that file reaches the
 # persistent data volume only on the very first start, so a stale volume keeps a
 # stale copy. This hook re-asserts both values through occ on every start.
