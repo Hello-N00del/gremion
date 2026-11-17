@@ -129,22 +129,26 @@ afterEach(() => {
 describe('/messages room header', () => {
   test('is intact at a 375 px phone viewport', async () => {
     const { head } = await mount(375, null)
+    expect(head.isConnected).toBe(true)
     expectHeaderIntact(head)
   })
 
   test('is intact in a 520 px column of a 1024 px desktop window', async () => {
     const { head } = await mount(1024, 520)
+    expect(head.isConnected).toBe(true)
     expectHeaderIntact(head)
   })
 
   test('is intact in a 460 px column of a 1024 px desktop window', async () => {
     const { head } = await mount(1024, 460)
+    expect(head.isConnected).toBe(true)
     expectHeaderIntact(head)
   })
 
   test('keeps title and actions on one row when the column is wide (positive control)', async () => {
     const { head } = await mount(1440, 1100)
     const { text, buttons } = headParts(head)
+    expect(head.isConnected).toBe(true)
     expectHeaderIntact(head)
     for (const b of buttons) {
       expect(Math.abs(rect(b).top + rect(b).height / 2 - (rect(text).top + rect(text).height / 2))).toBeLessThan(rect(head).height / 2)
