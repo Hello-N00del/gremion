@@ -325,7 +325,7 @@ describe('publishChannel — email, the mail server refuses the login (EAUTH)', 
     expect(result.warnings.some((w) => w.includes('a@x.com') && w.includes('failed'))).toBe(true)
     expect(result.warnings.some((w) => /SMTP login refused/.test(w))).toBe(true)
     // ... and the operator-facing list counts it instead of naming it.
-    expect(result.operatorWarnings!.some((w) => /^1 recipient\(s\) failed before the stop/.test(w))).toBe(true)
+    expect(result.operatorWarnings!.some((w) => w.startsWith('1 recipient(s) failed before the stop'))).toBe(true)
     expect(result.operatorWarnings!.some((w) => /SMTP login refused/.test(w))).toBe(true)
     expect(JSON.stringify(result.operatorWarnings)).not.toMatch(/@x\.com/)
   })
