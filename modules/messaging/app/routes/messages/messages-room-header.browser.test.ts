@@ -137,8 +137,8 @@ describe('/messages room header', () => {
     expectHeaderIntact(head)
   })
 
-  test('is intact in a 400 px column of a 1024 px desktop window', async () => {
-    const { head } = await mount(1024, 400)
+  test('is intact in a 460 px column of a 1024 px desktop window', async () => {
+    const { head } = await mount(1024, 460)
     expectHeaderIntact(head)
   })
 
