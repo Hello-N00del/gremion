@@ -90,7 +90,7 @@ describe('document editor page', () => {
     expect(close).toHaveBeenCalledTimes(1)
   })
 
-  it('Schließen works again when the browser did not close the tab (an interrupted close, a refused window.close)', () => {
+  it('goes to the file folder 250 ms after Schließen when the browser did not close the tab', () => {
     vi.useFakeTimers()
     try {
       window.history.replaceState({}, '', '/files/edit/Protokolle/Sitzung.odt?tab=1')
@@ -98,13 +98,57 @@ describe('document editor page', () => {
       const { getByRole } = mount()
       getByRole('button', { name: 'Schließen' }).click()
       expect(close).toHaveBeenCalledTimes(1)
-      // The tab is still open a moment later: the person is not left with an inert button.
+      expect(goto).not.toHaveBeenCalled()
+      vi.advanceTimersByTime(249)
+      expect(goto).not.toHaveBeenCalled()
+      vi.advanceTimersByTime(1)
+      expect(goto).toHaveBeenCalledExactlyOnceWith('/files/Protokolle')
+      // Nothing more happens by itself afterwards.
       vi.advanceTimersByTime(5000)
-      getByRole('button', { name: 'Schließen' }).click()
-      expect(close).toHaveBeenCalledTimes(2)
+      expect(goto).toHaveBeenCalledTimes(1)
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('Schließen is usable again after the debounce when the page is still there (navigation interrupted)', () => {
+    vi.useFakeTimers()
+    try {
+      window.history.replaceState({}, '', '/files/edit/Protokolle/Sitzung.odt?tab=1')
+      const close = vi.spyOn(window, 'close').mockImplementation(() => {})
+      const { getByRole } = mount()
+      getByRole('button', { name: 'Schließen' }).click()
+      vi.advanceTimersByTime(250)
+      expect(goto).toHaveBeenCalledTimes(1)
+      vi.advanceTimersByTime(5000)
+      getByRole('button', { name: 'Schließen' }).click()
+      expect(close).toHaveBeenCalledTimes(2)
+      vi.advanceTimersByTime(250)
+      expect(goto).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('shows a readable file name in the header, not the URL-encoded one', () => {
+    const { getByTestId, container } = mount({ fileName: 'Protokoll%20Sitzung.docx', paramPath: 'Protokolle/Protokoll%20Sitzung.docx' })
+    expect(getByTestId('editor-bar').textContent).toContain('Protokoll Sitzung.docx')
+    expect(getByTestId('editor-bar').textContent).not.toContain('%20')
+    expect((container.querySelector('iframe') as HTMLIFrameElement).getAttribute('title')).toBe('Protokoll Sitzung.docx')
+    expect(document.title).toContain('Protokoll Sitzung.docx')
+    expect(document.title).not.toContain('%20')
+  })
+
+  it('shows a malformed escape unchanged', () => {
+    const { getByTestId } = mount({ fileName: '100%.docx' })
+    expect(getByTestId('editor-bar').textContent).toContain('100%.docx')
+  })
+
+  it('renders the file name as text, never as HTML', () => {
+    const { getByTestId } = mount({ fileName: '%3Cb%3Efett%3C%2Fb%3E.odt' })
+    const bar = getByTestId('editor-bar')
+    expect(bar.textContent).toContain('<b>fett</b>.odt')
+    expect(bar.querySelector('b')).toBeNull()
   })
 
   it('ignores a close request from any other origin', () => {
