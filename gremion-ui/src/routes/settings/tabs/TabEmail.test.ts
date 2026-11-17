@@ -83,8 +83,19 @@ describe('TabEmail.svelte — password notice (K2#8)', () => {
     expect(text).not.toMatch(/Änderungen hier (haben|bleiben)/)
     expect(text).not.toMatch(/keine Wirkung|ohne Wirkung/)
     expect(text).not.toMatch(/gelten dessen Angaben/)
-    expect(text).toMatch(/Ohne gespeicherten Mailserver werden keine E-Mails versendet/)
+    expect(text).toMatch(/Ohne gespeicherten Mailserver werden keine Benachrichtigungen, Newsletter und ähnliche E-Mails der Anwendung versendet/)
     expect(text).toMatch(/Betreiber einzelne Angaben.*Vorrang/)
+  })
+
+  // The saved server only drives the application's own mail (notifications, newsletters and
+  // the like). Each customer's sign-in mail has its own sender, set up by the operator, and
+  // does not read this tab. So the notice must not claim that NO e-mail goes out without a
+  // server here, and must say that sign-in mail is set up separately.
+  it('scopes the no-server sentence to application mail and says sign-in mail is separate', () => {
+    const { container } = render(TabEmail, { props: { smtp: SMTP } })
+    const text = (container.textContent ?? '').replace(/\s+/g, ' ')
+    expect(text).not.toMatch(/keine E-Mails versendet/)
+    expect(text).toMatch(/E-Mails rund um die Anmeldung richtet der Betreiber getrennt ein/)
   })
 })
 

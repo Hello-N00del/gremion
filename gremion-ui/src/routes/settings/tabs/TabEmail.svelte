@@ -102,11 +102,12 @@
 
   <div class="rounded-lg border bg-surface-2/40 px-4 py-3 text-sm text-ink-muted">
     Hier tragen Sie den Mailserver und die Absender-Adresse ein, über die ausgehende E-Mails
-    verschickt werden. Ohne gespeicherten Mailserver werden keine E-Mails versendet. Benutzername
-    und Passwort für den Mailserver werden aus Sicherheitsgründen nicht in den Einstellungen
-    gespeichert, sondern vom Betreiber für Sie hinterlegt. Wenden Sie sich dafür an den Betreiber.
-    Hat der Betreiber einzelne Angaben bereits fest vorgegeben, haben diese Vorrang vor den
-    Eingaben hier.
+    verschickt werden. Ohne gespeicherten Mailserver werden keine Benachrichtigungen, Newsletter
+    und ähnliche E-Mails der Anwendung versendet. E-Mails rund um die Anmeldung richtet der
+    Betreiber getrennt ein. Benutzername und Passwort für den Mailserver werden aus
+    Sicherheitsgründen nicht in den Einstellungen gespeichert, sondern vom Betreiber für Sie
+    hinterlegt. Wenden Sie sich dafür an den Betreiber. Hat der Betreiber einzelne Angaben bereits
+    fest vorgegeben, haben diese Vorrang vor den Eingaben hier.
   </div>
 
   <form class="space-y-4 max-w-lg" on:submit|preventDefault={save}>
