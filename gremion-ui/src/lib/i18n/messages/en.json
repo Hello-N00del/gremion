@@ -237,7 +237,7 @@
   "settings.general.connError": "Connection error.",
   "settings.general.org.name.required": "Organisation name must not be empty.",
   "settings.org.branding.title": "Branding",
-  "settings.org.branding.sub": "Name and logo of the student body. Shown in the header, in emails and on the public portal.",
+  "settings.org.branding.sub": "Name of the student body. Shown in the header and on the public portal.",
   "settings.appearance.title": "Appearance",
   "settings.appearance.language": "Language",
   "settings.appearance.language.sub": "Interface language. Applies only to your account — not the public portal.",

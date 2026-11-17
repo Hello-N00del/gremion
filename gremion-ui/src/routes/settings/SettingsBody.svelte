@@ -98,7 +98,7 @@
   const SUBTITLE: Record<SectionKey, string> = {
     profil: 'Ihr Konto, Anmeldung über Keycloak (SSO).',
     darstellung: 'Sprache, Schriftgröße, Farbsehen und Bewegung.',
-    organisation: 'Name und Logo der Studierendenschaft.',
+    organisation: 'Name der Studierendenschaft und Semesterbeginn.',
     module: 'Funktionsmodule für Ihr Gremium einschalten.',
     dienste: 'Öffentliches Portal.',
     email: 'Postausgang für Benachrichtigungen.',
