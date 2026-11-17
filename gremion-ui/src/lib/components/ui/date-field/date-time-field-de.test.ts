@@ -67,6 +67,78 @@ describe('DateTimeFieldDe, a day without a time', () => {
   })
 })
 
+describe('DateTimeFieldDe, values that bypass the typing', () => {
+  it('can be typed on a phone keyboard: the text input does not ask for the digits-only keypad', () => {
+    render(Harness, { props: { initial: '', dateOnly: true } })
+    // inputmode="numeric" has no '.', ' ' or ':' key on iOS
+    expect(text().getAttribute('inputmode')).toBe('text')
+  })
+
+  it('limits the native picker to the years the field accepts', () => {
+    const { unmount } = render(Harness, { props: { initial: '', dateOnly: true } })
+    expect(picker('date').min).toBe('1000-01-01')
+    expect(picker('date').max).toBe('9999-12-31')
+    unmount()
+    render(Harness, { props: { initial: '', dateOnly: false } })
+    expect(picker('datetime-local').min).toBe('1000-01-01T00:00')
+    expect(picker('datetime-local').max).toBe('9999-12-31T23:59')
+  })
+
+  it('treats a picked day below the year 1000 like a typed one: empty value and the format hint', async () => {
+    render(Harness, { props: { initial: '2026-11-05', dateOnly: true } })
+    const native = picker('date')
+    native.value = '0999-01-01'
+    await fireEvent.change(native)
+    expect(bound()).toBe('')
+    expect(text().getAttribute('aria-invalid')).toBe('true')
+    expect(screen.getByRole('status').textContent?.trim()).toBe('Bitte im Format TT.MM.JJJJ eingeben.')
+  })
+
+  it('treats a picked date and time below the year 1000 like a typed one', async () => {
+    render(Harness, { props: { initial: '2026-11-05T09:30', dateOnly: false } })
+    const native = picker('datetime-local')
+    native.value = '0999-01-01T10:00'
+    await fireEvent.change(native)
+    expect(bound()).toBe('')
+    expect(text().getAttribute('aria-invalid')).toBe('true')
+  })
+
+  it('still takes a valid picked date and time', async () => {
+    render(Harness, { props: { initial: '', dateOnly: false } })
+    const native = picker('datetime-local')
+    native.value = '2028-02-29T18:45'
+    await fireEvent.change(native)
+    expect(text().value).toBe('29.02.2028 18:45')
+    expect(bound()).toBe('2028-02-29T18:45')
+  })
+
+  it('does not hold a value set from outside that the field would refuse to type', async () => {
+    render(Harness, { props: { initial: '2026-11-05', dateOnly: true } })
+    await fireEvent.click(screen.getByRole('button', { name: 'ungültig von außen setzen' }))
+    await tick()
+    expect(bound()).toBe('')
+    // shown, not blank: the person sees what is wrong
+    expect(text().value).toBe('0999-01-01')
+    expect(text().getAttribute('aria-invalid')).toBe('true')
+  })
+
+  it('does not hold a value that merely looks empty (a day without time in a date-and-time field)', async () => {
+    render(Harness, { props: { initial: '2026-11-05T09:30', dateOnly: false } })
+    await fireEvent.click(screen.getByRole('button', { name: 'von außen setzen' }))
+    await tick()
+    expect(text().value).not.toBe('')
+    expect(bound()).toBe('')
+    expect(text().getAttribute('aria-invalid')).toBe('true')
+  })
+
+  it('does not start with an initial value the field would refuse to type', () => {
+    render(Harness, { props: { initial: '0999-01-01', dateOnly: true } })
+    expect(bound()).toBe('')
+    expect(text().value).toBe('0999-01-01')
+    expect(text().getAttribute('aria-invalid')).toBe('true')
+  })
+})
+
 describe('DateTimeFieldDe, a day with a time', () => {
   it('shows and binds date and time', async () => {
     render(Harness, { props: { initial: '2026-11-05T09:30', dateOnly: false } })

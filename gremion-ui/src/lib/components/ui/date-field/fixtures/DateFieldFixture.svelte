@@ -12,3 +12,4 @@
 <DateTimeFieldDe id="field" label="Stichtag" {dateOnly} bind:value />
 <span data-testid="bound">{value}</span>
 <button type="button" onclick={() => (value = '2031-12-24')}>von außen setzen</button>
+<button type="button" onclick={() => (value = '0999-01-01')}>ungültig von außen setzen</button>
