@@ -237,7 +237,7 @@
   "settings.general.connError": "Verbindungsfehler.",
   "settings.general.org.name.required": "Organisationsname darf nicht leer sein.",
   "settings.org.branding.title": "Branding",
-  "settings.org.branding.sub": "Name und Logo der Studierendenschaft. Erscheinen in der Kopfzeile, in E-Mails und auf dem öffentlichen Portal.",
+  "settings.org.branding.sub": "Name der Studierendenschaft. Erscheint im Titel des Browser-Tabs.",
   "settings.appearance.title": "Darstellung",
   "settings.appearance.language": "Sprache",
   "settings.appearance.language.sub": "Sprache der Oberfläche. Gilt nur für Ihr Konto — nicht für das öffentliche Portal.",
