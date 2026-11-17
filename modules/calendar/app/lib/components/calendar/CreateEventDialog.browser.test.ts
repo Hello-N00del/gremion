@@ -291,12 +291,16 @@ describe('create-event dialog: start and end are not cut off', () => {
     }
   })
 
-  test('the two time fields stay in one row of the 3-row grid at desktop width', async () => {
-    await vpage.viewport(1280, 800)
+  test('start and end share one row, and the header/body/footer grid still keeps the dialog inside a short window', async () => {
+    await vpage.viewport(1280, 480)
     await mountDialog()
     expect(field('ce-start').getBoundingClientRect().top).toBe(field('ce-end').getBoundingClientRect().top)
+    // the 3-row grid (title / scrolling body / buttons): without it the body is
+    // as tall as the form and pushes the dialog out of the window
     const dialog = document.querySelector('[role="dialog"]') as HTMLElement
-    expect(getComputedStyle(dialog).gridTemplateRows.split(' ')).toHaveLength(3)
+    const body = dialog.querySelector('[data-dialog-body]') as HTMLElement
+    expect(dialog.getBoundingClientRect().bottom).toBeLessThanOrEqual(window.innerHeight)
+    expect(body.scrollHeight).toBeGreaterThan(body.clientHeight)
   })
 })
 
