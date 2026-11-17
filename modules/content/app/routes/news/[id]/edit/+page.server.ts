@@ -17,7 +17,7 @@ async function ensureDraftFile(id: number): Promise<string> {
   return ensureNewsDraft(createNextcloudClient(), getTenant().id, id, createEmptyOdt);
 }
 
-export const load: PageServerLoad = async ({ params, locals }) => {
+export const load: PageServerLoad = async ({ params, locals, url }) => {
   const session = await locals.auth();
   const user = session?.user as SessionUser | undefined;
   if (!user || !hasRole(user.roles, Role.CouncilAdmin)) {
@@ -37,7 +37,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
     const filePath = await ensureDraftFile(id);
     const nc = createNextcloudClient();
     const fileId = await nc.getFileId(filePath, ADMIN_USER);
-    ({ editorUrl, tokenTtl } = await nc.getCollaboraEditorUrl(fileId, ADMIN_USER));
+    ({ editorUrl, tokenTtl } = await nc.getCollaboraEditorUrl(fileId, ADMIN_USER, { publicOrigin: url.origin }));
   } catch {
     // Nextcloud/Collabora unavailable — page renders without editor
   }

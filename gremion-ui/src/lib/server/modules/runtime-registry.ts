@@ -276,8 +276,12 @@ export function getDataProvider<K extends keyof DataProviderContract>(
 export interface ProtocolDocumentPort {
   /** Create the blank draft .odt for a protocol; returns its NC-relative path. */
   createDraftFile(protocolId: string): Promise<string>
-  /** Mint a Collabora WOPI editor URL + token TTL for the draft. */
-  getDraftWopiToken(draftPath: string): Promise<{ editorUrl: string; tokenTtl: number }>
+  /** Mint a Collabora WOPI editor URL + token TTL for the draft. `opts.publicOrigin` is the origin the
+   *  browser has for this app: the editor posts its messages (save, close) to it. */
+  getDraftWopiToken(
+    draftPath: string,
+    opts?: { publicOrigin?: string }
+  ): Promise<{ editorUrl: string; tokenTtl: number }>
   /** Download the draft .odt bytes (throws if the NC download is not ok). */
   downloadDraft(draftPath: string): Promise<Buffer>
   /** Move the draft .odt into the published dir; returns the published dir path. */

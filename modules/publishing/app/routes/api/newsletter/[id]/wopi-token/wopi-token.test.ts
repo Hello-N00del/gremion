@@ -45,6 +45,7 @@ function makeEvent() {
   return {
     locals: { user: { id: '3f2c1d4e-aaaa-bbbb-cccc-1234567890ab', roles: ['finance'] } },
     params: { id: '7' },
+    url: new URL('https://rat.example.test/api/newsletter/7/wopi-token'),
   } as unknown as Parameters<typeof GET>[0]
 }
 
@@ -82,7 +83,7 @@ describe('GET /api/newsletter/[id]/wopi-token — #412 admin-resolved editor tok
     // The stored dav path is used as-is, resolved as the sys user — never the
     // logged-in user's UUID (the old /files/edit path did exactly that → 404).
     expect(mockGetFileId).toHaveBeenCalledWith(ODT_PATH, 'ncadmin')
-    expect(mockGetCollaboraEditorUrl).toHaveBeenCalledWith(42, 'ncadmin')
+    expect(mockGetCollaboraEditorUrl).toHaveBeenCalledWith(42, 'ncadmin', { publicOrigin: 'https://rat.example.test' })
   })
 
   it('returns the Collabora editor payload', async () => {

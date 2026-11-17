@@ -60,7 +60,7 @@ describe('GET /api/files/edit-token/[...path]', () => {
       tokenTtl: 36000,
       editorUrl: 'http://localhost:9980/loleaflet/index.html'
     })
-    expect(mockGetCollaboraEditorUrl).toHaveBeenCalledWith(42, '1')
+    expect(mockGetCollaboraEditorUrl).toHaveBeenCalledWith(42, '1', { publicOrigin: 'http://localhost' })
   })
 
   it('returns WOPI token for Guest role', async () => {
@@ -68,7 +68,7 @@ describe('GET /api/files/edit-token/[...path]', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await (GET as any)(makeEvent('Docs/report.odt', [Role.Guest]))
 
-    expect(mockGetCollaboraEditorUrl).toHaveBeenCalledWith(42, '1')
+    expect(mockGetCollaboraEditorUrl).toHaveBeenCalledWith(42, '1', { publicOrigin: 'http://localhost' })
   })
 
   it('returns WOPI token for Finance role', async () => {
@@ -76,7 +76,19 @@ describe('GET /api/files/edit-token/[...path]', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await (GET as any)(makeEvent('Finance/budget.ods', [Role.Finance]))
 
-    expect(mockGetCollaboraEditorUrl).toHaveBeenCalledWith(42, '1')
+    expect(mockGetCollaboraEditorUrl).toHaveBeenCalledWith(42, '1', { publicOrigin: 'http://localhost' })
+  })
+
+  // Collabora posts the editor's messages (save, close) to the origin the WOPI token was minted for, so the
+  // token request carries the host the person's browser has: the customer host of THIS request.
+  it('asks for the editor under the origin of the request, not the in-network name', async () => {
+    const { GET } = await import('./+server')
+    const event = makeEvent('Docs/Protokoll.odt', [Role.Member])
+    event.url = new URL('https://rat.example.test/api/files/edit-token/Docs/Protokoll.odt')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (GET as any)(event)
+
+    expect(mockGetCollaboraEditorUrl).toHaveBeenCalledWith(42, '1', { publicOrigin: 'https://rat.example.test' })
   })
 
   it('returns 400 for unsupported extension .zip', async () => {

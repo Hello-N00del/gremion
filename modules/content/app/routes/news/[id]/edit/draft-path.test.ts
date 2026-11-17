@@ -46,6 +46,7 @@ function notFound(): Error & { status: number } {
 function event(id = '7'): any {
 	return {
 		params: { id },
+		url: new URL('https://rat.example.test/news/' + id + '/edit'),
 		locals: { auth: async () => ({ user: { roles: ['council-admin'], groups: [], id: 'u1' } }) },
 	}
 }
@@ -106,5 +107,12 @@ describe('an existing draft is never overwritten by an empty stub (S3#9)', () =>
 		const out = await load(event('7'))
 		expect(nc.upload).toHaveBeenCalledTimes(1)
 		expect(out).toMatchObject({ editorUrl: 'https://office.example/e' })
+	})
+
+	// The editor posts its messages to the origin the token was minted for: the host the browser has.
+	it('asks for the editor under the origin of the request', async () => {
+		nc.getFileId.mockResolvedValue(42)
+		await load(event('7'))
+		expect(nc.getCollaboraEditorUrl).toHaveBeenCalledWith(42, expect.anything(), { publicOrigin: 'https://rat.example.test' })
 	})
 })
