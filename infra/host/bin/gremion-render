@@ -421,11 +421,12 @@ CONTROL_PANEL_OVERLAY="docker-compose.control-public.yml"
 # Turned on in state.env alone, the panel would answer the wrong host. Either
 # disagreement is refused, with the router file removed first.
 control_panel_env_agreement() {   # <want origin, empty when the install has not opted in> <router file to remove on refusal>
-    local want="$1" out="$2" colour envf got
+    local want="$1" out="$2" colour envf got rc
     for colour in blue green; do
         envf="$(gremion_root)/etc/env/app-${colour}.env"
         if [[ ! -f "$envf" ]]; then continue; fi
-        got="$(control_panel_origin_of "$envf")"
+        # a duplicated key is a refusal, and a refusal removes the router file first like every other one
+        got="$(control_panel_origin_of "$envf")" || { rc=$?; rm -f -- "$out"; exit "$rc"; }
         if [[ "$got" != "$want" ]]; then
             rm -f -- "$out"
             if [[ -z "$want" ]]; then

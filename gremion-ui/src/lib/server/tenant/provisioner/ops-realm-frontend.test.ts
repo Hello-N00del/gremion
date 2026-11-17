@@ -19,3 +19,23 @@ describe('ops realm frontendUrl', () => {
     expect(existing).toMatch(/raw\('PUT', `\/admin\/realms\/\$\{OPS_REALM\}`/)
   })
 })
+
+// A realm that differs is refused with a reason that depends on what its control-panel client says. A client
+// that could not be read must reach the refusal as an error (scripts/ops-realm-refusal.ts words it
+// "could not be read"), not as an empty answer ("carries no redirect URI"): the read goes through
+// readStoredPanelClient, whose result, error included, is what opsRealmRefusal is given. The function
+// itself is held by scripts/ops-realm-refusal.test.ts; this holds the wiring (tenant-provision.ts runs
+// main() on import, so it cannot be driven from a test).
+describe('ops realm refusal wiring', () => {
+  const differs = body.slice(body.indexOf('An ORIGIN mismatch'), body.indexOf('const secretPath'))
+
+  it('reads the control-panel client through readStoredPanelClient and hands the whole result, the error included, to opsRealmRefusal', () => {
+    expect(differs).toMatch(/const stored = await readStoredPanelClient\(raw, OPS_REALM\)/)
+    expect(differs).toMatch(/opsRealmRefusal\(\{[^}]*\.\.\.stored[^}]*\}\)/)
+  })
+
+  it('does not read the client by hand (a hand-written read would swallow its failure)', () => {
+    expect(differs).not.toMatch(/clients\?clientId=control-panel/)
+    expect(differs).not.toMatch(/catch \(e\)/)
+  })
+})

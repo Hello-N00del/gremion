@@ -751,6 +751,10 @@ case " $* " in
     # the realm'"'"'s control-panel client: which origin the realm was made for (its one redirect URI)
     [ -f "$GREMION_ROOT/realm.json" ] || exit 1
     [ -f "$GREMION_ROOT/kc-clients-unreadable" ] && { echo "HTTP error - 500 Internal Server Error" >&2; exit 1; }
+    [ -f "$GREMION_ROOT/kc-clients-leaky" ] && { echo "connect failed for http://admin:hunter2@kc.internal:8080/auth token=abc123def" >&2; exit 1; }
+    [ -f "$GREMION_ROOT/kc-clients-leaky2" ] && { echo "rejected: {\"access_token\":\"tok-1 x\",\"refresh_token\":\"tok2\"} KEYCLOAK_ADMIN_PASSWORD=hunter3 secret = \"pa ss\" Authorization: Basic dXNlcjpwYXNz" >&2; exit 1; }
+    [ -f "$GREMION_ROOT/kc-clients-notjson" ] && { echo "<html>login page</html>"; exit 0; }
+    [ -f "$GREMION_ROOT/kc-clients-noredirect" ] && { echo "[{\"redirectUris\":[]}]"; exit 0; }
     jq "[.clients[] | select(.clientId == \"control-panel\") | {redirectUris}]" "$GREMION_ROOT/realm.json"; exit 0 ;;
   *" get realms/platform "*)
     [ -f "$GREMION_ROOT/realm.json" ] || [ -f "$GREMION_ROOT/realm-present" ] || exit 1
@@ -812,14 +816,101 @@ exit 0'
     [[ "$output" == *"the origin is the one it was made for, so its template is the difference"* ]] || { echo "$output"; return 1; }
     [[ "$output" == *"docs/ops/runbook/upgrade.md, step 8a (read its precondition first)"* ]]
     [[ "$output" != *"cannot change in place"* ]]
-    # a realm whose client cannot be read: the cause is not known, and both remedies are named
+    # a realm whose client cannot be read: the cause is not known, the error is said (short), and both remedies are named
     touch "${GREMION_ROOT}/kc-clients-unreadable"
     KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-kc-admin-secret \
         run "$LAUNCHER" init --realm-only --keycloak-container kc-fixture --panel-origin https://panel.fixture.example
     [ "$status" -eq 1 ]
-    [[ "$output" == *"does not say which origin it was made for"* ]]
+    [[ "$output" == *"the realm's control-panel client could not be read (HTTP error - 500 Internal Server Error), so the origin it was made for is not known"* ]] || { echo "$output"; return 1; }
+    [[ "$output" != *"carries no redirect URI"* ]]
     [[ "$output" == *"cannot change in place"* ]]
     [[ "$output" == *"step 8a"* ]]
+}
+
+@test "init --realm-only --keycloak-container: an unreadable control-panel client says why, and the error never carries a credential" {
+    shim_kcadm
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-kc-admin-secret \
+        run "$LAUNCHER" init --realm-only --keycloak-container kc-fixture --panel-origin https://panel.fixture.example
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    jq '.attributes["gremion.ops-realm.sha256"] = "0000000000000000000000000000000000000000000000000000000000000000"' "${GREMION_ROOT}/realm.json" > "${GREMION_ROOT}/realm.json.new"
+    mv "${GREMION_ROOT}/realm.json.new" "${GREMION_ROOT}/realm.json"
+    touch "${GREMION_ROOT}/kc-clients-leaky"
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-kc-admin-secret \
+        run "$LAUNCHER" init --realm-only --keycloak-container kc-fixture --panel-origin https://panel.fixture.example
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"could not be read (connect failed for http://***@kc.internal:8080/auth token=***)"* ]] || { echo "$output"; return 1; }
+    [[ "$output" != *"hunter2"* ]]
+    [[ "$output" != *"abc123def"* ]]
+}
+
+@test "init --realm-only --keycloak-container: the error is masked for access_token, a *_PASSWORD variable, a quoted value with a space and an Authorization header too" {
+    shim_kcadm
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-kc-admin-secret \
+        run "$LAUNCHER" init --realm-only --keycloak-container kc-fixture --panel-origin https://panel.fixture.example
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    jq '.attributes["gremion.ops-realm.sha256"] = "0000000000000000000000000000000000000000000000000000000000000000"' "${GREMION_ROOT}/realm.json" > "${GREMION_ROOT}/realm.json.new"
+    mv "${GREMION_ROOT}/realm.json.new" "${GREMION_ROOT}/realm.json"
+    touch "${GREMION_ROOT}/kc-clients-leaky2"
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-kc-admin-secret \
+        run "$LAUNCHER" init --realm-only --keycloak-container kc-fixture --panel-origin https://panel.fixture.example
+    [ "$status" -eq 1 ]
+    # the same words as scripts/ops-realm-refusal.test.ts holds for the TypeScript side
+    [[ "$output" == *'could not be read (rejected: {"access_token":"***","refresh_token":"***"} KEYCLOAK_ADMIN_PASSWORD=*** secret = "***" Authorization: ***)'* ]] || { echo "$output"; return 1; }
+    [[ "$output" != *"tok-1"* ]]
+    [[ "$output" != *"tok2"* ]]
+    [[ "$output" != *"hunter3"* ]]
+    [[ "$output" != *"pa ss"* ]]
+    [[ "$output" != *"dXNlcjpwYXNz"* ]]
+}
+
+@test "init --realm-only --keycloak-container: an answer that is not JSON (a jq error) is unreadable, with its own words" {
+    shim_kcadm
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-kc-admin-secret \
+        run "$LAUNCHER" init --realm-only --keycloak-container kc-fixture --panel-origin https://panel.fixture.example
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    jq '.attributes["gremion.ops-realm.sha256"] = "0000000000000000000000000000000000000000000000000000000000000000"' "${GREMION_ROOT}/realm.json" > "${GREMION_ROOT}/realm.json.new"
+    mv "${GREMION_ROOT}/realm.json.new" "${GREMION_ROOT}/realm.json"
+    touch "${GREMION_ROOT}/kc-clients-notjson"
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-kc-admin-secret \
+        run "$LAUNCHER" init --realm-only --keycloak-container kc-fixture --panel-origin https://panel.fixture.example
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"the realm's control-panel client could not be read (the answer could not be parsed), so the origin it was made for is not known"* ]] || { echo "$output"; return 1; }
+    [[ "$output" != *"carries no redirect URI"* ]]
+}
+
+@test "init --realm-only --keycloak-container: a control-panel client that was read and has no redirect URI is 'no redirect URI', not 'unreadable'" {
+    shim_kcadm
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-kc-admin-secret \
+        run "$LAUNCHER" init --realm-only --keycloak-container kc-fixture --panel-origin https://panel.fixture.example
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    jq '.attributes["gremion.ops-realm.sha256"] = "0000000000000000000000000000000000000000000000000000000000000000"' "${GREMION_ROOT}/realm.json" > "${GREMION_ROOT}/realm.json.new"
+    mv "${GREMION_ROOT}/realm.json.new" "${GREMION_ROOT}/realm.json"
+    touch "${GREMION_ROOT}/kc-clients-noredirect"
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-kc-admin-secret \
+        run "$LAUNCHER" init --realm-only --keycloak-container kc-fixture --panel-origin https://panel.fixture.example
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"the realm's control-panel client carries no redirect URI of the form <origin>/*, so the origin it was made for is not known"* ]] || { echo "$output"; return 1; }
+    [[ "$output" != *"could not be read"* ]]
+    [[ "$output" == *"cannot change in place"* ]]
+    [[ "$output" == *"step 8a"* ]]
+}
+
+@test "init --realm-only --keycloak-container: a realm whose origin AND template both differ names the stored origin and says both differ" {
+    shim_kcadm
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-kc-admin-secret \
+        run "$LAUNCHER" init --realm-only --keycloak-container kc-fixture --panel-origin https://panel.fixture.example
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    # made for panel.fixture.example by another template: the fingerprint is neither of the current template for that origin
+    jq '.attributes["gremion.ops-realm.sha256"] = "0000000000000000000000000000000000000000000000000000000000000000"' "${GREMION_ROOT}/realm.json" > "${GREMION_ROOT}/realm.json.new"
+    mv "${GREMION_ROOT}/realm.json.new" "${GREMION_ROOT}/realm.json"
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-kc-admin-secret \
+        run "$LAUNCHER" init --realm-only --keycloak-container kc-fixture --panel-origin https://other.fixture.example
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"it was made for the panel origin https://panel.fixture.example, and its fingerprint is not the current template's for https://panel.fixture.example either, so the origin and the template both differ"* ]] || { echo "$output"; return 1; }
+    [[ "$output" == *"cannot change in place"* ]]
+    [[ "$output" == *"step 8a (read its precondition first)"* ]]
+    [[ "$output" != *"does not say which origin"* ]]
+    [[ "$output" != *"step 8a of docs/ops/runbook/upgrade.md does not apply"* ]]
 }
 
 @test "init --realm-only --keycloak-container: the grafana client's secret goes to etc/secrets/grafana/client_secret 0600, never on an argv; an equal realm without it is refused (TASK-039 G11)" {
@@ -1143,6 +1234,25 @@ release_repo() {
     [ "$status" -eq 0 ] || { echo "status=$status $output"; cat "$SHIM_LOG"; return 1; }
     run jq -r '.clients[] | select(.clientId == "control-panel") | [(.redirectUris | tostring), (.webOrigins | tostring)] | @tsv' "${GREMION_ROOT}/realm.json"
     [ "$output" = $'["https://control.guard.example/*"]\t["https://control.guard.example"]' ] || { echo "$output"; return 1; }
+}
+
+@test "control panel: CONTROL_PANEL_ORIGIN on two lines of state.env is a refusal for init and for panel: no realm is created, nothing falls back to the loopback" {
+    shim_kcadm
+    printf 'CONTROL_PANEL_ORIGIN=https://control.guard.example\nCONTROL_PANEL_ORIGIN=https://other.guard.example\n' >> "${GREMION_ROOT}/etc/env/state.env"
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-kc-admin-secret \
+        run "$LAUNCHER" init --realm-only --keycloak-container kc-fixture
+    [ "$status" -eq 2 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"CONTROL_PANEL_ORIGIN is set on 2 lines"* ]] || { echo "$output"; return 1; }
+    [ ! -e "${GREMION_ROOT}/realm.json" ] || { echo "a realm was created"; return 1; }
+    ! grep -q 'create realms' "$SHIM_LOG" || { echo "a realm was created"; return 1; }
+    # an explicit --panel-origin does not read around it either
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-kc-admin-secret \
+        run "$LAUNCHER" init --realm-only --keycloak-container kc-fixture --panel-origin http://127.0.0.1:3043
+    [ "$status" -eq 2 ] || { echo "status=$status $output"; return 1; }
+    [ ! -e "${GREMION_ROOT}/realm.json" ]
+    run "$LAUNCHER" panel
+    [ "$status" -eq 2 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"CONTROL_PANEL_ORIGIN is set on 2 lines"* ]]
 }
 
 @test "control panel: a QUOTED CONTROL_PANEL_ORIGIN is the origin for init and for panel, and a quoted empty one is off (the loopback)" {

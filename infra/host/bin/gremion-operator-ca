@@ -448,7 +448,7 @@ cmd_status() {
     need_cmd openssl
     root="$(gremion_root)"
     dest="${root}/${HOST_CA_REL}"
-    origin="$(control_panel_origin_of "${root}/etc/env/state.env")"
+    origin="$(control_panel_origin_of "${root}/etc/env/state.env")" || exit $?   # a duplicated key is a refusal
     info "opt-in (CONTROL_PANEL_ORIGIN in state.env): ${origin:-off}"
     if [[ -f "${root}/${HOST_ROUTER_REL}" ]]; then info "router file: ${HOST_ROUTER_REL} present"; else info "router file: ${HOST_ROUTER_REL} absent"; fi
     if [[ ! -s "$dest" ]]; then

@@ -1661,6 +1661,20 @@ control_all() { control_file; control_ca; control_live; }
     [ "$status" -eq 0 ]
 }
 
+@test "control panel: opted in, panel@file listed with no server or not listed at all fails: a check that looked at nothing is not a pass" {
+    control_all
+    PANEL_UP_WAIT_SECONDS=0 run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+    api_edit services 'map(if .name == "panel@file" then .loadBalancer.servers = [] else . end)'
+    PANEL_UP_WAIT_SECONDS=0 run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"service panel@file: traefik lists no server for it, so nothing was checked about the panel"* ]] || { echo "$output"; return 1; }
+    api_edit services 'map(select(.name != "panel@file"))'
+    PANEL_UP_WAIT_SECONDS=0 run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"service panel@file: traefik lists no such service, so nothing was checked about the panel's server"* ]] || { echo "$output"; return 1; }
+}
+
 @test "control panel: opted in, a colour with no panel container fails (the origin cannot be judged), with the router live" {
     control_all
     sed -i '/^c5$/d' "${FAKE_DOCKER}/ps"

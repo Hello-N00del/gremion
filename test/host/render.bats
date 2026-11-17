@@ -1177,6 +1177,27 @@ control_app_envs() {   # <origin line or empty> <compose files>
     [[ "$output" == *"control panel: not public"* ]]
 }
 
+@test "control panel: CONTROL_PANEL_ORIGIN on two lines of an app env is refused (exit 2) and the router file is removed, opted in or not" {
+    control_release; control_state; control_ca
+    control_app_envs 'CONTROL_PANEL_ORIGIN=https://control.example.org' 'docker-compose.app.yml:docker-compose.control-public.yml'
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    [ -s "$(CONTROL_FILE)" ]
+    # opted in, a duplicated key in one colour: the good router from the render above must go
+    printf 'CONTROL_PANEL_ORIGIN=https://control.example.org\n' >> "${GREMION_ROOT}/etc/env/app-blue.env"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"CONTROL_PANEL_ORIGIN is set on 2 lines"* ]] || { echo "$output"; return 1; }
+    [ ! -e "$(CONTROL_FILE)" ]
+    # turned off in state.env: a stale router goes as well, and the duplicate still refuses
+    printf 'http:\n  routers:\n    control-panel: {}\n' > "$(CONTROL_FILE)"
+    sed -i 's|^CONTROL_PANEL_ORIGIN=.*|CONTROL_PANEL_ORIGIN=|' "${GREMION_ROOT}/etc/env/state.env"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"CONTROL_PANEL_ORIGIN is set on 2 lines"* ]] || { echo "$output"; return 1; }
+    [ ! -e "$(CONTROL_FILE)" ]
+}
+
 @test "control panel: the edge overlay in an app env's COMPOSE_FILE without the opt-in is refused (the panel would sit on the edge network with no router)" {
     control_release
     control_app_envs '' 'docker-compose.app.yml:docker-compose.control-public.yml:docker-compose.pins.yml'
@@ -1412,10 +1433,10 @@ CASES
     printf 'COLOUR=blue\nCOMPOSE_FILE=docker-compose.app.yml:docker-compose.control-public.yml\nCONTROL_PANEL_ORIGIN=https://panel.example.com\n' > "${GREMION_ROOT}/etc/env/app-blue.env"
     run "$RENDER" --release "$RELEASE"
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
-    printf 'COLOUR=green\nCOMPOSE_FILE=docker-compose.app.yml:docker-compose.control-public.yml\nCONTROL_PANEL_ORIGIN=https://control.example.org\n' > "${GREMION_ROOT}/etc/env/app-green.env"
+    printf 'COLOUR=green\nCOMPOSE_FILE=docker-compose.app.yml:docker-compose.control-public.yml\nCONTROL_PANEL_ORIGIN=https://control.example.org\n' > "${GREMION_ROOT}/etc/env/app-blue.env"
     run "$RENDER" --release "$RELEASE"
     [ "$status" -eq 2 ]
-    [[ "$output" == *"app-green.env: CONTROL_PANEL_ORIGIN is not https://panel.example.com"* ]]
+    [[ "$output" == *"app-blue.env: CONTROL_PANEL_ORIGIN is not https://panel.example.com"* ]]
     [ ! -e "$(CONTROL_FILE)" ]
 }
 
