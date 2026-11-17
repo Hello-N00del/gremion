@@ -102,12 +102,12 @@ describe('mapBoardUnavailable — the 503 errors of the router on an API route',
   const ok = new Response('fine', { status: 200 })
 
   it('passes a normal response through', async () => {
-    const handler = mapBoardUnavailable(async () => ok)
+    const handler = mapBoardUnavailable(async (_e: unknown) => ok)
     expect(await handler({} as never)).toBe(ok)
   })
 
   it('a write during a move is a 503 with Retry-After 5 and the German text', async () => {
-    const handler = mapBoardUnavailable(async () => {
+    const handler = mapBoardUnavailable(async (_e: unknown) => {
       throw new BoardMovingError()
     })
     const res = await handler({} as never)
@@ -118,7 +118,7 @@ describe('mapBoardUnavailable — the 503 errors of the router on an API route',
   })
 
   it('an unreadable flag is a 503 with its own Retry-After and text', async () => {
-    const handler = mapBoardUnavailable(async () => {
+    const handler = mapBoardUnavailable(async (_e: unknown) => {
       throw new BoardLocationUnreadableError(new Error('db down'))
     })
     const res = await handler({} as never)
@@ -128,14 +128,14 @@ describe('mapBoardUnavailable — the 503 errors of the router on an API route',
   })
 
   it('never leaks the cause of the failure into the response', async () => {
-    const handler = mapBoardUnavailable(async () => {
+    const handler = mapBoardUnavailable(async (_e: unknown) => {
       throw new BoardLocationUnreadableError(new Error('password authentication failed for user x'))
     })
     expect(await (await handler({} as never)).text()).not.toContain('password')
   })
 
   it('SvelteKit errors (403, 404, 400) pass through untouched', async () => {
-    const handler = mapBoardUnavailable(async () => {
+    const handler = mapBoardUnavailable(async (_e: unknown) => {
       error(403, 'Forbidden')
     })
     expect(isHttpError(await handler({} as never).catch((e) => e))).toBe(true)
@@ -144,7 +144,7 @@ describe('mapBoardUnavailable — the 503 errors of the router on an API route',
 
   it('any other error is rethrown as it is', async () => {
     const boom = new Error('boom')
-    const handler = mapBoardUnavailable(async () => {
+    const handler = mapBoardUnavailable(async (_e: unknown) => {
       throw boom
     })
     await expect(handler({} as never)).rejects.toBe(boom)
@@ -153,24 +153,24 @@ describe('mapBoardUnavailable — the 503 errors of the router on an API route',
 
 describe('mapBoardUnavailableForPage — the 503 errors of the router in a page load', () => {
   it('returns the load result', async () => {
-    const load = mapBoardUnavailableForPage(async () => ({ a: 1 }))
+    const load = mapBoardUnavailableForPage(async (_e: unknown) => ({ a: 1 }))
     expect(await load({} as never)).toEqual({ a: 1 })
   })
 
   it.each([new BoardMovingError(), new BoardLocationUnreadableError()])('turns %s into error(503) with the German text', async (err) => {
-    const load = mapBoardUnavailableForPage(async () => {
+    const load = mapBoardUnavailableForPage(async (_e: unknown) => {
       throw err
     })
     await expect(load({} as never)).rejects.toMatchObject({ status: 503, body: { message: err.message } })
   })
 
   it('passes SvelteKit errors and other errors through', async () => {
-    const forbidden = mapBoardUnavailableForPage(async () => {
+    const forbidden = mapBoardUnavailableForPage(async (_e: unknown) => {
       error(403, 'Forbidden')
     })
     await expect(forbidden({} as never)).rejects.toMatchObject({ status: 403 })
     const boom = new Error('boom')
-    const broken = mapBoardUnavailableForPage(async () => {
+    const broken = mapBoardUnavailableForPage(async (_e: unknown) => {
       throw boom
     })
     await expect(broken({} as never)).rejects.toBe(boom)

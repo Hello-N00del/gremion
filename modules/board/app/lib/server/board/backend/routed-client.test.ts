@@ -121,7 +121,7 @@ describe('moving', () => {
 
   it.each(BOARD_WRITE_METHODS)('%s is a write: refused with 503, Retry-After 5 and the German text, nothing called', async (m) => {
     h.location.mockResolvedValue('moving')
-    const err = await call(make(), m).catch((e) => e)
+    const err = (await call(make(), m).catch((e: unknown) => e)) as BoardMovingError
     expect(err).toBeInstanceOf(BoardMovingError)
     expect(err).toBeInstanceOf(BoardUnavailableError)
     expect(err.status).toBe(503)

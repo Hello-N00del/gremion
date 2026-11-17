@@ -19,7 +19,10 @@ const { mockResolveBackend, mockGetBoard, mockListPromotedActionItemIds, mockSql
 }))
 
 vi.mock('$lib/server/board/scope', () => ({ resolveBoardOrgUnitScope: vi.fn(async () => ['ou-1']) }))
-vi.mock('$lib/server/board/backend/resolve', () => ({ resolveBoardBackendOr503: mockResolveBackend }))
+vi.mock('$lib/server/board/backend/resolve', async (orig) => ({
+  ...(await orig<typeof import('$lib/server/board/backend/resolve')>()),
+  resolveBoardBackendOr503: mockResolveBackend,
+}))
 vi.mock('$lib/server/board/board-db', () => ({
   boardDb: {
     getBoard: mockGetBoard,

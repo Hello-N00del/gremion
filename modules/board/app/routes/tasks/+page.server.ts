@@ -3,7 +3,7 @@ import { error } from '@sveltejs/kit'
 import { Role, hasRole } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
 import { resolveBoardOrgUnitScope } from '$lib/server/board/scope'
-import { resolveBoardBackendForPage } from '$lib/server/board/backend/resolve'
+import { mapBoardUnavailableForPage, resolveBoardBackendForPage } from '$lib/server/board/backend/resolve'
 import { listOrgUnits, listOrgUnitMembers } from '$lib/server/governance/org-units-db'
 import { getDisplayNameResolver } from '$lib/server/identity/display-names'
 import type { CardView, StackView, BoardView, MemberOption } from '$lib/components/board/types'
@@ -22,7 +22,7 @@ function dayOf(v: unknown): string | null {
   return typeof v === 'string' || typeof v === 'number' ? String(v).slice(0, 10) : null
 }
 
-export const load: PageServerLoad = async ({ locals, url }) => {
+export const load: PageServerLoad = mapBoardUnavailableForPage(async ({ locals, url }) => {
   const session = await locals.auth()
   const user = session?.user as SessionUser | undefined
   if (!user || !hasRole(user.roles, Role.Member)) throw error(403, 'Forbidden')
@@ -106,4 +106,4 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     members,
     me: user.id,
   }
-}
+})
