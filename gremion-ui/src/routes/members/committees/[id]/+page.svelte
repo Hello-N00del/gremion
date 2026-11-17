@@ -35,19 +35,31 @@
     memberSearchCapped = false
   }
 
+  // Only the newest search may fill the panel. Starting a search (Enter works while one is still
+  // loading) cancels the one in flight, so the second term is never dropped and an old answer never
+  // lands over a newer one.
+  let memberSearchSeq = 0
+  let memberSearchAbort: AbortController | null = null
+
   async function searchUsers() {
-    if (memberSearchLoading) return
+    const mine = ++memberSearchSeq
+    memberSearchAbort?.abort()
+    memberSearchAbort = null
     const term = memberSearch.trim()
     clearMemberSearchReport()
-    if (!term) { memberResults = []; memberSearchOutcome = 'empty'; return }
-    memberSearchLoading = true
     memberAddError = ''
+    if (!term) { memberResults = []; memberSearchOutcome = 'empty'; memberSearchLoading = false; return }
+    const controller = new AbortController()
+    memberSearchAbort = controller
+    memberSearchLoading = true
     try {
-      const res = await fetch(`/api/users?search=${encodeURIComponent(term)}&slim=true&max=${MEMBER_SEARCH_MAX}`)
+      const res = await fetch(`/api/users?search=${encodeURIComponent(term)}&slim=true&max=${MEMBER_SEARCH_MAX}`, { signal: controller.signal })
+      if (mine !== memberSearchSeq) return
       if (!res.ok) { memberAddError = `Suche fehlgeschlagen (${res.status})`; return }
       const body = await res.json()
-      // The term was edited while the answer was on its way: it is not an answer to what the field shows.
-      if (memberSearch.trim() !== term) return
+      // A newer search started while the answer was on its way, or the term was edited: it is not an
+      // answer to what the field shows.
+      if (mine !== memberSearchSeq || memberSearch.trim() !== term) return
       const hits: Array<{ id: string; email?: string; firstName?: string; lastName?: string; username?: string }> = body.data ?? []
       const existingIds = new Set(members.map((m) => m.user_keycloak_id))
       memberResults = hits
@@ -59,8 +71,17 @@
         }))
       memberSearchCapped = hits.length >= MEMBER_SEARCH_MAX
       memberSearchOutcome = memberResults.length > 0 ? '' : hits.length > 0 ? 'all-members' : 'none'
+    } catch (err) {
+      // A search that a newer one replaced is no failure. Anything else (network down, an answer that
+      // is not JSON) is shown, without echoing the term, and logged.
+      if (mine !== memberSearchSeq) return
+      memberAddError = 'Suche fehlgeschlagen'
+      console.warn('[committee-members] member search failed:', err instanceof Error ? err.message : 'unknown error')
     } finally {
-      memberSearchLoading = false
+      if (mine === memberSearchSeq) {
+        memberSearchLoading = false
+        memberSearchAbort = null
+      }
     }
   }
 

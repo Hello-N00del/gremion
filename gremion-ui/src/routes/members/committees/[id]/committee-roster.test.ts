@@ -293,4 +293,89 @@ describe('committee roster: what the add-member search reports', () => {
     await waitFor(() => expect(text()).toContain('Suche fehlgeschlagen (502)'))
     expect(text()).not.toContain(NONE)
   })
+
+  // fetch that answers by hand, so a test decides when each search finishes. It honours the abort signal
+  // the way the browser does.
+  function deferredFetch() {
+    const pending: Array<{ url: string; resolve: (body: unknown) => void; reject: (e: unknown) => void }> = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string, init?: RequestInit) => new Promise<Response>((resolve, reject) => {
+        pending.push({
+          url: String(url),
+          resolve: (body) => resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })),
+          reject,
+        })
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
+      })),
+    )
+    return pending
+  }
+
+  it('Enter on an edited term while the first search still loads gives the results of the second term', async () => {
+    mount()
+    const pending = deferredFetch()
+    const input = await openPanel()
+    await fireEvent.input(input, { target: { value: 'ann' } })
+    await fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => expect(pending).toHaveLength(1))
+    await fireEvent.input(input, { target: { value: 'mia' } })
+    await fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => expect(pending).toHaveLength(2))
+    expect(pending[1].url).toContain('search=mia')
+    pending[1].resolve({ data: [hit('u-mia', 'Mia', 'Neu')] })
+    await screen.findByText('Mia Neu')
+    // the first search answering late must not take the second one's list away
+    pending[0].resolve({ data: [hit('u-ann', 'Ann', 'Alt')] })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(screen.queryByText('Ann Alt')).toBeNull()
+    expect(screen.getByText('Mia Neu')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Suchen' })).toBeTruthy()
+  })
+
+  it('Enter on the same term while it loads does not leave the panel blank either', async () => {
+    mount()
+    const pending = deferredFetch()
+    const input = await openPanel()
+    await fireEvent.input(input, { target: { value: 'mia' } })
+    await fireEvent.keyDown(input, { key: 'Enter' })
+    await fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => expect(pending).toHaveLength(2))
+    pending[1].resolve({ data: [hit('u-mia', 'Mia', 'Neu')] })
+    await screen.findByText('Mia Neu')
+  })
+
+  it('a search whose request is refused at network level shows "Suche fehlgeschlagen" without the term and logs it', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const unhandled = vi.fn()
+    process.on('unhandledRejection', unhandled)
+    try {
+      mount()
+      vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('network down') }))
+      await search('geheim-term')
+      await waitFor(() => expect(text()).toContain('Suche fehlgeschlagen'))
+      expect(text()).not.toContain('geheim-term')
+      expect(text()).not.toContain(NONE)
+      expect(warn).toHaveBeenCalled()
+      await new Promise((r) => setTimeout(r, 20))
+      expect(unhandled).not.toHaveBeenCalled()
+    } finally {
+      process.off('unhandledRejection', unhandled)
+      warn.mockRestore()
+    }
+  })
+
+  it('an answer that is not JSON shows "Suche fehlgeschlagen" and the search button works again', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      mount()
+      vi.stubGlobal('fetch', vi.fn(async () => new Response('<html>Bad Gateway</html>', { status: 200, headers: { 'Content-Type': 'text/html' } })))
+      await search('mia')
+      await waitFor(() => expect(text()).toContain('Suche fehlgeschlagen'))
+      expect(text()).not.toContain(NONE)
+      expect((screen.getByRole('button', { name: 'Suchen' }) as HTMLButtonElement).disabled).toBe(false)
+    } finally {
+      warn.mockRestore()
+    }
+  })
 })
