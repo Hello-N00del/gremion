@@ -101,11 +101,12 @@
   <h2 class="text-lg font-semibold">E-Mail (SMTP)</h2>
 
   <div class="rounded-lg border bg-surface-2/40 px-4 py-3 text-sm text-ink-muted">
-    Hier tragen Sie einen eigenen Mailserver und eine Absender-Adresse für ausgehende E-Mails ein.
-    Hat der Betreiber den E-Mail-Versand bereits eingerichtet, gelten dessen Angaben; Änderungen
-    hier haben dann keine Wirkung. Benutzername und Passwort für den Mailserver werden aus
-    Sicherheitsgründen nicht in den Einstellungen gespeichert, sondern vom Betreiber für Sie
-    hinterlegt. Wenden Sie sich dafür an den Betreiber.
+    Hier tragen Sie den Mailserver und die Absender-Adresse ein, über die ausgehende E-Mails
+    verschickt werden. Ohne gespeicherten Mailserver werden keine E-Mails versendet. Benutzername
+    und Passwort für den Mailserver werden aus Sicherheitsgründen nicht in den Einstellungen
+    gespeichert, sondern vom Betreiber für Sie hinterlegt. Wenden Sie sich dafür an den Betreiber.
+    Hat der Betreiber einzelne Angaben bereits fest vorgegeben, haben diese Vorrang vor den
+    Eingaben hier.
   </div>
 
   <form class="space-y-4 max-w-lg" on:submit|preventDefault={save}>

@@ -64,20 +64,27 @@ describe('TabEmail.svelte — password notice (K2#8)', () => {
 
   it('tells the admin plainly that the operator sets the mail login', () => {
     const { container } = render(TabEmail, { props: { smtp: SMTP } })
-    expect(container.textContent).toMatch(/Betreiber/)
-    expect(container.textContent).toMatch(/Benutzername und Passwort/)
+    const text = (container.textContent ?? '').replace(/\s+/g, ' ')
+    expect(text).toMatch(/Betreiber/)
+    expect(text).toMatch(/Benutzername und Passwort/)
   })
 
-  // When the operator has wired the mail sending for the tenant, the operator's server and
-  // sender address win over the values saved here (tenant-mail.ts: registry override first).
-  // The notice therefore must not promise that these fields always decide, and must say that
-  // an operator setup takes precedence. Whitespace-normalised: the sentence wraps in markup.
-  it('does not promise that the fields here always decide; says an operator setup takes precedence', () => {
+  // tenant-mail.ts: `configured` comes only from the setting saved in this tab, and the
+  // operator's preset is merged PER FIELD (preset ?? saved). So the notice must not claim
+  // that the fields here are ignored when the operator has set things up: saving an empty
+  // server here switches sending off, and a saved sender address still applies when the
+  // operator only preset the server. It must say that a server has to be saved here for
+  // mail to go out, and that single operator presets take precedence for that detail only.
+  // Whitespace-normalised: the sentences wrap in markup.
+  it('does not claim the fields here are ignored, and says a saved server is needed for sending', () => {
     const { container } = render(TabEmail, { props: { smtp: SMTP } })
     const text = (container.textContent ?? '').replace(/\s+/g, ' ')
     expect(text).not.toMatch(/Hier legen Sie fest, über welchen Mailserver/)
-    expect(text).toMatch(/Hat der Betreiber den E-Mail-Versand bereits eingerichtet, gelten dessen Angaben/)
-    expect(text).toMatch(/Änderungen hier (haben|bleiben) (dann )?(keine Wirkung|ohne Wirkung)/)
+    expect(text).not.toMatch(/Änderungen hier (haben|bleiben)/)
+    expect(text).not.toMatch(/keine Wirkung|ohne Wirkung/)
+    expect(text).not.toMatch(/gelten dessen Angaben/)
+    expect(text).toMatch(/Ohne gespeicherten Mailserver werden keine E-Mails versendet/)
+    expect(text).toMatch(/Betreiber einzelne Angaben.*Vorrang/)
   })
 })
 

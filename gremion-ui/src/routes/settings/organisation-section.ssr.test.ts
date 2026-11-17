@@ -60,8 +60,8 @@ describe('settings section "Organisation": semester months', () => {
   })
 })
 
-// No logo upload exists (the logo comes from the customer's brand configuration, set by the
-// operator). The page must not promise one: neither the section subtitle nor the form text.
+// No logo upload exists in Settings. The page must not promise one: neither the section
+// subtitle nor the form text.
 describe('settings section "Organisation": no logo promise', () => {
   test('neither the subtitle nor the branding text mentions a logo', () => {
     const { body } = render(SettingsBody, { props: { data: data(undefined) as never, activeSection: 'organisation' } })
