@@ -93,6 +93,7 @@ describe('the export hold on the scratch stack', () => {
     tenant_done_at: null,
     retained_ok_at: null,
     final_at: k.final_at,
+    export_kept_until: k.export_kept_until,
   })
 
   beforeAll(async () => {
@@ -152,6 +153,18 @@ describe('the export hold on the scratch stack', () => {
     const k = await karenz(t.X)
     const after = await finalizeDueKarenz(finDeps(heldModule, { now: () => new Date(k.export_kept_until!.getTime() + 1000) }))
     expect(after).toMatchObject({ due: 1, finalized: 0, kept: 0, errors: [] })
+    expect(existsSync(t.exportPath)).toBe(false)
+    expect(existsSync(`${t.exportPath}.sha256`)).toBe(false)
+    expect((await karenz(t.X)).export_deleted_at).toBeInstanceOf(Date)
+  })
+
+  it('the release before the date: export_kept_until set to now by hand is honoured, the hold is not derived again, and the next run deletes the dump', async () => {
+    const t = await dueTenant()
+    await finalizeDueKarenz(finDeps(heldModule, { now: () => new Date() }))
+    expect(existsSync(t.exportPath)).toBe(true)
+    await platform`UPDATE plt.module_karenz SET export_kept_until = now() - interval '1 second' WHERE karenz_id = ${t.karenzId}`
+    const r = await finalizeDueKarenz(finDeps(heldModule, { now: () => new Date() }))
+    expect(r).toMatchObject({ due: 1, finalized: 0, kept: 0, errors: [] })
     expect(existsSync(t.exportPath)).toBe(false)
     expect(existsSync(`${t.exportPath}.sha256`)).toBe(false)
     expect((await karenz(t.X)).export_deleted_at).toBeInstanceOf(Date)

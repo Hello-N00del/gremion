@@ -68,6 +68,7 @@ describe('verifyRowExport: what the day-30 delete will refuse, it refuses before
     tenant_done_at: null,
     retained_ok_at: null,
     final_at: new Date('2026-11-01T00:00:00Z'),
+    export_kept_until: null,
   })
 
   it('accepts the row\'s own regular file with the recorded sha256', async () => {
@@ -156,7 +157,7 @@ describe('finalizeDueKarenz: the export hold is decided from the row', () => {
   const BOTH = [`${T}/lcfix/a.dump`, `${T}/lcfix/a.dump.sha256`]
   type Hold = NonNullable<FinalizeDeps['exportHold']>
 
-  type Fix = { state: KarenzState; db: 'blocked' | 'dropped' | 'enabled'; platformDone?: Date | null }
+  type Fix = { state: KarenzState; db: 'blocked' | 'dropped' | 'enabled'; platformDone?: Date | null; keptUntil?: Date | null }
   function holdHarness(fix: Fix, hold: FinalizeDeps['exportHold'], over: Partial<FinalizeDeps> = {}) {
     const exportDir = join(root, `case-${Math.random().toString(36).slice(2)}`)
     const dump = join(exportDir, T, 'lcfix', 'a.dump')
@@ -176,6 +177,7 @@ describe('finalizeDueKarenz: the export hold is decided from the row', () => {
       tenant_done_at: null,
       retained_ok_at: null,
       final_at: FINAL_AT,
+      export_kept_until: (fix.keptUntil ?? null) as Date | null,
     }
     const md = { state: fix.db }
     const events: string[] = []
@@ -311,6 +313,38 @@ describe('finalizeDueKarenz: the export hold is decided from the row', () => {
     expect(hold).not.toHaveBeenCalled()
     expect(h.deleted).toEqual(BOTH)
     expect(h.events).toEqual(['export-deleted'])
+  })
+
+  it('a date recorded in export_kept_until that has passed wins over the derived date: the hand release (set it to now) deletes at the next run', async () => {
+    // the hold would derive FUTURE again from final_at; the recorded, passed date must not be overwritten by it
+    const hold = vi.fn<Hold>(() => FUTURE)
+    const h = holdHarness({ state: 'finalized', db: 'dropped', platformDone: new Date('2026-12-01T11:00:00Z'), keptUntil: new Date('2026-12-02T09:00:00Z') }, hold)
+    const r = await finalizeDueKarenz(h.deps)
+    expect(r).toMatchObject({ due: 1, finalized: 0, kept: 0, errors: [] })
+    expect(hold).not.toHaveBeenCalled()
+    expect(h.deleted).toEqual(BOTH)
+    expect(h.events).toEqual(['export-deleted'])
+  })
+
+  it('a date recorded in export_kept_until that lies ahead keeps the export even when the row is picked up again for its platform side', async () => {
+    // a crash after the keep-UPDATE and before platform-done: the row is finalizing again with the date already set
+    const hold = vi.fn<Hold>(() => null)
+    const h = holdHarness({ state: 'finalizing', db: 'dropped', keptUntil: FUTURE }, hold)
+    const r = await finalizeDueKarenz(h.deps)
+    expect(r).toMatchObject({ finalized: 1, kept: 1, errors: [] })
+    expect(hold).not.toHaveBeenCalled()
+    expect(h.deleted).toEqual([])
+    expect(h.events).toEqual(['platform-done'])
+  })
+
+  it('a restored Karenz whose database row already reads dropped is asked: the hold does not depend on what this run did', async () => {
+    const hold = vi.fn<Hold>(() => FUTURE)
+    const h = holdHarness({ state: 'restored', db: 'dropped' }, hold)
+    const r = await finalizeDueKarenz(h.deps)
+    expect(r.errors).toEqual([])
+    expect(hold).toHaveBeenCalledWith(T, 'lcfix', { karenzState: 'restored', databaseDropped: true, finalAt: FINAL_AT })
+    expect(h.deleted).toEqual([])
+    expect(h.written.keptUntil).toEqual(FUTURE)
   })
 
   it('a hold that has passed, or none, deletes the export', async () => {

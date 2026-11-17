@@ -82,6 +82,25 @@ describe('the retention catalogue and the table say the same number', () => {
   })
 })
 
+describe('the retention catalogue does not describe a board export that is not taken', () => {
+  // The hold is wired for board, but board declares no module database in this tree, so no board export is taken
+  // at switch-off and the hold has nothing to keep. The rows must say when the keep time starts to apply, so a
+  // reader never takes them as a statement about a file that exists today.
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
+  const text = readFileSync(join(root, 'docs/compliance/retention-catalogue.md'), 'utf8').replace(/\r\n/g, '\n')
+  const lineOf = (start: string) => text.split('\n').find((l) => l.startsWith(start)) ?? ''
+  const conditional = /only once board has its own module database/i
+
+  it('RC-BRD, RC-MOD-EXPORT and the change note say the keep time applies only once board has its own module database', () => {
+    expect(lineOf('| RC-BRD '), 'RC-BRD').toMatch(conditional)
+    expect(lineOf('| RC-MOD-EXPORT '), 'RC-MOD-EXPORT').toMatch(conditional)
+    const start = text.indexOf('> **Change note 2026-11-17')
+    expect(start, 'change note 2026-11-17').toBeGreaterThanOrEqual(0)
+    const note = text.slice(start, text.indexOf('> **Change note 2026-10-27'))
+    expect(note.replace(/\n> ?/g, ' ')).toMatch(conditional)
+  })
+})
+
 describe('the modules port hands the export hold to the day-30 job', () => {
   beforeEach(() => lifecycle.finalizeDueKarenz.mockReset())
 
