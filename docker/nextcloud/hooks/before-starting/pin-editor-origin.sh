@@ -10,8 +10,8 @@
 # headers only when
 #   - the sender is a trusted proxy (trusted_proxies: the state network),
 #   - no overwritehost / overwriteprotocol pins the answer, and
-#   - the host is one of the trusted_domains (otherwise it falls back to its own
-#     first trusted domain).
+#   - the host is one of the trusted_domains (otherwise it answers HTTP 400 and gremion-ui
+#     retries the page without the origin, so the editor opens but posts to the in-network name).
 # This hook makes the last two true, idempotently, for an install of any age (the
 # custom.config.php copy on a persistent volume is only written on the first start).
 #
@@ -32,9 +32,20 @@ OCC="${OCC:-php /var/www/html/occ}"
 $OCC status 2>/dev/null | grep -q "installed: true" || exit 0
 
 # ensure_trusted <host> -- append the host to trusted_domains unless it is already listed.
+# The whole list is read first: if occ cannot read it, nothing is written (a failed read of one index
+# must never look like a free slot and overwrite an entry such as the in-network name).
 ensure_trusted() {
   host="$1"
-  i=0
+  list="$($OCC config:system:get trusted_domains 2>/dev/null)" || {
+    echo "pin-editor-origin: could not read trusted_domains, leaving it alone (non-fatal)"
+    return 0
+  }
+  if printf '%s\n' "$list" | grep -Fxq -- "$host"; then
+    echo "pin-editor-origin: ${host} already trusted"
+    return 0
+  fi
+  # The entries are numbered from 0 without gaps: the first free slot is the count.
+  i="$(printf '%s\n' "$list" | grep -c .)"
   while [ "$i" -lt 50 ]; do
     cur="$($OCC config:system:get trusted_domains "$i" 2>/dev/null)" || cur=""
     if [ -z "$cur" ]; then

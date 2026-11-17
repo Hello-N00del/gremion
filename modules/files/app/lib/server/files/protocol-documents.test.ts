@@ -71,9 +71,16 @@ describe('protocolDocumentPort.getDraftWopiToken', () => {
     mockGetCollaboraEditorUrl.mockResolvedValue({ editorUrl: 'http://collabora/edit?token=abc', tokenTtl: 3600 })
     const result = await protocolDocumentPort.getDraftWopiToken(DRAFT_PATH)
     expect(mockGetFileId).toHaveBeenCalledWith(DAV_DRAFT_FILE, 'admin')
-    expect(mockGetCollaboraEditorUrl).toHaveBeenCalledWith(42, 'admin')
+    expect(mockGetCollaboraEditorUrl).toHaveBeenCalledWith(42, 'admin', {})
     expect(result.editorUrl).toBe('http://collabora/edit?token=abc')
     expect(result.tokenTtl).toBe(3600)
+  })
+
+  it('forwards the browser origin so the editor posts its messages to the customer host', async () => {
+    mockGetFileId.mockResolvedValue(42)
+    mockGetCollaboraEditorUrl.mockResolvedValue({ editorUrl: 'http://collabora/edit?token=abc', tokenTtl: 3600 })
+    await protocolDocumentPort.getDraftWopiToken(DRAFT_PATH, { publicOrigin: 'https://kunde.example' })
+    expect(mockGetCollaboraEditorUrl).toHaveBeenCalledWith(42, 'admin', { publicOrigin: 'https://kunde.example' })
   })
 })
 

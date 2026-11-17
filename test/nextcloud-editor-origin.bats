@@ -20,7 +20,12 @@ setup() {
 f() { if [ -n "${2:-}" ] && [ "${2#--}" = "$2" ]; then echo "$OCC_STATE/$1.$2"; else echo "$OCC_STATE/$1"; fi; }
 case "$1" in
   status) echo "  - installed: true" ;;
-  config:system:get) [ -f "$(f "$2" "${3:-}")" ] && cat "$(f "$2" "${3:-}")" || exit 1 ;;
+  config:system:get)
+    if [ "$2" = trusted_domains ] && [ -z "${3:-}" ]; then
+      for t in "$OCC_STATE"/trusted_domains.*; do [ -f "$t" ] && { cat "$t"; echo; }; done
+      exit 0
+    fi
+    [ -f "$(f "$2" "${3:-}")" ] && cat "$(f "$2" "${3:-}")" || exit 1 ;;
   config:system:set)
     key="$2"; idx=""
     case "$3" in --value=*) ;; *) idx="$3" ;; esac
@@ -91,6 +96,19 @@ trusted() {
     [[ "$output" == *"ignoring"* ]]
 }
 
+@test "an occ that cannot read trusted_domains never gets an entry overwritten" {
+    printf '%s\n' '#!/bin/sh' 'case "$1" in' \
+        '  status) echo "installed: true" ;;' \
+        '  config:system:get) exit 1 ;;' \
+        '  config:system:set) printf "%s" "$*" >>"$OCC_STATE/writes" ;;' \
+        '  *) exit 1 ;;' 'esac' >"$OCC"
+    export NEXTCLOUD_PUBLIC_HOSTS=rat.example.test
+    run sh "$HOOK"
+    [ "$status" -eq 0 ]
+    [ ! -f "$OCC_STATE/writes" ]
+    [ "$(trusted)" = "localhost nextcloud" ]
+}
+
 @test "a failing occ never makes the hook fail (it must not block the container)" {
     printf '#!/bin/sh\ncase "$1" in status) echo "installed: true" ;; *) exit 1 ;; esac\n' >"$OCC"
     export NEXTCLOUD_PUBLIC_HOSTS=rat.example.test
@@ -106,5 +124,8 @@ trusted() {
     run grep -E '^[[:space:]]*NEXTCLOUD_OVERWRITE(HOST|PROTOCOL):' <<<"$block"
     [ "$status" -eq 1 ]
     run grep -E '^[[:space:]]*NEXTCLOUD_PUBLIC_HOSTS:[[:space:]]+\$\{PILOT_TENANT_HOST' <<<"$block"
+    [ "$status" -eq 0 ]
+    # The forwarded host is honoured from a trusted proxy only: both address families of the state network.
+    run grep -E '^[[:space:]]*NEXTCLOUD_TRUSTED_PROXIES:.*STATE_V4_SUBNET.*STATE_V6_SUBNET' <<<"$block"
     [ "$status" -eq 0 ]
 }

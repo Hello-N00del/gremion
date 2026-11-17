@@ -649,9 +649,11 @@ export class NextcloudClient {
    * message. The origin travels as X-Forwarded-Host / X-Forwarded-Proto, which
    * Nextcloud honours from a trusted proxy (the state network) once no
    * overwritehost pins the host (docker/nextcloud/hooks/before-starting/
-   * pin-editor-origin.sh). Nextcloud ignores a host that is not one of its
-   * trusted domains and the page then carries no editor state; the fetch is
-   * repeated without the origin so editing still opens.
+   * pin-editor-origin.sh). Nextcloud answers a host that is not one of its
+   * trusted domains with HTTP 400 (a page without editor state is handled the
+   * same way); the page fetch is then repeated without the origin so editing
+   * still opens. A failure of createDirect itself (Nextcloud down) is not
+   * retried.
    *
    * Returns { editorUrl, tokenTtl } where:
    *   - editorUrl: full Collabora URL with WOPISrc + access_token + access_token_ttl
@@ -669,6 +671,7 @@ export class NextcloudClient {
       try {
         state = await this.fetchEditorState(fileId, userId, forwarded)
       } catch (err) {
+        if (!(err instanceof EditorPageError)) throw err
         console.warn(
           `Nextcloud editor page refused the public origin ${opts.publicOrigin} (${err instanceof Error ? err.message : 'unknown error'}); opening the editor without it. Is the host one of Nextcloud's trusted_domains?`
         )
@@ -704,7 +707,7 @@ export class NextcloudClient {
     )
     if (!pageRes.ok) {
       const snippet = await pageRes.text().then((t) => t.slice(0, 200)).catch(() => '')
-      throw new Error(`Nextcloud direct view page → ${pageRes.status}: ${snippet}`)
+      throw new EditorPageError(`Nextcloud direct view page → ${pageRes.status}: ${snippet}`)
     }
     const html = await pageRes.text()
 
@@ -712,11 +715,14 @@ export class NextcloudClient {
     const callbackUrl = extractInitialState<string>(html, 'richdocuments-wopi_callback_url')
 
     if (!doc?.token || !doc?.urlsrc || !doc?.fileId || !callbackUrl) {
-      throw new Error('Collabora editor data missing from Nextcloud direct view page')
+      throw new EditorPageError('Collabora editor data missing from Nextcloud direct view page')
     }
     return { doc, callbackUrl }
   }
 }
+
+/** The direct-view page answered with an error or without editor state (as opposed to createDirect failing). */
+class EditorPageError extends Error {}
 
 interface EditorState {
   doc: { token: string; token_ttl: number; urlsrc: string; fileId: string }

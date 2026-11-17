@@ -35,12 +35,14 @@ async function createDraftFile(protocolId: string): Promise<string> {
 }
 
 async function getDraftWopiToken(
-  draftPath: string
+  draftPath: string,
+  opts: { publicOrigin?: string } = {}
 ): Promise<{ editorUrl: string; tokenTtl: number }> {
   const nc = createNextcloudClient()
   const user = sysUser()
   const fileId = await nc.getFileId(davPath(draftPath), user)
-  return nc.getCollaboraEditorUrl(fileId, user)
+  // The browser origin goes along so the editor posts its messages to the customer host.
+  return nc.getCollaboraEditorUrl(fileId, user, opts)
 }
 
 async function downloadDraft(draftPath: string): Promise<Buffer> {

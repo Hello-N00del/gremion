@@ -37,6 +37,9 @@ export async function GET(event: RequestEvent) {
   // A3a-2: the WOPI editor URL is minted by the files module's document port.
   const docs = getProtocolDocumentPort()
   if (!docs) throw error(503, 'Dokumentdienst nicht verfügbar')
-  const tokenInfo = await docs.getDraftWopiToken(protocol.nextcloud_draft_path)
+  // The origin the browser has for this app: the editor posts its messages (save, close) to it.
+  const tokenInfo = await docs.getDraftWopiToken(protocol.nextcloud_draft_path, {
+    publicOrigin: event.url.origin,
+  })
   return json(tokenInfo)
 }

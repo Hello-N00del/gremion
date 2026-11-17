@@ -912,8 +912,10 @@ services:
       # take from X-Forwarded-Host (trusted_domains), see pin-editor-origin.sh.
       NEXTCLOUD_PUBLIC_HOSTS:      ${PILOT_TENANT_HOST:-}
       NEXTCLOUD_OVERWRITEWEBROOT:  ""
-      # The state network's own subnet: the only peers that reach Nextcloud.
-      NEXTCLOUD_TRUSTED_PROXIES: ${STATE_V4_SUBNET:-172.16.0.0/12}
+      # The state network's own subnets (the network is dual-stack): the only peers that
+      # reach Nextcloud. A peer over IPv6 outside the list would have its X-Forwarded-Host
+      # ignored, and the editor would post to the in-network name again.
+      NEXTCLOUD_TRUSTED_PROXIES: ${STATE_V4_SUBNET:-172.16.0.0/12},${STATE_V6_SUBNET:-fd00::/8}
       REDIS_HOST:          nextcloud-redis
       REDIS_HOST_PASSWORD: ${REDIS_PASSWORD}
       # Read by configure-richdocuments.sh at the first install: the browser-facing

@@ -47,6 +47,7 @@ function makeEvent(opts: { roles?: string[] } = {}) {
   return {
     locals: { user: { id: 'u1', roles: opts.roles ?? ['member'] } },
     params: { id: '123e4567-e89b-12d3-a456-426614174001' },
+    url: new URL('https://kunde.example/api/protocols/123e4567-e89b-12d3-a456-426614174001/wopi-token'),
   } as unknown as Parameters<typeof GET>[0]
 }
 
@@ -75,7 +76,10 @@ describe('GET /api/protocols/[id]/wopi-token', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.editorUrl).toBe('http://collabora/edit?token=abc')
-    expect(mockGetDraftWopiToken).toHaveBeenCalledWith('/protocols/drafts/p1.odt')
+    // The editor posts its messages (save, close) to the origin the browser has for this app.
+    expect(mockGetDraftWopiToken).toHaveBeenCalledWith('/protocols/drafts/p1.odt', {
+      publicOrigin: 'https://kunde.example',
+    })
   })
 
   it('404s when the protocol does not exist', async () => {
