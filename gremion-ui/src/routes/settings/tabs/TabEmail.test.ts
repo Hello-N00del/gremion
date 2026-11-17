@@ -67,6 +67,18 @@ describe('TabEmail.svelte — password notice (K2#8)', () => {
     expect(container.textContent).toMatch(/Betreiber/)
     expect(container.textContent).toMatch(/Benutzername und Passwort/)
   })
+
+  // When the operator has wired the mail sending for the tenant, the operator's server and
+  // sender address win over the values saved here (tenant-mail.ts: registry override first).
+  // The notice therefore must not promise that these fields always decide, and must say that
+  // an operator setup takes precedence. Whitespace-normalised: the sentence wraps in markup.
+  it('does not promise that the fields here always decide; says an operator setup takes precedence', () => {
+    const { container } = render(TabEmail, { props: { smtp: SMTP } })
+    const text = (container.textContent ?? '').replace(/\s+/g, ' ')
+    expect(text).not.toMatch(/Hier legen Sie fest, über welchen Mailserver/)
+    expect(text).toMatch(/Hat der Betreiber den E-Mail-Versand bereits eingerichtet, gelten dessen Angaben/)
+    expect(text).toMatch(/Änderungen hier (haben|bleiben) (dann )?(keine Wirkung|ohne Wirkung)/)
+  })
 })
 
 describe('TabEmail.svelte — SMTP test result surface', () => {

@@ -101,9 +101,10 @@
   <h2 class="text-lg font-semibold">E-Mail (SMTP)</h2>
 
   <div class="rounded-lg border bg-surface-2/40 px-4 py-3 text-sm text-ink-muted">
-    Hier legen Sie fest, über welchen Mailserver und mit welcher Absender-Adresse E-Mails
-    versendet werden. Benutzername und Passwort für den Mailserver werden aus Sicherheitsgründen
-    nicht in den Einstellungen gespeichert, sondern vom Betreiber der Plattform für Sie
+    Hier tragen Sie einen eigenen Mailserver und eine Absender-Adresse für ausgehende E-Mails ein.
+    Hat der Betreiber den E-Mail-Versand bereits eingerichtet, gelten dessen Angaben; Änderungen
+    hier haben dann keine Wirkung. Benutzername und Passwort für den Mailserver werden aus
+    Sicherheitsgründen nicht in den Einstellungen gespeichert, sondern vom Betreiber für Sie
     hinterlegt. Wenden Sie sich dafür an den Betreiber.
   </div>
 
