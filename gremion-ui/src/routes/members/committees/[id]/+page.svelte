@@ -2,7 +2,7 @@
   import PageTitle from '$lib/components/PageTitle.svelte'
   import type { PageData } from './$types'
   import { invalidateAll, goto } from '$app/navigation'
-  import { t } from '$lib/i18n'
+  import { lang, t } from '$lib/i18n'
   import { Dialog, DialogHeader, DialogTitle } from '$lib/components/ui/dialog'
   import { DateTimeFieldDe } from '$lib/components/ui/date-field'
   import { buildRevokeRequest } from '$lib/governance/recall-action'
@@ -387,7 +387,7 @@
         </span>
       {/each}
       {#if hasFailed}
-        <button type="button" onclick={retryProvision} disabled={retrying}
+        <button type="button" onclick={retryProvision} disabled={retrying} lang={retrying ? 'de' : $lang}
           class="ml-auto rounded-md border px-3 py-1 text-xs font-medium hover:bg-surface-2 disabled:opacity-50">
           {retrying ? 'Läuft…' : $t('governance.provision.retry')}
         </button>
@@ -429,7 +429,7 @@
             oninput={clearMemberSearchReport}
             onkeydown={(e) => e.key === 'Enter' && searchUsers()}
           />
-          <select bind:value={newMemberType} class="rounded-md border border-border-strong bg-paper px-2 py-2 text-sm">
+          <select bind:value={newMemberType} lang={$lang} class="rounded-md border border-border-strong bg-paper px-2 py-2 text-sm">
             <option value="unelected">{$t('governance.member.type.unelected')}</option>
             <option value="elected">{$t('governance.member.type.elected')}</option>
             <option value="employee">{$t('governance.member.type.employee')}</option>
@@ -485,11 +485,11 @@
     <table class="w-full text-sm">
       <thead>
         <tr class="border-b border-border bg-surface-2/40">
-          <th class="px-4 py-2.5 text-left font-medium text-ink-muted">{$t('members.col.name')}</th>
-          <th class="px-4 py-2.5 text-left font-medium text-ink-muted">{$t('members.col.role')}</th>
-          <th class="px-4 py-2.5 text-left font-medium text-ink-muted hidden sm:table-cell">{$t('members.col.until')}</th>
+          <th class="px-4 py-2.5 text-left font-medium text-ink-muted" lang={$lang}>{$t('members.col.name')}</th>
+          <th class="px-4 py-2.5 text-left font-medium text-ink-muted" lang={$lang}>{$t('members.col.role')}</th>
+          <th class="px-4 py-2.5 text-left font-medium text-ink-muted hidden sm:table-cell" lang={$lang}>{$t('members.col.until')}</th>
           {#if data.isAdmin}
-            <th class="px-4 py-2.5 text-right font-medium text-ink-muted">{$t('members.col.actions')}</th>
+            <th class="px-4 py-2.5 text-right font-medium text-ink-muted" lang={$lang}>{$t('members.col.actions')}</th>
           {/if}
         </tr>
       </thead>
@@ -499,7 +499,7 @@
             <!-- Name -->
             <td class="px-4 py-3">
               {#if row.vacant}
-                <span class="italic text-ink-muted">{$t('members.role.vacant')}</span>
+                <span class="italic text-ink-muted" lang={$lang}>{$t('members.role.vacant')}</span>
               {:else}
                 <span class="font-medium">{row.displayName}</span>
               {/if}
@@ -511,7 +511,7 @@
                 <span class="inline-flex items-center gap-1.5">
                   {row.role}
                   {#if row.status === 'grace'}
-                    <span class="text-amber-500 text-xs">{$t('members.role.grace')}</span>
+                    <span class="text-amber-500 text-xs" lang={$lang}>{$t('members.role.grace')}</span>
                   {/if}
                 </span>
               {:else}
@@ -548,6 +548,7 @@
                   <button
                     class="text-xs text-rust hover:underline disabled:opacity-50"
                     disabled={removingId === row.memberId}
+                    lang={$lang}
                     onclick={() => removeMember(row.memberId!)}
                   >{removingId === row.memberId ? '…' : $t('members.action.remove')}</button>
                 {/if}
@@ -558,7 +559,7 @@
 
         {#if rosterRows().length === 0}
           <tr>
-            <td colspan="4" class="px-4 py-6 text-center text-sm text-ink-muted">
+            <td colspan="4" class="px-4 py-6 text-center text-sm text-ink-muted" lang={$lang}>
               {$t('members.empty.members')}
             </td>
           </tr>
@@ -593,7 +594,7 @@
   <!-- ── History ────────────────────────────────────────────────────────────── -->
   {#if data.history.length > 0}
     <div class="space-y-2">
-      <h2 class="text-sm font-semibold uppercase tracking-wide text-ink-muted mb-2">{$t('members.tab.history')}</h2>
+      <h2 class="text-sm font-semibold uppercase tracking-wide text-ink-muted mb-2" lang={$lang}>{$t('members.tab.history')}</h2>
       {#each data.history as entry (entry.id)}
         <div class="p-3 border border-border rounded-md text-xs flex gap-4">
           <span class="text-ink-muted shrink-0">

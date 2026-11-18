@@ -1,7 +1,7 @@
 <script lang="ts">
   import PageTitle from '$lib/components/PageTitle.svelte'
   import type { PageData } from './$types'
-  import { t } from '$lib/i18n'
+  import { lang, t } from '$lib/i18n'
 
   let { data }: { data: PageData } = $props()
 
@@ -91,11 +91,11 @@
             {/each}
           </span>
           {#if data.isAdmin}
-            <span class="status mono" class:off={!m.enabled}>{m.enabled ? $t('members.status.active') : $t('members.status.inactive')}</span>
+            <span class="status mono" class:off={!m.enabled} lang={$lang}>{m.enabled ? $t('members.status.active') : $t('members.status.inactive')}</span>
           {/if}
         </button>
         {#if data.isAdmin}
-          <label class="toggle">
+          <label class="toggle" lang={$lang}>
             <input
               type="checkbox"
               aria-label={`${$t('members.accountActive')}: ${m.name}`}

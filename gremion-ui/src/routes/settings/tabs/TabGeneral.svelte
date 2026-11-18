@@ -2,7 +2,7 @@
   import { Button } from '$lib/components/ui/button'
   import { Input } from '$lib/components/ui/input'
   import { Label } from '$lib/components/ui/label'
-  import { t } from '$lib/i18n'
+  import { lang, t } from '$lib/i18n'
   import Icon from '$lib/components/ui/Icon.svelte'
 
   export let org: { name: string; domain: string; logo_path: string | null }
@@ -64,12 +64,12 @@
 <div class="space-y-8 py-4">
   <!-- Organisation — branding only (#168) -->
   <section class="space-y-4 max-w-lg">
-    <h2 class="text-base font-semibold text-ink">{$t('settings.org.branding.title')}</h2>
-    <p class="text-xs text-ink-muted">{$t('settings.org.branding.sub')}</p>
+    <h2 class="text-base font-semibold text-ink" lang={$lang}>{$t('settings.org.branding.title')}</h2>
+    <p class="text-xs text-ink-muted" lang={$lang}>{$t('settings.org.branding.sub')}</p>
 
     <form class="space-y-4" onsubmit={(e) => { e.preventDefault(); save() }}>
       <div class="space-y-1.5">
-        <Label for="g-name">{$t('settings.general.org.name')}</Label>
+        <Label for="g-name"><span lang={$lang}>{$t('settings.general.org.name')}</span></Label>
         <Input id="g-name" bind:value={name} maxlength={200} />
       </div>
 
@@ -96,10 +96,10 @@
 
       <div class="flex items-center gap-3">
         <Button type="submit" disabled={saving}>
-          {saving ? $t('settings.general.saving') : $t('settings.general.save')}
+          <span lang={$lang}>{saving ? $t('settings.general.saving') : $t('settings.general.save')}</span>
         </Button>
         {#if saved}
-          <span class="flex items-center gap-1 text-sm text-green-600" role="status">
+          <span class="flex items-center gap-1 text-sm text-green-600" role="status" lang={$lang}>
             <Icon name="check" size={16} />
             {$t('settings.general.saved')}
           </span>

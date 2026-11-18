@@ -13,6 +13,7 @@ async function freshI18n() {
 
 afterEach(() => {
   document.documentElement.lang = ''
+  document.documentElement.removeAttribute('data-ui-locale')
   vi.unstubAllGlobals()
 })
 
@@ -29,6 +30,25 @@ describe('legacy $t shim in the browser (TASK-062 item 6)', () => {
     const { t, lang } = await freshI18n()
     expect(get(lang)).toBe('de')
     expect(get(t)('nav.files')).toBe('Dateien')
+  })
+
+  // Locale-en unit: a page declared German (lang="de") for an English person
+  // carries the person's locale in data-ui-locale (content-locale.ts). The
+  // strategy must read that one, or the browser renders German where the
+  // server rendered English and hydration flips the strings back.
+  test('a German-declared page for an English person: the catalogue follows data-ui-locale', async () => {
+    document.documentElement.lang = 'de'
+    document.documentElement.setAttribute('data-ui-locale', 'en')
+    const { t, lang } = await freshI18n()
+    expect(get(lang)).toBe('en')
+    expect(get(t)('nav.files')).toBe('Files')
+  })
+
+  test('data-ui-locale="de" on a page declared in another language stays German', async () => {
+    document.documentElement.lang = 'en'
+    document.documentElement.setAttribute('data-ui-locale', 'de')
+    const { lang } = await freshI18n()
+    expect(get(lang)).toBe('de')
   })
 
   // The retired gremion.lang / stura-lang keys are pinned in index.storage-keys.test.ts.

@@ -3,6 +3,7 @@
   import { onMount } from 'svelte'
   import Icon from '$lib/components/ui/Icon.svelte'
   import { themeMode } from '$lib/stores/theme'
+  import { t } from '$lib/i18n'
   import { resolveBrand, type Brand } from '$lib/brand'
   import { crumbsFor, type CrumbOverrides } from './crumbs'
   import { INSTANCE_STATE_META, instanceReady, type InstanceState } from '$lib/instance-status'
@@ -21,7 +22,8 @@
     unread = 0,
     leading,
     bodyContext,
-    modules
+    modules,
+    lang
   }: {
     brand?: Partial<Brand> | null
     nav?: NavItem[]
@@ -32,8 +34,11 @@
     bodyContext?: Snippet
     /** TASK-208: module-supplied chips, live-call indicator and bell (topbar-slot.ts). */
     modules?: TopbarModuleSlot
+    /** The language of the bar's own controls when it differs from the page's (WCAG 3.1.2); unset: the page's. */
+    lang?: string
   } = $props()
   let brand = $derived(resolveBrand(brandProp))
+  let themeLabel = $derived($themeMode === 'dark' ? $t('topbar.theme.toLight') : $t('topbar.theme.toDark'))
   // (open-core carve) `unread` is still accepted from AppShell for prop-shape
   // stability but no longer drives a bell badge here — the messages module owns
   // the notification surface and reintroduces it via a registered topbar slot.
@@ -96,11 +101,13 @@
   {@render leading?.()}
 
   <!-- Breadcrumbs (mono / uppercase, per chrome.jsx .crumbs) -->
-  <nav class="crumbs" aria-label="Breadcrumb">
-    <a href="/" class="root" class:last={crumbs.length === 0}>{brand.product}</a>
+  <!-- The nav's own label is chrome (the bar's language); the section names are German folder names and
+       the brand, so they are marked German where the bar's language differs from the page's. -->
+  <nav class="crumbs" {lang} aria-label={$t('topbar.breadcrumb')}>
+    <a href="/" class="root" class:last={crumbs.length === 0} lang={lang ? 'de' : undefined}>{brand.product}</a>
     {#each crumbs as crumb, i (i)}
       <span class="sep" aria-hidden="true">/</span>
-      <span class:last={i === crumbs.length - 1}>{crumb}</span>
+      <span class:last={i === crumbs.length - 1} lang={lang ? 'de' : undefined}>{crumb}</span>
     {/each}
   </nav>
 
@@ -113,15 +120,16 @@
     type="button"
     class="search"
     onclick={() => (paletteOpen = true)}
-    aria-label="Befehlspalette öffnen (Strg + K)"
+    {lang}
+    aria-label={$t('topbar.palette.open')}
     aria-haspopup="dialog"
   >
     <Icon name="search" size={14} aria-hidden="true" />
-    <span>Antrag, Datei, Person…</span>
+    <span>{$t('topbar.search.hint')}</span>
     <span class="k" aria-hidden="true">⌘ K</span>
   </button>
 
-  <CommandPalette bind:open={paletteOpen} {nav} />
+  <CommandPalette bind:open={paletteOpen} {nav} {lang} />
 
   <!-- #264: instance convergence badge — only when NOT fully converged. -->
   {#if showInstanceBadge}
@@ -129,10 +137,11 @@
       href="/systemstatus"
       class="topbar-status inst"
       class:danger={instanceMeta.tone === 'danger'}
-      title="Bereitstellung & Konvergenz · Systemstatus öffnen"
+      {lang}
+      title={$t('topbar.instance.title')}
     >
       <Icon name={instanceMeta.icon} size={11} aria-hidden="true" />
-      <span class="inst-txt">INSTANZ · {instanceMeta.label}</span>
+      <span class="inst-txt" lang="de">INSTANZ · {instanceMeta.label}</span>
     </a>
   {/if}
 
@@ -155,16 +164,17 @@
     type="button"
     class="icon-btn nav-column-only"
     onclick={() => themeMode.set($themeMode === 'dark' ? 'light' : 'dark')}
-    aria-label={$themeMode === 'dark' ? 'Helles Thema' : 'Dunkles Thema'}
+    {lang}
+    aria-label={themeLabel}
     aria-pressed={$themeMode === 'dark'}
-    title={$themeMode === 'dark' ? 'Helles Thema' : 'Dunkles Thema'}
+    title={themeLabel}
   >
     <Icon name={$themeMode === 'dark' ? 'sun' : 'moon'} size={16} />
   </button>
 
   <!-- Logout -->
   <form method="POST" action="/auth/logout" class="logout nav-column-only">
-    <button type="submit" class="icon-btn" aria-label="Abmelden" title="Abmelden">
+    <button type="submit" class="icon-btn" {lang} aria-label={$t('topbar.logout')} title={$t('topbar.logout')}>
       <Icon name="log-out" size={16} />
     </button>
   </form>

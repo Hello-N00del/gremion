@@ -7,7 +7,7 @@
   import ModuleOffWarning from '$lib/components/ModuleOffWarning.svelte'
   import ModuleSwitchNotice from '$lib/components/ModuleSwitchNotice.svelte'
   import OperatorModuleList from './OperatorModuleList.svelte'
-  import { t } from '$lib/i18n'
+  import { lang, t } from '$lib/i18n'
   import { fillText } from '$lib/modules/fill-text'
   import type { KarenzView, ModuleDeletionPreview, ModuleOverview, ModuleOverviewItem } from '$lib/modules/switch-preview'
 
@@ -273,7 +273,7 @@
   }
 </script>
 
-<div class="space-y-5 py-4" data-testid="tab-modules">
+<div class="space-y-5 py-4" data-testid="tab-modules" lang={$lang}>
   <p class="text-sm text-ink-muted">{$t('settings.modules.intro')}</p>
 
   {#if resumeError}
@@ -306,7 +306,7 @@
         <li class="space-y-3 rounded-lg border border-border p-4" data-module={m.moduleId}>
           <div class="flex flex-wrap items-start justify-between gap-3">
             <div class="space-y-1">
-              <h3 class="text-sm font-semibold">{m.label}</h3>
+              <h3 class="text-sm font-semibold" lang="de">{m.label}</h3>
               <p class="text-xs text-ink-muted">
                 <span>{m.enabled ? $t('settings.modules.state.on') : $t('settings.modules.state.off')}</span>
                 ·

@@ -3,8 +3,8 @@
 // page, not per shell, and fails safe: a route follows the person's locale
 // only when its page is PROVEN translated (below); every other route is
 // declared German, shell routes (/beschluesse, /protokolle, /systemstatus,
-// ...) included, and the catalogue strings around it (shell chrome, +error)
-// render German with it.
+// ...) included. (The catalogue strings render in the person's locale on every
+// route, locale-en; only the declaration follows this file.)
 //
 // "Proven translated" is checked mechanically over the real route tree
 // (every +page.svelte, its nested +layout.svelte files and every .svelte
@@ -283,7 +283,10 @@ describe('the proof itself', () => {
   })
 })
 
-describe('every page is declared in the language it renders in (guard)', () => {
+// This pins the DECLARED language (`<html lang>`): a page is declared English only when the scan proves its
+// text comes from the catalogue. It does not claim that nothing German renders under an English person's
+// locale; catalogue strings inside a page declared German render in the person's locale (locale-en unit).
+describe('a page is declared English only when its text is proven to come from the catalogue (guard)', () => {
   // Every +page.svelte under routes/, shell routes included: the round-3 scan
   // looked only at the routes outside the shell and so missed /beschluesse.
   const pages = filesUnder(ROUTES)
@@ -348,7 +351,12 @@ describe('every page is declared in the language it renders in (guard)', () => {
     expect(layout).toMatch(/afterNavigate\(\(\{ to \}\) => \{\s*if \(to\) syncDocumentLang\(document\.documentElement, to\.route\.id\)/)
   })
 
-  it('the root layout renders the shell chrome in the page language', () => {
-    expect(layout).toMatch(/<AppShell[^>]*\blocale=\{pageLocale\}/)
+  // locale-en: the declared language and the rendered language are separate. The
+  // chrome speaks the person's locale on every page; the page's declared language
+  // goes along so the shell can mark chrome that differs (WCAG 3.1.2).
+  it("the root layout renders the shell chrome in the person's locale and hands it the page's declared language", () => {
+    expect(layout).toMatch(/<AppShell[^>]*\blocale=\{uiLocale\}/)
+    expect(layout).toMatch(/<AppShell[^>]*\{pageLocale\}/)
+    expect(layout).toMatch(/let pageLocale = \$derived\(contentLocaleFor\(\$page\.route\.id, uiLocale\)\)/)
   })
 })

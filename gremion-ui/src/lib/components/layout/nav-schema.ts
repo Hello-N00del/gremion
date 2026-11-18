@@ -21,8 +21,10 @@ export type NavItem =
       // #289 (HANDOVER-v8 Part F): when set, the label is re-termed via the
       // active tenant's term-map (retermNav). Absent → label is a fixed literal.
       termKey?: string;
+      /** Set by localizeNav (nav-localize.ts) only: the language of a label the translation did not reach. */
+      lang?: string;
     }
-  | { kind: 'section'; label: string; needs?: string[]; role?: Role; moduleId?: string; termKey?: string; children: NavItem[] };
+  | { kind: 'section'; label: string; needs?: string[]; role?: Role; moduleId?: string; termKey?: string; lang?: string; children: NavItem[] };
 
 /**
  * A module-anchor placeholder in the base nav TEMPLATE. composeNavSchema splices

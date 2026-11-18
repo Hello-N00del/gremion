@@ -4,7 +4,7 @@
   import Icon from '$lib/components/ui/Icon.svelte'
   import { resolveBrand } from '$lib/brand'
   import { PLUGGABLE_MODULES } from '$lib/instance-status'
-  import { t } from '$lib/i18n'
+  import { lang, t } from '$lib/i18n'
   import ModuleOffNotice from '$lib/components/ModuleOffNotice.svelte'
   import { onMount } from 'svelte'
   import { initTheme } from '$lib/stores/theme'
@@ -64,6 +64,12 @@
     return page.error?.message ?? $t('error.detail.unknown')
   })
 
+  // The detail is a catalogue message for the statuses it knows; for any other the server's own message is shown
+  // as it came (German or English, depending on the endpoint), so it is not marked as the person's language.
+  const detailIsCatalogue = $derived(
+    page.status === 403 || page.status === 404 || page.status === 500 || !page.error?.message,
+  )
+
   const heading = $derived(
     moduleOff
       ? 'Modul nicht aktiv'
@@ -83,26 +89,27 @@
   <ModuleOffNotice moduleId={moduleOff.id} isItAdmin={isItAdmin} />
 {:else}
 <div class="error-page">
+  <!-- WCAG 3.1.2: the page is declared German (<html lang>), the catalogue messages render in the person's locale. -->
   <div class="error-card">
     <div class="error-status" aria-hidden="true">{page.status}</div>
     <div class="eyebrow">{brand.product} · {page.status}</div>
-    <h1 class="display error-heading">{heading}</h1>
+    <h1 class="display error-heading" lang={$lang}>{heading}</h1>
 
-      <p class="error-detail">{detail}</p>
+      <p class="error-detail" lang={detailIsCatalogue ? $lang : undefined}>{detail}</p>
 
       {#if page.status === 403}
         {#if sessionUser}
-          <div class="error-context">
+          <div class="error-context" lang={$lang}>
             {$t('error.context.403.signedInAs')} <strong>{sessionUser.name}</strong> · {$t('error.context.403.role')} <strong>{roleLabel}</strong>.
             {$t('error.context.403.needHigher')}
           </div>
         {:else}
-          <div class="error-context">
+          <div class="error-context" lang={$lang}>
             {$t('error.context.403.anonymous')}
           </div>
         {/if}
       {:else if page.status === 500}
-        <div class="error-context">
+        <div class="error-context" lang={$lang}>
           {$t('error.context.500')}
           {#if errId}
             <div class="error-ref mono">{$t('error.context.500.ref')} <strong>{errId}</strong></div>
@@ -110,7 +117,7 @@
         </div>
       {/if}
 
-    <div class="error-actions">
+    <div class="error-actions" lang={$lang}>
       <a href="/" class="btn btn-primary">
         <Icon name="home" size={14} /> {$t('error.action.home')}
       </a>

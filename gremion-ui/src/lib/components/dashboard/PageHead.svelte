@@ -1,7 +1,7 @@
 <script lang="ts">
   import Icon from '$lib/components/ui/Icon.svelte'
-  import { t } from '$lib/i18n'
-  import { fmtMeetingPill, greeting, pluralDe } from './format'
+  import { lang, t } from '$lib/i18n'
+  import { fmtMeetingPill, greeting, isMeetingToday, pluralDe } from './format'
   import type { Upcoming } from './types'
 
   // Page head: title block (left) + actions (right).
@@ -32,9 +32,9 @@
 <div class="page-head">
   <div>
     {#if nextMeeting}
-      <span class="pill pill-accent pill-live">{nextMeeting.title} · {fmtMeetingPill(nextMeeting.startIso, $t)}</span>
+      <span class="pill pill-accent pill-live">{nextMeeting.title} · <span lang={isMeetingToday(nextMeeting.startIso) ? $lang : 'de'}>{fmtMeetingPill(nextMeeting.startIso, $t)}</span></span>
     {/if}
-    <h1 class="page-title" style="margin-top: 10px;">{greeting($t)}, {firstName}.</h1>
+    <h1 class="page-title" style="margin-top: 10px;" lang={$lang}>{greeting($t)}, {firstName}.</h1>
     <div class="page-sub">
       {#if isMember || !financeEnabled}
         {myEventCount} {pluralDe(myEventCount, 'Termin', 'Termine')} in deinen {gremienPlural} · {liveVotesCount} {pluralDe(liveVotesCount, 'Abstimmung läuft', 'Abstimmungen laufen')}.

@@ -2,7 +2,7 @@
   import { Button } from '$lib/components/ui/button'
   import { Input } from '$lib/components/ui/input'
   import { Label } from '$lib/components/ui/label'
-  import { t } from '$lib/i18n'
+  import { lang, t } from '$lib/i18n'
   import Icon from '$lib/components/ui/Icon.svelte'
 
   // (open-core carve) This tab formerly rendered feature-module toggles
@@ -50,7 +50,7 @@
 </script>
 
 <div class="space-y-6 py-4">
-  <h2 class="text-base font-semibold text-ink">{$t('settings.services.title')}</h2>
+  <h2 class="text-base font-semibold text-ink" lang={$lang}>{$t('settings.services.title')}</h2>
 
   <!-- Public portal URL -->
   <section class="space-y-3 max-w-lg">
@@ -82,10 +82,10 @@
 
       <div class="flex items-center gap-3">
         <Button type="submit" disabled={portalSaving}>
-          {portalSaving ? $t('settings.general.saving') : $t('settings.general.save')}
+          <span lang={$lang}>{portalSaving ? $t('settings.general.saving') : $t('settings.general.save')}</span>
         </Button>
         {#if portalSaved}
-          <span class="flex items-center gap-1 text-sm text-green-600" role="status">
+          <span class="flex items-center gap-1 text-sm text-green-600" role="status" lang={$lang}>
             <Icon name="check" size={16} />
             {$t('settings.general.saved')}
           </span>

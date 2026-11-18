@@ -78,7 +78,7 @@ describe('settings section "Organisation": branding text says only what is true'
 
   test('the rendered branding text names the browser tab and no other place', () => {
     const { body } = render(SettingsBody, { props: { data: data(undefined) as never, activeSection: 'organisation' } })
-    const sub = body.match(/<p class="text-xs text-ink-muted">(Name der Studierendenschaft[^<]*)<\/p>/)?.[1]
+    const sub = body.match(/<p class="text-xs text-ink-muted"(?: lang="[a-z]+")?>(Name der Studierendenschaft[^<]*)<\/p>/)?.[1]
     expect(sub, 'branding sub text not found').toBeDefined()
     expect(sub).toMatch(/Browser/)
     expect(sub).not.toMatch(FALSE_PLACES)

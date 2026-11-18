@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { PageData, LayoutData } from './$types'
   import Icon from '$lib/components/ui/Icon.svelte'
-  import { t } from '$lib/i18n'
+  import { lang, t } from '$lib/i18n'
   import { scopeLabels, type ScopeKind } from '$lib/auth/labels'
   import { goto } from '$app/navigation'
   import { untrack } from 'svelte'
@@ -52,18 +52,18 @@
   }
 
   const sections: Section[] = $derived([
-    { key: 'profil', label: 'Profil', icon: 'badge', group: 'Konto', show: true },
-    { key: 'darstellung', label: 'Darstellung & Barrierefreiheit', icon: 'eye', group: 'Konto', show: true },
-    { key: 'organisation', label: 'Organisation', icon: 'settings', group: 'Verwaltung', show: data.isITAdmin },
+    { key: 'profil', label: $t('settings.section.profil'), icon: 'badge', group: $t('settings.group.account'), show: true },
+    { key: 'darstellung', label: $t('settings.section.darstellung'), icon: 'eye', group: $t('settings.group.account'), show: true },
+    { key: 'organisation', label: $t('settings.section.organisation'), icon: 'settings', group: $t('settings.group.admin'), show: data.isITAdmin },
     // Karenz phase 1: council-admin (isAdmin; an it-admin is one too) switches feature modules on.
-    { key: 'module', label: 'Module', icon: 'settings', group: 'Verwaltung', show: data.isAdmin },
-    { key: 'dienste', label: 'Dienste & Portal', icon: 'settings', group: 'Verwaltung', show: data.isITAdmin },
-    { key: 'email', label: 'E-Mail', icon: 'send', group: 'Verwaltung', show: data.isITAdmin },
-    { key: 'rechtliches', label: 'Rechtliches', icon: 'file', group: 'Verwaltung', show: data.isITAdmin },
-    { key: 'datenschutz', label: 'Datenschutz', icon: 'shield', group: 'Verwaltung', show: data.isITAdmin },
-    { key: 'sicherungen', label: 'Sicherungen', icon: 'folder', group: 'System', show: data.isITAdmin },
-    { key: 'loeschfristen', label: 'Löschfristen', icon: 'clock', group: 'System', show: data.isITAdmin },
-    { key: 'gefahrenzone', label: 'Gefahrenzone', icon: 'lock', group: 'System', show: data.isITAdmin, danger: true },
+    { key: 'module', label: $t('settings.section.module'), icon: 'settings', group: $t('settings.group.admin'), show: data.isAdmin },
+    { key: 'dienste', label: $t('settings.section.dienste'), icon: 'settings', group: $t('settings.group.admin'), show: data.isITAdmin },
+    { key: 'email', label: $t('settings.section.email'), icon: 'send', group: $t('settings.group.admin'), show: data.isITAdmin },
+    { key: 'rechtliches', label: $t('settings.section.rechtliches'), icon: 'file', group: $t('settings.group.admin'), show: data.isITAdmin },
+    { key: 'datenschutz', label: $t('settings.section.datenschutz'), icon: 'shield', group: $t('settings.group.admin'), show: data.isITAdmin },
+    { key: 'sicherungen', label: $t('settings.section.sicherungen'), icon: 'folder', group: $t('settings.group.system'), show: data.isITAdmin },
+    { key: 'loeschfristen', label: $t('settings.section.loeschfristen'), icon: 'clock', group: $t('settings.group.system'), show: data.isITAdmin },
+    { key: 'gefahrenzone', label: $t('settings.section.gefahrenzone'), icon: 'lock', group: $t('settings.group.system'), show: data.isITAdmin, danger: true },
   ])
   const visible = $derived(sections.filter((s) => s.show))
 
@@ -95,19 +95,19 @@
     return out
   })
 
-  const SUBTITLE: Record<SectionKey, string> = {
-    profil: 'Ihr Konto, Anmeldung über Keycloak (SSO).',
-    darstellung: 'Sprache, Schriftgröße, Farbsehen und Bewegung.',
-    organisation: 'Name der Studierendenschaft und Semesterbeginn.',
-    module: 'Funktionsmodule für Ihr Gremium einschalten.',
-    dienste: 'Öffentliches Portal.',
-    email: 'Postausgang für Benachrichtigungen.',
-    rechtliches: 'Pflichttexte des öffentlichen Portals.',
-    datenschutz: 'Verantwortliche Stelle und Löschkonzept.',
-    sicherungen: 'Backups und Wiederherstellung.',
-    loeschfristen: 'Automatische Aufbewahrungsfristen.',
-    gefahrenzone: 'Unwiderrufliche Aktionen.',
-  }
+  const SUBTITLE: Record<SectionKey, string> = $derived({
+    profil: $t('settings.subtitle.profil'),
+    darstellung: $t('settings.subtitle.darstellung'),
+    organisation: $t('settings.subtitle.organisation'),
+    module: $t('settings.subtitle.module'),
+    dienste: $t('settings.subtitle.dienste'),
+    email: $t('settings.subtitle.email'),
+    rechtliches: $t('settings.subtitle.rechtliches'),
+    datenschutz: $t('settings.subtitle.datenschutz'),
+    sicherungen: $t('settings.subtitle.sicherungen'),
+    loeschfristen: $t('settings.subtitle.loeschfristen'),
+    gefahrenzone: $t('settings.subtitle.gefahrenzone'),
+  })
 
   function selectSection(k: SectionKey) {
     activeKey = k
@@ -212,21 +212,23 @@
   }
 </script>
 
+<!--
+  WCAG 3.1.2: this page is declared German (<html lang>, content-locale.ts) while the catalogue strings
+  render in the person's locale, so every region made of them says so. Hard-coded German stays unmarked.
+-->
 <div class="settings-wrap">
   <div class="page-head">
-    <div>
+    <div lang={$lang}>
       <div class="eyebrow">{$t('settings.title')}</div>
       <h1 class="page-title">{$t('settings.title')}</h1>
       <div class="page-sub">
-        {data.isITAdmin
-          ? 'Konto, Organisation und System verwalten.'
-          : 'Ihr Konto und Ihre persönlichen Einstellungen.'}
+        {data.isITAdmin ? $t('settings.page.sub.admin') : $t('settings.page.sub.member')}
       </div>
     </div>
   </div>
 
   <div class="set-layout">
-    <nav class="set-nav" aria-label="Einstellungsbereiche">
+    <nav class="set-nav" lang={$lang} aria-label={$t('settings.nav.aria')}>
       {#each groups as g (g.name)}
         <div class="set-nav-group">{g.name}</div>
         {#each g.items as s (s.key)}
@@ -243,14 +245,15 @@
       {/each}
       {#if data.isITAdmin}
         <div class="set-nav-note">
-          <b>Mitglieder</b>, <b>Gremien</b> und <b>Abstimmungen</b> verwalten Sie direkt über die
-          Navigation — sie haben hier keine eigene Kachel mehr.
+          <b>{$t('nav.item.members')}</b>, <b>{$t('nav.section.committees')}</b>
+          {$t('settings.nav.note.and')} <b>{$t('nav.item.votes')}</b>
+          {$t('settings.nav.note.tail')}
         </div>
       {/if}
     </nav>
 
     <div class="set-panel">
-      <div class="set-panel-head">
+      <div class="set-panel-head" lang={$lang}>
         <h2>{cur.label}</h2>
         <p>{SUBTITLE[cur.key]}</p>
       </div>
@@ -267,9 +270,9 @@
                 <span class="scope-chip {chipClass(s.kind)}">{s.label}</span>
               {/each}
               {#if data.stepUpEnforced && data.mfaEnrolled === true}
-                <span class="pill pill-success"><Icon name="shield" size={11} /> 2FA aktiv</span>
+                <span class="pill pill-success" lang={$lang}><Icon name="shield" size={11} /> {$t('settings.profile.mfaOn')}</span>
               {:else if data.stepUpEnforced && data.mfaEnrolled === false}
-                <span class="pill"><Icon name="shield" size={11} /> 2FA nicht eingerichtet</span>
+                <span class="pill" lang={$lang}><Icon name="shield" size={11} /> {$t('settings.profile.mfaOff')}</span>
               {/if}
             </div>
           </div>
@@ -279,9 +282,9 @@
           emailActionAvailable={data.emailActionAvailable}
           accountActionResult={data.accountActionResult}
         />
-        <div class="profil-note">
-          Sprache der Oberfläche finden Sie unter
-          <b>Darstellung &amp; Barrierefreiheit</b>.
+        <div class="profil-note" lang={$lang}>
+          {$t('settings.profileNote.head')}
+          <b>{$t('settings.section.darstellung')}</b>.
         </div>
       {:else if activeKey === 'darstellung'}
         <TabAccessibility />

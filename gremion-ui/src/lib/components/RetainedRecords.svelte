@@ -28,7 +28,7 @@
 </script>
 
 {#if records.length > 0}
-  <section aria-labelledby={titleId} class="space-y-3 rounded-lg border border-border bg-surface-2 p-4">
+  <section aria-labelledby={titleId} lang={$lang} class="space-y-3 rounded-lg border border-border bg-surface-2 p-4">
     <div class="space-y-1">
       <h2 id={titleId} class="text-base font-semibold">{fillText($t('settings.modules.karenz.retained.title'), { module: moduleLabel })}</h2>
       <p class="text-sm text-ink-muted">{$t('settings.modules.karenz.retained.intro')}</p>

@@ -24,7 +24,7 @@
 </script>
 
 <script lang="ts">
-  import { t } from '$lib/i18n'
+  import { lang, t } from '$lib/i18n'
   import Icon from '$lib/components/ui/Icon.svelte'
 
   interface Props {
@@ -39,6 +39,13 @@
   let { value = $bindable(''), disabled = false, ariaLabel }: Props = $props()
 
   let editor = $state<HTMLDivElement | null>(null)
+  // WCAG 3.1.2: the page is declared German while the composer's controls render in the person's language.
+  // What the author types is their own text, so the editing surface is NOT marked while it has content (a
+  // lang on it would also switch the browser's spell checker); it is marked only while it is blank and
+  // shows the placeholder, and its accessible name comes from a marked label element.
+  const uid = $props.id()
+  const labelId = `${uid}-label`
+  const blank = $derived(value.replace(/<[^>]*>/g, '').trim() === '')
   let linkRowOpen = $state(false)
   let linkUrl = $state('')
   // Stored selection range so the link is applied to the text the user had
@@ -111,7 +118,7 @@
 </script>
 
 <div class="composer" class:is-disabled={disabled}>
-  <div class="toolbar" role="toolbar" aria-label={$t('news.composer.toolbar')}>
+  <div class="toolbar" role="toolbar" lang={$lang} aria-label={$t('news.composer.toolbar')}>
     {#each tools as tool (tool.title)}
       <button
         type="button"
@@ -133,7 +140,7 @@
   </div>
 
   {#if linkRowOpen}
-    <div class="link-row">
+    <div class="link-row" lang={$lang}>
       <input
         class="link-input"
         type="url"
@@ -156,6 +163,8 @@
     </div>
   {/if}
 
+  <!-- A caller's own label (ariaLabel) is the caller's text and language; the default is the catalogue's. -->
+  <span id={labelId} class="sr-only" lang={ariaLabel ? undefined : $lang}>{ariaLabel ?? $t('news.composer.body')}</span>
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
     bind:this={editor}
@@ -164,7 +173,8 @@
     role="textbox"
     tabindex="0"
     aria-multiline="true"
-    aria-label={ariaLabel ?? $t('news.composer.body')}
+    aria-labelledby={labelId}
+    lang={blank ? $lang : undefined}
     aria-disabled={disabled}
     data-placeholder={$t('news.composer.placeholder')}
     oninput={syncFromDom}

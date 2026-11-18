@@ -136,14 +136,18 @@ test.describe('server-decided locale (TASK-062)', () => {
       await page.waitForLoadState('networkidle')
       expect(await langMutations(page)).toEqual([])
 
-      // Second route, a German shell page: German declaration, German chrome
-      // (the whole document speaks one language), the choice kept aside.
+      // Second route, a German shell page: the declaration stays German (the
+      // page body is hard-coded German) and the choice is kept aside, but the
+      // shell chrome and its navigation render in the stored choice, English,
+      // marked lang="en" where it differs from the page (locale-en unit).
       const second = await page.goto('/')
       expect(second!.status()).toBe(200)
       const html = await second!.text()
       expect(html).toContain('<html lang="de" data-ui-locale="en">')
       // $t-rendered shell strings arrive translated on the server, never as raw keys.
-      expect(html).toContain('aria-label="Hauptnavigation"')
+      expect(html).toContain('aria-label="Main navigation"')
+      expect(html).toMatch(/<div class="nav-col[^"]*" lang="en"/)
+      expect(html).toContain('>Overview<')
       expect(html).not.toMatch(/(>|=")(nav|a11y|topbar)\.[a-z][a-zA-Z.]*(<|")/)
       await page.waitForLoadState('networkidle')
       expect(await langMutations(page)).toEqual([])

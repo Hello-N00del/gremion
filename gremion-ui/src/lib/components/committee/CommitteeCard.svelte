@@ -1,6 +1,6 @@
 <script lang="ts">
   import Icon from '$lib/components/ui/Icon.svelte'
-  import { t } from '$lib/i18n'
+  import { lang, t } from '$lib/i18n'
 
   // Shared committee tile, consumed by the admin /members grid (readonly=false:
   // name links into the committee detail, Protokolle/Beschlüsse actions shown)
@@ -50,7 +50,7 @@
       <div class="committee-head-text">
         <div class="display committee-name">{card.label}</div>
         <div class="mono committee-count">
-          {card.memberCount} {card.memberCount === 1 ? $t('committee.member') : $t('committee.members')}
+          <span lang={$lang}>{card.memberCount} {card.memberCount === 1 ? $t('committee.member') : $t('committee.members')}</span>
         </div>
       </div>
     </div>
@@ -60,7 +60,7 @@
       <div class="committee-head-text">
         <div class="display committee-name">{card.label}</div>
         <div class="mono committee-count">
-          {card.memberCount} {card.memberCount === 1 ? $t('committee.member') : $t('committee.members')}
+          <span lang={$lang}>{card.memberCount} {card.memberCount === 1 ? $t('committee.member') : $t('committee.members')}</span>
         </div>
       </div>
     </a>
