@@ -13,7 +13,7 @@
 # The base is the kernel's own pin (services/kernel-api/Dockerfile): the tag names
 # the version scripts/check-node-floor.mjs reads, the digest is the registry's
 # multi-arch index of that tag.
-FROM node:26.13.0-alpine@sha256:8996bb5821d62a8fd9bb27c1cb07462f3fdce6e47d640c6a881ead0b064ce216
+FROM node:26.13.1-alpine@sha256:6bd9ab43c0ec0190ca7b2d193906cb8b7edf6e7f4afa43ddeccd6452710bffb5
 
 # node:26-alpine bundles no corepack (dropped from core in Node 25+); the pnpm
 # version is the one the root package.json pins in packageManager, prepared here
