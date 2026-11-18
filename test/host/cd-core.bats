@@ -881,10 +881,10 @@ done' "$C2" "$C3" "$C1" "$D1"
     cd_need_flock
     cd_git_fixture
     run cd_lib 'cd_lock_take; cd_block_add "$1" build_failed x
-if cd_contains_open_block 0123456789ab; then echo yes; else echo no; fi
+if cd_contains_open_block 0123456789ab; then echo yes; else echo no; fi 2>/dev/null
 rm -rf "$CD_MIRROR_DIR"
-if cd_contains_open_block "${2:0:12}"; then echo yes; else echo no; fi
-if cd_contains_open_block "${1:0:12}"; then echo yes; else echo no; fi' "$C2" "$C1"
+if cd_contains_open_block "${2:0:12}"; then echo yes; else echo no; fi 2>/dev/null
+if cd_contains_open_block "${1:0:12}"; then echo yes; else echo no; fi 2>/dev/null' "$C2" "$C1"
     [ "$status" -eq 0 ]
     [ "${lines[0]}" = "yes" ]
     [ "${lines[1]}" = "yes" ]
