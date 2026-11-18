@@ -808,14 +808,13 @@ svc_state() {
     [ "$status" -eq 1 ]
     [ "$output" = "" ]
     [[ "$stderr" == *"no such image"* ]]
-    [ "$(printf '%s
-' "$stderr" | wc -l)" -eq 1 ]
+    [ "$(printf '%s\n' "$stderr" | wc -l)" -eq 1 ]
     echo "not-an-id" > "$DK/image.gremion-ui_pilot-odd"
     run --separate-stderr cd_image_id gremion-ui:pilot-odd
     [ "$status" -eq 1 ]
     [ "$output" = "" ]
-    [ "$(printf '%s
-' "$stderr" | wc -l)" -eq 1 ]
+    [ "$(printf '%s\n' "$stderr" | wc -l)" -eq 1 ]
+    [[ "$stderr" == *"not an image id"* ]]
     run cd_image_id ''
     [ "$status" -eq 2 ]
     run cd_image_id '--all'
@@ -830,8 +829,7 @@ svc_state() {
     [ "$output" = "" ]
     [[ "$stderr" == *"docker did not answer"* ]]
     [[ "$stderr" == *"Cannot connect"* ]]
-    [ "$(printf '%s
-' "$stderr" | wc -l)" -eq 1 ]
+    [ "$(printf '%s\n' "$stderr" | wc -l)" -eq 1 ]
     # the same ref with a healthy daemon and no such image is still 1
     rm -f "$DK/image.daemon"
     run --separate-stderr cd_image_id gremion-ui:pilot-aaaaaaaaaaaa
@@ -895,15 +893,13 @@ svc_state() {
     [ "$status" -eq 1 ]
     [ "$output" = "" ]
     [[ "$stderr" == "cd-docker: cd_traefik_service: "* ]]
-    [ "$(printf '%s
-' "$stderr" | wc -l)" -eq 1 ]
+    [ "$(printf '%s\n' "$stderr" | wc -l)" -eq 1 ]
     shim curl 'printf "<html>edge</html>"'
     run --separate-stderr cd_traefik_service app@file
     [ "$status" -eq 1 ]
     [ "$output" = "" ]
     [[ "$stderr" == "cd-docker: cd_traefik_service: "* ]]
-    [ "$(printf '%s
-' "$stderr" | wc -l)" -eq 1 ]
+    [ "$(printf '%s\n' "$stderr" | wc -l)" -eq 1 ]
     shim curl 'printf "[]"'
     run cd_traefik_service app@file
     [ "$status" -eq 1 ]

@@ -176,7 +176,9 @@ cd_set_env_key() {
 # of the caller's environment are dropped before compose starts, so the shape
 # cannot be changed from outside. CD_DC_TIMEOUT (whole seconds, 0 or unset = none) bounds
 # the call; a call that hits it returns 124, or 137 when compose ignored the
-# TERM and was killed ten seconds later: both mean "timed out".
+# TERM and was killed ten seconds later: both mean "timed out" (and one line
+# on stderr says so). Any other non-zero status is compose's own, passed on
+# unchanged; compose has already said why on its own stderr.
 cd_dc() {
     local tree="${1:-}" proj="${2:-}" envf verb a tmo root cf rc
     local -a star=() t=()
@@ -346,14 +348,17 @@ cd_wait_healthy() {
 # that does not answer first among them: "not there" and "cannot tell" are
 # different answers and a caller must be able to tell them apart.
 cd_image_id() {
-    local ref="${1:-}" id errf rc=0 why
+    local ref="${1:-}" id errf rc=0 why all
     [[ -n "$ref" && "$ref" != -* ]] || { _cd_docker_err "cd_image_id: usage: REF"; return 2; }
     errf="$(mktemp)" || { _cd_docker_err "cd_image_id: cannot create a temporary file"; return 2; }
     id="$(docker image inspect -f '{{.Id}}' "$ref" 2>"$errf" </dev/null)" || rc=$?
-    why="$(head -n 1 "$errf" 2>/dev/null | tr -cd '[:print:]' | cut -c 1-200)" || why=''
+    # the whole answer is searched for the phrase (a warning line may come
+    # first); only its first line is ever reported
+    all="$(tr -cd '[:print:]\n' <"$errf" 2>/dev/null)" || all=''
+    why="$(printf '%s\n' "$all" | head -n 1 | cut -c 1-200)"
     rm -f -- "$errf"
     if [[ "$rc" -ne 0 ]]; then
-        if [[ "${why,,}" == *'no such image'* ]]; then
+        if [[ "${all,,}" == *'no such image'* ]]; then
             _cd_docker_err "cd_image_id: no such image"
             return 1
         fi
