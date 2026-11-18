@@ -27,29 +27,35 @@ describe('exportKeptUntil and exportHold', () => {
   })
 
   it('counts elapsed days across a leap day and a change of the clock: the same instant on every run and in every zone', () => {
-    // 365 days are 365 x 24 h: a year that holds 29 February ends one calendar day earlier
-    expect(exportKeptUntil('board', new Date('2027-12-01T10:00:00Z'))?.toISOString()).toBe('2028-11-30T10:00:00.000Z')
-    expect(exportKeptUntil('board', new Date('2026-10-20T12:00:00Z'))?.toISOString()).toBe('2027-10-20T12:00:00.000Z')
+    // The end instant is fixed and final_at is derived from it, so the cases do not depend on the length: when the
+    // DPO changes EXPORT_KEEP_DAYS, only the constant and the catalogue change. The days are elapsed days
+    // (n x 24 h), not calendar days: the span below holds 29 February 2028 when the length is more than ~9 months.
+    const days = EXPORT_KEEP_DAYS.board!
+    const startOf = (end: string) => new Date(new Date(end).getTime() - days * DAY)
+    expect(exportKeptUntil('board', startOf('2028-11-30T10:00:00Z'))?.toISOString()).toBe('2028-11-30T10:00:00.000Z')
+    expect(exportKeptUntil('board', startOf('2027-10-20T12:00:00Z'))?.toISOString()).toBe('2027-10-20T12:00:00.000Z')
     const finalAt = new Date('2026-12-01T10:00:00Z')
     expect(exportKeptUntil('board', finalAt)?.getTime()).toBe(exportKeptUntil('board', new Date(finalAt.getTime()))?.getTime())
   })
 
   it('a change of the clock inside the year moves nothing: elapsed days are counted on the instant, under a zone that has daylight saving', () => {
-    // 2027-03-27 to 2028-03-27 holds a leap day AND the spring change of 2028 (26 March, Europe/Berlin). 365 calendar
-    // days counted on the local date land one hour off the instant that 365 x 24 h reach; only counting on the
-    // instant gives the same answer in every zone.
+    // The span ends just after the spring change of 2028 (26 March, Europe/Berlin) and, for the length in force,
+    // holds a leap day and a change of the clock. Days counted on the local date land one hour off the instant
+    // that n x 24 h reach; only counting on the instant gives the same answer in every zone.
     const before = process.env.TZ
     process.env.TZ = 'Europe/Berlin'
     try {
       const probe = (y: number, m: number, d: number) => new Date(y, m, d, 12).getTimezoneOffset()
       // the zone is really in effect: winter and summer differ, or this guard checks nothing
       expect([probe(2027, 0, 15), probe(2027, 6, 15)], 'process.env.TZ did not take effect').toEqual([-60, -120])
-      const finalAt = new Date('2027-03-27T10:00:00Z')
-      expect(exportKeptUntil('board', finalAt)?.toISOString()).toBe('2028-03-26T10:00:00.000Z')
-      expect(exportKeptUntil('board', finalAt)?.getTime()).toBe(finalAt.getTime() + 365 * DAY)
-      // and the other direction: autumn change
-      const autumn = new Date('2027-10-30T10:00:00Z')
-      expect(exportKeptUntil('board', autumn)?.getTime()).toBe(autumn.getTime() + 365 * DAY)
+      const days = EXPORT_KEEP_DAYS.board!
+      const end = new Date('2028-03-26T10:00:00Z')
+      const finalAt = new Date(end.getTime() - days * DAY)
+      expect(exportKeptUntil('board', finalAt)?.toISOString()).toBe(end.toISOString())
+      // and the other direction: the span ends just after the autumn change
+      const autumnEnd = new Date('2027-10-30T10:00:00Z')
+      const autumn = new Date(autumnEnd.getTime() - days * DAY)
+      expect(exportKeptUntil('board', autumn)?.getTime()).toBe(autumnEnd.getTime())
     } finally {
       if (before === undefined) delete process.env.TZ
       else process.env.TZ = before
