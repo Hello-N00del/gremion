@@ -1046,7 +1046,7 @@ mk_fail() { TMPDIR=/nonexistent/none "$@"; }
         [ $((SECONDS - start)) -lt 2 ]
         # the named reason survives; no colour is reported as unhealthy
         grep -q 'COMPOSE_PROJECT_NAME' "${BATS_TEST_TMPDIR}/err"
-        ! grep -q 'not healthy' "${BATS_TEST_TMPDIR}/err"
+        assert_absent 'not healthy' "${BATS_TEST_TMPDIR}/err"
         [ -z "$CD_WAIT_BAD" ]
     done
 }
