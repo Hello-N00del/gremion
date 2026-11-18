@@ -18,7 +18,8 @@ interface ScopeCase {
 }
 
 const FIXTURE = fileURLToPath(new URL('../../../../test/host/fixtures/cd/dump-options/scope-names.json', import.meta.url))
-const cases = (JSON.parse(readFileSync(FIXTURE, 'utf8')) as { cases: ScopeCase[] }).cases
+const fixture: { cases: ScopeCase[] } = JSON.parse(readFileSync(FIXTURE, 'utf8'))
+const cases = fixture.cases
 
 describe('host program scope parity with scopeOf', () => {
   it('the fixture holds parity names and deviation names', () => {
@@ -32,16 +33,20 @@ describe('host program scope parity with scopeOf', () => {
     })
   }
 
-  for (const c of cases.filter((x) => !x.parity)) {
-    it(`is a recorded deviation: ${c.database}`, () => {
-      // The host program keeps platform with null ids for this name.
+  const kernelCases = cases.filter((x) => !x.parity && x.database.endsWith('__kernel'))
+  const refusedCases = cases.filter((x) => !x.parity && !x.database.endsWith('__kernel'))
+
+  for (const c of kernelCases) {
+    it(`is a recorded deviation (scopeOf says customer, the host keeps platform): ${c.database}`, () => {
       expect(c.scope).toBe('platform')
-      if (c.database.endsWith('__kernel')) {
-        expect(scopeOf(c.database).scope).toBe('customer')
-        expect(scopeOf(c.database).moduleId).toBe('kernel')
-      } else {
-        expect(() => scopeOf(c.database)).toThrow(/DUMP_SCOPE/)
-      }
+      expect(scopeOf(c.database)).toMatchObject({ scope: 'customer', moduleId: 'kernel' })
+    })
+  }
+
+  for (const c of refusedCases) {
+    it(`is a recorded deviation (scopeOf refuses it, the host keeps platform): ${c.database}`, () => {
+      expect(c.scope).toBe('platform')
+      expect(() => scopeOf(c.database)).toThrow(/DUMP_SCOPE/)
     })
   }
 })
