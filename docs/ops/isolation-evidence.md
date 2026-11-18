@@ -49,12 +49,17 @@ moved is served in-process from its own kernel database, a customer whose board
 lives in the board module's own database (`t_<hex32>__board`) is served by the
 board service. The case proves both paths in one run, so the evidence is for the
 code that serves a customer after a move as well as before it. The board
-service's own two-tenant suite (`modules/board/test/isolation*`, run in the
-leaf's integration lane) is not what the producer records; it proves the same
-vectors at the service's own routes and adds three: the erasure of one person
-who holds cards in two tenants, the delete of an org unit's boards that both
-tenants have boards on, and the block of one tenant's database (the module's
-app role loses `CONNECT`), which must leave the other tenant served.
+service's own two-tenant suite (`modules/board/test/isolation*`) is not what the
+producer records, and no required gate runs it: it is run by hand with
+`pnpm --filter board-service test:integration` against a throwaway Postgres
+(`BOARD_TEST_PG_URL`). It proves the same vectors at the service's own routes and
+adds three: the erasure of one person who holds cards in two tenants, the delete of
+an org unit's boards that both tenants have boards on, and the block of one
+tenant's database (the module's app role loses `CONNECT`), which must leave the
+other tenant served. The first two are also in the recorded case, made through the
+kernel's own erasure hook and org-unit cleanup (see below); the block is not,
+because the recorded case's board service connects as the server's administrative
+role, for which a revoked `CONNECT` has no effect.
 
 The board case runs the real route handlers (`/api/board`, `/api/board/[id]`,
 `.../cards`, `.../promotable`, `.../promote` and the `/tasks` load), the real scope
@@ -73,7 +78,12 @@ It covers the board service's vectors 1 to 9 and H for every ordered pair of the
 three customers (so the two customers that share the board service are judged
 against each other as well), with positive controls (including that a module
 customer is answered over HTTP by the board service and a kernel customer is
-not), plus a scan that no board file opens its own connection. It needs
+not), plus the two calls the kernel itself makes into the board: the erasure of a
+person (the board's erasure hook) and the removal of an org unit's boards. Each is
+made as every customer for every other customer's person and org unit (nothing
+anywhere may change) and then for the customer's own (the change lands in the
+store the flag names and in no other, a kernel customer making no call to the board
+service). The case also scans that no board file opens its own connection. It needs
 `ISOLATION_TENANT_PG_URL` like the leaf cases; the runner then states
 `GREMION_PRODUCTION_STACK=none` for that case only, after checking the server is
 loopback and not port 5432, and derives the harness database URLs from it. The same
@@ -102,9 +112,9 @@ Honest labelling, because the proof kinds differ:
   flag says) and no other, and that another customer's rows are neither readable
   nor writable from there. It says nothing about members of one customer seeing
   each other's boards (that is the within-customer scope, covered by the board's
-  own route tests), and nothing about the kernel-driven calls of the board service
-  (the erasure of a person, the delete of an org unit's boards): those are in the
-  service's own suite.
+  own route tests). A kernel copy that a move leaves behind is not represented: the
+  `module` customers of the case start with no board rows in their kernel
+  databases.
 - `fake-upstream-app`: the real route handlers and clients run against a
   recording fake of the shared upstream. This shows app-layer scoping against
   ONE shared Nextcloud and ONE shared Synapse: every upstream request a caller

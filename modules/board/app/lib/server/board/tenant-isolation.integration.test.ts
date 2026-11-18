@@ -38,7 +38,11 @@
  *   8 stack create   the port (the kernel has no route)   rejected, nothing written to it
  *   9 board create   POST /api/board with its org unit    403 (scope), nothing written to it
  *   H fingerprint    every customer's boards, stacks and cards are byte-identical after every attempt
- * every one of them in BOTH directions for every ordered pair of customers (6 pairs).
+ * every one of them in BOTH directions for every ordered pair of customers (6 pairs). Two more are not a request of
+ * a member but a call the kernel makes into the board, and are judged the same way (another customer's person or
+ * org unit changes nothing anywhere; the own one changes the store the flag names and no other):
+ *   E erase-subject  the board erasure hook              a kernel customer on the kernel tables, a module customer in its module database
+ *   O org-unit boards the cleanup after an org-unit delete   a kernel customer: not due (the cascade); a module customer: the board service
  *
  * Why it can fail: replace getDb() by a shared pool (the mutation this file is judged by) and the
  * positive controls, the physical-database checks and the 404 expectations all go red; point the
@@ -53,7 +57,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { randomBytes } from 'node:crypto'
-import { readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import type http from 'node:http'
 import path from 'node:path'
 import type { Sql } from '@gremion/db'
@@ -70,6 +74,7 @@ import { GET as promotable } from '../../../routes/api/board/[id]/promotable/+se
 import { POST as promote } from '../../../routes/api/board/[id]/promote/+server'
 import { load as tasksLoad } from '../../../routes/tasks/+page.server'
 import { getBoardBackend } from './backend'
+import { boardErasureHook, BOARD_ERASED_MARKER, deleteBoardsOfOrgUnit } from './erasure'
 import { getBoardLocation, resetBoardLocationCacheForTests, type BoardLocation } from './backend/location'
 
 // Guard at import like every harness that creates or drops a database; the isolation suite derives DATABASE_URL from the throwaway server.
@@ -92,8 +97,22 @@ const DIRECTIONS: ReadonlyArray<readonly [Who, Who]> = WHOS.flatMap((atk) => oth
 
 const UI_ROOT = path.resolve(__dirname, '..', '..', '..', '..')
 const MIGRATIONS = path.join(UI_ROOT, 'migrations')
-/** The board module as it sits in the repository: the leaf's source and its migrations. */
-const BOARD_MODULE_ROOT = path.resolve(UI_ROOT, '..', 'modules', 'board')
+/**
+ * The board module as it sits in the repository: the leaf's source and its migrations. This file runs from two
+ * places (here, in the module, and as an overlay copy under gremion-ui), so the module is found by walking up
+ * to the first directory that holds it, never by a fixed number of steps.
+ */
+function findBoardModuleRoot(): string {
+  let dir = __dirname
+  for (;;) {
+    const candidate = path.join(dir, 'modules', 'board')
+    if (existsSync(path.join(candidate, 'src', 'app.ts'))) return candidate
+    const parent = path.dirname(dir)
+    if (parent === dir) throw new Error('[board-isolation] cannot find modules/board above this file: refusing to run')
+    dir = parent
+  }
+}
+const BOARD_MODULE_ROOT = findBoardModuleRoot()
 const LEAF_MIGRATIONS = path.join(BOARD_MODULE_ROOT, 'migrations')
 const READER_ROLE = 'gremion_public_reader'
 const RUN = `${process.pid}_${Math.random().toString(36).slice(2, 8)}`
@@ -401,6 +420,21 @@ const leaksNothingOf = (reply: Reply, who: Who) => {
   return canariesOf(who).filter((c) => text.includes(c))
 }
 
+/**
+ * The url a fetch call was made to. A call shape this file does not know is an error, not a call to nowhere: a
+ * call that went uncounted would let "the kernel customer made no call to the board service" pass falsely.
+ */
+function fetchTarget(input: unknown): string {
+  if (typeof input === 'string') return input
+  if (input instanceof URL) return input.href
+  if (input instanceof Request) return input.url
+  throw new Error('[board-isolation] a fetch call of a shape this case does not count: refusing to judge it')
+}
+
+/** How many calls the router (or a kernel-driven hook) has made to the board service so far. */
+const callsToLeaf = (): number =>
+  fetchSpy.mock.calls.filter(([input]) => fetchTarget(input).startsWith(process.env.BOARD_SERVICE_URL!)).length
+
 // == setup
 
 const ADMIN_ID = {
@@ -573,13 +607,12 @@ describe('board: three customers on real PostgreSQL, one served in-process and t
   })
 
   it('positive control: the router sends a module customer to the board service and a kernel customer to the kernel tables', async () => {
-    const toLeaf = () => fetchSpy.mock.calls.filter(([input]) => String(input).startsWith(process.env.BOARD_SERVICE_URL!)).length
     for (const who of WHOS) {
-      const before = toLeaf()
+      const before = callsToLeaf()
       const read = await apiRead(who, seed[who].boardId)
       expect(read.status).toBe(200)
       // module customers: the board answered is the one in the module database, called over HTTP; kernel customer: no call
-      expect(toLeaf() > before).toBe(inModule(who))
+      expect(callsToLeaf() > before).toBe(inModule(who))
     }
   })
 
@@ -767,6 +800,93 @@ describe('board: three customers on real PostgreSQL, one served in-process and t
 
     it('H fingerprint: every customer boards, stacks and cards are byte-identical after every attempt', async () => {
       for (const who of WHOS) expect(await fingerprint(who)).toBe(before[who])
+    })
+  })
+
+  // The two calls the kernel itself makes into the board, not a request of a member: the erasure of a person
+  // (the hook) and the removal of an org unit's boards. Each is made as one customer, through the same flag
+  // reading and the same board service client the pilot runs, for every ordered pair (an erasure or a delete
+  // of another customer's subject or org unit must change nothing there) and then for the own subject and the
+  // own org unit (the change lands in the store the flag names, and only there).
+  describe('kernel-driven calls: erase-subject and the org-unit board delete', () => {
+    const subjectRows = (who: Who, subject: string) =>
+      countWhere(who, 'card', 'created_by = $1 OR assignee_keycloak_id = $1', subject)
+    /** The counts of an erasure that was done; anything else (skipped, deferred) is a failure of the case. */
+    const erase = async (atk: Who, subject: string): Promise<Readonly<Record<string, number>>> => {
+      const res = await runWithTenant(ctx[atk], () => boardErasureHook.erase({ tenantId: ctx[atk].id, db: getDb(), subjectId: subject }))
+      if (res.status !== 'erased') throw new Error(`[board-isolation] the erasure was not done: ${res.status}`)
+      return res.counts
+    }
+    const dropOrgUnit = (who: Who, orgUnitId: string) => runWithTenant(ctx[who], () => deleteBoardsOfOrgUnit(orgUnitId))
+
+    it('erase-subject as one customer for another customer subject changes nothing anywhere', async () => {
+      const before = {} as Record<Who, string>
+      for (const who of WHOS) before[who] = await fingerprint(who)
+      for (const [atk, vic] of DIRECTIONS) {
+        // the subject really is in the victim: the control that makes "nothing changed" mean something
+        expect(await subjectRows(vic, seed[vic].userId)).toBeGreaterThan(0)
+        const counts = await erase(atk, seed[vic].userId)
+        expect(Object.values(counts).every((n) => n === 0)).toBe(true)
+        for (const who of WHOS) expect(await fingerprint(who)).toBe(before[who])
+      }
+    })
+
+    it('erase-subject for the own subject lands in the store the flag names, for a kernel and for a module customer', async () => {
+      for (const who of WHOS) {
+        const subject = seed[who].userId
+        const others = othersOf(who)
+        const otherBefore = Object.fromEntries(await Promise.all(others.map(async (o) => [o, await fingerprint(o)] as const)))
+        expect(await subjectRows(who, subject)).toBeGreaterThan(0)
+        const calls = callsToLeaf()
+
+        const counts = await erase(who, subject)
+        // a module customer's erasure was made in the board service; a kernel customer's made no call to it
+        expect(callsToLeaf() > calls).toBe(inModule(who))
+        expect(counts.card_created_by).toBeGreaterThan(0)
+
+        expect(await subjectRows(who, subject)).toBe(0)
+        expect(await countWhere(who, 'card', 'created_by = $1', BOARD_ERASED_MARKER)).toBeGreaterThan(0)
+        // the cards are kept, and a module customer's kernel tables still hold no board rows
+        const [kernelCards] = await kernelAdmin[who]<{ n: string }[]>`SELECT count(*)::text AS n FROM card`
+        expect(Number(kernelCards!.n) > 0).toBe(!inModule(who))
+        for (const o of others) expect(await fingerprint(o)).toBe(otherBefore[o])
+      }
+    })
+
+    it('org-unit board delete as one customer for another customer org unit deletes nothing anywhere', async () => {
+      const before = {} as Record<Who, string>
+      for (const who of WHOS) before[who] = await fingerprint(who)
+      for (const [atk, vic] of DIRECTIONS) {
+        for (const ouId of [seed[vic].ouId, seed[vic].emptyOuId]) {
+          const res = await dropOrgUnit(atk, ouId)
+          // a kernel customer is not due a call (the database cascade does it); a module customer's board service
+          // is asked, and has no board of that org unit in the database of THIS customer
+          expect(res).toEqual(inModule(atk) ? { status: 'deleted', boards: 0 } : { status: 'not-due' })
+          for (const who of WHOS) expect(await fingerprint(who)).toBe(before[who])
+        }
+      }
+    })
+
+    it('org-unit board delete for the own org unit removes that unit boards from the store the flag names, and no other', async () => {
+      for (const who of WHOS) {
+        const s = seed[who]
+        const others = othersOf(who)
+        const otherBefore = Object.fromEntries(await Promise.all(others.map(async (o) => [o, await fingerprint(o)] as const)))
+        // a board of its own on the org unit about to be deleted, written to the store the flag names
+        await boardAdmin[who]`INSERT INTO board (org_unit_id, name) VALUES (${s.emptyOuId}, ${`unit-delete-control-${who.toLowerCase()}`})`
+        const owned = await countWhere(who, 'board', 'org_unit_id = $1', s.emptyOuId)
+        expect(owned).toBeGreaterThan(0)
+
+        // the kernel deletes the org unit (its cascade reaches the kernel tables only), then asks for the rest
+        await kernelAdmin[who]`DELETE FROM org_units WHERE id = ${s.emptyOuId}`
+        const res = await dropOrgUnit(who, s.emptyOuId)
+        expect(res).toEqual(inModule(who) ? { status: 'deleted', boards: owned } : { status: 'not-due' })
+
+        expect(await countWhere(who, 'board', 'org_unit_id = $1', s.emptyOuId)).toBe(0)
+        // the other org unit of the same customer keeps its board
+        expect(await countWhere(who, 'board', 'id = $1', s.boardId)).toBe(1)
+        for (const o of others) expect(await fingerprint(o)).toBe(otherBefore[o])
+      }
     })
   })
 })

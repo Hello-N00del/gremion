@@ -38,7 +38,7 @@ import { TENANT_A, TENANT_B, TENANT_C } from './support/tenants.ts'
 
 const SECRET = 'r29bk-isolation-secret'
 const DECOY_DB = 'board_test_shared'
-/** The module's ONE app role: it is shared by every tenant's board database. */
+/** The module's app role: the one whose CONNECT a module switch-off revokes on a tenant's board database. */
 const APP_ROLE = 'm_board_app'
 
 let admin: ScratchSql
@@ -221,11 +221,10 @@ describe('two-tenant isolation through the board routes (A7)', () => {
   })
 })
 
-// The isolation is by DATABASE NAME keyed on the tenant id, not by role: m_board_app is one role per module and
-// holds CONNECT on every tenant's board database, so a role-level boundary between tenants does not exist and is
-// not claimed here. What a module switch-off does is revoke that role's CONNECT on ONE tenant's database (the
-// Karenz block); the other tenants' databases are untouched, and the leaf must keep serving them.
-describe("blocking one tenant's database (the Karenz CONNECT revoke) leaves the other tenant served", () => {
+// Each tenant's board lives in a database named after its tenant id. A module switch-off revokes the module
+// app role's CONNECT on that one database (the Karenz block). The other tenants' databases are not touched
+// by it, and the leaf must keep serving them.
+describe('a blocked tenant database (the Karenz CONNECT revoke): the other tenant is still served', () => {
   it('A answers 404 tenant_not_provisioned on every route, B keeps reading and writing, and unblocking A restores it', async () => {
     const dbA = tenantBoardDb(TENANT_A.id)
     const dbB = tenantBoardDb(TENANT_B.id)
