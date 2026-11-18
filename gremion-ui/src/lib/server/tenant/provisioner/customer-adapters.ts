@@ -58,6 +58,7 @@ import {
   type TenantInput,
 } from '$lib/server/tenant/registry'
 import { getDb } from '$lib/server/db'
+import { setBoardLocationModule } from './board-location-flag'
 import { KcProvisionApi } from './kc-admin-api'
 import { assertBrandIdentityComplete, materializeConfig } from './materialize'
 import { ADMIN_CLIENT_ID, GREMION_ADMIN_SA_REALM_ROLES, ACCOUNT_CONSOLE_CLIENT_ID, UPDATE_EMAIL_ACTION, UPDATE_EMAIL_ACTION_CONFIG } from './pipeline'
@@ -307,7 +308,7 @@ export function firstBodyAdapters(keycloak: ProvisioningSubsystem): Adapters {
   return { keycloak, matrix: notWanted('matrix'), nextcloud: notWanted('nextcloud') }
 }
 
-export function customerAdapters(o: CustomerAdapterOptions): Pick<ProvisioningDeps, 'control' | 'config' | 'realm' | 'kernel' | 'governance' | 'domain' | 'storage' | 'firstBody' | 'broker'> {
+export function customerAdapters(o: CustomerAdapterOptions): Pick<ProvisioningDeps, 'control' | 'config' | 'realm' | 'kernel' | 'governance' | 'domain' | 'storage' | 'firstBody' | 'broker' | 'boardLocation'> {
   const log = o.log ?? (() => {})
   const hostPath = (name: string) => `${o.tenantSecretsDir.replace(/\/$/, '')}/${name}`
   const readSecretFile = (name: string): string | null => (existsSync(hostPath(name)) ? readFileSync(hostPath(name), 'utf-8').trim() : null)
@@ -679,6 +680,17 @@ export function customerAdapters(o: CustomerAdapterOptions): Pick<ProvisioningDe
           }
           return { created: existing.length === 0 }
         })
+      },
+    },
+
+    // Where the board of a NEW customer lives (create path only): `module` once the board's own database exists.
+    // The customer's own kernel database, through the same context the kernel steps use: a provisioning
+    // customer through the provisioning context, a finished one (a rerun of the create) through the active one.
+    boardLocation: {
+      async setModule(c) {
+        const t = await tenantOf(c)
+        const inContext = t.status === 'active' ? inActiveContext : inProvisioningContext
+        return inContext(c, () => setBoardLocationModule(getDb()))
       },
     },
 
