@@ -15,10 +15,10 @@
   ],
   "modules": {
     "board": {
-      "pilot": false,
-      "profiles": [],
+      "pilot": true,
+      "profiles": ["board"],
       "postRealm": [],
-      "reason": "runs in-process on kernel tables and needs no compose profile (board-postgres is not started); it is selectable at create through the isolation gate since the board wave of 2026-11-11, and pilot stays false only because a pilot module here asks for at least one profile"
+      "reason": "board-postgres (state) and board-service (app) share the profile; a customer's board lives in its own database t_<tenant>__board on board-postgres, created and exported by the module lifecycle, and board-service serves it"
     },
     "calendar": {
       "pilot": true,
