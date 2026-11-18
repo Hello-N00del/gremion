@@ -6,8 +6,8 @@
 #
 # STATE-FREE LIVENESS. The first thing the watchdog judges is whether the program is alive,
 # and for that it reads only: the heartbeat file, a flock probe of the cd lock, the age of the
-# oldest queued mail and the kill switch. It never parses state.json for liveness, and a
-# missing, truncated or foreign-version state file is itself an alert (a `stalled` mail with
+# oldest queued mail, the data/cd/ALERT file and the kill switch. It never parses state.json
+# for liveness, and a missing, truncated or foreign-version state file is itself an alert (a `stalled` mail with
 # detail state_unreadable), never an exit 2 that would silence the watchdog together with the
 # tick. The rules that need the state (a stale poll, a red main, the kill-switch reminder)
 # run after the liveness rules and read it with a tolerant jq.
@@ -28,6 +28,9 @@
 #                        and a logger line (cd_alert): the mail path is dead, so no mail can say
 #                        so. The watchdog sends the queue first and judges the age of what is
 #                        left, so a relay that is back after a long outage writes no ALERT.
+#   data/cd/ALERT present (a fatal exit of the tick wrote it, or the rule above did) ->
+#                        `stalled` detail alert, once per ALERT file (its mtime), even while
+#                        the heartbeat is fresh and with the kill switch on.
 #   the last poll success older than CD_STALL_MINUTES while `git ls-remote` shows a tip that
 #                        neither the poller nor the live release knows -> `stalled`.
 #   main red for six hours -> one `stalled` mail per red episode.
@@ -180,6 +183,22 @@ _cd_wd_outbox() {
     cd_alert "the mail outbox has a message older than one hour"
 }
 
+# -- the ALERT file ----------------------------------------------------------------------
+# A fatal exit of the tick (a bad config, a state this program rejects) writes data/cd/ALERT
+# and leaves a heartbeat behind, and the state-free liveness rules above are content with a
+# fresh heartbeat. Without this rule a tick that dies on every run is silent for as long as
+# the beat is young, and the ALERT it wrote reaches nobody but the start gate. One `stalled`
+# mail per ALERT file (its modification time is the identity: a new fatal exit writes the file
+# again), whatever the kill switch says. It reads the file's existence and time, never its text.
+_cd_wd_alert() {
+    local m
+    [[ -e "$CD_ALERT_FILE" ]] || return 0
+    m="$(stat -c %Y "$CD_ALERT_FILE" 2>/dev/null)" || return 0
+    [[ "$m" =~ ^[0-9]{1,12}$ ]] || return 0
+    _cd_wd_hb_read || true
+    _cd_wd_stalled alert "alert-${m}" "" "${HB_PHASE:-unknown}" "${HB_STAGE:-}"
+}
+
 # -- rules that read the state -----------------------------------------------------------
 # _cd_wd_remote_tip -- the full SHA of main at the repository, empty when it cannot be read.
 _cd_wd_remote_tip() {
@@ -262,6 +281,7 @@ cd_cmd_watchdog() {
     cd_notify_flush || flush_rc=$?
     _cd_wd_liveness "$now" || cd_hist watchdog_rule_failed rule=liveness || true
     _cd_wd_outbox || cd_hist watchdog_rule_failed rule=outbox || true
+    _cd_wd_alert || cd_hist watchdog_rule_failed rule=alert || true
     _cd_wd_state_rules "$now" || cd_hist watchdog_rule_failed rule=state || true
     _cd_wd_killswitch || cd_hist watchdog_rule_failed rule=killswitch || true
     # the mails this run queued leave now, unless the first pass of this run already failed or

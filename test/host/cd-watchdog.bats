@@ -203,7 +203,8 @@ wd() { run nlib 'cd_cmd_watchdog'; }
     cd_advance $(( 7 * 86400 ))
     fresh_hb
     wd
-    [ "$(mail_count)" -eq 2 ]
+    # a week of dead relay also writes the ALERT file and its one mail; the reminders are two
+    [ "$(grep -l '^kind: killswitch$' "${GREMION_ROOT}"/data/cd/outbox/*.eml | wc -l | tr -d ' ')" -eq 2 ]
 }
 
 @test "kill switch: an idle program with no heartbeat for hours is not an alarm (automation is off on purpose)" {
@@ -309,6 +310,100 @@ wd() { run nlib 'cd_cmd_watchdog'; }
     [ "$status" -eq 0 ]
     [ "$(curl_calls)" -eq 1 ]
     [ "$(mail_count)" -eq 0 ]
+}
+
+# ---------------------------------------------------------------------------
+# data/cd/ALERT: a fatal exit of the tick must not stay silent behind a fresh heartbeat
+# ---------------------------------------------------------------------------
+
+# alert_at EPOCH -- an ALERT file with that mtime (what cd_alert leaves behind)
+alert_at() {
+    printf 'cd: state schema not supported
+' > "${GREMION_ROOT}/data/cd/ALERT"
+    touch -d "@$1" "${GREMION_ROOT}/data/cd/ALERT"
+}
+
+@test "alert: an ALERT file with a fresh heartbeat and a readable state gives one stalled mail with detail alert, once per ALERT" {
+    cd_need_flock
+    fresh_hb
+    alert_at $(( NOW - 100 ))
+    wd
+    [ "$status" -eq 0 ]
+    [ "$(mails_with alert)" -eq 1 ]
+    grep -qx 'kind: stalled' "$(mail_files)"
+    grep -qx 'command: gremion-cd status' "$(mail_files)"
+    cd_advance 600
+    fresh_hb
+    wd
+    [ "$(mails_with alert)" -eq 1 ]
+    # the same file written again (a new fatal exit) is a new mail
+    alert_at $(( NOW + 500 ))
+    wd
+    [ "$(mails_with alert)" -eq 2 ]
+}
+
+@test "alert: no ALERT file, no alert mail" {
+    cd_need_flock
+    fresh_hb
+    wd
+    [ "$(mails_with alert)" -eq 0 ]
+    [ "$(mail_count)" -eq 0 ]
+}
+
+@test "alert: a tick that died on a schema it rejects (v 1 state that breaks the closed schema, ALERT written) is not silent behind its fresh heartbeat" {
+    cd_need_flock
+    fresh_hb
+    cd_seed_state '.phase = "no-such-phase"'
+    # the tick's first read of the state (the driver refreshes no heartbeat before it)
+    run cd_lib 'cd_state_load'
+    [ "$status" -eq 2 ]
+    [ -s "${GREMION_ROOT}/data/cd/ALERT" ]
+    fresh_hb
+    wd
+    [ "$status" -eq 0 ]
+    [ "$(mails_with alert)" -eq 1 ]
+}
+
+@test "alert: the kill switch does not hide an ALERT" {
+    cd_need_flock
+    touch "${GREMION_ROOT}/etc/cd.disabled"
+    fresh_hb
+    alert_at $(( NOW - 100 ))
+    wd
+    [ "$(mails_with alert)" -eq 1 ]
+}
+
+@test "alert: an ALERT beside a deleted state and a stale heartbeat still mails each judgement (the rules do not shadow one another)" {
+    cd_need_flock
+    hb $(( NOW - 1000 ))
+    rm -f "${GREMION_ROOT}/data/cd/state.json"
+    alert_at $(( NOW - 100 ))
+    wd
+    [ "$status" -eq 0 ]
+    [ "$(mails_with alert)" -eq 1 ]
+    [ "$(mails_with no_tick)" -eq 1 ]
+    [ "$(mails_with state_unreadable)" -eq 1 ]
+}
+
+# ---------------------------------------------------------------------------
+# The probe holds the lock for an instant only
+# ---------------------------------------------------------------------------
+
+@test "liveness: while the watchdog runs (here: inside the mail relay call of its final flush) the cd lock is free for the tick" {
+    cd_need_flock
+    # a stale heartbeat queues a mail, so the final flush calls curl while the watchdog is
+    # still running; the shim then tries to take the cd lock from another process
+    hb $(( NOW - 1000 ))
+    shim curl "$(cat <<'SH'
+cat > /dev/null
+if ( flock -n 9 ) 9>>"$GREMION_ROOT/runtime/cd/cd.lock"; then echo free >> "$GREMION_ROOT/.lock-during"; else echo held >> "$GREMION_ROOT/.lock-during"; fi
+exit 7
+SH
+)"
+    wd
+    [ "$status" -eq 0 ]
+    [ -f "${GREMION_ROOT}/.lock-during" ]
+    [ "$(sort -u "${GREMION_ROOT}/.lock-during")" = "free" ]
 }
 
 # ---------------------------------------------------------------------------

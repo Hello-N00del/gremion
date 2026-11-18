@@ -544,6 +544,75 @@ digest_day() { date -u -d "2026-11-18 $1" +%s; }
 }
 
 # ---------------------------------------------------------------------------
+# The fixed sentences of the driver: a closed-vocabulary `notes` field
+# ---------------------------------------------------------------------------
+
+@test "notes: a released mail carries the program's own sentences (lock span over, reconcile not run) as words of a closed list" {
+    run nlib 'cd_notify released sha12='"$SHA_A"' hostlock_min=95 notes=lock_span_over,reconcile_not_run'
+    [ "$status" -eq 0 ]
+    grep -qx 'notes: lock_span_over,reconcile_not_run' "$(mail_files)"
+    grep -qx 'hostlock_min: 95' "$(mail_files)"
+}
+
+@test "notes: the kill-switch critical mail says rollback is off and the host lock is held, and a rollback_failed mail names the unhealthy old colour" {
+    run nlib 'cd_notify killswitch phase=watching sha12='"$SHA_A"' notes=rollback_off_lock_held'
+    [ "$status" -eq 0 ]
+    grep -qx 'notes: rollback_off_lock_held' "$(mail_files)"
+    : > "$SHIM_LOG"
+    cd_advance 10
+    run nlib 'cd_notify rollback_failed sha12='"$SHA_A"' colour=blue notes=unhealthy_after_rollback'
+    grep -qx 'notes: unhealthy_after_rollback' "$(grep -l '^kind: rollback_failed$' "${GREMION_ROOT}"/data/cd/outbox/*.eml)"
+}
+
+@test "notes: a word outside the list, a slug-shaped word, a list that is too long and a note on a kind that has none are never written as text" {
+    run nlib '
+        cd_notify released sha12='"$SHA_A"' notes=customer_acme
+        printf "%s
+" 1700000010 > "$GREMION_CD_NOW_FILE"
+        cd_notify released sha12='"$SHA_B"' notes=lock_span_over,reconcile_not_run,rollback_off_lock_held,unhealthy_after_rollback,lock_span_over
+        printf "%s
+" 1700000020 > "$GREMION_CD_NOW_FILE"
+        cd_notify held sha12='"$SHA_A"' hold=blocked notes=lock_span_over'
+    [ "$status" -eq 0 ]
+    [ "$(mail_count)" -eq 3 ]
+    grep -qx 'notes: <redacted>' "${GREMION_ROOT}/data/cd/outbox/1700000000-released.eml"
+    grep -qx 'notes: <redacted>' "${GREMION_ROOT}/data/cd/outbox/1700000010-released.eml"
+    refute_in "${GREMION_ROOT}/data/cd/outbox/1700000000-released.eml" customer_acme
+    refute_in "${GREMION_ROOT}/data/cd/outbox/1700000020-held.eml" notes
+}
+
+# ---------------------------------------------------------------------------
+# A killed send leaves nothing behind
+# ---------------------------------------------------------------------------
+
+@test "send: a upload copy left by a send that was killed (.send.<pid>.eml) is removed by the next flush" {
+    cd_need_flock
+    mkdir -p "${GREMION_ROOT}/data/cd/outbox"
+    printf 'To: ops@example.org
+
+body
+' > "${GREMION_ROOT}/data/cd/outbox/.send.99999.eml"
+    run nlib 'cd_notify held sha12='"$SHA_A"' hold=blocked; cd_notify_flush'
+    [ "$status" -eq 0 ]
+    [ "$(sent_count)" -eq 1 ]
+    [ ! -e "${GREMION_ROOT}/data/cd/outbox/.send.99999.eml" ]
+    [ "$(find "${GREMION_ROOT}/data/cd/outbox" -type f | wc -l | tr -d ' ')" -eq 0 ]
+}
+
+@test "send: a flusher that does not hold the flush lock leaves another flusher's upload copy alone" {
+    cd_need_flock
+    mkdir -p "${GREMION_ROOT}/data/cd/outbox"
+    printf 'To: ops@example.org
+
+body
+' > "${GREMION_ROOT}/data/cd/outbox/.send.99999.eml"
+    cd_bg 'exec 7>>"${GREMION_ROOT}/runtime/cd/notify.lock"; flock -n 7; echo ready; exec sleep 300'
+    run nlib 'cd_notify held sha12='"$SHA_A"' hold=blocked; cd_notify_flush'
+    [ "$status" -eq 3 ]
+    [ -e "${GREMION_ROOT}/data/cd/outbox/.send.99999.eml" ]
+}
+
+# ---------------------------------------------------------------------------
 # The program
 # ---------------------------------------------------------------------------
 

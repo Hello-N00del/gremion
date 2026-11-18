@@ -45,7 +45,7 @@
 # Rendering order is CD_NOTIFY_ORDER; `kind`, `time` and `host` are set by the program and
 # are not arguments.
 CD_NOTIFY_ORDER=(
-    phase sha12 prev_sha12 uncovered tag colour prev_colour stage rule hold reason detail result
+    phase sha12 prev_sha12 uncovered tag colour prev_colour stage rule hold reason detail result notes
     commits requests fivexx tenants_not_ready
     modules_total modules_upgraded modules_failed leaves_total leaves_migrated leaves_skipped leaves_failed
     customers_total customers_ok customers_failed customers_skipped
@@ -57,17 +57,25 @@ CD_NOTIFY_ORDER=(
 declare -gA CD_NOTIFY_TYPE=(
     [phase]=phase [sha12]=sha [prev_sha12]=sha [uncovered]=shalist [tag]=tag [colour]=colour [prev_colour]=colour
     [stage]=stage [rule]=rule [hold]=hold [reason]=code [detail]=detail [result]=result
-    [dump_label]=label [command]=cmd
+    [dump_label]=label [command]=cmd [notes]=notes
 )
 # The closed vocabularies: the stage names, the block rules, the hold kinds and the watchdog
 # details are the program's own words, so a field that names one accepts only those.
 CD_NOTIFY_STAGES="none tick poll idle select fetch classify host_apply state_apply retag render build snapshot migrate start gates switch watch commit reconcile"
 CD_NOTIFY_RULES="none build_failed migrate_failed start_failed readiness_failed isolation_failed verify_failed post_switch_verify watch_readiness watch_crash watch_5xx watch_pause_cap manual_rollback proof_end commit_stuck stuck_stage"
 CD_NOTIFY_HOLDS="none operator blocked state_tier unsupported_chain contract_migration waived_migration ci_changed chain_class_changed batch_too_large not_ancestor ruleset_missing range_unverified classify_failed failure proof rollback_failed killswitch stuck_stage reconcile_failed"
-CD_NOTIFY_DETAILS="no_heartbeat heartbeat_unreadable no_tick release_stuck release_over_budget state_unreadable poll_stale main_red outbox_old"
+CD_NOTIFY_DETAILS="no_heartbeat heartbeat_unreadable no_tick release_stuck release_over_budget state_unreadable poll_stale main_red outbox_old alert"
+# The fixed sentences of the driver, as words: the `notes` field is a comma-separated list of
+# at most four of them. A free sentence would be dropped or redacted, so the program's own
+# remarks travel as words of this list and the reader of the mail knows what each one says.
+#   lock_span_over           the host lock was held longer than CD_LOCK_SPAN_MIN (hostlock_min says how long)
+#   reconcile_not_run        the reconcile stage was skipped (CD_RECONCILE=0)
+#   rollback_off_lock_held   the kill switch is on: automatic rollback is OFF and the host lock is held
+#   unhealthy_after_rollback the old colour is unhealthy after a rollback; nothing is left to try
+CD_NOTIFY_NOTES="lock_span_over reconcile_not_run rollback_off_lock_held unhealthy_after_rollback"
 
 declare -gA CD_NOTIFY_KIND_FIELDS=(
-    [released]="sha12 prev_sha12 tag colour prev_colour commits requests fivexx tenants_not_ready modules_total modules_upgraded modules_failed leaves_total leaves_migrated leaves_skipped leaves_failed observed_min snapshot_s module_s reconcile_s hostlock_min dump_label dump_mb"
+    [released]="sha12 prev_sha12 tag colour prev_colour commits requests fivexx tenants_not_ready modules_total modules_upgraded modules_failed leaves_total leaves_migrated leaves_skipped leaves_failed observed_min snapshot_s module_s reconcile_s hostlock_min dump_label dump_mb notes"
     [rolled_back]="sha12 prev_sha12 tag colour prev_colour stage rule observed_min requests fivexx tenants_not_ready hostlock_min command"
     [rejected]="sha12 prev_sha12 tag colour stage rule reason commits modules_total modules_upgraded modules_failed leaves_total leaves_migrated leaves_skipped leaves_failed dump_label command"
     [held]="sha12 prev_sha12 uncovered hold reason commits command"
@@ -76,8 +84,8 @@ declare -gA CD_NOTIFY_KIND_FIELDS=(
     [parked]="sha12 prev_sha12 colour prev_colour stage rule observed_min paused_min hostlock_min command"
     [stalled]="phase sha12 stage detail heartbeat_age_min poll_age_min outbox_age_min command"
     [alive]="phase sha12 hold blocks poll_age_min outbox_age_min"
-    [rollback_failed]="sha12 prev_sha12 tag colour prev_colour stage rule reason command"
-    [killswitch]="phase sha12 stage command"
+    [rollback_failed]="sha12 prev_sha12 tag colour prev_colour stage rule reason notes command"
+    [killswitch]="phase sha12 stage notes command"
     [adopted]="sha12 prev_sha12 colour reason command"
     [proof_on]="sha12 reason"
     [selftest]="sha12 stage result reason"
@@ -137,6 +145,18 @@ _cd_nf_cmd_ok() {
     [[ "$1" == "${w[*]}" ]]
 }
 
+# _cd_nf_notes_ok VALUE -- 0 when VALUE is one to four words of CD_NOTIFY_NOTES, comma-separated.
+_cd_nf_notes_ok() {
+    local -a w=()
+    local i
+    [[ "${1-}" =~ ^[a-z_]+(,[a-z_]+){0,3}$ ]] || return 1
+    IFS=',' read -r -a w <<< "$1" || return 1
+    for (( i = 0; i < ${#w[@]}; i++ )); do
+        [[ " $CD_NOTIFY_NOTES " == *" ${w[i]} "* ]] || return 1
+    done
+    return 0
+}
+
 # _cd_nf_clean TYPE VALUE -- VALUE when it has the shape of its field and passes the
 # scrubber, else <redacted>.
 _cd_nf_clean() {
@@ -163,6 +183,7 @@ _cd_nf_clean() {
         phase) [[ "$v" =~ $re_phase ]] && ok=1 ;;
         cmd) _cd_nf_cmd_ok "$v" && ok=1 ;;
         label) [[ "$v" =~ $re_label ]] && ok=1 ;;
+        notes) _cd_nf_notes_ok "$v" && ok=1 ;;
     esac
     if (( ok == 1 )); then
         cd_scrub_value "$v"
@@ -504,6 +525,9 @@ cd_notify_flush() {
         exec 7>&-
         return 3
     fi
+    # holding the flush lock, no send is running: an upload copy that is left (a send that was
+    # killed between writing it and removing it) belongs to nobody and goes
+    rm -f "$dir"/.send.*.eml 2>/dev/null || true
     for f in "${files[@]}"; do
         [[ -f "$f" ]] || continue
         n=$(( n + 1 ))
