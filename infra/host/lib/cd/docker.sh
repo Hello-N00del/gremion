@@ -75,17 +75,36 @@ cd_envfile() {
     printf '%s/etc/env/%s.env\n' "$(_cd_docker_root)" "$proj"
 }
 
+# _cd_kv_decls FILE KEY - how many lines of an env file declare KEY in ANY
+# spelling compose's own dotenv reader accepts: a leading space or tab, an
+# `export ` prefix, blanks before the `=`, and `KEY: value`. The last
+# declaration wins in compose, so a reader that counted only the plain
+# `KEY=value` could approve a file in which compose acts on another value.
+# Comment lines and keys that merely start with the name do not count. KEY is
+# already validated by the caller (upper case, digits, underscore).
+_cd_kv_decls() {
+    local n
+    n="$(grep -cE -- "^[[:space:]]*(export[[:space:]]+)?${2}[[:space:]]*[=:]" "$1")" || true
+    printf '%s' "${n:-0}"
+}
+
 # cd_kv_get FILE KEY - one non-secret value of an env file: the text after
 # KEY=, one pair of matching quotes and a trailing CR removed. Returns 1 (and
-# prints nothing) when the key is absent or declared more than once: a reader
-# that could pick a different line than compose does must not answer.
+# prints nothing) when the key is absent, declared more than once, or declared
+# in any spelling other than the plain KEY=value line (see _cd_kv_decls): a
+# reader that could pick a different line than compose does must not answer.
 cd_kv_get() {
-    local f="${1:-}" k="${2:-}" n v
+    local f="${1:-}" k="${2:-}" n p v
     [[ "$k" =~ ^[A-Z][A-Z0-9_]*$ ]] || { _cd_docker_err "cd_kv_get: bad key name"; return 2; }
     [[ -f "$f" && -r "$f" ]] || { _cd_docker_err "cd_kv_get: no readable file $(basename -- "$f")"; return 2; }
-    n="$(grep -c -- "^${k}=" "$f")" || true
+    n="$(_cd_kv_decls "$f" "$k")"
     if [[ "$n" -ne 1 ]]; then
         _cd_docker_err "cd_kv_get: ${k} is declared ${n} times in $(basename -- "$f")"
+        return 1
+    fi
+    p="$(grep -c -- "^${k}=" "$f")" || true
+    if [[ "$p" -ne 1 ]]; then
+        _cd_docker_err "cd_kv_get: ${k} in $(basename -- "$f") is not a plain ${k}=value line"
         return 1
     fi
     v="$(sed -n "s/^${k}=//p" "$f" | head -n 1)"
@@ -112,9 +131,15 @@ cd_set_env_key() {
         *$'\n'* | *$'\r'*) _cd_docker_err "cd_set_env_key: ${k}: the value holds a line break"; return 2 ;;
     esac
     [[ -f "$f" && -r "$f" && ! -L "$f" ]] || { _cd_docker_err "cd_set_env_key: no regular file $(basename -- "$f")"; return 2; }
-    n="$(grep -c -- "^${k}=" "$f")" || true
+    n="$(_cd_kv_decls "$f" "$k")"
     if [[ "$n" -gt 1 ]]; then
         _cd_docker_err "cd_set_env_key: ${k} is declared ${n} times in $(basename -- "$f"); refusing to guess"
+        return 1
+    fi
+    # a single declaration in another spelling would survive the edit and, as
+    # the last one, could win in compose
+    if [[ "$n" -eq 1 ]] && ! grep -q -- "^${k}=" "$f"; then
+        _cd_docker_err "cd_set_env_key: ${k} in $(basename -- "$f") is not a plain ${k}=value line; refusing to guess"
         return 1
     fi
     tmp="$(mktemp "${f}.XXXXXX")" || { _cd_docker_err "cd_set_env_key: cannot create a temporary copy"; return 1; }
@@ -168,17 +193,21 @@ cd_set_env_key() {
 # no argument may be a global option of compose, and the env file must declare
 # exactly one COMPOSE_PROJECT_NAME (resolved as the lookups of this library
 # resolve it, STACK cross-check included) and exactly one non-empty
-# COMPOSE_FILE: without them compose would fall back to the name of the tree
-# directory and to docker-compose.yml and could start a third stack beside the
-# live colours, so a missing key is a stop (2), never a default. The
-# COMPOSE_PROJECT_NAME,
+# COMPOSE_FILE, each as ONE plain KEY=value line: a second line in any
+# spelling compose reads (export, leading blanks, a blank before the = or a
+# colon) is refused too, because the last one would win there. Without the two
+# keys compose would fall back to the name of the tree directory and to
+# docker-compose.yml and could start a third stack beside the live colours, so
+# a missing key is a stop (2), never a default. The COMPOSE_PROJECT_NAME,
 # COMPOSE_PROFILES, COMPOSE_FILE, COMPOSE_PATH_SEPARATOR and COMPOSE_ENV_FILES
 # of the caller's environment are dropped before compose starts, so the shape
-# cannot be changed from outside. CD_DC_TIMEOUT (whole seconds, 0 or unset = none) bounds
-# the call; a call that hits it returns 124, or 137 when compose ignored the
-# TERM and was killed ten seconds later: both mean "timed out" (and one line
-# on stderr says so). Any other non-zero status is compose's own, passed on
-# unchanged; compose has already said why on its own stderr.
+# cannot be changed from outside. CD_DC_TIMEOUT (whole seconds, 0 or unset =
+# none) bounds the call; a call that hits it returns 124, or 137 when compose
+# ignored the TERM and was killed ten seconds later: both mean "timed out" (and
+# one line on stderr says so; a compose that itself exits 137 under a timeout
+# is indistinguishable from that and is reported the same way). Any other
+# non-zero status is compose's own, passed on unchanged; compose has already
+# said why on its own stderr.
 cd_dc() {
     local tree="${1:-}" proj="${2:-}" envf verb a tmo root cf rc
     local -a star=() t=()
@@ -401,13 +430,20 @@ cd_traefik_api() {
 # (for example app@file). Returns 1 with nothing printed when the call fails or
 # the answer is not a JSON object.
 cd_traefik_service() {
-    local name="${1:-}" api body
+    local name="${1:-}" api body errf rc=0 why
     [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._@-]*$ ]] || { _cd_docker_err "cd_traefik_service: bad service name"; return 2; }
     api="$(cd_traefik_api)" || return 2
-    body="$(curl -fsS --max-time 10 "${api}/api/http/services/${name}" 2>/dev/null </dev/null)" || {
-        _cd_docker_err "cd_traefik_service: the Traefik API did not answer for ${name}"
+    errf="$(mktemp)" || { _cd_docker_err "cd_traefik_service: cannot create a temporary file"; return 2; }
+    body="$(curl -fsS --max-time 10 "${api}/api/http/services/${name}" 2>"$errf" </dev/null)" || rc=$?
+    # curl's own reason (a refused connection, an HTTP 404) is passed on, first
+    # line only: the code cannot tell "not there" from "no answer" by itself
+    why="$(tr -cd '[:print:]\n' <"$errf" 2>/dev/null | head -n 1 | cut -c 1-200)" || why=''
+    rm -f -- "$errf"
+    if [[ "$rc" -ne 0 ]]; then
+        [[ -n "$why" ]] || why="curl status ${rc}"
+        _cd_docker_err "cd_traefik_service: the call for ${name} failed: ${why}"
         return 1
-    }
+    fi
     printf '%s' "$body" | jq -e 'type == "object"' >/dev/null 2>&1 || {
         _cd_docker_err "cd_traefik_service: the answer for ${name} is not a JSON object"
         return 1

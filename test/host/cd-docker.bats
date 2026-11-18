@@ -290,6 +290,97 @@ load_lib() {
     [ ! -e "$DK/argv.log" ]
 }
 
+# Compose's own dotenv reader accepts more spellings of a line than a plain
+# KEY=value: a leading space or tab, an `export` prefix, a space before the
+# `=`, and `KEY: value`; and when a key is declared twice the last one wins.
+# A reader that counts only the plain spelling would approve a file in which
+# compose acts on another project or other files, so any such line next to (or
+# instead of) the plain one is a refusal, for both keys.
+@test "cd_dc refuses (2) every other spelling of COMPOSE_FILE or COMPOSE_PROJECT_NAME that compose would read, and starts compose never" {
+    load_lib
+    f="${GREMION_ROOT}/etc/env/app-green.env"
+    cp "$f" "${BATS_TEST_TMPDIR}/orig.env"
+    for line in \
+        'export COMPOSE_FILE=other.yml' \
+        ' COMPOSE_FILE=other.yml' \
+        $'\tCOMPOSE_FILE=other.yml' \
+        'COMPOSE_FILE: other.yml' \
+        'COMPOSE_FILE =other.yml' \
+        'COMPOSE_FILE : other.yml' \
+        'export COMPOSE_PROJECT_NAME=teststack-app-green' \
+        ' COMPOSE_PROJECT_NAME=teststack-app-green' \
+        $'\tCOMPOSE_PROJECT_NAME=teststack-app-green' \
+        'COMPOSE_PROJECT_NAME: teststack-app-green' \
+        'COMPOSE_PROJECT_NAME =teststack-app-green'; do
+        # after the plain line, and before it (compose lets the last one win)
+        cp "${BATS_TEST_TMPDIR}/orig.env" "$f"
+        printf '%s\n' "$line" >> "$f"
+        run --separate-stderr cd_dc "$TREE" app-green up -d
+        [ "$status" -eq 2 ] || { echo "after: ${line}"; false; }
+        [ -n "$stderr" ]
+        { printf '%s\n' "$line"; cat "${BATS_TEST_TMPDIR}/orig.env"; } > "$f"
+        run --separate-stderr cd_dc "$TREE" app-green up -d
+        [ "$status" -eq 2 ] || { echo "before: ${line}"; false; }
+        [ -n "$stderr" ]
+    done
+    [ ! -e "$DK/argv.log" ]
+}
+
+@test "cd_dc refuses (2) a file whose only COMPOSE_FILE or COMPOSE_PROJECT_NAME line is not the plain spelling" {
+    load_lib
+    f="${GREMION_ROOT}/etc/env/app-green.env"
+    cp "$f" "${BATS_TEST_TMPDIR}/orig.env"
+    for key in COMPOSE_FILE COMPOSE_PROJECT_NAME; do
+        cp "${BATS_TEST_TMPDIR}/orig.env" "$f"
+        sed -i "s/^${key}=/export ${key}=/" "$f"
+        run --separate-stderr cd_dc "$TREE" app-green up -d
+        [ "$status" -eq 2 ]
+        [[ "$stderr" == *"$key"* ]]
+    done
+    [ ! -e "$DK/argv.log" ]
+}
+
+@test "cd_dc does not mistake a comment or another key that starts with the name for a declaration" {
+    load_lib
+    f="${GREMION_ROOT}/etc/env/app-green.env"
+    printf '# COMPOSE_FILE=old.yml\n# export COMPOSE_PROJECT_NAME=old\nCOMPOSE_FILE_EXTRA=x\nCOMPOSE_PROJECT_NAME_X=y\n' >> "$f"
+    run cd_dc "$TREE" app-green up -d
+    [ "$status" -eq 0 ]
+    [ -s "$DK/argv.log" ]
+}
+
+@test "cd_kv_get refuses (1) a key in any spelling compose would also read, besides the plain one" {
+    load_lib
+    f="${BATS_TEST_TMPDIR}/k.env"
+    for line in 'export A=2' ' A=2' 'A: 2' 'A =2'; do
+        printf 'A=1\n%s\n' "$line" > "$f"
+        run --separate-stderr cd_kv_get "$f" A
+        [ "$status" -eq 1 ] || { echo "$line"; false; }
+        [ "$output" = "" ]
+        [ -n "$stderr" ]
+    done
+    printf 'export A=1\n' > "$f"
+    run cd_kv_get "$f" A
+    [ "$status" -eq 1 ]
+    printf '# A=9\nAB=3\nA=1\n' > "$f"
+    run cd_kv_get "$f" A
+    [ "$status" -eq 0 ]
+    [ "$output" = 1 ]
+}
+
+@test "cd_set_env_key refuses a file that declares the key in another spelling, and changes nothing" {
+    load_lib
+    f="${BATS_TEST_TMPDIR}/s.env"
+    for line in 'export IMAGE_TAG=two' ' IMAGE_TAG=two' 'IMAGE_TAG: two' 'IMAGE_TAG =two'; do
+        printf 'A=1\n%s\n' "$line" > "$f"
+        before="$(cksum < "$f")"
+        run --separate-stderr cd_set_env_key "$f" IMAGE_TAG new
+        [ "$status" -eq 1 ] || { echo "$line"; false; }
+        [ -n "$stderr" ]
+        [ "$(cksum < "$f")" = "$before" ]
+    done
+}
+
 @test "cd_dc runs compose for the state project once its env file declares both keys" {
     load_lib
     cd_dc "$TREE" state up -d
@@ -680,8 +771,7 @@ svc_state() {
     # a 3 s window the first reading is 1000, the deadline 1003, and the loop
     # looks at the service once per reading until a reading reaches 1003.
     load_lib
-    printf 'gremion-ui
-' > "$DK/services"
+    printf 'gremion-ui\n' > "$DK/services"
     svc_state gremion-ui 'running starting'
     echo 1000 > "${BATS_TEST_TMPDIR}/clock"
     cd_now() { local t; t=$(cat "${BATS_TEST_TMPDIR}/clock"); echo $((t + 1)) > "${BATS_TEST_TMPDIR}/clock"; echo "$t"; }
@@ -893,6 +983,14 @@ svc_state() {
     [ "$status" -eq 1 ]
     [ "$output" = "" ]
     [[ "$stderr" == "cd-docker: cd_traefik_service: "* ]]
+    [ "$(printf '%s\n' "$stderr" | wc -l)" -eq 1 ]
+    # curl's own reason is passed on (a 404 is not "no answer"), as one line
+    shim curl 'echo "curl: (22) The requested URL returned error: 404" >&2; exit 22'
+    run --separate-stderr cd_traefik_service app@file
+    [ "$status" -eq 1 ]
+    [ "$output" = "" ]
+    [[ "$stderr" == *"returned error: 404"* ]]
+    [[ "$stderr" != *"did not answer"* ]]
     [ "$(printf '%s\n' "$stderr" | wc -l)" -eq 1 ]
     shim curl 'printf "<html>edge</html>"'
     run --separate-stderr cd_traefik_service app@file
