@@ -76,17 +76,19 @@ export function pgModules(opts: {
     async assertServerAnswers(service: string) {
       // One bounded SELECT 1 as the server's admin: the create flow asks before it writes anything, so a
       // down server is a refusal with nothing to clean up. The message names the compose service (a
-      // catalogue constant), never an address or a credential.
+      // catalogue constant) and the error CODE, never the driver's text, which carries the address.
       let timer: ReturnType<typeof setTimeout> | undefined
       try {
         const ask = Promise.resolve(opts.lifecycle.server(service).admin`SELECT 1`)
         const late = new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error(`no answer within ${SERVER_ANSWER_MS / 1000} seconds`)), SERVER_ANSWER_MS)
+          timer = setTimeout(() => reject(Object.assign(new Error('timeout'), { code: `no answer within ${SERVER_ANSWER_MS / 1000} seconds` })), SERVER_ANSWER_MS)
         })
         ask.catch(() => {}) // a late failure after the timeout wins the race is not an unhandled rejection
         await Promise.race([ask, late])
       } catch (err) {
-        throw new ProvisioningError('PRECONDITION', `the database server ${service} does not answer (${err instanceof Error ? err.message : 'unreachable'}); the module cannot be set up, nothing was written`, { cause: err })
+        const code = (err as { code?: unknown } | null)?.code
+        const why = typeof code === 'string' && /^[A-Za-z0-9_ ]{1,60}$/.test(code) ? code : 'unreachable'
+        throw new ProvisioningError('PRECONDITION', `the database server ${service} does not answer (${why}); the module cannot be set up, nothing was written`, { cause: err })
       } finally {
         if (timer) clearTimeout(timer)
       }

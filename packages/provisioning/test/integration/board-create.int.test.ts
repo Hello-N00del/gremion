@@ -60,7 +60,7 @@ type Behaviour = { answers: number } | { hang: true }
 function flakyServer(real: ModuleServer, behaviour: Behaviour): ModuleServer {
   const ask = (): Promise<never> | null => {
     if ('hang' in behaviour) return new Promise<never>(() => {})
-    if (behaviour.answers <= 0) return Promise.reject(Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }))
+    if (behaviour.answers <= 0) return Promise.reject(Object.assign(new Error('connect ECONNREFUSED 192.0.2.7:5432'), { code: 'ECONNREFUSED' }))
     behaviour.answers--
     return null
   }
@@ -143,6 +143,8 @@ describe('create for a module with a database of its own (the board shape)', () 
     expect(err).toMatchObject({ code: 'PRECONDITION' })
     expect(err?.message).toContain(SERVICE)
     expect(err?.message).toContain('nothing was written')
+    expect(err?.message).toContain('ECONNREFUSED') // the error code, not the driver's text: that carries the address
+    expect(err?.message).not.toContain('192.0.2.7')
     expect(await platformRows(c.id)).toEqual({ enabled: [], database: [] })
     expect(await databases()).toEqual(before)
   })
