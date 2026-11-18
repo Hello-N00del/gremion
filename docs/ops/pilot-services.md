@@ -300,9 +300,11 @@ gives its ICE servers to the client, so no client change is involved.
   The panel refuses `disable_module` for these three (`DISABLE_LOCKED`); only the
   host break-glass request is not refused by code, so that stays an operator rule.
 - **Isolation evidence.** The case table behind the enable gate covers the
-  backends this install runs; board runs in-process and has no evidence row, so
-  a second customer needs it first. Votes, files and messaging are proven at the
-  app layer against a shared Nextcloud and Synapse.
+  backends this install runs. Board's recorded case is the in-process one over
+  the kernel tables; a customer whose board lives in its own database is served
+  by the leaf, so the case through the router and the leaf is owed before a
+  second customer relies on that path. Votes, files and messaging are proven at
+  the app layer against a shared Nextcloud and Synapse.
 - **Office router.** The `.office` router is emitted for every routed host
   whether or not Collabora runs; on a host without it traefik lists that router
   as not enabled, and `gremion-verify` reports it as not live. Making it

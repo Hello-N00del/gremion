@@ -119,30 +119,41 @@ describe('the retention catalogue describes a board export that is taken', () =>
   const lineOf = (start: string) => text.split('\n').find((l) => l.startsWith(start)) ?? ''
   const stale = /only once board has its own module database|today (it|board) has none|no board export is taken/i
 
-  it('RC-BRD, RC-MOD-EXPORT and the change note carry no condition that board has no module database', () => {
+  // The dated notes are history: 2026-11-17 (BD2's decision) keeps its text, and 2026-11-18 says what changed since.
+  const noteOf = (from: string, to: string) => {
+    const start = text.indexOf(`> **Change note ${from}`)
+    expect(start, `change note ${from}`).toBeGreaterThanOrEqual(0)
+    const end = text.indexOf(`> **Change note ${to}`)
+    expect(end, `change note ${to}`).toBeGreaterThan(start)
+    return text.slice(start, end).replace(/\n> ?/g, ' ')
+  }
+
+  it('RC-BRD, RC-MOD-EXPORT and the newest change note carry no condition that board has no module database', () => {
     expect(lineOf('| RC-BRD '), 'RC-BRD').not.toMatch(stale)
     expect(lineOf('| RC-MOD-EXPORT '), 'RC-MOD-EXPORT').not.toMatch(stale)
-    const start = text.indexOf('> **Change note 2026-11-17')
-    expect(start, 'change note 2026-11-17').toBeGreaterThanOrEqual(0)
-    const note = text.slice(start, text.indexOf('> **Change note 2026-10-27'))
-    expect(note.replace(/\n> ?/g, ' ')).not.toMatch(stale)
+    expect(noteOf('2026-11-18', '2026-11-17')).not.toMatch(stale)
   })
 
-  it('RC-BRD and the change note say that a board still held in the kernel tables has nothing to export at switch-off', () => {
+  it('the 2026-11-17 note is kept as written and the 2026-11-18 note replaces its sentence about a board with no database', () => {
+    // A dated note is a record of what was decided then: it is not rewritten when the facts move on. The later
+    // note says which sentence it replaces.
+    expect(noteOf('2026-11-17', '2026-10-27')).toMatch(/today board has none/i)
+    expect(noteOf('2026-11-18', '2026-11-17')).toMatch(/replaces the sentence of the 2026-11-17 note/i)
+  })
+
+  it('RC-BRD and the newest change note say that a board still held in the kernel tables has nothing to export at switch-off and is not deleted by it', () => {
     // A customer whose board was switched on while board had no database of its own keeps the cards in the kernel
     // tables: its switch-off opens the 30-day clock but exports nothing, and the catalogue must not promise an export
-    // for it.
-    const start = text.indexOf('> **Change note 2026-11-17')
-    const note = text.slice(start, text.indexOf('> **Change note 2026-10-27')).replace(/\n> ?/g, ' ')
-    for (const [name, body] of [['RC-BRD', lineOf('| RC-BRD ')], ['the change note', note]] as const) {
+    // or a deletion for it.
+    for (const [name, body] of [['RC-BRD', lineOf('| RC-BRD ')], ['the change note', noteOf('2026-11-18', '2026-11-17')]] as const) {
       expect(body, name).toMatch(/kernel tables/i)
       expect(body, name).toMatch(/nothing to export/i)
+      expect(body, name).toMatch(/not deleted|neither it nor this release exports or deletes/i)
     }
   })
 
   it('the change note says that a later change of the length does not re-date an export that is already kept', () => {
-    const start = text.indexOf('> **Change note 2026-11-17')
-    const note = text.slice(start, text.indexOf('> **Change note 2026-10-27')).replace(/\n> ?/g, ' ')
+    const note = noteOf('2026-11-17', '2026-10-27')
     expect(note).toMatch(/already kept/i)
     expect(note).toMatch(/does not re-date/i)
   })

@@ -33,16 +33,27 @@
 > job's destructive steps run only when `KARENZ_FINAL_DELETION=on`; it ships `off` (a dry
 > run), and it is turned on only after the phase-3 finance extraction is verified.
 >
+> **Change note 2026-11-18 (board declares its own module database):** board now declares a
+> module database and a board export. This replaces the sentence of the 2026-11-17 note below
+> that says board has none today: a switch-off of a board that lives in its module database
+> takes a board export, and the 365-day rule of that note applies to it. A board still held
+> in the kernel tables (switched on while board had no database of its own, or never switched
+> on at all) has nothing to export at switch-off: the switch-off opens the 30-day clock only
+> when the customer had a board enablement, and neither it nor this release exports or
+> deletes those rows. Moving them into the module database is a separate step that is not
+> part of this release; their retention until then is open and goes to the DPO together
+> with the 2026-11-17 note. This is a change of a compliance document and goes to the DPO
+> for review.
+>
 > **Change note 2026-11-17 (board export kept after day 30):** operator decision: the board
 > export is not deleted on day 30. The Karenz job drops the blocked database and keeps the
 > board export for a fixed number of days after day 30 (`EXPORT_KEEP_DAYS` in
 > `packages/provisioning/src/export-hold.ts`). The length is **provisional** until the DPO
 > confirms it; the constant and the two rows RC-MOD-EXPORT and RC-BRD change together, and a
-> test fails when they disagree. Board has its own module database, so a switch-off takes a
-> board export and this rule applies to it. A customer whose board was switched on before it
-> had one still holds the cards in the kernel tables: its switch-off has nothing to export,
-> opens the 30-day clock only, and leaves those rows where they are until they are moved
-> into the module database. The date is written to the
+> test fails when they disagree. This applies only once board has its own module database:
+> today board has none, is served from the kernel tenant database, and no board export is
+> taken at switch-off, so the rule keeps nothing until the release that gives board a
+> database (the runbook row for board stays true until then). The date is written to the
 > Karenz row by the first day-30 run that keeps the export and is read from there ever
 > after: a later change of `EXPORT_KEEP_DAYS` does not re-date an export that is already
 > kept, so when the DPO sets the final length, the stored dates of exports already kept are
@@ -441,7 +452,7 @@ their deletion rules are the file store operator's and are out of this catalogue
 
 | Row | Category (profile) | Start event | Basis | Window | Reading |
 |---|---|---|---|---|---|
-| RC-BRD | Boards and cards (`rp-brd-board`, `rp-brd-card`) | module disabled, body archived, or end of the Wahlperiode | Art. 5(1)(e) | **1 year** after the Wahlperiode ends (the successor board's first year); **grace** after disablement; the board export is kept **365 days after day 30**; provisional until the DPO confirms; the same number as RC-MOD-EXPORT; a board still held in the kernel tables has nothing to export at switch-off. Erasure of a person does not reach the kept export, which holds the card text and the two person columns (`created_by`, `assignee_keycloak_id`): open question for the DPO | [A-L4] Sets the schema's undecided "+ n" placeholder [D-nc] under this reading |
+| RC-BRD | Boards and cards (`rp-brd-board`, `rp-brd-card`) | module disabled, body archived, or end of the Wahlperiode | Art. 5(1)(e) | **1 year** after the Wahlperiode ends (the successor board's first year); **grace** after disablement; the board export is kept **365 days after day 30**; provisional until the DPO confirms; the same number as RC-MOD-EXPORT; a board still held in the kernel tables has nothing to export at switch-off and is not deleted by it. Erasure of a person does not reach the kept export, which holds the card text and the two person columns (`created_by`, `assignee_keycloak_id`): open question for the DPO | [A-L4] Sets the schema's undecided "+ n" placeholder [D-nc] under this reading |
 | RC-PWD | Vault items, collection references, instance configuration (`rp-pwd-native-item`, `rp-pwd-collectionreference`, `rp-pwd-instanceconfig`) | item deleted; body archived; module disabled (export first) | Art. 5(1)(e), 25, 32 | item **on event**; otherwise **grace** | [A-G] |
 
 ### 7.9 Public portal (pub)

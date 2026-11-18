@@ -298,6 +298,59 @@ describe('board has a module database of its own (the shipped module.json)', () 
     expect(deleted).toEqual([`${TENANT}/board/20261111T000000000Z.dump`, `${TENANT}/board/20261111T000000000Z.dump.sha256`])
     expect(steps).toEqual(['export-verified', 'cas-finalizing', 'db-dropped', 'cas-dropped', 'export-deleted', 'platform-done'])
   })
+
+  it('finalizeDueKarenz at day 30 for a Karenz that has no export and no plt.module_database row completes without a module server: it drops nothing and consults no hold', async () => {
+    // The day-30 half of the switch-off above: a customer whose board was enabled before the declaration has a
+    // Karenz row with a null export and no module database. board declares a database, so the job reads the
+    // (absent) row, finds nothing to drop and nothing to delete, and still finishes the platform side; it must
+    // not need board-postgres for a customer that has no database there.
+    const statements: Statement[] = []
+    const row = {
+      karenz_id: KARENZ_ROW,
+      customer_id: TENANT,
+      module_id: MODULE_ROW,
+      module_key: 'board',
+      state: 'open',
+      export_path: null,
+      export_sha256: null,
+      export_deleted_at: null,
+      platform_done_at: null,
+      tenant_done_at: null,
+      retained_ok_at: null,
+      final_at: new Date('2026-12-11T00:00:00Z'),
+      export_kept_until: null,
+    }
+    const sql = fakeSql(statements, (s) => {
+      if (s.text.startsWith('SELECT k.karenz_id::text')) return [row]
+      if (/SELECT state FROM plt\.module_karenz WHERE karenz_id/.test(s.text)) return [{ state: 'open' }]
+      return []
+    })
+    const asked: string[] = []
+    const steps: string[] = []
+    const deps = {
+      platform: sql,
+      catalogue: [boardModule()],
+      exportDir: EXPORT_DIR,
+      exportHold: () => {
+        throw new Error('the export hold must not be consulted for a Karenz with no export')
+      },
+      finalDeletion: true,
+      now: () => new Date('2026-12-12T00:00:00Z'),
+      hooks: { afterStep: (step: string) => void steps.push(step) },
+      server: (service: string) => {
+        asked.push(service)
+        throw new Error(`deps.server(${JSON.stringify(service)}) must not be called without a module database row`)
+      },
+    } as unknown as FinalizeDeps
+
+    const r = await finalizeDueKarenz(deps)
+
+    expect(r.errors).toEqual([])
+    expect(r).toMatchObject({ due: 1, finalized: 1, kept: 0, dryRun: false })
+    expect(asked).toEqual([])
+    expect(steps).toEqual(['cas-finalizing', 'platform-done'])
+    expect(statements.some((s) => /DROP DATABASE/.test(s.text))).toBe(false)
+  })
 })
 
 // What the two earlier guards of the database-less board also covered: a module that declares no database
