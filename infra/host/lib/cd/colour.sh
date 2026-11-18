@@ -27,7 +27,8 @@
 # only the file name is printed.
 #
 # The worker gate file (section 4 of the plan): runtime/workers/<colour>, the host
-# side of the read-only bind mount that gremion-ui reads at every background tick.
+# side of the read-only bind mount that gremion-ui reads at every background tick (the
+# directory is GREMION_WORKERS_DIR when the environment or the colour's env file sets it).
 # `off` stops the colour's jobs; absent, unreadable or any other content means on.
 
 CD_COLOUR_REASON=''
@@ -121,9 +122,36 @@ _cd_colour_logfile() {
 
 # -- the worker gate ----------------------------------------------------------
 
-# The host directory of the gate files: the same source the compose mount reads.
+# _cd_colour_workers_dir COLOUR - the host directory of the gate files, from the same
+# sources and in the same order as the compose mount reads GREMION_WORKERS_DIR: the
+# environment of this process (compose inherits it), then the colour's own env file, then
+# the default under the root. A value that is not an absolute path, or that holds a $, is
+# refused (2): compose would expand it, and the file would land in another directory than
+# the one the container mounts.
 _cd_colour_workers_dir() {
-    printf '%s' "${GREMION_WORKERS_DIR:-$(_cd_colour_root)/runtime/workers}"
+    local colour="$1" f v n
+    v="${GREMION_WORKERS_DIR:-}"
+    if [[ -z "$v" ]]; then
+        f="$(cd_envfile "app-${colour}")" || return 2
+        if [[ -f "$f" && -r "$f" ]]; then
+            n="$(grep -cE -- '^[[:space:]]*(export[[:space:]]+)?GREMION_WORKERS_DIR[[:space:]]*[=:]' "$f")" || true
+            if [[ "${n:-0}" -gt 0 ]]; then
+                v="$(cd_kv_get "$f" GREMION_WORKERS_DIR 2>/dev/null)" || {
+                    _cd_colour_err "cd_colour_workers: GREMION_WORKERS_DIR of the ${colour} env file is not a single plain line"
+                    return 2
+                }
+            fi
+        fi
+    fi
+    if [[ -z "$v" ]]; then
+        printf '%s' "$(_cd_colour_root)/runtime/workers"
+        return 0
+    fi
+    [[ "$v" == /* && "$v" != *'$'* ]] || {
+        _cd_colour_err "cd_colour_workers: GREMION_WORKERS_DIR is not a plain absolute path"
+        return 2
+    }
+    printf '%s' "$v"
 }
 
 # cd_colour_workers COLOUR on|off|get - write or read runtime/workers/<colour>. A
@@ -134,7 +162,7 @@ _cd_colour_workers_dir() {
 cd_colour_workers() {
     local colour="${1:-}" mode="${2:-}" dir f v tmp
     _cd_colour_check_colour "$colour" cd_colour_workers || return 2
-    dir="$(_cd_colour_workers_dir)"
+    dir="$(_cd_colour_workers_dir "$colour")" || return 2
     f="${dir}/${colour}"
     case "$mode" in
         get)
@@ -170,6 +198,7 @@ cd_colour_workers() {
     fi
     v="$(cd_colour_workers "$colour" get)" || v=''
     [[ "$v" == "$mode" ]] || {
+        rm -f -- "$tmp"
         _cd_colour_err "cd_colour_workers: the ${colour} gate file does not read back as ${mode}"
         return 1
     }
@@ -691,6 +720,23 @@ cd_colour_ready() {
 
 # -- isolation evidence and verify -----------------------------------------------
 
+# _cd_colour_child_rc REASON EXIT MESSAGE - say why and return the code that a
+# non-zero exit of a family program (gremion-isolation, gremion-verify) stands for: its 1
+# is a failed assertion (1); its 2 is a missing precondition, such as an unclean tree (2);
+# its 3 is "blocked", such as a leftover container of an earlier killed run (3, retry
+# later, never a verdict on the commit); a timeout or a kill (124, 137) and anything the
+# program does not document are infrastructure (4).
+_cd_colour_child_rc() {
+    local reason="$1" code="$2" msg="$3" rc
+    case "$code" in
+        1) rc=1 ;;
+        2) rc=2 ;;
+        3) rc=3 ;;
+        *) rc=4 ;;
+    esac
+    _cd_colour_fail "$reason" "$rc" "$msg"
+}
+
 # _cd_colour_tip TREE - the full commit of the release tree; 2 when it has none.
 _cd_colour_tip() {
     local sha=''
@@ -719,8 +765,8 @@ cd_colour_isolation_run() {
     log="$(_cd_colour_logfile isolation)" || return 2
     GREMION_RELEASE_DIR="$tree" "$prog" run --out "$out" >"$log" 2>&1 </dev/null || rc=$?
     if [[ "$rc" -ne 0 ]]; then
-        _cd_colour_fail isolation_run 1 "isolation run failed (exit ${rc}); output in logs/${log##*/}"
-        return 1
+        _cd_colour_child_rc isolation_run "$rc" "isolation run failed (exit ${rc}); output in logs/${log##*/}"
+        return $?
     fi
     ev="${out}/${tip}.json"
     [[ -s "$ev" ]] || { _cd_colour_fail isolation_run 1 "isolation run left no evidence file for the tip; output in logs/${log##*/}"; return 1; }
@@ -742,7 +788,10 @@ cd_colour_isolation_record() {
     [[ -s "$ev" ]] || { _cd_colour_fail isolation_record 1 "isolation record: no evidence file for the tip"; return 1; }
     log="$(_cd_colour_logfile isolation-record)" || return 2
     GREMION_RELEASE_DIR="$tree" "$prog" record "$ev" >"$log" 2>&1 </dev/null || rc=$?
-    [[ "$rc" -eq 0 ]] || { _cd_colour_fail isolation_record 1 "isolation record failed (exit ${rc}); output in logs/${log##*/}"; return 1; }
+    if [[ "$rc" -ne 0 ]]; then
+        _cd_colour_child_rc isolation_record "$rc" "isolation record failed (exit ${rc}); output in logs/${log##*/}"
+        return $?
+    fi
     return 0
 }
 
@@ -770,9 +819,8 @@ cd_colour_verify() {
         cd_hist verify_report "enforce=${enf}" "code=${rc}" "colour=${colour}" || true
     fi
     if [[ "$enf" == 1 ]]; then
-        _cd_colour_fail verify 1 "gremion-verify failed (exit ${rc}); output in logs/${log##*/}"
-        [[ "$rc" -eq 2 ]] && return 2
-        return 1
+        _cd_colour_child_rc verify "$rc" "gremion-verify failed (exit ${rc}); output in logs/${log##*/}"
+        return $?
     fi
     _cd_colour_err "gremion-verify failed (exit ${rc}), reported only (CD_VERIFY_ENFORCE=0); output in logs/${log##*/}"
     return 0

@@ -45,7 +45,7 @@ setup() {
     # the real mv, recorded in its own log (SHIM_LOG must stay empty for the worker gate)
     REAL_MV="$(command -v mv)"
     export REAL_MV
-    printf '#!/usr/bin/env bash\n(IFS="|"; printf "%%s\\n" "$*" >> "$DK/mv.log")\nexec "$REAL_MV" "$@"\n' > "${SHIM_DIR}/mv"
+    printf '#!/usr/bin/env bash\n(IFS="|"; printf "%%s\\n" "$*" >> "$DK/mv.log")\n[ -f "$DK/mv.lie" ] && exit 0\nexec "$REAL_MV" "$@"\n' > "${SHIM_DIR}/mv"
     chmod +x "${SHIM_DIR}/mv"
     shim git "case \"\$*\" in *rev-parse*) printf '%s\n' '${TIP}' ;; esac"
 }
@@ -343,6 +343,57 @@ ready_green() { call "cd_colour_ready green ${TAG_NEW} \"\$TREE\""; }
     [[ "$output" == "rc=0"* ]]
     [ "$(cat "${GREMION_ROOT}/elsewhere/blue")" = off ]
     [ ! -e "${GREMION_ROOT}/runtime/workers" ]
+}
+
+@test "workers: GREMION_WORKERS_DIR of the colour's own env file moves the directory, as the compose mount reads it" {
+    printf 'GREMION_WORKERS_DIR=%s/from-env-file\n' "$GREMION_ROOT" >> "${GREMION_ROOT}/etc/env/app-green.env"
+    call 'cd_colour_workers green off'
+    [[ "$output" == "rc=0"* ]]
+    [ "$(cat "${GREMION_ROOT}/from-env-file/green")" = off ]
+    [ ! -e "${GREMION_ROOT}/runtime/workers" ]
+    call 'cd_colour_workers green get'
+    [[ "$output" == "off"$'\n'"rc=0"* ]]
+    # the other colour has no such key and keeps the default
+    call 'cd_colour_workers blue off'
+    [ "$(cat "${GREMION_ROOT}/runtime/workers/blue")" = off ]
+}
+
+@test "workers: the environment of the process wins over the env file, as it does for compose" {
+    printf 'GREMION_WORKERS_DIR=%s/from-env-file\n' "$GREMION_ROOT" >> "${GREMION_ROOT}/etc/env/app-green.env"
+    export GREMION_WORKERS_DIR="${GREMION_ROOT}/from-process"
+    call 'cd_colour_workers green off'
+    [[ "$output" == "rc=0"* ]]
+    [ "$(cat "${GREMION_ROOT}/from-process/green")" = off ]
+    [ ! -e "${GREMION_ROOT}/from-env-file" ]
+}
+
+@test "workers: a directory that compose would read differently (relative, or with a variable) is refused and nothing is written" {
+    printf 'GREMION_WORKERS_DIR=relative/dir\n' >> "${GREMION_ROOT}/etc/env/app-green.env"
+    call 'cd_colour_workers green off'
+    [[ "$output" == *"rc=2"* ]]
+    call 'cd_colour_workers green get'
+    [[ "$output" == *"rc=2"* ]]
+    sed -i '$d' "${GREMION_ROOT}/etc/env/app-green.env"
+    printf 'GREMION_WORKERS_DIR=${GREMION_ROOT}/w\n' >> "${GREMION_ROOT}/etc/env/app-green.env"
+    call 'cd_colour_workers green off'
+    [[ "$output" == *"rc=2"* ]]
+    [ ! -e "${GREMION_ROOT}/runtime/workers" ]
+}
+
+@test "workers: start writes off into the directory the env file names" {
+    happy
+    printf 'GREMION_WORKERS_DIR=%s/from-env-file\n' "$GREMION_ROOT" >> "${GREMION_ROOT}/etc/env/app-green.env"
+    call "cd_colour_start \"\$TREE\" green ${TAG_NEW}"
+    [[ "$output" == *"rc=0"* ]]
+    [ "$(cat "${GREMION_ROOT}/from-env-file/green")" = off ]
+}
+
+@test "workers: a write that did not land is caught by the read-back" {
+    touch "$DK/mv.lie"
+    call 'cd_colour_workers green off'
+    [[ "$output" == *"rc=1"* ]]
+    # no temp file is left behind
+    [ -z "$(ls -A "${GREMION_ROOT}/runtime/workers")" ]
 }
 
 @test "workers: a bad colour or mode is a usage error and writes nothing" {
@@ -881,7 +932,7 @@ shim_isolation() {
 printf '%s|%s\n' "${GREMION_RELEASE_DIR:-unset}" "$*" >> "$DK/iso.log"
 echo "output that names host.example.org and a router table"
 echo "stderr line for host.example.org" >&2
-[ -f "$DK/iso.fail" ] && exit 1
+[ -f "$DK/iso.fail" ] && exit "$(cat "$DK/iso.fail")"
 if [ "$1" = run ]; then
   out="$3"
   [ -f "$DK/iso.noevidence" ] || { mkdir -p "$out"; echo '{}' > "$out/${ISO_TIP}.json"; }
@@ -916,7 +967,7 @@ EOF
 
 @test "isolation run: a program that fails is 1 and names the log file, not its output" {
     shim_isolation
-    touch "$DK/iso.fail"
+    echo 1 > "$DK/iso.fail"
     run --separate-stderr colour_lib 'cd_colour_isolation_run "$TREE"; echo "rc=$?"'
     [[ "$output" == *"rc=1"* ]]
     [[ "$stderr" == *"logs/cd-isolation-"* ]]
@@ -955,11 +1006,39 @@ EOF
     assert_absent '\|run ' "$DK/iso.log" "record ran the producer"
 }
 
+@test "isolation run: the exit codes of the program are told apart (1 assertion, 2 precondition, 3 blocked, anything else infrastructure)" {
+    shim_isolation
+    echo 2 > "$DK/iso.fail"
+    call 'cd_colour_isolation_run "$TREE"'
+    [[ "$output" == *"rc=2 reason=isolation_run"* ]]
+    echo 3 > "$DK/iso.fail"
+    call 'cd_colour_isolation_run "$TREE"'
+    [[ "$output" == *"rc=3 reason=isolation_run"* ]]
+    echo 137 > "$DK/iso.fail"
+    call 'cd_colour_isolation_run "$TREE"'
+    [[ "$output" == *"rc=4 reason=isolation_run"* ]]
+    echo 1 > "$DK/iso.fail"
+    call 'cd_colour_isolation_run "$TREE"'
+    [[ "$output" == *"rc=1 reason=isolation_run"* ]]
+}
+
+@test "isolation record: the exit codes of the program are told apart too" {
+    shim_isolation
+    mkdir -p "${GREMION_ROOT}/data/isolation-evidence"
+    echo '{}' > "${GREMION_ROOT}/data/isolation-evidence/${TIP}.json"
+    echo 2 > "$DK/iso.fail"
+    call 'cd_colour_isolation_record "$TREE"'
+    [[ "$output" == *"rc=2 reason=isolation_record"* ]]
+    echo 3 > "$DK/iso.fail"
+    call 'cd_colour_isolation_record "$TREE"'
+    [[ "$output" == *"rc=3 reason=isolation_record"* ]]
+}
+
 @test "isolation record: a failing record is 1" {
     shim_isolation
     mkdir -p "${GREMION_ROOT}/data/isolation-evidence"
     echo '{}' > "${GREMION_ROOT}/data/isolation-evidence/${TIP}.json"
-    touch "$DK/iso.fail"
+    echo 1 > "$DK/iso.fail"
     call 'cd_colour_isolation_record "$TREE"'
     [[ "$output" == *"rc=1 reason=isolation_record"* ]]
 }
@@ -1008,6 +1087,10 @@ EOF
     echo 2 > "$DK/verify.rc"
     call 'cd_colour_verify green "$TREE"'
     [[ "$output" == *"rc=2 reason=verify"* ]]
+    # a program cut off by the time limit is infrastructure, not a verdict on the commit
+    echo 124 > "$DK/verify.rc"
+    call 'cd_colour_verify green "$TREE"'
+    [[ "$output" == *"rc=4 reason=verify"* ]]
 }
 
 @test "verify: the output of the program is in a 0600 file under logs/, not on stdout or stderr" {
