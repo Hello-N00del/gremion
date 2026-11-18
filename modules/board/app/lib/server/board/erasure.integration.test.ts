@@ -1,7 +1,7 @@
 // TRD-196 / PRD-OPS-005 — DB-backed proof of the board erasure hook against the
 // real kernel schema (migration 0034: board / stack / card).
 import { createServer } from 'node:http'
-import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { getDb } from '$lib/server/db'
 import { deleteOrgUnit } from '$lib/server/governance/org-units-db'
 import { registerDataProvider, _resetRuntimeRegistryForTests } from '$lib/server/modules/runtime-registry'
@@ -38,7 +38,8 @@ afterAll(async () => {
 })
 
 // The board lives in its own database: the hook asks the leaf (a stub here, the leaf has its own
-// suite) and reports the leaf's counts. The kernel copy is not the board any more, so it is left alone.
+// suite) and reports the leaf's counts. The kernel copy is not the board any more, but a move leaves it
+// behind and it holds the id too, so the hook erases it as well, in the same pass.
 async function withLeaf<T>(status: number, body: unknown, fn: (seen: { path: string; secret: string | undefined; tenant: string | undefined; body: string }[]) => Promise<T>): Promise<T> {
   const seen: { path: string; secret: string | undefined; tenant: string | undefined; body: string }[] = []
   const srv = createServer((req, res) => {
@@ -98,18 +99,59 @@ describe('boardErasureHook (real schema)', () => {
     expect(again).toEqual({ status: 'erased', counts: { card_assignee: 0, card_created_by: 0 } })
   })
 
-  it('with the location flag at module the hook calls the board leaf, reports its counts, and leaves every kernel card as it was', async () => {
+  it('with the location flag at module the hook calls the board leaf, reports its counts, and leaves no kernel card holding the subject', async () => {
     await seed()
     const sql = getDb()
     await sql`INSERT INTO board_location (id, location) VALUES (true, 'module')`
     await withLeaf(200, { counts: { card_assignee: 6, card_created_by: 7 } }, async (seen) => {
       const res = await asTenant(() => boardErasureHook.erase({ tenantId: 't', subjectId: SUBJECT, db: sql }))
-      expect(res).toEqual({ status: 'erased', counts: { card_assignee: 6, card_created_by: 7 } })
+      expect(res).toEqual({
+        status: 'erased',
+        counts: { card_assignee: 6, card_created_by: 7, card_assignee_kernel_copy: 2, card_created_by_kernel_copy: 2 },
+      })
       expect(seen).toHaveLength(1)
       expect(seen[0]).toMatchObject({ path: 'POST /api/v1/erase-subject', secret: 'erasure-test-secret', tenant: 't' })
       expect(JSON.parse(seen[0]!.body)).toEqual({ subjectId: SUBJECT })
     })
-    expect(await sql`SELECT 1 FROM card WHERE assignee_keycloak_id = ${SUBJECT} OR created_by = ${SUBJECT}`).toHaveLength(3)
+    // the old copy in the kernel tables does not keep the person; every card stays and the others are untouched
+    expect(await sql`SELECT 1 FROM card WHERE assignee_keycloak_id = ${SUBJECT} OR created_by = ${SUBJECT}`).toHaveLength(0)
+    expect(await sql`SELECT 1 FROM card`).toHaveLength(5)
+    expect(await sql`SELECT 1 FROM card WHERE assignee_keycloak_id = ${OTHER} OR created_by = ${OTHER}`).toHaveLength(3)
+  })
+
+  // The flip of a move takes a table lock, writes the flag and commits. An erasure that read the flag as
+  // 'moving' and then queued its updates behind that lock runs them against the OLD copy once the flip has
+  // committed; the board is in the module database by then, so only a flag read AFTER the updates reaches it.
+  it('an erasure whose updates wait behind the flip of a move still reaches the module database', async () => {
+    await seed()
+    const sql = getDb()
+    await sql`INSERT INTO board_location (id, location) VALUES (true, 'moving')`
+    const locker = await sql.reserve()
+    try {
+      await withLeaf(200, { counts: { card_assignee: 1, card_created_by: 1 } }, async (seen) => {
+        await locker`BEGIN`
+        await locker`LOCK TABLE card IN SHARE ROW EXCLUSIVE MODE`
+        const erasing = asTenant(() => boardErasureHook.erase({ tenantId: 't', subjectId: SUBJECT, db: sql }))
+        // wait until the hook's update is really queued behind the lock (no guessing with a sleep)
+        const deadline = Date.now() + 10_000
+        for (;;) {
+          const waiting = await locker`
+            SELECT 1 FROM pg_locks l JOIN pg_class c ON c.oid = l.relation
+             WHERE c.relname = 'card' AND NOT l.granted`
+          if (waiting.length > 0) break
+          if (Date.now() > deadline) throw new Error('the erasure never queued behind the lock')
+          await new Promise((r) => setTimeout(r, 25))
+        }
+        await locker`UPDATE board_location SET location = 'module', changed_at = now()`
+        await locker`COMMIT`
+        const res = await erasing
+        expect(res.status).toBe('erased')
+        expect(seen.map((s) => s.path)).toEqual(['POST /api/v1/erase-subject'])
+      })
+    } finally {
+      await locker`ROLLBACK`.catch(() => undefined)
+      locker.release()
+    }
   })
 
   it('with the flag at module and the leaf answering 404 tenant_not_provisioned (blocked database) the hook is deferred, never erased', async () => {
@@ -118,9 +160,10 @@ describe('boardErasureHook (real schema)', () => {
     await sql`INSERT INTO board_location (id, location) VALUES (true, 'module')`
     await withLeaf(404, { success: false, error: 'tenant_not_provisioned' }, async () => {
       const res = await asTenant(() => boardErasureHook.erase({ tenantId: 't', subjectId: SUBJECT, db: sql }))
-      expect(res.status).toBe('skipped')
-      expect(res.status === 'skipped' && res.reason).toMatch(/^deferred:/)
+      expect(res.status).toBe('deferred')
     })
+    // the kernel copy was erased before the leaf was asked, and stays so
+    expect(await sql`SELECT 1 FROM card WHERE assignee_keycloak_id = ${SUBJECT} OR created_by = ${SUBJECT}`).toHaveLength(0)
   })
 
   it('with the flag at module and the leaf answering 500 the hook throws', async () => {
@@ -193,6 +236,24 @@ describe('org-unit delete and the boards (real schema)', () => {
     await withLeaf(500, { success: false, error: 'internal error' }, async () => {
       await expect(deleteOrgUnit(id)).resolves.toBeUndefined()
     })
+    expect(await sql`SELECT 1 FROM org_units WHERE id = ${id}`).toHaveLength(0)
+  })
+
+  it('flag module, board database blocked: the org unit is deleted, and the cleanup that is owed is warned about without the id', async () => {
+    const id = await seedUnitWithBoard()
+    const sql = getDb()
+    await sql`INSERT INTO board_location (id, location) VALUES (true, 'module')`
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await withLeaf(404, { success: false, error: 'tenant_not_provisioned' }, async () => {
+        await expect(deleteOrgUnit(id)).resolves.toBeUndefined()
+      })
+      const warned = warn.mock.calls.flat().join(' ')
+      expect(warned).toMatch(/board/i)
+      expect(warned).not.toContain(id)
+    } finally {
+      warn.mockRestore()
+    }
     expect(await sql`SELECT 1 FROM org_units WHERE id = ${id}`).toHaveLength(0)
   })
 

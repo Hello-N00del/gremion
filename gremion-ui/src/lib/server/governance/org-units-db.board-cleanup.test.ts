@@ -54,8 +54,11 @@ import { registerDataProvider, _resetRuntimeRegistryForTests } from '$lib/server
 
 const KEY = 'board:delete-org-unit-boards' as const
 
-function provider(result: number | null | Error = 2) {
-  return vi.fn(async (id: string) => {
+type Cleanup = { status: 'not-due' } | { status: 'deleted'; boards: number } | { status: 'deferred' }
+const deleted = (boards: number): Cleanup => ({ status: 'deleted', boards })
+
+function provider(result: Cleanup | Error = deleted(2)) {
+  return vi.fn(async (id: string): Promise<Cleanup> => {
     state.events.push(`board:${id}`)
     if (result instanceof Error) throw result
     return result
@@ -69,6 +72,7 @@ describe('deleteOrgUnit and the boards of the deleted org unit', () => {
     _resetRuntimeRegistryForTests()
     vi.spyOn(console, 'error').mockImplementation(() => {})
     vi.spyOn(console, 'info').mockImplementation(() => {})
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
   })
   afterEach(() => {
     vi.restoreAllMocks()
@@ -130,18 +134,36 @@ describe('deleteOrgUnit and the boards of the deleted org unit', () => {
   })
 
   it('logs the number of boards removed, never an id or a name', async () => {
-    registerDataProvider(KEY, provider(3))
+    registerDataProvider(KEY, provider(deleted(3)))
     await deleteOrgUnit('ou-1')
     const logged = vi.mocked(console.info).mock.calls.flat().join(' ')
     expect(logged).toContain('3')
     expect(logged).not.toContain('ou-1')
   })
 
-  it('a provider that answers null (nothing to call, or not reachable) is not an error and logs nothing', async () => {
-    registerDataProvider(KEY, provider(null))
+  it('a provider that answers not-due (the boards live in the kernel tables, the cascade did it) logs nothing', async () => {
+    registerDataProvider(KEY, provider({ status: 'not-due' }))
     await deleteOrgUnit('ou-1')
     expect(console.error).not.toHaveBeenCalled()
+    expect(console.warn).not.toHaveBeenCalled()
     expect(console.info).not.toHaveBeenCalled()
+  })
+
+  it('a provider that answers deleted with zero boards logs nothing', async () => {
+    registerDataProvider(KEY, provider(deleted(0)))
+    await deleteOrgUnit('ou-1')
+    expect(console.error).not.toHaveBeenCalled()
+    expect(console.warn).not.toHaveBeenCalled()
+    expect(console.info).not.toHaveBeenCalled()
+  })
+
+  it('a provider that answers deferred (the call was owed and could not be made) warns, does not fail the delete, and names no id', async () => {
+    registerDataProvider(KEY, provider({ status: 'deferred' }))
+    await expect(deleteOrgUnit('ou-1')).resolves.toBeUndefined()
+    const warned = vi.mocked(console.warn).mock.calls.flat().join(' ')
+    expect(warned).toMatch(/board/i)
+    expect(warned).not.toContain('ou-1')
+    expect(warned).not.toContain('Referat')
   })
 
   it('no provider registered (the board module is off): the delete runs as before, no call, no log', async () => {
@@ -150,8 +172,8 @@ describe('deleteOrgUnit and the boards of the deleted org unit', () => {
     expect(console.error).not.toHaveBeenCalled()
   })
 
-  it('asks even when the delete matched no row, so a retry after a lost call still cleans up', async () => {
-    const p = provider(0)
+  it('asks even when the delete matched no row (the leaf delete is idempotent)', async () => {
+    const p = provider(deleted(0))
     registerDataProvider(KEY, p)
     await deleteOrgUnit('ou-gone')
     expect(p).toHaveBeenCalledExactlyOnceWith('ou-gone')

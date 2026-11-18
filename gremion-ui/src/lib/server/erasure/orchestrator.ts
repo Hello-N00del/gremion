@@ -144,6 +144,11 @@ function fromHookResult(moduleId: string, result: ErasureHookResult | undefined)
   if (result?.status === 'skipped' && typeof result.reason === 'string' && result.reason !== '') {
     return skipped(moduleId, result.reason)
   }
+  // An erasure that is owed and cannot run now (the module's data is switched off). Nothing was reached, so it
+  // is a skip in the report (never `erased`, overall `incomplete`); the stored status set has no fourth value.
+  if (result?.status === 'deferred' && typeof result.reason === 'string' && result.reason !== '') {
+    return skipped(moduleId, `deferred: ${result.reason}`)
+  }
   return { moduleId, status: 'failed', counts: {}, reason: 'malformed erasure hook result', residuals: [] }
 }
 

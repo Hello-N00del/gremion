@@ -6,10 +6,11 @@
 // and the authorship is replaced by a marker that matches no user. The boards,
 // stacks and cards themselves are council planning records and stay.
 //
-// Where the board lives decides what the hook does. kernel / moving: the kernel tables, updated here.
-// module (or BOARD_BACKEND=service): the board's own database, reached through the leaf; a blocked
-// database is `skipped` as deferred, any other failure throws, and nothing ever says `erased` for rows
-// it did not reach.
+// Where the board lives decides what the hook does. The two updates ALWAYS run on the kernel tables (a
+// board that moved leaves its old copy behind, and that copy holds the id too). kernel / moving: that is
+// all. module (or BOARD_BACKEND=service): the board's own database is erased as well, through the leaf; a
+// blocked database is `deferred`, any other failure throws, and nothing ever says `erased` for rows it
+// did not reach. The flag is read AFTER the updates, so a flip that the updates queued behind is seen.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Sql } from '@gremion/db'
 import { runWithTenant, type TenantContext } from '$lib/server/tenant/context'
@@ -43,18 +44,34 @@ const SUBJECT = 'u-secret-subject-id'
 function fakeDb(counts: number[], location: 'kernel' | 'moving' | 'module' | 'none' | Error = 'kernel', ageS = 1) {
   const calls: { text: string; values: unknown[] }[] = []
   const reads: string[] = []
+  // every statement in the order the transaction saw it: 'update' or 'read' (the flag)
+  const order: string[] = []
+  const state = { rolledBack: false, committed: false }
   const tag = (strings: TemplateStringsArray, ...values: unknown[]) => {
     const text = strings.join('?')
     if (/FROM board_location/.test(text)) {
       reads.push(text)
+      order.push('read')
       if (location instanceof Error) return Promise.reject(location)
       return Promise.resolve(location === 'none' ? [] : [{ location, age_s: ageS }])
     }
     calls.push({ text, values })
+    order.push('update')
     return Promise.resolve({ count: counts[calls.length - 1] ?? 0 })
   }
-  const db = Object.assign(tag, { begin: async (fn: (tx: typeof tag) => Promise<unknown>) => fn(tag) })
-  return { db: db as unknown as Sql, calls, reads }
+  const db = Object.assign(tag, {
+    begin: async (fn: (tx: typeof tag) => Promise<unknown>) => {
+      try {
+        const out = await fn(tag)
+        state.committed = true
+        return out
+      } catch (err) {
+        state.rolledBack = true
+        throw err
+      }
+    },
+  })
+  return { db: db as unknown as Sql, calls, reads, order, state }
 }
 
 const notProvisioned = () => new BoardServiceError(404, 'tenant_not_provisioned', 'tenant_not_provisioned')
@@ -117,11 +134,18 @@ describe('boardErasureHook', () => {
     expect(calls).toHaveLength(2)
   })
 
-  it('auto, the flag cannot be read: throws (reported failed), never erased and never a guess', async () => {
-    const { db, calls } = fakeDb([9, 9], new Error('connection refused'))
+  it('auto, the flag cannot be read: throws (reported failed), the transaction rolls back, the leaf is not called, never a guess', async () => {
+    const { db, state } = fakeDb([9, 9], new Error('connection refused'))
     await expect(boardErasureHook.erase({ tenantId: 't', subjectId: 'u-1', db })).rejects.toThrow(/nicht verf/)
-    expect(calls).toHaveLength(0)
+    expect(state).toEqual({ rolledBack: true, committed: false })
     expect(h.eraseSubject).not.toHaveBeenCalled()
+  })
+
+  it('auto: the flag is read AFTER the two updates, in the same transaction (a flip the updates waited behind is then seen)', async () => {
+    const { db, order, state } = fakeDb([1, 2], 'kernel')
+    await boardErasureHook.erase({ tenantId: 't', subjectId: 'u-1', db })
+    expect(order).toEqual(['update', 'update', 'read'])
+    expect(state.committed).toBe(true)
   })
 
   it('BOARD_BACKEND=inprocess forces the kernel tables and ignores the flag, as the router does', async () => {
@@ -134,49 +158,76 @@ describe('boardErasureHook', () => {
     expect(h.eraseSubject).not.toHaveBeenCalled()
   })
 
-  it('no connection: skipped, nothing called', async () => {
+  it.each([undefined, 'auto', 'inprocess', 'service'])('no connection (BOARD_BACKEND=%s): skipped, nothing called', async (mode) => {
+    if (mode !== undefined) vi.stubEnv('BOARD_BACKEND', mode)
     const res = await boardErasureHook.erase({ tenantId: 't', subjectId: 'u-1', db: null })
     expect(res.status).toBe('skipped')
     expect(h.eraseSubject).not.toHaveBeenCalled()
   })
 
+  it.each(['', 'Service', 'kernel', 'module'])('an unknown BOARD_BACKEND value %j throws, as the router does: nothing is updated or called', async (value) => {
+    vi.stubEnv('BOARD_BACKEND', value)
+    const { db, calls } = fakeDb([9, 9], 'module')
+    await expect(boardErasureHook.erase({ tenantId: 't', subjectId: 'u-1', db })).rejects.toThrow(/BOARD_BACKEND/)
+    expect(calls).toHaveLength(0)
+    expect(h.eraseSubject).not.toHaveBeenCalled()
+  })
+
   describe('the board lives in its own database', () => {
-    it('location module: calls the leaf with the subject id and reports erased with the leaf counts; the kernel tables are not touched', async () => {
+    it('location module: the kernel copy is erased in the same transaction, then the leaf is called; both sets of counts are reported', async () => {
       h.eraseSubject.mockResolvedValue({ card_assignee: 3, card_created_by: 4 })
-      const { db, calls, reads } = fakeDb([9, 9], 'module')
+      const { db, calls, order, state } = fakeDb([5, 6], 'module')
       const res = await inTenant(() => boardErasureHook.erase({ tenantId: TENANT.id, subjectId: 'u-1', db }))
-      expect(res).toEqual({ status: 'erased', counts: { card_assignee: 3, card_created_by: 4 } })
+      expect(res).toEqual({
+        status: 'erased',
+        counts: { card_assignee: 3, card_created_by: 4, card_assignee_kernel_copy: 5, card_created_by_kernel_copy: 6 },
+      })
       expect(h.eraseSubject).toHaveBeenCalledExactlyOnceWith('u-1')
-      expect(reads).toHaveLength(1)
-      expect(calls).toHaveLength(0)
+      expect(order).toEqual(['update', 'update', 'read'])
+      expect(calls[0]!.text).toMatch(/UPDATE card SET assignee_keycloak_id = NULL/)
+      expect(calls[1]!.text).toMatch(/UPDATE card SET created_by/)
+      expect(state.committed).toBe(true)
+    })
+
+    it('the kernel updates are committed before the leaf is asked (no transaction waits on an HTTP call), and a leaf failure does not undo them', async () => {
+      const seenAtLeaf: boolean[] = []
+      const { db, state } = fakeDb([1, 1], 'module')
+      h.eraseSubject.mockImplementation(async () => {
+        seenAtLeaf.push(state.committed)
+        throw new BoardServiceError(500, 'HTTP 500')
+      })
+      await expect(inTenant(() => boardErasureHook.erase({ tenantId: TENANT.id, subjectId: 'u-1', db }))).rejects.toBeInstanceOf(BoardServiceError)
+      expect(seenAtLeaf).toEqual([true])
     })
 
     it('BOARD_BACKEND=auto spelled out behaves the same as unset', async () => {
       vi.stubEnv('BOARD_BACKEND', 'auto')
       h.eraseSubject.mockResolvedValue({ card_assignee: 0, card_created_by: 0 })
-      const { db, calls } = fakeDb([9, 9], 'module')
+      const { db, calls } = fakeDb([0, 0], 'module')
       const res = await inTenant(() => boardErasureHook.erase({ tenantId: TENANT.id, subjectId: 'u-1', db }))
       expect(res.status).toBe('erased')
-      expect(calls).toHaveLength(0)
+      expect(calls).toHaveLength(2)
     })
 
-    it('BOARD_BACKEND=service: the leaf, whatever the flag says; the flag is not read and the kernel tables are not touched', async () => {
+    it('BOARD_BACKEND=service: the kernel copy and the leaf, whatever the flag says; the flag is not read', async () => {
       vi.stubEnv('BOARD_BACKEND', 'service')
       h.eraseSubject.mockResolvedValue({ card_assignee: 1, card_created_by: 0 })
-      const { db, calls, reads } = fakeDb([9, 9], 'kernel')
+      const { db, calls, reads } = fakeDb([2, 0], 'kernel')
       const res = await inTenant(() => boardErasureHook.erase({ tenantId: TENANT.id, subjectId: 'u-1', db }))
-      expect(res).toEqual({ status: 'erased', counts: { card_assignee: 1, card_created_by: 0 } })
+      expect(res).toEqual({
+        status: 'erased',
+        counts: { card_assignee: 1, card_created_by: 0, card_assignee_kernel_copy: 2, card_created_by_kernel_copy: 0 },
+      })
       expect(reads).toHaveLength(0)
-      expect(calls).toHaveLength(0)
+      expect(calls).toHaveLength(2)
     })
 
-    it('a blocked board database (leaf 404 tenant_not_provisioned) is skipped as deferred, naming no subject, never erased', async () => {
+    it('a blocked board database (leaf 404 tenant_not_provisioned) is deferred, naming no subject, never erased', async () => {
       h.eraseSubject.mockRejectedValue(notProvisioned())
       const { db } = fakeDb([9, 9], 'module')
       const res = await inTenant(() => boardErasureHook.erase({ tenantId: TENANT.id, subjectId: SUBJECT, db }))
-      expect(res.status).toBe('skipped')
-      expect(res.status === 'skipped' && res.reason).toMatch(/^deferred:/)
-      expect(res.status === 'skipped' && res.reason).toMatch(/blocked|switched off/i)
+      expect(res.status).toBe('deferred')
+      expect(res.status === 'deferred' && res.reason).toMatch(/blocked|switched off/i)
       expect(JSON.stringify(res)).not.toContain(SUBJECT)
     })
 
@@ -212,7 +263,7 @@ describe('boardErasureHook', () => {
       expect(h.eraseSubject).not.toHaveBeenCalled()
     })
 
-    it('every outcome that reaches no rows is a skip or a throw, never erased', async () => {
+    it('every outcome that reaches no rows is a deferral or a throw, never erased', async () => {
       const { db } = fakeDb([9, 9], 'module')
       for (const failure of [notProvisioned(), new BoardServiceError(500, 'HTTP 500'), new Error('x')]) {
         h.eraseSubject.mockRejectedValue(failure)
@@ -220,7 +271,7 @@ describe('boardErasureHook', () => {
           (r) => r.status,
           () => 'threw',
         )
-        expect(['skipped', 'threw']).toContain(outcome)
+        expect(['deferred', 'threw']).toContain(outcome)
       }
     })
   })
@@ -231,14 +282,14 @@ describe('deleteBoardsOfOrgUnit (the kernel calls it after it deleted the org un
 
   it.each(['kernel', 'moving', 'none'] as const)('location %s: the kernel cascade already removed the boards, so there is no call (null)', async (loc) => {
     h.dbHandle.current = fakeDb([], loc).db
-    expect(await inTenant(() => deleteBoardsOfOrgUnit(OU))).toBeNull()
+    expect(await inTenant(() => deleteBoardsOfOrgUnit(OU))).toEqual({ status: 'not-due' })
     expect(h.deleteBoardsForOrgUnit).not.toHaveBeenCalled()
   })
 
   it('location module: calls the leaf for that org unit and returns how many boards it deleted', async () => {
     h.dbHandle.current = fakeDb([], 'module').db
     h.deleteBoardsForOrgUnit.mockResolvedValue(2)
-    expect(await inTenant(() => deleteBoardsOfOrgUnit(OU))).toBe(2)
+    expect(await inTenant(() => deleteBoardsOfOrgUnit(OU))).toEqual({ status: 'deleted', boards: 2 })
     expect(h.deleteBoardsForOrgUnit).toHaveBeenCalledExactlyOnceWith(OU)
   })
 
@@ -249,7 +300,7 @@ describe('deleteBoardsOfOrgUnit (the kernel calls it after it deleted the org un
     const second = fakeDb([], 'module')
     h.dbHandle.current = second.db
     h.deleteBoardsForOrgUnit.mockResolvedValue(0)
-    expect(await inTenant(() => deleteBoardsOfOrgUnit(OU))).toBe(0)
+    expect(await inTenant(() => deleteBoardsOfOrgUnit(OU))).toEqual({ status: 'deleted', boards: 0 })
     expect(h.deleteBoardsForOrgUnit).toHaveBeenCalledTimes(1)
   })
 
@@ -257,7 +308,7 @@ describe('deleteBoardsOfOrgUnit (the kernel calls it after it deleted the org un
     vi.stubEnv('BOARD_BACKEND', 'inprocess')
     const f = fakeDb([], 'module')
     h.dbHandle.current = f.db
-    expect(await inTenant(() => deleteBoardsOfOrgUnit(OU))).toBeNull()
+    expect(await inTenant(() => deleteBoardsOfOrgUnit(OU))).toEqual({ status: 'not-due' })
     expect(f.reads).toHaveLength(0)
     expect(h.deleteBoardsForOrgUnit).not.toHaveBeenCalled()
   })
@@ -267,7 +318,7 @@ describe('deleteBoardsOfOrgUnit (the kernel calls it after it deleted the org un
     const f = fakeDb([], 'kernel')
     h.dbHandle.current = f.db
     h.deleteBoardsForOrgUnit.mockResolvedValue(1)
-    expect(await inTenant(() => deleteBoardsOfOrgUnit(OU))).toBe(1)
+    expect(await inTenant(() => deleteBoardsOfOrgUnit(OU))).toEqual({ status: 'deleted', boards: 1 })
     expect(f.reads).toHaveLength(0)
   })
 
@@ -277,10 +328,19 @@ describe('deleteBoardsOfOrgUnit (the kernel calls it after it deleted the org un
     expect(h.deleteBoardsForOrgUnit).not.toHaveBeenCalled()
   })
 
-  it('a blocked board database (404 tenant_not_provisioned) is not reachable now: null, no throw', async () => {
+  it('a blocked board database (404 tenant_not_provisioned) is a call that was owed and could not be made: deferred, not "nothing to do", no throw', async () => {
     h.dbHandle.current = fakeDb([], 'module').db
     h.deleteBoardsForOrgUnit.mockRejectedValue(notProvisioned())
-    expect(await inTenant(() => deleteBoardsOfOrgUnit(OU))).toBeNull()
+    expect(await inTenant(() => deleteBoardsOfOrgUnit(OU))).toEqual({ status: 'deferred' })
+  })
+
+  it.each(['', 'Service', 'kernel', 'module'])('an unknown BOARD_BACKEND value %j throws, as the router does: no flag read, no call', async (value) => {
+    vi.stubEnv('BOARD_BACKEND', value)
+    const f = fakeDb([], 'module')
+    h.dbHandle.current = f.db
+    await expect(inTenant(() => deleteBoardsOfOrgUnit(OU))).rejects.toThrow(/BOARD_BACKEND/)
+    expect(f.reads).toHaveLength(0)
+    expect(h.deleteBoardsForOrgUnit).not.toHaveBeenCalled()
   })
 
   it.each([new BoardServiceError(500, 'HTTP 500'), new BoardServiceError(404, 'not found', 'not found'), new TypeError('fetch failed')])(

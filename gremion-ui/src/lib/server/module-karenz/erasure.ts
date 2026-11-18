@@ -162,8 +162,8 @@ export interface ReplayDeps {
 /**
  * Before a module comes back: call its registered erasure hook for every subject erased since the
  * switch-off, with the ID-ONLY subject (username and e-mail null). Throws ErasureReplayError AFTER trying
- * every subject when any hook failed, so the switch stays applying and the next pass runs it again (a hook
- * must be idempotent). A module without a hook is `skipped` in the detail: nothing was replayed.
+ * every subject when any hook failed or deferred, so the switch stays applying and the next pass runs it
+ * again (a hook must be idempotent). A module without a hook is `skipped` in the detail: nothing was replayed.
  */
 export async function replayErasureForRestore(
   ctx: { tenantId: string; manifestId: string; switchedOffAt: Date; db: Sql },
@@ -186,7 +186,13 @@ export async function replayErasureForRestore(
     try {
       const res = await hook.erase({ tenantId: ctx.tenantId, subjectId, subject: { id: subjectId, username: null, email: null }, db: ctx.db })
       if (res.status === 'erased') out.erased++
-      else {
+      else if (res.status === 'deferred') {
+        // The module's data is still switched off, so the erasure is still owed: coming back now would
+        // show the person again. Counted as a failure, like an error, so the switch stays applying and the
+        // next pass replays it again.
+        out.failed++
+        console.error(`[module-karenz] erasure replay: the ${ctx.manifestId} hook deferred the erasure (its data is still switched off)`)
+      } else {
         out.skipped++
         reasons.add(res.reason)
       }

@@ -204,19 +204,27 @@ export async function setSubsystemWanted(
 /**
  * After the org unit's own transaction committed: remove its boards from the board module's own
  * database. While a customer's boards live in the kernel tables the database cascade
- * (board.org_unit_id ON DELETE CASCADE, migration 0034) does it and the provider answers null; in the
+ * (board.org_unit_id ON DELETE CASCADE, migration 0034) does it and the provider answers `not-due`; in the
  * module database nothing cascades, so the board module is asked through the runtime-registry seam (the
- * kernel never imports module code). A failure is logged and left to be found later: the org unit is
- * gone either way, and a delete that fails because a board call failed would leave the caller retrying
- * a delete that already happened. The log carries a count or an error class, never an id or a name.
+ * kernel never imports module code). The org unit is gone either way, so a failure never fails the delete:
+ *   - a thrown failure is logged as an error class;
+ *   - `deferred` (the board database is blocked, for instance while the module is switched off) is logged as
+ *     a warning, because the boards of the deleted org unit then stay in that database.
+ * Nothing retries either case: the committee delete route refuses an org unit that no longer exists, so
+ * the delete is not called a second time, and there is no ledger of cleanups that are owed. The log line
+ * is the only trace. It carries a count or an error class, never an id or a name.
  */
 async function deleteBoardsAfterCommit(orgUnitId: string): Promise<void> {
   const provider = getDataProvider('board:delete-org-unit-boards')
   if (!provider) return
   try {
-    const removed = await provider(orgUnitId)
-    if (removed !== null && removed > 0) {
-      console.info(`[org-units] boards of a deleted org unit removed from the board database: ${removed}`)
+    const result = await provider(orgUnitId)
+    if (result.status === 'deleted' && result.boards > 0) {
+      console.info(`[org-units] boards of a deleted org unit removed from the board database: ${result.boards}`)
+    } else if (result.status === 'deferred') {
+      console.warn(
+        '[org-units] the board database is not reachable (the board module is switched off): the boards of a deleted org unit stay there until they are cleaned up',
+      )
     }
   } catch (err) {
     const cls = err instanceof Error && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(err.name) ? err.name : 'Error'
@@ -249,8 +257,8 @@ export async function deleteOrgUnit(
       await enqueueOrgUnitEvent(sql, { eventType: 'deleted', aggregateId: id, payload: { id } })
     }
   })
-  // Own transaction only, and only after it committed. Asked even when no row matched, so a retry after
-  // a lost call still cleans up (the call is idempotent).
+  // Own transaction only, and only after it committed. Asked even when no row matched: the leaf delete is
+  // idempotent, and an id that the kernel no longer knows may still have boards in the module database.
   if (!tx) await deleteBoardsAfterCommit(id)
 }
 

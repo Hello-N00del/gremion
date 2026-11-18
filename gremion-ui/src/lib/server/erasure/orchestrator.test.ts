@@ -241,6 +241,19 @@ describe('runErasure', () => {
     expect(report.status).toBe('incomplete')
   })
 
+  it('a hook that reports deferred (its database is blocked, the erasure is replayed later) is recorded skipped with its reason: never erased, overall incomplete', async () => {
+    const h = hookOf('calendar', async () => ({ status: 'deferred', reason: 'the database is blocked; replayed when the module is switched on again' }))
+    const report = await runErasure(input, deps(['kernel', 'calendar'], [hookOf('kernel'), h]))
+    expect(report.modules[1]).toMatchObject({ status: 'skipped', reason: expect.stringMatching(/^deferred: .*blocked/), counts: {}, residuals: [] })
+    expect(report.status).toBe('incomplete')
+  })
+
+  it('a deferred result without a reason is malformed: failed', async () => {
+    const bad = hookOf('calendar', (async () => ({ status: 'deferred' })) as unknown as KernelErasureHook['erase'])
+    const report = await runErasure(input, deps(['kernel', 'calendar'], [hookOf('kernel'), bad]))
+    expect(report.modules[1].status).toBe('failed')
+  })
+
   it('a malformed "erased" result (no counts object) is failed, not erased', async () => {
     const bad = hookOf('calendar', (async () => ({ status: 'erased' })) as unknown as KernelErasureHook['erase'])
     const report = await runErasure(input, deps(['kernel', 'calendar'], [hookOf('kernel'), bad]))
