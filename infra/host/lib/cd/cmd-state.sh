@@ -342,6 +342,11 @@ cd_resume_guidance() {
         ci_changed | batch_too_large | chain_class_changed) printf 'It ends with: gremion-cd release-now %s\n' "$sha" ;;
         unsupported_chain | contract_migration | waived_migration)
             printf 'Stage 1 cannot apply this by itself: a hand upgrade of the host, then gremion-cd adopt --re-adopt --reason TEXT.\n' ;;
+        ruleset_missing)
+            # the cause is the repository's rules, not a commit: nothing a commit does ends it
+            printf 'It cannot be waived: fix the cause by restoring the repository rules; the next tick goes on once they hold.\n'
+            return 0
+            ;;
         *) printf 'It cannot be waived: fix the cause (a later commit that removes it ends the hold at the next tick).\n' ;;
     esac
     printf 'It also ends by itself when a later commit removes the cause and the newest candidate classifies clean.\n'

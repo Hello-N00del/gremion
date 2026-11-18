@@ -32,6 +32,11 @@ CD_LIB_DIR="$SCRIPT_DIR/../lib/cd"
 . "$CD_LIB_DIR/core.sh"
 # The sourced path is built as <dir>/<name>.sh from a name found by the glob, so every
 # dotted path ends in a literal .sh: these are libraries, never an env file.
+# A library that does not load (an interrupted install leaves a half-written file) is
+# recorded, not fatal here: main() writes the ALERT file for it and then refuses every verb
+# except help, version and watchdog, which need nothing but core.sh and their own library,
+# so the dead-man check keeps running while a half-installed library waits for its repair.
+cd_lib_failed=()
 for cd_lib_file in "$CD_LIB_DIR"/*.sh; do
     [[ -f "$cd_lib_file" ]] || continue
     cd_lib_name="${cd_lib_file##*/}"
@@ -40,7 +45,9 @@ for cd_lib_file in "$CD_LIB_DIR"/*.sh; do
         core | apply-root) continue ;;
     esac
     # shellcheck source=/dev/null
-    . "$CD_LIB_DIR/${cd_lib_name}.sh"
+    if ! . "$CD_LIB_DIR/${cd_lib_name}.sh"; then
+        cd_lib_failed+=("$cd_lib_name")
+    fi
 done
 unset cd_lib_file cd_lib_name
 if [[ "${GREMION_CD_TESTING:-}" == 1 && -n "${GREMION_CD_STUBS_DIR:-}" ]]; then
@@ -50,7 +57,7 @@ fi
 cd_paths_init
 
 main() {
-    local verb="${1:-}" fn rc=0
+    local verb="${1:-}" fn
     if [[ -z "$verb" ]]; then
         cd_cmd_help >&2
         exit 2
@@ -62,6 +69,13 @@ main() {
         cd_die 2 "not a verb (gremion-cd help)"
     fi
     shift
+    if ((${#cd_lib_failed[@]} > 0)); then
+        cd_alert "library did not load: ${cd_lib_failed[*]}"
+        case "$verb" in
+            help | version | watchdog) ;;
+            *) cd_die 2 "library did not load: ${cd_lib_failed[*]} (an interrupted install?)" ;;
+        esac
+    fi
     fn="cd_cmd_${verb//-/_}"
     if ! declare -F "$fn" >/dev/null 2>&1; then
         cd_die 2 "unknown verb: ${verb} (gremion-cd help)"
@@ -79,8 +93,12 @@ main() {
             fi
             ;;
     esac
-    "$fn" "$@" || rc=$?
-    exit "$rc"
+    # The verb is called plainly: `"$fn" "$@" || rc=$?` would switch errexit off for the
+    # verb and for everything it calls, and the fail-closed reads of core.sh (a refused
+    # state read is an exit, never an empty answer) would stop holding. With errexit on, a
+    # verb's return code is the exit code of the program.
+    "$fn" "$@"
+    exit 0
 }
 
 main "$@"

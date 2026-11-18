@@ -572,8 +572,10 @@ cd_state_get() {
     printf '%s' "$CD_STATE_DOC" | jq -r "$expr"
 }
 
-# cd_require_lock WHAT -- a writer must hold the cd lock IN THIS PROCESS (a forked
-# process that merely inherited fd 8 does not count).
+# cd_require_lock WHAT -- a writer must hold the cd lock in this shell. The check compares
+# $$, which a ( ) subshell or a $( ) shares with its parent; such a subshell inherits fd 8
+# and so holds the same lock for as long as the parent does. A separate program that
+# merely inherited fd 8 does not pass: it has its own $$ and never ran cd_lock_take.
 cd_require_lock() {
     if [[ "${CD_LOCK_PID:-}" != "$$" ]]; then
         cd_err "refusing ${1:-a write} without the cd lock"
@@ -724,7 +726,10 @@ cd_hostlock_take() {
 
 # cd_hostlock_release -- the host lock only; the cd lock stays.
 cd_hostlock_release() {
-    exec 9>&- 2>/dev/null || true
+    # no redirection on this line: `exec` with no command makes every redirection on it
+    # permanent, and a stray 2>/dev/null here would silence every later message of the
+    # program. Closing a descriptor that is not open is not an error.
+    exec 9>&- || true
     CD_HOSTLOCK_PID=""
     unset GREMION_HOST_LOCK_HELD
     return 0
@@ -733,7 +738,7 @@ cd_hostlock_release() {
 # cd_locks_release -- both.
 cd_locks_release() {
     cd_hostlock_release
-    exec 8>&- 2>/dev/null || true
+    exec 8>&- || true
     CD_LOCK_PID=""
     return 0
 }
@@ -814,7 +819,7 @@ cd_request_put() {
         cd_err "request: bad verb"
         return 2
     fi
-    printf '%s' "$args" | jq -e 'type == "object"' >/dev/null 2>&1 || { cd_err "request: args must be a JSON object"; return 2; }
+    printf '%s' "$args" | jq -s -e 'length == 1 and (.[0] | type == "object")' >/dev/null 2>&1 || { cd_err "request: args must be a JSON object"; return 2; }
     epoch="$(cd_now)" || return 2
     by="${SUDO_USER:-${USER:-$(id -un 2>/dev/null || echo unknown)}}"
     [[ "$by" =~ ^[A-Za-z0-9._-]{1,32}$ ]] || by=unknown
@@ -871,10 +876,12 @@ cd_request_next() {
             continue
         fi
         body="$(cat "$f")"
-        if ! printf '%s' "$body" | jq -e '
-              type == "object" and .v == 1
+        # -s and length == 1: jq 1.6 answers "true" to -e for an input with no document at
+        # all, so an empty file must be refused by counting the documents, not by -e alone
+        if ! printf '%s' "$body" | jq -s -e '
+              length == 1 and (.[0] | type == "object" and .v == 1
               and (.verb | type == "string" and test("^[a-z][a-z0-9-]{0,31}$"))
-              and (.args | type == "object") and (.at | type == "string") and (.by | type == "string")' >/dev/null 2>&1; then
+              and (.args | type == "object") and (.at | type == "string") and (.by | type == "string"))' >/dev/null 2>&1; then
             cd_request_reject "$f" malformed
             continue
         fi
@@ -901,7 +908,7 @@ def okblock: type == "object"
   and (.rule | IN("build_failed","migrate_failed","start_failed","readiness_failed","isolation_failed","verify_failed","post_switch_verify","watch_readiness","watch_crash","watch_5xx","watch_pause_cap","manual_rollback"))
   and (.detail | type == "string")
   and (.cleared == null or (.cleared | type == "object" and ((keys - ["at","reason"]) == []) and (.at | type == "string") and (.reason | type == "string")));
-type == "array" and all(.[]; okblock)
+length == 1 and (.[0] | type == "array" and all(.[]; okblock))
 JQ
 }
 
@@ -913,7 +920,7 @@ cd_blocks_load() {
     CD_BLOCKS_DOC="[]"
     [[ -e "$CD_BLOCKED_FILE" ]] || return 0
     CD_BLOCKS_DOC="$(cat "$CD_BLOCKED_FILE")" || cd_die 2 "blocked.json unreadable"
-    if ! printf '%s' "$CD_BLOCKS_DOC" | jq -e "$(cd_blocks_check_jq)" >/dev/null 2>&1; then
+    if ! printf '%s' "$CD_BLOCKS_DOC" | jq -s -e "$(cd_blocks_check_jq)" >/dev/null 2>&1; then
         cd_alert "blocked.json is not a valid block list"
         cd_die 2 "blocked.json is not a valid block list"
     fi
@@ -930,7 +937,7 @@ cd_blocks_apply() {
         cd_err "block filter failed"
         return 1
     fi
-    if ! printf '%s' "$new" | jq -e "$(cd_blocks_check_jq)" >/dev/null 2>&1; then
+    if ! printf '%s' "$new" | jq -s -e "$(cd_blocks_check_jq)" >/dev/null 2>&1; then
         cd_err "block change refused by the schema"
         return 1
     fi

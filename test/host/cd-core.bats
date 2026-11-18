@@ -1300,6 +1300,147 @@ request_count() { find "${GREMION_ROOT}/runtime/cd/requests" -maxdepth 1 -name '
 }
 
 # ---------------------------------------------------------------------------
+# Review fixes: stderr after a release, empty documents, errexit inside a verb,
+# a library that does not load
+# ---------------------------------------------------------------------------
+
+@test "locks: stderr still works after cd_hostlock_release and after cd_locks_release" {
+    cd_need_flock
+    run cd_lib 'cd_lock_take; cd_hostlock_take
+cd_hostlock_release
+cd_err "visible-after-hostlock-release"
+sh -c "echo child-after-hostlock-release >&2"
+cd_locks_release
+cd_err "visible-after-locks-release"
+sh -c "echo child-after-locks-release >&2"
+echo stdout-ok'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *visible-after-hostlock-release* ]]
+    [[ "$output" == *child-after-hostlock-release* ]]
+    [[ "$output" == *visible-after-locks-release* ]]
+    [[ "$output" == *child-after-locks-release* ]]
+    # the descriptors really are closed: a second process can take both locks
+    run cd_lib 'cd_hostlock_take; cd_lock_take'
+    [ "$status" -eq 0 ]
+}
+
+@test "requests: an empty, a whitespace-only and a two-document request file are rejected and logged, never consumed" {
+    local d="${GREMION_ROOT}/runtime/cd/requests" ok='{"v":1,"verb":"hold","args":{},"at":"t","by":"x"}'
+    mkdir -p "$d"
+    : > "${d}/1700000000-0001-hold.json"
+    printf ' \n\t\n' > "${d}/1700000000-0002-hold.json"
+    printf '%s\n%s\n' "$ok" "$ok" > "${d}/1700000000-0003-hold.json"
+    run cd_lib 'if cd_request_next; then echo consumed; else echo none; fi'
+    [ "$status" -eq 0 ]
+    [ "$output" = "none" ]
+    [ "$(ls "${d}/rejected" | wc -l)" -eq 3 ]
+    [ ! -e "${d}/processed" ] || [ "$(ls "${d}/processed" | wc -l)" -eq 0 ]
+    [ "$(grep -c request_rejected "${GREMION_ROOT}/data/cd/history.jsonl")" -eq 3 ]
+}
+
+@test "blocks: an empty or whitespace-only block list stops the program (never 'not blocked')" {
+    local content
+    for content in '' ' ' $'\n' $'  \n\t\n'; do
+        printf '%s' "$content" > "${GREMION_ROOT}/data/cd/blocked.json"
+        rm -f "${GREMION_ROOT}/data/cd/ALERT"
+        run cd_lib 'if cd_is_blocked '"$SHA_A"'; then echo blocked; else echo free; fi; echo survived'
+        [ "$status" -eq 2 ] || { echo "status $status for a ${#content}-byte list: $output"; return 1; }
+        [[ "$output" != *free* ]]
+        [[ "$output" != *survived* ]]
+        [ -s "${GREMION_ROOT}/data/cd/ALERT" ]
+    done
+    # two documents in one file are not a list either
+    printf '[]\n[]\n' > "${GREMION_ROOT}/data/cd/blocked.json"
+    run cd_lib 'cd_blocks_load; echo survived'
+    [ "$status" -eq 2 ]
+    [[ "$output" != *survived* ]]
+}
+
+@test "blocks: a filter that prints nothing or two documents is refused and the file is unchanged" {
+    cd_need_flock
+    run cd_lib 'cd_lock_take; cd_block_add '"$SHA_A"' build_failed x'
+    [ "$status" -eq 0 ]
+    local before
+    before="$(sha256sum "${GREMION_ROOT}/data/cd/blocked.json")"
+    run cd_lib 'cd_lock_take; cd_blocks_apply "empty"'
+    [ "$status" -eq 1 ]
+    [ "$(sha256sum "${GREMION_ROOT}/data/cd/blocked.json")" = "$before" ]
+    run cd_lib 'cd_lock_take; cd_blocks_apply ".,."'
+    [ "$status" -eq 1 ]
+    [ "$(sha256sum "${GREMION_ROOT}/data/cd/blocked.json")" = "$before" ]
+    [ -s "${GREMION_ROOT}/data/cd/blocked.json" ]
+}
+
+# a copy of the host tree with probe libraries, so the real dispatcher runs them
+dispatch_copy() {
+    local src="${GREMION_ROOT}/host-copy"
+    rm -rf "$src"
+    cp -r "$HOST_SRC" "$src"
+    printf '%s' "$src"
+}
+
+@test "dispatcher: errexit stays on inside a verb (an unchecked failing command stops it, a refused state read is not an empty answer)" {
+    local src
+    src="$(dispatch_copy)"
+    cat > "${src}/lib/cd/zz-probe.sh" <<'EOF'
+cd_cmd_zz_state() { local x; x="$(cd_state_get .phase)"; echo "carried on [$x]"; }
+cd_cmd_zz_false() { false; echo "carried on after false"; }
+cd_cmd_zz_rc() { return 3; }
+cd_cmd_zz_ok() { echo "verb ran"; }
+EOF
+    # no state file: the read dies, the verb must not print anything after it
+    run env HOST_SRC="$src" "${src}/bin/gremion-cd" zz-state
+    [ "$status" -eq 2 ]
+    [[ "$output" != *"carried on"* ]]
+    run env HOST_SRC="$src" "${src}/bin/gremion-cd" zz-false
+    [ "$status" -eq 1 ]
+    [[ "$output" != *"carried on"* ]]
+    # an explicit return code still comes out unchanged, and a clean verb is 0
+    run env HOST_SRC="$src" "${src}/bin/gremion-cd" zz-rc
+    [ "$status" -eq 3 ]
+    run env HOST_SRC="$src" "${src}/bin/gremion-cd" zz-ok
+    [ "$status" -eq 0 ]
+    [ "$output" = "verb ran" ]
+}
+
+@test "dispatcher: a library that does not load writes the ALERT file; the watchdog, help and version still run, every other verb is exit 2" {
+    local src
+    src="$(dispatch_copy)"
+    # an interrupted install: a half-written library
+    printf 'cd_cmd_zz_half() {\n  echo half\n' > "${src}/lib/cd/zz-half.sh"
+    cd_seed_state
+    run env HOST_SRC="$src" "${src}/bin/gremion-cd" watchdog
+    [ "$status" -eq 0 ]
+    grep -q '^stub cd_cmd_watchdog' "$SHIM_LOG"
+    [ -s "${GREMION_ROOT}/data/cd/ALERT" ]
+    grep -q 'zz-half' "${GREMION_ROOT}/data/cd/ALERT"
+    rm -f "${GREMION_ROOT}/data/cd/ALERT"
+    run env HOST_SRC="$src" "${src}/bin/gremion-cd" version
+    [ "$status" -eq 0 ]
+    run env HOST_SRC="$src" "${src}/bin/gremion-cd" status
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"did not load"* ]]
+    [ -s "${GREMION_ROOT}/data/cd/ALERT" ]
+    cd_stub_set cd_cmd_tick 0
+    run env HOST_SRC="$src" "${src}/bin/gremion-cd" tick
+    [ "$status" -eq 2 ]
+    ! grep -q '^stub cd_cmd_tick' "$SHIM_LOG"
+}
+
+@test "resume: a ruleset_missing hold does not claim that a later commit ends it" {
+    shim sudo
+    cd_seed_state '.hold = {"kind":"ruleset_missing","reason":"r","sha12":"0123456789ab","since":"2026-11-17T01:00:00Z"}'
+    run cd_prog resume
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"ruleset"* ]]
+    [[ "$output" != *"later commit"* ]]
+    # a classifier hold that a commit really can end still says so
+    cd_seed_state '.hold = {"kind":"ci_changed","reason":"r","sha12":"0123456789ab","since":"2026-11-17T01:00:00Z"}'
+    run cd_prog resume
+    [[ "$output" == *"later commit"* ]]
+}
+
+# ---------------------------------------------------------------------------
 # Shell hygiene
 # ---------------------------------------------------------------------------
 
