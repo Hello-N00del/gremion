@@ -137,8 +137,7 @@ export const boardErasureHook: ModuleErasureHook<Sql> = {
  *             the cascade did it, no call was made;
  *   deleted   the leaf removed `boards` boards;
  *   deferred  the call was owed (the boards are in the board's own database) and could not be made because
- *             that database is blocked or gone (404 tenant_not_provisioned). The caller says so in the log,
- *             since nothing else records that the boards of this org unit are still there.
+ *             that database is blocked or gone (404 tenant_not_provisioned). The caller says so in the log.
  * Any other failure throws and the caller (the org-unit delete) logs it without undoing the delete.
  * The flag is read fresh from the kernel database, not from the router's 5 second cache.
  */

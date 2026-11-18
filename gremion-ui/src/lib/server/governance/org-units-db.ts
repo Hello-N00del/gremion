@@ -209,10 +209,8 @@ export async function setSubsystemWanted(
  * kernel never imports module code). The org unit is gone either way, so a failure never fails the delete:
  *   - a thrown failure is logged as an error class;
  *   - `deferred` (the board database is blocked, for instance while the module is switched off) is logged as
- *     a warning, because the boards of the deleted org unit then stay in that database.
- * Nothing retries either case: the committee delete route refuses an org unit that no longer exists, so
- * the delete is not called a second time, and there is no ledger of cleanups that are owed. The log line
- * is the only trace. It carries a count or an error class, never an id or a name.
+ *     a warning, so the cleanup that did not happen is visible.
+ * The log carries a count or an error class, never an id or a name.
  */
 async function deleteBoardsAfterCommit(orgUnitId: string): Promise<void> {
   const provider = getDataProvider('board:delete-org-unit-boards')
