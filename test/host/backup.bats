@@ -876,7 +876,9 @@ backup_host_data_dirs() {
         # root in a nested bats, so it runs there instead of being skipped. A box
         # with neither cannot run it.
         sudo -n true 2>/dev/null || skip "needs root or passwordless sudo to plant a root-owned tree"
-        run sudo -n env "PATH=${PATH}" bats -f '^a root-owned 0700 export tree is staged' "$BATS_TEST_FILENAME"
+        # BATS_ROOT/bin/bats, not `bats`: inside a test PATH leads to the libexec copy,
+        # which needs the outer run's environment, and sudo starts a clean one.
+        run sudo -n env -i "PATH=${PATH}" "HOME=/root" "${BATS_ROOT}/bin/bats" -f '^a root-owned 0700 export tree is staged' "$BATS_TEST_FILENAME"
         [ "$status" -eq 0 ] || { echo "$output"; return 1; }
         [[ "$output" == *"ok 1 a root-owned 0700 export tree"* ]] || { echo "$output"; return 1; }
         [[ "$output" != *"# skip"* ]] || { echo "the nested root run skipped: $output"; return 1; }
