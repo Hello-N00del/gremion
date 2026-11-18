@@ -59,8 +59,27 @@ describe('setBoardLocationModule on a real kernel database', () => {
     expect((await flag())?.location).toBe('moving')
   })
 
+  it('a row that turns `moving` between the read and the lock is not overwritten: the call refuses and the move keeps its row', async () => {
+    await sql()`INSERT INTO board_location (id, location) VALUES (true, 'kernel')`
+    const real = sql()
+    // the caller's own read has seen `kernel`; a move then claims the flag before the transaction takes its lock
+    const racing = new Proxy(real, {
+      get(target, prop) {
+        if (prop === 'begin') {
+          return async (...args: unknown[]) => {
+            await target`UPDATE board_location SET location = 'moving'`
+            return (target.begin as (...a: unknown[]) => unknown).apply(target, args)
+          }
+        }
+        return Reflect.get(target, prop, target)
+      },
+    })
+    await expect(setBoardLocationModule(racing)).rejects.toMatchObject({ code: 'CUSTOMER_STATE' })
+    expect((await flag())?.location).toBe('moving')
+  })
+
   it('works as a role that holds DML on the four tables and nothing more (not a superuser, not the owner)', async () => {
-    const role = 'bd7_flag_app'
+    const role = 'flag_writer_app'
     const tables = 'board, stack, card, board_location'
     await sql().unsafe(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${role}') THEN CREATE ROLE ${role} NOLOGIN NOSUPERUSER NOBYPASSRLS; END IF; END $$`)
     await sql().unsafe(`GRANT SELECT, INSERT, UPDATE, DELETE ON ${tables} TO ${role}`)

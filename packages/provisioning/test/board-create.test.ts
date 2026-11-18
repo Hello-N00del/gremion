@@ -211,6 +211,36 @@ describe('the location flag', () => {
     expect(w.enabled.get(a.customer.id)?.has('board') ?? false).toBe(false)
   })
 
+  it('a rerun with board ticked on an active customer whose board was enabled BEFORE it declared a database is refused before enableModule runs (it would create an empty database beside the kernel rows)', async () => {
+    const w = boardWorld()
+    w.declared.delete('board') // today's shape: board enabled in the kernel, no database row
+    const d = deps(w)
+    const s = spec()
+    const a = await phaseA(w, d, s)
+    await createPhaseB(s, d)
+    expect(w.control.get('musterstadt')?.status).toBe('active')
+    expect(w.enabled.get(a.customer.id)?.has('board')).toBe(true)
+    expect(w.moduleDbs.size).toBe(0)
+    w.declared.set('board', SERVICE) // the declaration merges later
+    const before = [...w.mutations]
+    await expect(createPhaseB(s, d)).rejects.toMatchObject({ code: 'CUSTOMER_STATE' })
+    expect(w.mutations).toEqual(before)
+    expect(w.moduleDbs.size).toBe(0)
+    expect(w.boardFlag.has(a.customer.id)).toBe(false)
+  })
+
+  it('an active customer whose board already lives in its own database (flag module) reruns the create without a change', async () => {
+    const w = boardWorld()
+    const d = deps(w)
+    const s = spec()
+    const a = await phaseA(w, d, s)
+    await createPhaseB(s, d)
+    expect(w.boardFlag.get(a.customer.id)).toBe('module')
+    const before = [...w.mutations]
+    await expect(createPhaseB(s, d)).resolves.toMatchObject({ enabled: ['board'] })
+    expect(w.mutations).toEqual(before)
+  })
+
   it('a later enable of board through the panel (enableCustomerModule) writes no flag: that path belongs to the lifecycle guard', async () => {
     const w = boardWorld()
     const d = deps(w)

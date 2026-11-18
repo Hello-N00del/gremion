@@ -320,10 +320,11 @@ export async function createPhaseB(spec: CreateSpec, deps: ProvisioningDeps): Pr
   // only the modules not enabled yet need their server: a finished module is not asked again on a rerun
   const alreadyEnabled = new Set(await deps.modules.enabled(c))
   await assertBoardServerAnswers(v.enable.filter((m) => !alreadyEnabled.has(m)), deps)
-  // an active customer is never flipped, so a board that is not enabled yet on one whose location is not
-  // `module` is refused here, before any module is enabled: otherwise an empty board database would be
-  // created beside the kernel rows and only then would the location step refuse
-  if (c.status === 'active' && v.enable.includes(BOARD_MODULE) && !alreadyEnabled.has(BOARD_MODULE)) await ensureBoardLocation(c, deps)
+  // an active customer is never flipped, so one whose board location is not `module` is refused here, before
+  // any module is enabled. Not conditional on the board being enabled yet: a board enabled before it declared
+  // a database has no module database row, and the real enableModule would create an empty database beside
+  // the kernel rows before the location step could refuse
+  if (c.status === 'active' && v.enable.includes(BOARD_MODULE)) await ensureBoardLocation(c, deps)
   const run = await runPhase('b', {
     customerId: c.id,
     operatorId: spec.operatorId,

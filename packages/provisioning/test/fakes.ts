@@ -351,7 +351,16 @@ export function deps(w: World, catalogue = ['board', 'calendar', 'publishing', '
       async enable(c, moduleId, gate: EnableGate, operatorId, actorKind) {
         w.actors.push(`enable ${moduleId} ${actorKind ?? 'operator'}`)
         const mine = w.enabled.get(c.id) ?? new Map()
-        if (mine.has(moduleId)) return { noop: true, database: null }
+        // the real enableModule: an enablement with no module database row (a module enabled before it declared a
+        // database) is not a no-op, it creates the database
+        if (mine.has(moduleId)) {
+          const service = w.declared.get(moduleId)
+          if (!service || w.moduleDbs.has(`${c.id}/${moduleId}`)) return { noop: true, database: null }
+          askServer(w, service)
+          w.moduleDbs.add(`${c.id}/${moduleId}`)
+          m(`pg:create-module-db ${c.slug}/${moduleId}`)
+          return { noop: false, database: `t_x__${moduleId}` }
+        }
         if (w.unloaded.has(moduleId)) throw Object.assign(new Error(`module ${moduleId} has no plt.module_version`), { code: 'MODULE_VERSION_UNKNOWN' })
         const g = await gate(c.id, moduleId)
         if (!g) throw Object.assign(new Error(`the enable gate refused (${c.id}, ${moduleId})`), { code: 'GATE_REFUSED' })

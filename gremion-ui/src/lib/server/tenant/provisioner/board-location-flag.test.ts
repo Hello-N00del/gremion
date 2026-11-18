@@ -105,6 +105,16 @@ describe('setBoardLocationModule', () => {
     await expect(setBoardLocationModule(fakeSql({ location: 'kernel', counts: EMPTY, upsertMissed: true, readBack: 'moving' }, []))).rejects.toMatchObject({ code: 'CUSTOMER_STATE' })
   })
 
+  // The fake above cannot run SQL; what keeps a concurrent move's `moving` row from being overwritten is the
+  // WHERE of the upsert, so its text is pinned here and the behaviour on a real database is the
+  // integration file's "turns moving between the read and the lock".
+  it('the upsert only overwrites a `kernel` row (a `moving` row written by a concurrent move is never touched)', async () => {
+    const log: string[] = []
+    await setBoardLocationModule(fakeSql({ location: null, counts: EMPTY }, log))
+    const upsert = log.find((l) => l.startsWith('INSERT INTO board_location')) ?? ''
+    expect(upsert).toMatch(/ON CONFLICT \(id\) DO UPDATE SET .* WHERE board_location\.location = 'kernel'/)
+  })
+
   it('a flag that does not read back as module after the commit is a failure, not a success', async () => {
     await expect(setBoardLocationModule(fakeSql({ location: null, counts: EMPTY, readBack: 'kernel' }, []))).rejects.toMatchObject({ code: 'POSTCONDITION' })
   })

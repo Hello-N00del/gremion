@@ -98,7 +98,7 @@ describe('create for a module with a database of its own (the board shape)', () 
     pgModules({
       platform,
       catalogue: [boardWithDatabase()],
-      lifecycle: { server: () => server, secrets: { appPassword: () => APP_PW }, exporter: { dump: async () => {}, list: async () => '' }, exportDir: resolve(REPO, '.scratch/bd7/exports'), releaseRef: 'dist-v0.0.1', log: () => {} },
+      lifecycle: { server: () => server, secrets: { appPassword: () => APP_PW }, exporter: { dump: async () => {}, list: async () => '' }, exportDir: resolve(REPO, '.scratch/board-create/exports'), releaseRef: 'dist-v0.0.1', log: () => {} },
     })
   const customer = () => {
     const id = uuidv7()
