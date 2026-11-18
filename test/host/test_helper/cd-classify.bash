@@ -127,7 +127,7 @@ cls_setup() {
     export STACK=teststack
     export TMPDIR="${GREMION_ROOT}/tmp"
     mkdir -p "$TMPDIR" "${GREMION_ROOT}/releases"
-    printf 'COMPOSE_PROJECT_NAME=teststack-state\n' >"${GREMION_ROOT}/etc/env/state.env"
+    printf 'COMPOSE_PROJECT_NAME=teststack-state\nCOMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml:docker-compose.state-pins.yml\n' >"${GREMION_ROOT}/etc/env/state.env"
     chmod 600 "${GREMION_ROOT}/etc/env/state.env"
     CLS_OLD="${GREMION_ROOT}/releases/aaaaaaaaaaaa"
     CLS_NEW="${GREMION_ROOT}/releases/bbbbbbbbbbbb"
