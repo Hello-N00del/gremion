@@ -58,3 +58,13 @@ export function catalogueText(declaredHtml: string, localizedHtml: string): Frag
 export function unmarkedCatalogueText(declaredHtml: string, localizedHtml: string, want: string): Fragment[] {
   return catalogueText(declaredHtml, localizedHtml).filter((f) => f.lang !== want)
 }
+
+/**
+ * The reverse check: text under an element with lang `want` that renders the same in the declared
+ * render. Catalogue text differs between locales, so what is left is a name, a number or a
+ * hard-coded string the wrapper wrongly calls `want`. Callers list the fragments that are fine.
+ */
+export function unchangedUnderLang(declaredHtml: string, localizedHtml: string, want: string): Fragment[] {
+  const same = new Set(fragmentsOf(declaredHtml).map((f) => f.text))
+  return fragmentsOf(localizedHtml).filter((f) => f.lang === want && same.has(f.text))
+}

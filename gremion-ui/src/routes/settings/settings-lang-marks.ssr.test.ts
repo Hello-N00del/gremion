@@ -15,7 +15,7 @@ import SettingsBody from './SettingsBody.svelte'
 import { paraglideMiddleware } from '../../lib/i18n/paraglide/server.js'
 import { defineCustomServerStrategy } from '../../lib/i18n/paraglide/runtime.js'
 import { GREMION_STRATEGY, type Locale } from '../../lib/i18n/locale'
-import { catalogueText, unmarkedCatalogueText } from '../../lib/i18n/lang-marks.testkit'
+import { catalogueText, unchangedUnderLang, unmarkedCatalogueText } from '../../lib/i18n/lang-marks.testkit'
 
 vi.mock('$app/environment', () => ({ browser: false, building: false, dev: true, version: 'test' }))
 vi.mock('$app/navigation', () => ({ goto: vi.fn() }))
@@ -54,7 +54,7 @@ async function settings(locale: Locale, activeSection: string): Promise<string> 
 }
 
 // gefahrenzone is left out: its dialog widget does not render in this test environment, and the tab holds no catalogue text beyond the head and navigation every section shares.
-const SECTIONS = ['profil', 'darstellung', 'module', 'dienste', 'email', 'rechtliches', 'datenschutz', 'sicherungen', 'loeschfristen']
+const SECTIONS = ['profil', 'darstellung', 'organisation', 'module', 'dienste', 'email', 'rechtliches', 'datenschutz', 'sicherungen', 'loeschfristen']
 
 describe('settings: catalogue text is marked with its language', () => {
   for (const section of SECTIONS) {
@@ -68,9 +68,20 @@ describe('settings: catalogue text is marked with its language', () => {
     })
   }
 
-  test('de: a German person gets no lang="en" anywhere', async () => {
-    for (const section of ['profil', 'darstellung']) {
-      expect(await settings('de', section), section).not.toContain('lang="en"')
-    }
+  // The reverse: what is marked English must not be hard-coded German that reads the same in both renders.
+  // Words spelt the same in both languages, and punctuation, are not German literals.
+  const SAME_IN_BOTH = new Set(['Organisation', 'System', 'Backups', 'Name', 'Branding', 'Normal', 'Email', 'English'])
+  test.each(SECTIONS)('en, %s: nothing marked lang="en" is a German literal', async (section) => {
+    const de = await settings('de', section)
+    const en = await settings('en', section)
+    const suspects = unchangedUnderLang(de, en, 'en').filter((f) => /\p{L}{2,}/u.test(f.text) && !SAME_IN_BOTH.has(f.text))
+    expect(suspects.map((f) => `${f.where} ${JSON.stringify(f.text)}`)).toEqual([])
+  })
+
+  // The language switch names each language in itself (lang="de" Deutsch, lang="en" English), so a German
+  // person has exactly that one lang="en" on the appearance tab and none elsewhere.
+  test('de: a German person gets no lang="en" beyond the English language name', async () => {
+    expect((await settings('de', 'profil')).match(/lang="en"/g) ?? []).toHaveLength(0)
+    expect((await settings('de', 'darstellung')).match(/lang="en"/g) ?? []).toHaveLength(1)
   })
 })

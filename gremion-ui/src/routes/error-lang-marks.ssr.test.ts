@@ -64,7 +64,7 @@ describe('+error: catalogue text is marked with its language', () => {
   test('a message the server wrote is not marked as English', async () => {
     const en = await error('en', 409, 'Konflikt beim Speichern')
     const detail = fragmentsOf(en).find((f) => f.text === 'Konflikt beim Speichern')
-    expect(detail?.lang).toBe('de')
+    expect(detail?.lang).toBe('de') // the page's own declaration, not the person's
   })
 
   test('de: a German person gets no lang="en"', async () => {

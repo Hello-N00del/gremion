@@ -46,6 +46,7 @@
         type="submit"
         name="locale"
         value="de"
+        lang="de"
         aria-pressed={$lang === 'de'}
         class="flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors
                {$lang === 'de'
@@ -59,6 +60,7 @@
         type="submit"
         name="locale"
         value="en"
+        lang="en"
         aria-pressed={$lang === 'en'}
         class="flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors
                {$lang === 'en'

@@ -2,7 +2,7 @@
   import PageTitle from '$lib/components/PageTitle.svelte'
   import { enhance } from '$app/forms'
   import type { ActionData, PageData } from './$types'
-  import { t } from '$lib/i18n'
+  import { lang, t } from '$lib/i18n'
 
   let { data, form }: { data: PageData; form: ActionData } = $props()
   let kind = $state<'council' | 'committee' | 'group'>('committee')
@@ -11,7 +11,7 @@
 <PageTitle title={$t('members.new.title')} />
 
 <div class="max-w-2xl mx-auto">
-  <h1 class="text-2xl font-semibold mb-6">{$t('members.new.title')}</h1>
+  <h1 class="text-2xl font-semibold mb-6" lang={$lang}>{$t('members.new.title')}</h1>
 
   {#if form?.error}
     <p class="text-sm text-rust mb-4">{form.error}</p>
@@ -20,7 +20,7 @@
   <form method="POST" use:enhance class="space-y-4">
     <div>
       <label for="name" class="block text-sm font-medium mb-1">
-        {$t('members.new.name')} <span class="text-rust">*</span>
+        <span lang={$lang}>{$t('members.new.name')}</span> <span class="text-rust">*</span>
       </label>
       <input
         id="name"
@@ -28,17 +28,19 @@
         type="text"
         required
         class="w-full rounded-md border border-border-strong bg-paper px-3 py-2 text-sm focus:outline-hidden focus:ring-2 focus:ring-accent"
+        lang={$lang}
         placeholder={$t('members.new.name.placeholder')}
       />
     </div>
 
     <div>
-      <label for="description" class="block text-sm font-medium mb-1">{$t('members.new.description')}</label>
+      <label for="description" class="block text-sm font-medium mb-1" lang={$lang}>{$t('members.new.description')}</label>
       <textarea
         id="description"
         name="description"
         rows="3"
         class="w-full rounded-md border border-border-strong bg-paper px-3 py-2 text-sm focus:outline-hidden focus:ring-2 focus:ring-accent"
+        lang={$lang}
         placeholder={$t('members.new.description.placeholder')}
       ></textarea>
     </div>
@@ -78,7 +80,7 @@
         type="submit"
         class="rounded-md bg-accent px-4 py-2 text-sm font-medium text-paper hover:bg-accent/90"
       >
-        {$t('members.new.submit')}
+        <span lang={$lang}>{$t('members.new.submit')}</span>
       </button>
     </div>
   </form>
