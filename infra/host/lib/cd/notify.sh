@@ -54,6 +54,9 @@ CD_NOTIFY_ORDER=(
     command
 )
 
+# `reason` is a slug-shaped code, not a closed list: the callers pass the program's own reason
+# codes there and never a name taken from data (the shape check cannot tell a program code
+# from a customer slug, so the real-data boundary for this one field is the caller).
 declare -gA CD_NOTIFY_TYPE=(
     [phase]=phase [sha12]=sha [prev_sha12]=sha [uncovered]=shalist [tag]=tag [colour]=colour [prev_colour]=colour
     [stage]=stage [rule]=rule [hold]=hold [reason]=code [detail]=detail [result]=result
@@ -123,7 +126,8 @@ _cd_nf_in_list() {
 }
 
 # _cd_nf_cmd_ok VALUE -- 0 when VALUE is `gremion-cd VERB [ARG ...]` made only of the program's
-# own words: a verb of the list, a flag of the list, a short SHA or `main`. A free word (a
+# own words: a verb of the list, a flag of the list, a short SHA, `main`, or `--reason TEXT`
+# (the placeholder word, never a reason). A free word (a
 # customer's name, a reason text, a branch) is not a command the mail may carry.
 CD_NOTIFY_VERBS="status hold resume release-now rollback reconcile adopt selftest classify tick poll watchdog"
 CD_NOTIFY_FLAGS="--json --discard-dump --accept-descendants --with-state --force-blocked --accept-range --unverified --re-adopt --post-apply --resume-only"
@@ -131,11 +135,16 @@ _cd_nf_cmd_ok() {
     local -a w=()
     local i
     read -r -a w <<< "${1-}" || return 1
-    (( ${#w[@]} >= 2 && ${#w[@]} <= 7 )) || return 1
+    (( ${#w[@]} >= 2 && ${#w[@]} <= 8 )) || return 1
     [[ "${w[0]}" == gremion-cd ]] || return 1
     [[ " $CD_NOTIFY_VERBS " == *" ${w[1]} "* ]] || return 1
     for (( i = 2; i < ${#w[@]}; i++ )); do
-        if [[ "${w[i]}" == --* ]]; then
+        if [[ "${w[i]}" == --reason ]]; then
+            # `--reason` is the one flag with a value, and the value is the fixed placeholder
+            # word TEXT: the mail names the form of the command, the operator writes the reason.
+            (( i + 1 < ${#w[@]} )) && [[ "${w[i + 1]}" == TEXT ]] || return 1
+            i=$(( i + 1 ))
+        elif [[ "${w[i]}" == --* ]]; then
             [[ " $CD_NOTIFY_FLAGS " == *" ${w[i]} "* ]] || return 1
         else
             [[ "${w[i]}" =~ ^([0-9a-f]{12}|main)$ ]] || return 1
@@ -294,7 +303,7 @@ _cd_nf_ledger_add() {
 }
 
 # -- queue -------------------------------------------------------------------------------
-# _cd_nf_write_file KIND NOW BODY SUBJECT TO -- the file, mode 0600, the first free name.
+# _cd_nf_write_file KIND NOW SUBJECT BODY TO -- the file, mode 0600, the first free name.
 _cd_nf_write_file() {
     local kind="$1" now="$2" subject="$3" body="$4" to="$5" dir path tmp n=1 date_h id
     dir="${CD_DATA}/outbox"

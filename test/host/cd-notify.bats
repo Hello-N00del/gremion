@@ -84,6 +84,38 @@ body_of() { sed -n '/^$/,$p' "$1" | sed '1d'; }
     grep -qx "command: gremion-cd release-now ${SHA_A} --accept-range" "$f"
 }
 
+@test "render: the commands a held mail carries in the plan (accept-range with --reason TEXT, adopt --re-adopt --reason TEXT, resume --accept-descendants --reason TEXT) are printed, any other word after --reason is <redacted>" {
+    run nlib '
+        cd_notify held sha12='"$SHA_A"' hold=range_unverified command="gremion-cd release-now '"$SHA_A"' --accept-range --reason TEXT"
+        printf "%s
+" 1700000100 > "$GREMION_CD_NOW_FILE"
+        cd_notify held sha12='"$SHA_A"' hold=unsupported_chain command="gremion-cd adopt --re-adopt --reason TEXT"
+        printf "%s
+" 1700000200 > "$GREMION_CD_NOW_FILE"
+        cd_notify held sha12='"$SHA_A"' hold=blocked command="gremion-cd resume --accept-descendants --reason TEXT"
+        printf "%s
+" 1700000300 > "$GREMION_CD_NOW_FILE"
+        cd_notify held sha12='"$SHA_A"' hold=blocked command="gremion-cd resume --reason kanzlei"
+        printf "%s
+" 1700000400 > "$GREMION_CD_NOW_FILE"
+        cd_notify held sha12='"$SHA_A"' hold=blocked command="gremion-cd resume --reason"
+        printf "%s
+" 1700000500 > "$GREMION_CD_NOW_FILE"
+        cd_notify held sha12='"$SHA_A"' hold=blocked command="gremion-cd resume TEXT"
+        printf "%s
+" 1700000600 > "$GREMION_CD_NOW_FILE"
+        cd_notify held sha12='"$SHA_A"' hold=blocked command="gremion-cd resume --reason TEXT acme"'
+    [ "$status" -eq 0 ]
+    local d="${GREMION_ROOT}/data/cd/outbox"
+    grep -qx "command: gremion-cd release-now ${SHA_A} --accept-range --reason TEXT" "$d/1700000000-held.eml"
+    grep -qx 'command: gremion-cd adopt --re-adopt --reason TEXT' "$d/1700000100-held.eml"
+    grep -qx 'command: gremion-cd resume --accept-descendants --reason TEXT' "$d/1700000200-held.eml"
+    grep -qx 'command: <redacted>' "$d/1700000300-held.eml"
+    grep -qx 'command: <redacted>' "$d/1700000400-held.eml"
+    grep -qx 'command: <redacted>' "$d/1700000500-held.eml"
+    grep -qx 'command: <redacted>' "$d/1700000600-held.eml"
+}
+
 @test "render: a bad kind is refused and cd_notify still returns 0" {
     run nlib 'cd_notify not_a_kind sha12='"$SHA_A"'; echo "rc=$?"'
     [ "$status" -eq 0 ]
