@@ -22,7 +22,7 @@ setup() {
     export TREE
     cp "${FIX}/state.env" "${GREMION_ROOT}/etc/env/state.env"
     cp "${FIX}/app-green.env" "${GREMION_ROOT}/etc/env/app-green.env"
-    cp "${FIX}/app-green.env" "${GREMION_ROOT}/etc/env/app-blue.env"
+    cp "${FIX}/app-blue.env" "${GREMION_ROOT}/etc/env/app-blue.env"
     shim_docker
 }
 
@@ -406,18 +406,67 @@ mk_envfile() { printf 'A=1\nIMAGE_TAG=old\nIMAGE_TAG_OLD=keep\n# IMAGE_TAG=comme
     [ "$output" = "" ]
 }
 
-@test "cd_svc_cid returns 2 when docker does not answer, STACK is unset, or a name is bad" {
+@test "cd_svc_cid returns 2 when docker does not answer or a name is bad" {
     load_lib
     touch "$DK/ps.fail"
     run cd_svc_cid app-blue gremion-ui
     [ "$status" -eq 2 ]
     rm -f "$DK/ps.fail" "$DK/argv.log"
-    run env -u STACK bash -c ". '$DOCKER_LIB'; cd_svc_cid app-blue gremion-ui"
-    [ "$status" -eq 2 ]
     run cd_svc_cid app-blue '--all'
     [ "$status" -eq 2 ]
     run cd_svc_cid app-purple gremion-ui
     [ "$status" -eq 2 ]
+    [ ! -e "$DK/argv.log" ]
+}
+
+# The compose project name is the one the env file declares (what compose
+# itself acts on), never a name rebuilt from the shell's STACK: a STACK that
+# differs would otherwise report "no container" for a project that is running.
+@test "cd_svc_cid and cd_project_cids look under the COMPOSE_PROJECT_NAME of the env file when STACK is unset" {
+    load_lib
+    sed -i 's/^COMPOSE_PROJECT_NAME=.*/COMPOSE_PROJECT_NAME=prod-app-green/' "${GREMION_ROOT}/etc/env/app-green.env"
+    printf 'c111\n' > "$DK/cid.prod-app-green.gremion-ui"
+    printf 'c111\n' > "$DK/cids.prod-app-green"
+    unset STACK
+    run cd_svc_cid app-green gremion-ui
+    [ "$status" -eq 0 ]
+    [ "$output" = c111 ]
+    run cd_project_cids app-green
+    [ "$status" -eq 0 ]
+    [ "$output" = c111 ]
+}
+
+@test "cd_svc_cid and cd_project_cids refuse (2) when STACK names a different project than the env file, never a quiet 'no container'" {
+    load_lib
+    sed -i 's/^COMPOSE_PROJECT_NAME=.*/COMPOSE_PROJECT_NAME=prod-app-green/' "${GREMION_ROOT}/etc/env/app-green.env"
+    printf 'c111\n' > "$DK/cid.prod-app-green.gremion-ui"
+    printf 'c111\n' > "$DK/cids.prod-app-green"
+    export STACK=other
+    run cd_svc_cid app-green gremion-ui
+    [ "$status" -eq 2 ]
+    [ "$output" != c111 ]
+    run cd_project_cids app-green
+    [ "$status" -eq 2 ]
+    [ ! -e "$DK/argv.log" ]
+}
+
+@test "cd_svc_cid and cd_project_cids refuse (2) an env file with no, a repeated, a malformed or a foreign COMPOSE_PROJECT_NAME, and ask docker never" {
+    load_lib
+    f="${GREMION_ROOT}/etc/env/app-green.env"
+    cp "$f" "${BATS_TEST_TMPDIR}/orig.env"
+    for variant in none dup bad foreign; do
+        cp "${BATS_TEST_TMPDIR}/orig.env" "$f"
+        case "$variant" in
+            none) sed -i '/^COMPOSE_PROJECT_NAME=/d' "$f" ;;
+            dup) echo 'COMPOSE_PROJECT_NAME=teststack-app-green' >> "$f" ;;
+            bad) sed -i 's/^COMPOSE_PROJECT_NAME=.*/COMPOSE_PROJECT_NAME=Bad Name/' "$f" ;;
+            foreign) sed -i 's/^COMPOSE_PROJECT_NAME=.*/COMPOSE_PROJECT_NAME=teststack-app-blue/' "$f" ;;
+        esac
+        run cd_svc_cid app-green gremion-ui
+        [ "$status" -eq 2 ]
+        run cd_project_cids app-green
+        [ "$status" -eq 2 ]
+    done
     [ ! -e "$DK/argv.log" ]
 }
 
@@ -724,9 +773,15 @@ svc_state() {
     code="${BATS_TEST_TMPDIR}/docker.code"
     grep -vE '^[[:space:]]*#' "$DOCKER_LIB" | sed -e 's/|| exit 2$//' > "$code"
     assert_absent '\b(exit|die)\b' "$code" "only the subshell of cd_dc may exit"
-    before="$(set +o)"
-    load_lib
-    [ "$(set +o)" = "$before" ]
+    # bats itself runs with errexit on, so compare in a clean shell where it
+    # is off: a stray `set -e`, `set -u` or `set -o pipefail` at file scope shows.
+    run env -i PATH="$PATH" bash --norc --noprofile -c "
+        before=\"\$-|\$(set +o)\"
+        . '$DOCKER_LIB'
+        after=\"\$-|\$(set +o)\"
+        [ \"\$before\" = \"\$after\" ]
+    "
+    [ "$status" -eq 0 ]
 }
 
 @test "docker.sh runs under set -euo pipefail in a clean shell with nothing but GREMION_ROOT and STACK" {

@@ -5,7 +5,9 @@
 # SOURCED, NEVER EXECUTED. Like common.sh it does not set shell options: the
 # program that sources it owns them. It depends on NOTHING else of the cd
 # family (not core.sh, not common.sh): it reads GREMION_ROOT (default
-# /opt/gremion) and STACK, and calls docker, curl, jq and coreutils. The one
+# /opt/gremion) and the env files under it (the compose project name comes from
+# there; STACK, when set, is only cross-checked against it), and calls docker,
+# curl, jq and coreutils. The one
 # optional hook is `cd_now`: when core.sh has defined it, the wait loop reads
 # time through it (a fake clock for tests); otherwise it uses date.
 #
@@ -37,13 +39,29 @@ _cd_docker_epoch() {
     fi
 }
 
-# The compose project name of a project: <STACK>-<project>. The env file does
-# not carry it; STACK is the stack name of the host.
+# The compose project name of a project: the COMPOSE_PROJECT_NAME its env file
+# declares (<stack>-<project>), because that is the name compose itself acts
+# on. A name rebuilt from the shell's STACK could differ and then every lookup
+# would answer "no container" for a project that is running, which a caller
+# reads as safe. So the env file is the one source; it must declare the name
+# exactly once, as a valid project name that ends in -<project>; and when STACK
+# is set it must agree (a disagreement is a refusal, 2, never a guess).
 _cd_docker_proj() {
-    local proj="$1"
-    [[ -n "${STACK:-}" ]] || { _cd_docker_err "STACK is not set"; return 2; }
-    [[ "$STACK" =~ ^[a-z0-9][a-z0-9_-]*$ ]] || { _cd_docker_err "STACK is not a valid project prefix"; return 2; }
-    printf '%s-%s' "$STACK" "$proj"
+    local proj="$1" f name
+    f="$(cd_envfile "$proj")" || return 2
+    name="$(cd_kv_get "$f" COMPOSE_PROJECT_NAME 2>/dev/null)" || {
+        _cd_docker_err "the env file of ${proj} does not declare exactly one COMPOSE_PROJECT_NAME"
+        return 2
+    }
+    [[ "$name" =~ ^[a-z0-9][a-z0-9_-]*$ && "$name" == *-"${proj}" ]] || {
+        _cd_docker_err "the COMPOSE_PROJECT_NAME of ${proj} is not <stack>-${proj}"
+        return 2
+    }
+    if [[ -n "${STACK:-}" && "$name" != "${STACK}-${proj}" ]]; then
+        _cd_docker_err "STACK and the COMPOSE_PROJECT_NAME of ${proj} disagree; refusing to look under either"
+        return 2
+    fi
+    printf '%s' "$name"
 }
 
 # cd_envfile PROJECT - the env file of a compose project: state, app-blue or
