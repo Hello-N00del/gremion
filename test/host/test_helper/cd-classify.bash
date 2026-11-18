@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# test/host/fixtures/cd/classify/classify-helper.sh -- fixtures for test/host/cd-classify.bats.
+# test/host/test_helper/cd-classify.bash -- fixtures for test/host/cd-classify.bats.
 #
 # Load it AFTER test_helper/host and test_helper/cd:
 #     load 'test_helper/host'
 #     load 'test_helper/cd'
-#     load 'fixtures/cd/classify/classify-helper.sh'
+#     load 'test_helper/cd-classify'
 #
 # WHAT IT GIVES
 #   cls_make_base DIR      a tiny release tree (a committed work tree): the files the

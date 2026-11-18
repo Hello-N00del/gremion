@@ -4,14 +4,14 @@
 #
 # Run: MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/repo:ro" -w /repo gremion-bats:local test/host/cd-classify.bats
 #
-# Trees are tiny committed work trees built here (fixtures/cd/classify/classify-helper.sh); `docker
+# Trees are tiny committed work trees built here (test_helper/cd-classify); `docker
 # compose config` is a shim that answers with canned JSON holding the absolute tree path.
 # Every name is a reserved example name; nothing real is read.
 
 bats_require_minimum_version 1.5.0
 load 'test_helper/host'
 load 'test_helper/cd'
-load 'fixtures/cd/classify/classify-helper.sh'
+load 'test_helper/cd-classify'
 
 setup_file() {
     CLS_BASE="${BATS_FILE_TMPDIR}/base"
@@ -402,6 +402,28 @@ exec '"$real"' "$@"'
     ! grep -q "$canary" "$BATS_TEST_TMPDIR/term.out"
 }
 
+@test "a caller whose own TERM handler returns keeps that handler after the classifier was terminated" {
+    local canary="CANARY-trap-$$" pid i
+    cls_compose "$CLS_OLD" ".services.nats.environment.PASSWORD = \"${canary}\""
+    cls_commit "$CLS_OLD"
+    : >"$CLS_OLD/.compose.slow"
+    ( exec bash -c "${CLS_SCRIPT%cd_classify \"\$@\"}"'trap "stop=1" TERM
+cd_classify "$@"
+echo "after=[$(trap -p TERM)]"' cls-run "$CLS_OLD" "$CLS_NEW" ) >"$BATS_TEST_TMPDIR/trap.out" 2>&1 3>&- &
+    pid=$!
+    for i in $(seq 1 50); do
+        grep -rqs "$canary" "$TMPDIR" && break
+        sleep 0.2
+    done
+    grep -rqs "$canary" "$TMPDIR"
+    kill -TERM "$pid"
+    wait "$pid" || true
+    # the verdict is the fail-closed one, the directory is gone and the handler is still the caller's
+    [ -z "$(find "$TMPDIR" -mindepth 1 -maxdepth 1 -name 'cd-classify*' 2>/dev/null)" ]
+    grep -q 'classify_failed:internal' "$BATS_TEST_TMPDIR/trap.out"
+    grep -qF "after=[trap -- 'stop=1' SIGTERM]" "$BATS_TEST_TMPDIR/trap.out"
+}
+
 # ---------------------------------------------------------------------------
 # Migrations
 # ---------------------------------------------------------------------------
@@ -522,6 +544,18 @@ echo "int=[$(trap -p INT)]"' cls-run "$CLS_OLD" "$CLS_NEW"
     run cls_run
     [ "$status" -eq 0 ]
     cls_is '.holds | map(.reason) | index("classify_failed:chain_class_pair:governance") != null'
+}
+
+@test "migrations: the module-upgrade arm of the allow-list is for module chains only (control flipped to module-upgrade)" {
+    cls_class "$CLS_OLD" control module-upgrade
+    cls_class "$CLS_NEW" control module-upgrade
+    cls_commit "$CLS_OLD"
+    cls_chain_file "$CLS_NEW" control 002_x.sql expand
+    cls_commit "$CLS_NEW"
+    run cls_run
+    [ "$status" -eq 0 ]
+    cls_is '.holds | map(.reason) | index("classify_failed:chain_class_pair:control") != null'
+    cls_is '.app_only == false'
 }
 
 @test "module declaration: runtime.database that differs between the trees is unsupported_chain" {
