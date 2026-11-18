@@ -79,7 +79,9 @@
   // module has no data, the template renders an empty state — no fake rows.
   let upcoming = $derived((data.upcomingEvents ?? []) as Upcoming[])
   let nextMeeting = $derived((data.nextMeeting ?? null) as Upcoming | null)
-  let myEventCount = $derived(upcoming.filter((u) => u.mine).length)
+  // Counted server-side over the whole 30-day window; `upcoming` is only the six-row preview.
+  let myEventCount = $derived(data.myEventCount ?? upcoming.filter((u) => u.mine).length)
+  let upcomingCount = $derived(data.upcomingCount ?? upcoming.length)
 
   let budgetSummary = $derived((data.budgetSummary ?? null) as BudgetSummary | null)
 
@@ -126,7 +128,7 @@
     <KpiRow
       {isMember}
       {financeEnabled}
-      upcomingCount={upcoming.length}
+      {upcomingCount}
       {myEventCount}
       {liveVotesCount}
       {unreadCount}

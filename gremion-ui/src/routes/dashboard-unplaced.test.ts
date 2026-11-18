@@ -7,7 +7,9 @@ import { Role } from '$lib/auth'
 // Postgres (the load also pulls calendar events for Task 3.6).
 const getOrgUnitIdsForUser = vi.fn<(id: string) => Promise<readonly string[]>>()
 vi.mock('$lib/server/governance/org-units-db', () => ({
+  // The dashboard reads the display union (roster + office); one mock serves both names.
   getOrgUnitIdsForUser: (id: string) => getOrgUnitIdsForUser(id),
+  getOrgUnitIdsWithOfficesForUser: (id: string) => getOrgUnitIdsForUser(id),
 }))
 vi.mock('$lib/server/calendar/calendar-db', () => ({
   listEvents: vi.fn(async () => []),

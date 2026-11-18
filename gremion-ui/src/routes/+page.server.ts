@@ -2,7 +2,7 @@ import type { PageServerLoad } from './$types'
 import { makeAuthHelpers } from '$lib/auth/group-helpers'
 import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
-import { getOrgUnitIdsForUser } from '$lib/server/governance/org-units-db'
+import { getOrgUnitIdsWithOfficesForUser } from '$lib/server/governance/org-units-db'
 import { deriveHue } from '$lib/governance/committee-color'
 import { getDataProvider, type DashBudgetSummary } from '$lib/server/modules/runtime-registry'
 
@@ -32,6 +32,10 @@ export interface DashUpcoming {
 export type { DashBudgetSummary }
 interface DashCommon {
   upcomingEvents: DashUpcoming[]
+  /** Every event in the 30-day window; upcomingEvents is only the first six. */
+  upcomingCount: number
+  /** Events in the window that sit in a body the user belongs to (roster or office). */
+  myEventCount: number
   nextMeeting: DashUpcoming | null
   budgetSummary: DashBudgetSummary | null
 }
@@ -52,21 +56,28 @@ async function loadCommon(
     getDataProvider('calendar:upcoming-events')?.({ from: now, to: horizon }) ?? Promise.resolve([])
   ).catch(() => [])
 
-  // "mine" = the event touches an org-unit the user belongs to.
+  // "mine" = the event touches an org-unit the user belongs to, by roster row or by a
+  // live office (display union; authorisation keeps reading the roster alone).
   const myOrgUnits = user
-    ? new Set(await getOrgUnitIdsForUser(user.id).catch(() => [] as readonly string[]))
+    ? new Set(await getOrgUnitIdsWithOfficesForUser(user.id).catch(() => [] as readonly string[]))
     : new Set<string>()
 
-  const upcomingEvents: DashUpcoming[] = events
+  const future = events
     .filter((e) => e.startAt.getTime() >= now.getTime())
     .sort((a, b) => a.startAt.getTime() - b.startAt.getTime())
+  const isMine = (e: { committeeIds: readonly string[] }) => e.committeeIds.some((c) => myOrgUnits.has(c))
+  // The tile counts the whole window; the list below it is only a preview.
+  const upcomingCount = future.length
+  const myEventCount = future.filter(isMine).length
+
+  const upcomingEvents: DashUpcoming[] = future
     .slice(0, 6)
     .map((e) => ({
       id: e.id,
       startIso: e.startAt.toISOString(),
       title: e.title,
       where: e.location ?? '',
-      mine: e.committeeIds.some((c) => myOrgUnits.has(c)),
+      mine: isMine(e),
       // Stable committee hue (calendar/committee mechanism); falls back to the
       // accent hue when the event is untagged.
       hue: e.committeeIds[0] ? deriveHue(e.committeeIds[0]) : 252,
@@ -85,7 +96,7 @@ async function loadCommon(
     getDataProvider('finance:dashboard-summary')?.({ fetch: fetchFn }) ?? Promise.resolve(null)
   ).catch(() => null)
 
-  return { upcomingEvents, nextMeeting, budgetSummary }
+  return { upcomingEvents, upcomingCount, myEventCount, nextMeeting, budgetSummary }
 }
 
 export const load: PageServerLoad = async ({ locals, fetch, parent }) => {
@@ -99,12 +110,12 @@ export const load: PageServerLoad = async ({ locals, fetch, parent }) => {
 
   // Unplaced-guest branch (Task 3.3, README screen 27 — persona Tom): a session
   // whose effective role is only Guest (not Member-or-above) AND who belongs to
-  // zero org-units is "eingeladen, noch nicht zugeordnet". The page renders the
+  // zero org-units (roster or office) is "eingeladen, noch nicht zugeordnet". The page renders the
   // empty state instead of the member/approver dashboard. The membership check
   // degrades to "treated as placed" if the governance DB is unreachable, so a
   // transient DB outage never strips a real member down to the guest view.
   if (user && !hasRole(user.roles, Role.Member)) {
-    const orgUnitIds = await getOrgUnitIdsForUser(user.id).catch(
+    const orgUnitIds = await getOrgUnitIdsWithOfficesForUser(user.id).catch(
       () => null as readonly string[] | null,
     )
     if (orgUnitIds !== null && orgUnitIds.length === 0) {
@@ -113,6 +124,8 @@ export const load: PageServerLoad = async ({ locals, fetch, parent }) => {
         myApprovals: [],
         myApprovalsCount: 0,
         upcomingEvents: [],
+        upcomingCount: 0,
+        myEventCount: 0,
         nextMeeting: null,
         budgetSummary: null,
       }
