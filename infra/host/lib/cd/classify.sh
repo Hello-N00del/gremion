@@ -17,7 +17,10 @@
 #
 # THE DOCUMENT (jq -cS, byte-identical for the same two trees)
 #   v            1
-#   app_only     true when state_tier AND holds are both empty
+#   app_only     true when state_tier is empty AND classification did not fail (an unknown
+#                state tier is not an empty one). Other holds leave it true: whether the
+#                state stages are needed is a question about state_tier only, and every
+#                hold, whatever app_only says, is in `holds`
 #   state_tier   reason codes of the state tier: compose_state:<service>, edge,
 #                host_programs, shared_sql, platform_migration (sorted, unique)
 #   holds        every hold as {kind, reason}, most restrictive first, then by reason.
@@ -38,7 +41,7 @@
 # come from the poll (batch_too_large, not_ancestor, ruleset_missing, range_unverified)
 # are not decided here.
 #
-# STATE TIER (by effect, section 3 of the design): compose_state (the rendered compose
+# STATE TIER (decided by effect, not by a path list): compose_state (the rendered compose
 # config of the state project, with the tree prefix stripped, plus the git entry of every
 # bind-mount source, config file and build context inside the tree), edge, host_programs
 # (a file of the manifest set differs from the MANIFEST, not from the old tree),
@@ -55,7 +58,7 @@
 # tree that is not a git work tree, or has a tracked change, is `classify_failed`.
 #
 # MIGRATIONS. The verdict for a new file comes from the class of its chain in the LIVE
-# tree's chain-runners.json (F54), through an allow-list of chain and class pairs; the
+# tree's chain-runners.json, through an allow-list of chain and class pairs; the
 # NEW tree's file must agree (a different class is chain_class_changed, in addition).
 #
 # shellcheck disable=SC2016  # the jq programs are single-quoted on purpose
@@ -491,7 +494,7 @@ _cls_err() { printf '%s\n' "$1" >>"${_CLS_TMP}/e.txt"; }
 _cls_hold() { printf '%s\t%s\n' "$1" "$2" >>"${_CLS_TMP}/h.txt"; }
 _cls_state() { printf '%s\n' "$1" >>"${_CLS_TMP}/s.txt"; _cls_hold state_tier "$1"; }
 
-# _cd_cls_known_class CLASS -- the five classes of chain-runners.json (module-upgrade added by U6d).
+# _cd_cls_known_class CLASS -- the five classes of chain-runners.json.
 _cd_cls_known_class() {
     case "$1" in
         tenant-store | legacy-boot | module-upgrade | unadopted | fresh-only) return 0 ;;
@@ -516,7 +519,7 @@ _cd_cls_emit() {
         | ($c | lines | map(split("\t") | {key: .[0], value: {class: (if .[1] == "" then null else .[1] end),
               expand: (.[2] | tonumber), migrate: (.[3] | tonumber), contract: (.[4] | tonumber)}}) | from_entries) as $chains
         | {v: 1,
-           app_only: (($state | length) == 0 and ($holds | length) == 0),
+           app_only: (($state | length) == 0 and ([$holds[] | select(.kind == "classify_failed")] | length) == 0),
            state_tier: $state,
            holds: $holds,
            hold: ($holds[0] // null),
@@ -572,7 +575,7 @@ cd_classify() {
 # predecessor (the host manifest is the predecessor's own: what the program would hold
 # for that one commit). Needs the mirror. Prints one line per pair and a count.
 cd_cmd_classify() {
-    local from="${1:-}" to="${2:-}" skip=0 a mirror work prev cur sha base pairs=0 auto=0 held=0 hostonly=0
+    local from="${1:-}" to="${2:-}" skip=0 a mirror work prev cur sha base pairs=0 auto=0 held=0 hostonly=0 hostlib=0
     local doc verdict reasons i max=200
     local -a shas=() extra=()
     local -A kinds=()
@@ -622,7 +625,7 @@ cd_cmd_classify() {
         doc="$(cd_classify "$prev" "$cur" --manifest "$work/manifest.json" ${extra[@]+"${extra[@]}"})"
         pairs=$((pairs + 1))
         reasons="$(jq -r '[.holds[] | .reason] | join(",")' <<<"$doc")"
-        if [[ "$(jq -r '.app_only' <<<"$doc")" == true ]]; then
+        if [[ "$(jq -r "(.holds | length) == 0" <<<"$doc")" == true ]]; then
             verdict=automatic
             auto=$((auto + 1))
         else
@@ -632,6 +635,9 @@ cd_cmd_classify() {
             if jq -e '(.holds | length) == 1 and .holds[0].reason == "host_programs"
                       and ([.host.groups | keys[] | select(. != "lib" and . != "lib_cd")] | length) == 0' <<<"$doc" >/dev/null; then
                 hostonly=$((hostonly + 1))
+                if jq -e "(.host.groups | keys | index(\"lib_cd\")) == null" <<<"$doc" >/dev/null; then
+                    hostlib=$((hostlib + 1))
+                fi
             fi
             while IFS= read -r a; do
                 [[ -n "$a" ]] || continue
@@ -649,7 +655,8 @@ cd_cmd_classify() {
     for a in $(printf '%s\n' "${!kinds[@]}" | LC_ALL=C sort); do
         cd_info "held with ${a}: ${kinds[$a]}"
     done
-    cd_info "held only by host_programs through infra/host/lib: ${hostonly}"
+    cd_info "held only by host_programs through infra/host/lib/** (lib and lib/cd): ${hostonly}"
+    cd_info "  of which no file of lib/cd is among them: ${hostlib}"
     if [[ "$skip" == 1 ]]; then
         cd_info "compose_state was not evaluated (--no-compose)"
     fi

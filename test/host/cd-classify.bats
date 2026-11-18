@@ -354,7 +354,7 @@ teardown() { cls_teardown; }
     cls_commit "$CLS_NEW"
     run cls_run
     [ "$status" -eq 0 ]
-    cls_is '.hold == {"kind": "unsupported_chain", "reason": "chain_unadopted:module-calendar"} and .app_only == false'
+    cls_is '.hold == {"kind": "unsupported_chain", "reason": "chain_unadopted:module-calendar"}'
 }
 
 @test "migrations: a new module-board file (class unadopted in the real tree) is unsupported_chain" {
@@ -467,7 +467,7 @@ teardown() { cls_teardown; }
     cls_commit "$CLS_NEW"
     run cls_run
     [ "$status" -eq 0 ]
-    cls_is '.hold == {"kind": "contract_migration", "reason": "contract_migration:control"} and .app_only == false'
+    cls_is '.hold == {"kind": "contract_migration", "reason": "contract_migration:control"}'
     cls_is '.migrations.chains.control.contract == 1'
 }
 
@@ -514,7 +514,7 @@ teardown() { cls_teardown; }
 }
 
 # ---------------------------------------------------------------------------
-# The class comes from the LIVE tree (F54), and a class change is held
+# The class comes from the LIVE tree, and a class change is held
 # ---------------------------------------------------------------------------
 
 @test "chain_class_changed: a new module-board file AND the chain flipped to module-upgrade in the new tree" {
@@ -523,7 +523,7 @@ teardown() { cls_teardown; }
     cls_commit "$CLS_NEW"
     run cls_run
     [ "$status" -eq 0 ]
-    cls_is '.app_only == false'
+    cls_is '.holds != [] and .state_tier == []'
     cls_is '.holds | map(.reason) | index("chain_class_changed:module-board") != null'
     # the file is judged by the LIVE class: it must not pass as automatic
     cls_is '.holds | map(.reason) | index("chain_unadopted:module-board") != null'
@@ -559,7 +559,7 @@ teardown() { cls_teardown; }
     cls_is '.migrations.chains["module-board"].class == "module-upgrade"'
 }
 
-@test "board plan: a board schema file is chain_unadopted until the class flip and automatic after it" {
+@test "a board schema file is chain_unadopted until its chain flips to module-upgrade, and automatic after it" {
     cls_chain_file "$CLS_NEW" module-board 002_x.sql expand
     cls_commit "$CLS_NEW"
     run cls_run
@@ -590,8 +590,22 @@ teardown() { cls_teardown; }
     cls_commit "$CLS_NEW"
     run cls_run
     [ "$status" -eq 0 ]
-    cls_is '.holds == [{"kind": "ci_changed", "reason": "ci_changed"}] and .ci_changed == true and .app_only == false'
+    cls_is '.holds == [{"kind": "ci_changed", "reason": "ci_changed"}] and .ci_changed == true and .app_only == true'
     cls_is '.state_tier == []'
+}
+
+@test "app_only is about the state tier: a hold leaves it true, a state reason or a failed classification makes it false" {
+    echo '# x' >>"$CLS_NEW/.github/workflows/ci.yml"
+    cls_commit "$CLS_NEW"
+    run cls_run
+    cls_is '.app_only == true and .state_tier == [] and (.holds | length) == 1'
+    echo '#' >>"$CLS_NEW/infra/host/bin/prog"
+    cls_commit "$CLS_NEW"
+    run cls_run
+    cls_is '.app_only == false and .state_tier == ["host_programs"]'
+    : >"$CLS_NEW/.compose.fail"
+    run cls_run
+    cls_is '.app_only == false and (.holds | map(.kind) | index("classify_failed") != null)'
 }
 
 @test "ci_changed: a new workflow file counts, a range that does not touch the directory does not" {
@@ -761,7 +775,8 @@ cls_mirror() {
     [[ "$output" == *"${C3:0:12}..${C4:0:12} automatic"* ]]
     [[ "$output" == *"${C4:0:12}..${C5:0:12} held chain_unadopted:mail"* ]]
     [[ "$output" == *"classified 4 pairs: automatic 2, held 2"* ]]
-    [[ "$output" == *"held only by host_programs through infra/host/lib: 1"* ]]
+    [[ "$output" == *"held only by host_programs through infra/host/lib/** (lib and lib/cd): 1"* ]]
+    [[ "$output" == *"of which no file of lib/cd is among them: 1"* ]]
     [[ "$output" == *"held with state_tier: 1"* ]]
     [[ "$output" == *"held with unsupported_chain: 1"* ]]
 }
