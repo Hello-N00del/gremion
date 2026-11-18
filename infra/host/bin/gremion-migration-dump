@@ -626,8 +626,10 @@ main() {
     # (unexported) MD_* variables only AFTER load_env below: state.env carries
     # POSTGRES_USER, and load_env exports every key over the caller's value.
     if [[ -n "$opt_svc" || -n "$opt_role" ]]; then
-        [[ "$cmd" == take ]]             || die "--pg-service and --pg-user belong to take only (restore reads them from the ledger line of its dump)" 2
-        [[ -n "$opt_svc" && -n "$opt_role" ]]             || die "--pg-service and --pg-user come together or not at all" 2
+        [[ "$cmd" == take ]] \
+            || die "--pg-service and --pg-user belong to take only (restore reads them from the ledger line of its dump)" 2
+        [[ -n "$opt_svc" && -n "$opt_role" ]] \
+            || die "--pg-service and --pg-user come together or not at all" 2
         valid_pg_service "$opt_svc" || die "invalid --pg-service: it must be postgres or <name>-postgres" 2
         valid_pg_role "$opt_role" || die "invalid --pg-user: it must match ^[a-z_][a-z0-9_]{0,62}\$" 2
     fi
@@ -638,7 +640,8 @@ main() {
     trap on_exit EXIT
     if [[ -n "$opt_svc" ]]; then
         # pg_container would honour the override and ignore the service silently.
-        [[ -z "${GREMION_MIGRATION_DUMP_PG_CONTAINER:-}" ]]             || die "GREMION_MIGRATION_DUMP_PG_CONTAINER is set (environment or state.env) and would override --pg-service silently: unset it" 2
+        [[ -z "${GREMION_MIGRATION_DUMP_PG_CONTAINER:-}" ]] \
+            || die "GREMION_MIGRATION_DUMP_PG_CONTAINER is set (environment or state.env) and would override --pg-service silently: unset it" 2
         MD_SERVICE="$opt_svc"
         MD_ROLE="$opt_role"
     fi
