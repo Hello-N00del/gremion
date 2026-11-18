@@ -5,7 +5,7 @@
   import { page } from '$app/state'
   import { invalidateAll } from '$app/navigation'
   import { resolveBrand } from '$lib/brand'
-  import { t } from '$lib/i18n'
+  import { lang, t } from '$lib/i18n'
   import { Dialog } from '$lib/components/ui/dialog'
   import PollCreateForm from '$lib/components/polls/PollCreateForm.svelte'
   import RetainedRecords from '$lib/components/RetainedRecords.svelte'
@@ -198,7 +198,7 @@
         ><Icon name={data.heliosStatus.icon} size={12} /> {data.heliosStatus.label}</span>
       {/if}
       {#if data.isManager}
-        <button type="button" class="btn btn-sm" onclick={() => (showPollCreate = true)}>
+        <button type="button" class="btn btn-sm" lang={$lang} onclick={() => (showPollCreate = true)}>
           <Icon name="poll" size={14} /> {$t('votes.poll.new')}
         </button>
       {/if}

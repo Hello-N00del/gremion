@@ -6,6 +6,11 @@
 
   let { data, form }: { data: PageData; form: ActionData } = $props()
   let kind = $state<'council' | 'committee' | 'group'>('committee')
+  // WCAG 3.1.2: the placeholders are catalogue text in the person's language, but what the person types is
+  // their own text (a committee name, usually German), so each field is marked English only while it is
+  // empty and shows its placeholder; a lang on a filled field would also switch the spell checker.
+  let nameBlank = $state(true)
+  let descriptionBlank = $state(true)
 </script>
 
 <PageTitle title={$t('members.new.title')} />
@@ -28,7 +33,8 @@
         type="text"
         required
         class="w-full rounded-md border border-border-strong bg-paper px-3 py-2 text-sm focus:outline-hidden focus:ring-2 focus:ring-accent"
-        lang={$lang}
+        lang={nameBlank ? $lang : undefined}
+        oninput={(e) => (nameBlank = e.currentTarget.value === '')}
         placeholder={$t('members.new.name.placeholder')}
       />
     </div>
@@ -40,7 +46,8 @@
         name="description"
         rows="3"
         class="w-full rounded-md border border-border-strong bg-paper px-3 py-2 text-sm focus:outline-hidden focus:ring-2 focus:ring-accent"
-        lang={$lang}
+        lang={descriptionBlank ? $lang : undefined}
+        oninput={(e) => (descriptionBlank = e.currentTarget.value === '')}
         placeholder={$t('members.new.description.placeholder')}
       ></textarea>
     </div>

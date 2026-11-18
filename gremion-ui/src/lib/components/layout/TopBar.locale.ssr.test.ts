@@ -32,6 +32,7 @@ import TopBar from './TopBar.svelte'
 import { paraglideMiddleware } from '../../i18n/paraglide/server.js'
 import { defineCustomServerStrategy } from '../../i18n/paraglide/runtime.js'
 import { GREMION_STRATEGY, type Locale } from '../../i18n/locale'
+import { fragmentsOf } from '../../i18n/lang-marks.testkit'
 
 const localeOf = new WeakMap<Request, Locale>()
 defineCustomServerStrategy(GREMION_STRATEGY, { getLocale: (request) => (request ? localeOf.get(request) : undefined) })
@@ -53,5 +54,21 @@ describe('top bar language marks', () => {
   test('en: the search button, theme toggle and logout carry lang="en"', async () => {
     const html = await topbar('en', 'en')
     expect(html.match(/lang="en"/g)?.length ?? 0).toBeGreaterThanOrEqual(4)
+  })
+
+  test('en: the breadcrumb label is marked English, the German section names and the brand German', async () => {
+    const fragments = fragmentsOf(await topbar('en', 'en'))
+    const label = fragments.find((f) => f.where.endsWith('[aria-label]') && f.where.startsWith('<nav.crumbs'))
+    expect(label, 'the breadcrumb nav label is rendered').toBeDefined()
+    expect(label!.lang).toBe('en')
+    expect(fragments.find((f) => f.text === 'Einstellungen')?.lang).toBe('de')
+    expect(fragments.find((f) => f.where === '<a.root>')?.lang).toBe('de')
+  })
+
+  test('same language as the page: the breadcrumbs carry no lang of their own', async () => {
+    const html = await topbar('de', undefined)
+    expect(html).toMatch(/<nav class="crumbs[^"]*"[^>]*>/)
+    expect(html.match(/<nav class="crumbs[^"]*"[^>]*>/)![0]).not.toContain('lang=')
+    expect(fragmentsOf(html).find((f) => f.text === 'Einstellungen')?.lang).toBe('de')
   })
 })

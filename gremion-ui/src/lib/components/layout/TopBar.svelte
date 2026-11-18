@@ -101,11 +101,13 @@
   {@render leading?.()}
 
   <!-- Breadcrumbs (mono / uppercase, per chrome.jsx .crumbs) -->
-  <nav class="crumbs" aria-label={$t('topbar.breadcrumb')}>
-    <a href="/" class="root" class:last={crumbs.length === 0}>{brand.product}</a>
+  <!-- The nav's own label is chrome (the bar's language); the section names are German folder names and
+       the brand, so they are marked German where the bar's language differs from the page's. -->
+  <nav class="crumbs" {lang} aria-label={$t('topbar.breadcrumb')}>
+    <a href="/" class="root" class:last={crumbs.length === 0} lang={lang ? 'de' : undefined}>{brand.product}</a>
     {#each crumbs as crumb, i (i)}
       <span class="sep" aria-hidden="true">/</span>
-      <span class:last={i === crumbs.length - 1}>{crumb}</span>
+      <span class:last={i === crumbs.length - 1} lang={lang ? 'de' : undefined}>{crumb}</span>
     {/each}
   </nav>
 

@@ -9,7 +9,7 @@
   import { isEditableFile, isViewableFile } from '$lib/files/editable-types'
   import { editorTabHref } from '$lib/files/editor-close'
   import { isUploadTooLarge } from '$lib/files/upload-limit'
-  import { t } from '$lib/i18n'
+  import { lang, t } from '$lib/i18n'
 
   interface Props {
     rootPath: string
@@ -227,12 +227,14 @@
   }
 </script>
 
-<div class="fb-wrap">
+<!-- WCAG 3.1.2: the page is declared German while the chrome renders in the person's language. File and
+     folder names are the user's own text (language unknown), so they carry lang="". -->
+<div class="fb-wrap" lang={$lang}>
   <!-- Breadcrumb -->
   <nav class="fb-breadcrumb">
     {#each breadcrumbs() as crumb, i (crumb.path)}
       {#if i > 0}<span class="fb-crumb-sep">/</span>{/if}
-      <button class="fb-crumb" onclick={() => navigate(crumb.path)}>{crumb.label}</button>
+      <button class="fb-crumb" lang={i === 0 ? undefined : ''} onclick={() => navigate(crumb.path)}>{crumb.label}</button>
     {/each}
   </nav>
 
@@ -293,7 +295,7 @@
           {:else}
             <span class="fb-ext">{(entry.displayName.split('.').pop() ?? '').slice(0, 4).toUpperCase()}</span>
           {/if}
-          <div class="fb-name-cell">
+          <div class="fb-name-cell" lang="">
             {#if renamingHref === entry.href}
               <Input
                 value={renameValue}
@@ -593,7 +595,7 @@
 </style>
 
 <!-- New folder dialog -->
-<Dialog open={showNewFolderDialog} onClose={() => (showNewFolderDialog = false)}>
+<Dialog open={showNewFolderDialog} onClose={() => (showNewFolderDialog = false)} lang={$lang}>
   <DialogHeader>
     <DialogTitle>{$t('files.newFolder')}</DialogTitle>
   </DialogHeader>
@@ -611,12 +613,12 @@
 </Dialog>
 
 <!-- Delete confirmation dialog -->
-<Dialog open={showDeleteDialog} onClose={() => (showDeleteDialog = false)}>
+<Dialog open={showDeleteDialog} onClose={() => (showDeleteDialog = false)} lang={$lang}>
   <DialogHeader>
     <DialogTitle>{$t('files.deleteConfirm')}</DialogTitle>
   </DialogHeader>
   <p class="py-4 text-sm">
-    {$t('files.deleteBody')} <strong>{deleteTarget?.displayName}</strong>?
+    {$t('files.deleteBody')} <strong lang="">{deleteTarget?.displayName}</strong>?
   </p>
   <DialogFooter>
     <Button variant="outline" onclick={() => (showDeleteDialog = false)}>{$t('files.cancel')}</Button>

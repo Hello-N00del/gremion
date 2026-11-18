@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { t } from '$lib/i18n'
-  import { fmtCountdown, fmtMeetingPill } from './format'
+  import { lang, t } from '$lib/i18n'
+  import { fmtCountdown, fmtMeetingPill, isMeetingToday } from './format'
   import type { Upcoming } from './types'
 
   // Featured: next meeting (real calendar event, or empty state).
@@ -13,11 +13,11 @@
       <div class="eyebrow">Nächster Termin</div>
       <h2 class="display feat-title">{nextMeeting.title}</h2>
       <div class="feat-detail">
-        {fmtMeetingPill(nextMeeting.startIso, $t)}{nextMeeting.where ? ` · ${nextMeeting.where}` : ''}
+        <span lang={isMeetingToday(nextMeeting.startIso) ? $lang : 'de'}>{fmtMeetingPill(nextMeeting.startIso, $t)}</span>{nextMeeting.where ? ` · ${nextMeeting.where}` : ''}
       </div>
     </div>
     <div class="feat-count">
-      <div class="countdown mono">{fmtCountdown(nextMeeting.startIso, $t)}</div>
+      <div class="countdown mono" lang={$lang}>{fmtCountdown(nextMeeting.startIso, $t)}</div>
       <div class="eyebrow feat-count-label">Beginnt in</div>
     </div>
   </div>

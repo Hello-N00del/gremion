@@ -17,10 +17,12 @@
 // catalogue string in English, also on a page that is still declared German.
 // Where the two differ the shell marks its own parts with their language
 // (AppShell `pageLocale`, WCAG 3.1.2), and a page marks the regions it renders
-// from the catalogue with `lang={$lang}` (the settings page, +error, the shared
-// module notices: settings-lang-marks.ssr.test.ts and error-lang-marks.ssr.test.ts
-// render both locales and fail on catalogue text without it); the hard-coded
-// German inside a page stays German, unmarked, until TASK-161 migrates it.
+// from the catalogue with `lang={$lang}`. lang-marks.coverage.test.ts enforces that
+// over EVERY .svelte file (a markup `$t` with no lang-bearing element above it
+// fails, no hand-kept list of pages), and the render guards (settings, +error,
+// the module notices, files, news, dashboard) prove the marks on the output; the
+// hard-coded German inside a page stays German, unmarked, until TASK-161
+// migrates it.
 //
 // The decision is keyed by the SvelteKit route id (event.route.id on the
 // server, navigation.to.route.id on the client), not by pathname prefix: a

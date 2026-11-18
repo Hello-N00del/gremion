@@ -21,13 +21,21 @@ export function fmtEventWhen(iso: string): string {
 }
 
 // "Heute 18:00" / "Di 06.05 · 18:00" pill for the featured next meeting.
-export function fmtMeetingPill(iso: string, translate: (key: string) => string): string {
+export function isMeetingToday(iso: string): boolean {
   const d = new Date(iso)
   const now = new Date()
-  const sameDay =
+  return (
     d.getFullYear() === now.getFullYear() &&
     d.getMonth() === now.getMonth() &&
     d.getDate() === now.getDate()
+  )
+}
+
+// Only "Heute" comes from the catalogue; the weekday and date of any other day are German
+// literals, so a caller marks the pill with the person's language only when this is true.
+export function fmtMeetingPill(iso: string, translate: (key: string) => string): string {
+  const d = new Date(iso)
+  const sameDay = isMeetingToday(iso)
   const time = d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })
   return sameDay ? `${translate('dashboard.countdown.today')} ${time}` : `${fmtEventWhen(iso)} · ${time}`
 }
