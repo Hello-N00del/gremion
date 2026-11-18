@@ -519,6 +519,30 @@
       "adoptedBy": "TASK-044",
       "since": "2026-10-31",
       "reason": "ONE pool on gremion_platform as gremion_ui_modules: EXECUTE on the three council request functions only; control-plane pool like access-records-db.ts, never a tenant database"
+    },
+    {
+      "path": "packages/provisioning/test/integration/board-create.int.test.ts",
+      "calls": 1,
+      "imports": 1,
+      "adoptedBy": "TASK-043",
+      "since": "2026-11-18",
+      "reason": "scratch-server proof, not a tenant connection: the create flow for a module with its own database runs on the package's own scratch PostgreSQL (test/integration/run.mjs) through the real pgModules/enableModule/gate, and the test reads the platform tables and the created database as the scratch admin to prove no enablement exists without a database; openTenantDb cannot address the control plane or a database that does not exist yet; stays allow-listed while the test exists"
+    },
+    {
+      "path": "gremion-ui/src/lib/server/tenant/provisioner/board-location-flag.integration.test.ts",
+      "calls": 2,
+      "imports": 1,
+      "adoptedBy": "TASK-152",
+      "since": "2026-11-18",
+      "reason": "integration proof against the guarded kernel test database, not a tenant connection: it opens one direct connection to read and reset the board location flag and the board tables around the create flow's write (a connection other than the app pool, to prove the lock and the refusals); openTenantDb (a (tenant, module) pool resolved from GREMION_<MODULE>_PG_URL) cannot address the kernel database; stays allow-listed while the test exists"
+    },
+    {
+      "path": "scripts/check-board-compose.test.mjs",
+      "calls": 2,
+      "imports": 0,
+      "adoptedBy": "TASK-152",
+      "since": "2026-11-18",
+      "reason": "scratch-server proof, not a tenant connection: it starts a throwaway PostgreSQL container and connects with the rendered board role URL to prove it authenticates and the wrong one is refused; openTenantDb cannot address a server that exists only for this test; stays allow-listed while the test exists"
     }
   ]
 }
