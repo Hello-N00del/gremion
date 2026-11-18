@@ -40,7 +40,10 @@
 > in the kernel tables (switched on while board had no database of its own, or never switched
 > on at all) has nothing to export at switch-off: the switch-off opens the 30-day clock only
 > when the customer had a board enablement, and neither it nor this release exports or
-> deletes those rows. Moving them into the module database is a separate step that is not
+> deletes those rows. Switching board on later for an existing customer whose board is not
+> yet in its module database is refused by the module gate before anything is written, so
+> no empty module database is created beside kernel rows and no empty export is taken in
+> place of the board's rows; a board enabled in this way has to be moved first. Moving them into the module database is a separate step that is not
 > part of this release; their retention until then is open and goes to the DPO together
 > with the 2026-11-17 note. This is a change of a compliance document and goes to the DPO
 > for review.

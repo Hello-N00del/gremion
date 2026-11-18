@@ -87,6 +87,28 @@ export async function preflightGate(
   }
 }
 
+/** The module whose customer data lives in the kernel database until its location flag says `module`. */
+export const BOARD_MODULE = 'board'
+
+/**
+ * Puts the customer's board location at `module`, or refuses. Called by every path that enables the board
+ * (the create flow and a later enable), so no path creates the board's own database beside kernel rows.
+ *
+ * Does nothing while the catalogue's board entry declares no database (it reads the declaration), so a
+ * customer is never flagged `module` without a database behind it. The port writes the flag for a customer
+ * still being created (once its database exists) and only READS it for an active one: an active customer
+ * whose board is not already `module` is refused, because enableModule would create an empty database
+ * beside the kernel rows and the switch-off would then export that empty database. Rows are carried by
+ * board-move, never by an enable.
+ */
+export async function ensureBoardLocation(c: CustomerRef, deps: Pick<ProvisioningDeps, 'modules' | 'boardLocation'>): Promise<void> {
+  if (!deps.modules.databaseService?.(BOARD_MODULE)) return
+  if (!deps.boardLocation) {
+    throw new ProvisioningError('PRECONDITION', `the board declares a database but this port set has no way to write its location for ${c.slug}; the customer is left provisioning`)
+  }
+  await deps.boardLocation.setModule(c)
+}
+
 /**
  * Enables ONE module for a known customer through the real gate: the given
  * DPIA decision is recorded first (an identical latest one is reused, so a
@@ -138,7 +160,13 @@ export async function enableCustomerModule(
   if (!row.host) throw new ProvisioningError('CUSTOMER_STATE', `customer ${s} has no primary host bound`)
   const c = refOf(row, row.host)
   await preflightGate([m], opts.dpia ? { [m]: opts.dpia } : undefined, c.id, opts.operatorId, deps.gate, opts.actorKind)
+  // an ACTIVE customer's board must already live in its own database, checked BEFORE enableModule (and before the
+  // DPIA record) so a refusal writes nothing: not conditional on the board being enabled yet, because a board
+  // enabled before it declared a database has no module database row and enableModule would create an empty one
+  if (m === BOARD_MODULE && row.status === 'active') await ensureBoardLocation(c, deps)
   const r = await enableOne(c, m, opts, deps)
+  // a customer still being created has no traffic: its flag is set once the database exists, as the create does
+  if (m === BOARD_MODULE && row.status === 'provisioning') await ensureBoardLocation(c, deps)
   const enabled = (await deps.modules.enabled(c)).sort()
   const broker = await deps.broker.ensure(c, enabled)
   return { customer: c, moduleKey: m, noop: r.noop, database: r.database, enabled, reloaded: broker.reloaded }

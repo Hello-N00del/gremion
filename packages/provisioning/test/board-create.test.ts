@@ -241,8 +241,77 @@ describe('the location flag', () => {
     expect(w.mutations).toEqual(before)
   })
 
-  it('a later enable of board through the panel (enableCustomerModule) writes no flag: that path belongs to the lifecycle guard', async () => {
+  it('a later enable of board on an ACTIVE customer whose board lives in the kernel is refused before anything is written (it would create an empty database beside the kernel rows, and its switch-off would export that empty database)', async () => {
     const w = boardWorld()
+    const d = deps(w)
+    const s = spec({ enable: ['calendar'] })
+    const a = await phaseA(w, d, s)
+    await createPhaseB(s, d)
+    expect(w.control.get('musterstadt')?.status).toBe('active')
+    const before = [...w.mutations]
+    await expect(enableCustomerModule('musterstadt', 'board', { operatorId: OPERATOR, dpia: DPIA }, d)).rejects.toMatchObject({ code: 'CUSTOMER_STATE', message: expect.stringContaining('board-move') })
+    expect(w.mutations).toEqual(before)
+    expect(w.moduleDbs.size).toBe(0)
+    expect(w.enabled.get(a.customer.id)?.has('board') ?? false).toBe(false)
+    expect(w.boardFlag.has(a.customer.id)).toBe(false)
+  })
+
+  it('the same refusal for an active customer whose board was enabled before it declared a database and was switched off and on again (no module database row, no flag)', async () => {
+    const w = boardWorld()
+    w.declared.delete('board') // the shape before the declaration: board enabled in the kernel, no database row
+    const d = deps(w)
+    const s = spec()
+    const a = await phaseA(w, d, s)
+    await createPhaseB(s, d)
+    await d.modules.disable({ ...a.customer }, 'board', OPERATOR)
+    expect(w.enabled.get(a.customer.id)?.has('board') ?? false).toBe(false)
+    w.declared.set('board', SERVICE) // the declaration merges
+    const before = [...w.mutations]
+    await expect(enableCustomerModule('musterstadt', 'board', { operatorId: OPERATOR, dpia: DPIA }, d)).rejects.toMatchObject({ code: 'CUSTOMER_STATE' })
+    expect(w.mutations).toEqual(before)
+    expect(w.moduleDbs.size).toBe(0)
+    expect(w.boardFlag.has(a.customer.id)).toBe(false)
+  })
+
+  it('an active customer whose board already lives in its own database (flag module) switches it off and on again through the panel', async () => {
+    const w = boardWorld()
+    const d = deps(w)
+    const s = spec()
+    const a = await phaseA(w, d, s)
+    await createPhaseB(s, d)
+    await d.modules.disable({ ...a.customer }, 'board', OPERATOR)
+    await enableCustomerModule('musterstadt', 'board', { operatorId: OPERATOR, dpia: DPIA }, d)
+    expect(w.enabled.get(a.customer.id)?.has('board')).toBe(true)
+    expect(w.boardFlag.get(a.customer.id)).toBe('module')
+  })
+
+  it('a later enable of board on a customer still being created sets the flag once the database exists, like the create does', async () => {
+    const w = boardWorld()
+    const d = deps(w)
+    const a = await phaseA(w, d, spec({ enable: ['calendar'] }))
+    expect(w.control.get('musterstadt')?.status).toBe('provisioning')
+    await enableCustomerModule('musterstadt', 'board', { operatorId: OPERATOR, dpia: DPIA }, d)
+    const at = (m: string) => w.mutations.indexOf(m)
+    expect(at('pg:enable musterstadt/board')).toBeGreaterThan(-1)
+    expect(at('pg:enable musterstadt/board')).toBeLessThan(at('board:flag-module musterstadt'))
+    expect(w.boardFlag.get(a.customer.id)).toBe('module')
+  })
+
+  it('a declared database with no flag writer fails closed on a later enable, before anything is written', async () => {
+    const w = boardWorld()
+    const d = deps(w)
+    const s = spec({ enable: ['calendar'] })
+    await phaseA(w, d, s)
+    await createPhaseB(s, d)
+    delete (d as { boardLocation?: unknown }).boardLocation
+    const before = [...w.mutations]
+    await expect(enableCustomerModule('musterstadt', 'board', { operatorId: OPERATOR, dpia: DPIA }, d)).rejects.toMatchObject({ code: 'PRECONDITION' })
+    expect(w.mutations).toEqual(before)
+  })
+
+  it('while the catalogue declares no database a later enable of board is the hide-only enable of today: no flag, no refusal', async () => {
+    const w = world() // nothing declared
+    w.isolation.set('board', { id: '01927f00-0000-7000-8000-00000000beef', passed: true, tip: TIP })
     const d = deps(w)
     const s = spec({ enable: ['calendar'] })
     const a = await phaseA(w, d, s)
