@@ -72,8 +72,30 @@ export function pgModules(opts: {
       })
     },
     enabled: (c: CustomerRef) => enabledModuleKeys(opts.platform, c.id),
+    databaseService: (id: string) => byId.get(id)?.moduleJson.runtime.database?.postgresService ?? null,
+    async assertServerAnswers(service: string) {
+      // One bounded SELECT 1 as the server's admin: the create flow asks before it writes anything, so a
+      // down server is a refusal with nothing to clean up. The message names the compose service (a
+      // catalogue constant), never an address or a credential.
+      let timer: ReturnType<typeof setTimeout> | undefined
+      try {
+        const ask = Promise.resolve(opts.lifecycle.server(service).admin`SELECT 1`)
+        const late = new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`no answer within ${SERVER_ANSWER_MS / 1000} seconds`)), SERVER_ANSWER_MS)
+        })
+        ask.catch(() => {}) // a late failure after the timeout wins the race is not an unhandled rejection
+        await Promise.race([ask, late])
+      } catch (err) {
+        throw new ProvisioningError('PRECONDITION', `the database server ${service} does not answer (${err instanceof Error ? err.message : 'unreachable'}); the module cannot be set up, nothing was written`, { cause: err })
+      } finally {
+        if (timer) clearTimeout(timer)
+      }
+    },
   }
 }
+
+/** How long the create flow waits for a module database server's answer before it refuses the create. */
+const SERVER_ANSWER_MS = 5000
 
 /**
  * The customer's CURRENT module set, as the registry holds it: module keys with an `enabled`
