@@ -37,6 +37,40 @@ afterAll(async () => {
   resetBoardLocationCacheForTests()
 })
 
+// The board lives in its own database: the hook asks the leaf (a stub here, the leaf has its own
+// suite) and reports the leaf's counts. The kernel copy is not the board any more, so it is left alone.
+async function withLeaf<T>(status: number, body: unknown, fn: (seen: { path: string; secret: string | undefined; tenant: string | undefined; body: string }[]) => Promise<T>): Promise<T> {
+  const seen: { path: string; secret: string | undefined; tenant: string | undefined; body: string }[] = []
+  const srv = createServer((req, res) => {
+    const chunks: Buffer[] = []
+    req.on('data', (c: Buffer) => chunks.push(c))
+    req.on('end', () => {
+      seen.push({
+        path: `${req.method} ${req.url}`,
+        secret: req.headers['x-internal-auth'] as string | undefined,
+        tenant: req.headers['x-tenant-id'] as string | undefined,
+        body: Buffer.concat(chunks).toString('utf8'),
+      })
+      res.writeHead(status, { 'content-type': 'application/json' })
+      res.end(JSON.stringify(body))
+    })
+  })
+  await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r))
+  const prev = { url: process.env.BOARD_SERVICE_URL, secret: process.env.INTERNAL_BOARD_SECRET }
+  process.env.BOARD_SERVICE_URL = `http://127.0.0.1:${(srv.address() as { port: number }).port}`
+  process.env.INTERNAL_BOARD_SECRET = 'erasure-test-secret'
+  try {
+    return await fn(seen)
+  } finally {
+    process.env.BOARD_SERVICE_URL = prev.url
+    process.env.INTERNAL_BOARD_SECRET = prev.secret
+    if (prev.url === undefined) delete process.env.BOARD_SERVICE_URL
+    if (prev.secret === undefined) delete process.env.INTERNAL_BOARD_SECRET
+    await new Promise<void>((r) => srv.close(() => r()))
+  }
+}
+const asTenant = <T>(fn: () => Promise<T>) => runWithTenant({ id: 't', slug: 't' } as unknown as TenantContext, fn)
+
 describe('boardErasureHook (real schema)', () => {
   it('unassigns and pseudonymises the subject, keeps every card, leaves others untouched', async () => {
     await seed()
@@ -63,40 +97,6 @@ describe('boardErasureHook (real schema)', () => {
     const again = await boardErasureHook.erase({ tenantId: 't', subjectId: SUBJECT, db: sql })
     expect(again).toEqual({ status: 'erased', counts: { card_assignee: 0, card_created_by: 0 } })
   })
-
-  // The board lives in its own database: the hook asks the leaf (a stub here, the leaf has its own
-  // suite) and reports the leaf's counts. The kernel copy is not the board any more, so it is left alone.
-  async function withLeaf<T>(status: number, body: unknown, fn: (seen: { path: string; secret: string | undefined; tenant: string | undefined; body: string }[]) => Promise<T>): Promise<T> {
-    const seen: { path: string; secret: string | undefined; tenant: string | undefined; body: string }[] = []
-    const srv = createServer((req, res) => {
-      const chunks: Buffer[] = []
-      req.on('data', (c: Buffer) => chunks.push(c))
-      req.on('end', () => {
-        seen.push({
-          path: `${req.method} ${req.url}`,
-          secret: req.headers['x-internal-auth'] as string | undefined,
-          tenant: req.headers['x-tenant-id'] as string | undefined,
-          body: Buffer.concat(chunks).toString('utf8'),
-        })
-        res.writeHead(status, { 'content-type': 'application/json' })
-        res.end(JSON.stringify(body))
-      })
-    })
-    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r))
-    const prev = { url: process.env.BOARD_SERVICE_URL, secret: process.env.INTERNAL_BOARD_SECRET }
-    process.env.BOARD_SERVICE_URL = `http://127.0.0.1:${(srv.address() as { port: number }).port}`
-    process.env.INTERNAL_BOARD_SECRET = 'erasure-test-secret'
-    try {
-      return await fn(seen)
-    } finally {
-      process.env.BOARD_SERVICE_URL = prev.url
-      process.env.INTERNAL_BOARD_SECRET = prev.secret
-      if (prev.url === undefined) delete process.env.BOARD_SERVICE_URL
-      if (prev.secret === undefined) delete process.env.INTERNAL_BOARD_SECRET
-      await new Promise<void>((r) => srv.close(() => r()))
-    }
-  }
-  const asTenant = <T>(fn: () => Promise<T>) => runWithTenant({ id: 't', slug: 't' } as unknown as TenantContext, fn)
 
   it('with the location flag at module the hook calls the board leaf, reports its counts, and leaves every kernel card as it was', async () => {
     await seed()
@@ -140,6 +140,7 @@ describe('boardErasureHook (real schema)', () => {
     expect(res.status).toBe('erased')
     expect(await sql`SELECT 1 FROM card WHERE assignee_keycloak_id = ${SUBJECT} OR created_by = ${SUBJECT}`).toHaveLength(0)
   })
+})
 
 // The org-unit cascade, against the real kernel schema: deleteOrgUnit(id) removes the org unit and, while
 // the boards live in the kernel tables, the database cascade removes them with it; the board module's
@@ -204,5 +205,4 @@ describe('org-unit delete and the boards (real schema)', () => {
       expect(seen).toHaveLength(0)
     })
   })
-})
 })
