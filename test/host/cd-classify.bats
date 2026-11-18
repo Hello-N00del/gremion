@@ -206,6 +206,32 @@ teardown() { cls_teardown; }
     [[ "$output" == "$CLS_NEW/data" ]]
 }
 
+@test "state tier: a service that is added or removed is named, and a change outside the services is _project" {
+    cls_compose "$CLS_NEW" '.services.extra = {"image": "extra:1"}'
+    cls_commit "$CLS_NEW"
+    run cls_run
+    [ "$status" -eq 0 ]
+    cls_is '.state_tier == ["compose_state:extra"]'
+    cls_compose "$CLS_NEW" 'del(.services.extra) | del(.services.nats)'
+    cls_commit "$CLS_NEW"
+    run cls_run
+    cls_is '.state_tier == ["compose_state:nats"]'
+    cls_compose "$CLS_NEW" '.services.nats = {"image":"nats:2","environment":{"A":"1"}} | .networks.default.name = "other"'
+    cls_commit "$CLS_NEW"
+    run cls_run
+    cls_is '.state_tier == ["compose_state:_project"]'
+}
+
+@test "the live tree may be given through a symbolic link (the current link)" {
+    ln -s "$CLS_OLD" "${GREMION_ROOT}/current"
+    CLS_OLD="${GREMION_ROOT}/current"
+    echo 'export const a = 5' >"$CLS_NEW/gremion-ui/src/app.ts"
+    cls_commit "$CLS_NEW"
+    run cls_run
+    [ "$status" -eq 0 ]
+    cls_is '.app_only == true and .holds == []'
+}
+
 @test "a sibling path that merely starts with the tree prefix is not stripped" {
     cls_compose "$CLS_NEW" '.services.nats.environment.PEER = "@TREE@-other/x"'
     cls_commit "$CLS_NEW"
