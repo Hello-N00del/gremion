@@ -46,19 +46,25 @@ _cd_docker_epoch() {
 # while the line readers of this library would count it as one: a file with an
 # unclosed quote could be read by the library and by compose as two different
 # files. So such a file is refused (the host templates never write one). A value
-# counts as quoted when its first character, after the separator and any blanks,
-# is a quote; it must then be one double-quoted string (\" escapes) or one
-# single-quoted string, followed by nothing or a comment. Comment lines and
-# lines that are no KEY=value in any spelling are not looked at.
+# counts as quoted when its first character, after the first = or : of a line
+# and any blanks, is a quote, whatever the key looks like; it must then be one
+# double-quoted string (\" escapes) or one single-quoted string without any
+# backslash, followed by nothing or a comment. Comment lines are not looked at.
+# This is deliberately stricter than compose's own reader, not a model of it.
 _cd_env_quotes_closed() {
     local line v
-    local re_key='^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_.-]*[[:space:]]*[=:][[:space:]]*(.*)$'
+    # any line with a separator that is no comment, whatever the key looks
+    # like (compose opens a multi-line value behind a key that starts with a
+    # digit, or holds brackets or a non-ASCII letter): the value is what follows
+    # the first = or :
+    local re_key='^[^#=:]*[=:][[:space:]]*(.*)$'
     local re_dq='^"([^"\\]|\\.)*"[[:space:]]*(#.*)?$'
-    local re_sq="^'[^']*'[[:space:]]*(#.*)?\$"
+    # no backslash at all inside single quotes: compose reads \' as an escape
+    local re_sq="^'[^'\\\\]*'[[:space:]]*(#.*)?\$"
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%$'\r'}"
         [[ "$line" =~ $re_key ]] || continue
-        v="${BASH_REMATCH[2]}"
+        v="${BASH_REMATCH[1]}"
         case "$v" in
             \"*) [[ "$v" =~ $re_dq ]] || return 1 ;;
             \'*) [[ "$v" =~ $re_sq ]] || return 1 ;;

@@ -352,8 +352,9 @@ load_lib() {
 # Compose reads a double or single quoted value across line breaks, so a line
 # that sits INSIDE such a value is no declaration to compose, while a line
 # reader sees it as one. A file with a quoted value that does not close on its
-# own line is refused (the host templates never write one), so the library and
-# compose can never read different files.
+# own line is refused (the host templates never write one). That is the
+# refusal; it does not model every corner of compose's dotenv reader (see the
+# probes below), it is deliberately stricter.
 @test "cd_dc refuses (2) a COMPOSE key hidden inside a multi-line quoted value, one stderr line, compose never started" {
     load_lib
     f="${GREMION_ROOT}/etc/env/app-green.env"
@@ -378,6 +379,36 @@ load_lib() {
         run --separate-stderr cd_dc "$TREE" app-green up -d
         [ "$status" -eq 2 ] || { echo "variant: ${variant}"; false; }
         [[ "$stderr" == "cd-docker: cd_dc: "* ]] || { echo "variant: ${variant}: ${stderr}"; false; }
+        [ "$(printf '%s\n' "$stderr" | wc -l)" -eq 1 ]
+    done
+    [ ! -e "$DK/argv.log" ]
+}
+
+# Probed against a real compose: it opens a multi-line value behind a key that
+# starts with a digit, one with brackets or a non-ASCII letter, and it reads
+# \' inside single quotes as an escape, so the quote that follows does not
+# close the value. The check must not depend on how the key is spelled.
+@test "cd_dc refuses (2) an unclosed quote however the key is spelled and whatever escape precedes the closing quote" {
+    load_lib
+    f="${GREMION_ROOT}/etc/env/app-green.env"
+    cp "$f" "${BATS_TEST_TMPDIR}/orig.env"
+    for opener in \
+        "NOTE='abc\\'" \
+        'NOTE="abc\"' \
+        '1N="open' \
+        'N[0]="open' \
+        $'\xc3\x84="open' \
+        'N.x-y="open' \
+        'N-x:"open'; do
+        cp "${BATS_TEST_TMPDIR}/orig.env" "$f"
+        sed -i '/^COMPOSE_FILE=/d;/^COMPOSE_PROJECT_NAME=/d' "$f"
+        closer='"'
+        [[ "$opener" == *"'"* ]] && closer="'"
+        printf '%s\nCOMPOSE_PROJECT_NAME=teststack-app-green\nCOMPOSE_FILE=docker-compose.app.yml\n%s\n' \
+            "$opener" "$closer" >> "$f"
+        run --separate-stderr cd_dc "$TREE" app-green up -d
+        [ "$status" -eq 2 ] || { echo "opener: ${opener}"; false; }
+        [[ "$stderr" == *"quoted value"* ]] || { echo "opener: ${opener}: ${stderr}"; false; }
         [ "$(printf '%s\n' "$stderr" | wc -l)" -eq 1 ]
     done
     [ ! -e "$DK/argv.log" ]
