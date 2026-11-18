@@ -29,7 +29,7 @@
 #                        so. The watchdog sends the queue first and judges the age of what is
 #                        left, so a relay that is back after a long outage writes no ALERT.
 #   data/cd/ALERT present (a fatal exit of the tick wrote it, or the rule above did) ->
-#                        `stalled` detail alert, once per ALERT file (its mtime), even while
+#                        `stalled` detail alert, once per ALERT episode and daily after, even while
 #                        the heartbeat is fresh and with the kill switch on.
 #   the last poll success older than CD_STALL_MINUTES while `git ls-remote` shows a tip that
 #                        neither the poller nor the live release knows -> `stalled`.
@@ -188,15 +188,27 @@ _cd_wd_outbox() {
 # and leaves a heartbeat behind, and the state-free liveness rules above are content with a
 # fresh heartbeat. Without this rule a tick that dies on every run is silent for as long as
 # the beat is young, and the ALERT it wrote reaches nobody but the start gate. One `stalled`
-# mail per ALERT file (its modification time is the identity: a new fatal exit writes the file
-# again), whatever the kill switch says. It reads the file's existence and time, never its text.
+# mail per ALERT episode (from the first run that sees the file to the run that finds it gone),
+# a reminder once a day while it stands, whatever the kill switch says. It reads the file's
+# existence only, never its text.
 _cd_wd_alert() {
-    local m
-    [[ -e "$CD_ALERT_FILE" ]] || return 0
-    m="$(stat -c %Y "$CD_ALERT_FILE" 2>/dev/null)" || return 0
-    [[ "$m" =~ ^[0-9]{1,12}$ ]] || return 0
-    _cd_wd_hb_read || true
-    _cd_wd_stalled alert "alert-${m}" "" "${HB_PHASE:-unknown}" "${HB_STAGE:-}"
+    local now="$1" since phase=unknown stage=""
+    if [[ ! -e "$CD_ALERT_FILE" ]]; then
+        _cd_wd_del alert_since || true
+        return 0
+    fi
+    # The episode, not the file's time, is the identity: cd_alert rewrites the file on every
+    # failing tick and every dead-relay run, so its mtime changes all the time.
+    since="$(_cd_wd_get alert_since)"
+    if [[ ! "$since" =~ ^[0-9]{1,12}$ ]]; then
+        since="$now"
+        _cd_wd_put alert_since "$now" || true
+    fi
+    if _cd_wd_hb_read; then
+        phase="$HB_PHASE"
+        stage="$HB_STAGE"
+    fi
+    _cd_wd_stalled alert "alert-${since}" 86400 "$phase" "$stage"
 }
 
 # -- rules that read the state -----------------------------------------------------------
@@ -281,7 +293,7 @@ cd_cmd_watchdog() {
     cd_notify_flush || flush_rc=$?
     _cd_wd_liveness "$now" || cd_hist watchdog_rule_failed rule=liveness || true
     _cd_wd_outbox || cd_hist watchdog_rule_failed rule=outbox || true
-    _cd_wd_alert || cd_hist watchdog_rule_failed rule=alert || true
+    _cd_wd_alert "$now" || cd_hist watchdog_rule_failed rule=alert || true
     _cd_wd_state_rules "$now" || cd_hist watchdog_rule_failed rule=state || true
     _cd_wd_killswitch || cd_hist watchdog_rule_failed rule=killswitch || true
     # the mails this run queued leave now, unless the first pass of this run already failed or

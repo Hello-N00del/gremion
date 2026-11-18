@@ -307,6 +307,8 @@ wd() { run nlib 'cd_cmd_watchdog'; }
 # data/cd/ALERT: a fatal exit of the tick must not stay silent behind a fresh heartbeat
 # ---------------------------------------------------------------------------
 
+# alerts_sent -- the alert mails the relay shim took
+alerts_sent() { grep -l 'detail: alert' "${GREMION_ROOT}"/.sent.* 2>/dev/null | wc -l | tr -d ' '; }
 # alert_at EPOCH -- an ALERT file with that mtime (what cd_alert leaves behind)
 alert_at() {
     printf 'cd: state schema not supported
@@ -314,7 +316,7 @@ alert_at() {
     touch -d "@$1" "${GREMION_ROOT}/data/cd/ALERT"
 }
 
-@test "alert: an ALERT file with a fresh heartbeat and a readable state gives one stalled mail with detail alert, once per ALERT" {
+@test "alert: an ALERT file with a fresh heartbeat and a readable state gives one stalled mail with detail alert" {
     cd_need_flock
     fresh_hb
     alert_at $(( NOW - 100 ))
@@ -323,14 +325,70 @@ alert_at() {
     [ "$(mails_with alert)" -eq 1 ]
     grep -qx 'kind: stalled' "$(mail_files)"
     grep -qx 'command: gremion-cd status' "$(mail_files)"
+}
+
+@test "alert: one mail per ALERT episode, not per rewrite -- every failing tick rewrites the file (a new mtime), and that is still one mail" {
+    cd_need_flock
+    fresh_hb
+    alert_at $(( NOW - 100 ))
+    wd
+    [ "$(mails_with alert)" -eq 1 ]
+    cd_advance 600
+    fresh_hb
+    alert_at $(( NOW + 600 ))
+    wd
+    cd_advance 600
+    fresh_hb
+    alert_at $(( NOW + 1200 ))
+    wd
+    [ "$(mails_with alert)" -eq 1 ]
+}
+
+@test "alert: a dead relay rewrites ALERT on every run (the outbox rule) and that is still one alert mail" {
+    cd_need_flock
+    run nlib 'cd_notify held sha12=aaaaaaaaaaaa hold=blocked'
+    cd_advance 3700
+    fresh_hb
+    wd
+    [ "$(mails_with alert)" -eq 1 ]
+    # a new file mtime at the next run, whatever the filesystem's clock grain
+    sleep 1.1
+    cd_advance 600
+    fresh_hb
+    wd
+    sleep 1.1
     cd_advance 600
     fresh_hb
     wd
     [ "$(mails_with alert)" -eq 1 ]
-    # the same file written again (a new fatal exit) is a new mail
-    alert_at $(( NOW + 500 ))
+}
+
+@test "alert: a reminder once a day while ALERT stands, and a new mail for a new episode after it was removed" {
+    cd_need_flock
+    rm -f "${GREMION_ROOT}/.curl-fail"
+    fresh_hb
+    alert_at $(( NOW - 100 ))
     wd
-    [ "$(mails_with alert)" -eq 2 ]
+    [ "$(alerts_sent)" -eq 1 ]
+    cd_advance 600
+    fresh_hb
+    wd
+    [ "$(alerts_sent)" -eq 1 ]
+    cd_advance 86400
+    fresh_hb
+    wd
+    [ "$(alerts_sent)" -eq 2 ]
+    # the operator clears it; the episode ends
+    rm -f "${GREMION_ROOT}/data/cd/ALERT"
+    cd_advance 600
+    fresh_hb
+    wd
+    [ "$(alerts_sent)" -eq 2 ]
+    cd_advance 600
+    fresh_hb
+    alert_at $(( NOW - 10 ))
+    wd
+    [ "$(alerts_sent)" -eq 3 ]
 }
 
 @test "alert: no ALERT file, no alert mail" {

@@ -585,7 +585,7 @@ digest_day() { date -u -d "2026-11-18 $1" +%s; }
 # A killed send leaves nothing behind
 # ---------------------------------------------------------------------------
 
-@test "send: a upload copy left by a send that was killed (.send.<pid>.eml) is removed by the next flush" {
+@test "send: an upload copy left by a send that was killed (.send.<pid>.eml) is removed by the next flush" {
     cd_need_flock
     mkdir -p "${GREMION_ROOT}/data/cd/outbox"
     printf 'To: ops@example.org
