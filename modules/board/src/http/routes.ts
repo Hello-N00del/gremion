@@ -17,6 +17,10 @@
 //         params) so the candidate id list can exceed node:http's ~16KB header
 //         cap (~320 ids per committee); #387.
 //   POST  /api/v1/boards/:id/promote   → Card (201) | 404 | 409 (promoteActionItem)
+//   POST  /api/v1/erase-subject        → { counts: { card_assignee, card_created_by } } (the kernel's erasure
+//         hook; body { subjectId }, nothing else; one transaction; zero counts for an unknown subject)
+//   DELETE /api/v1/org-units/:id/boards → { deleted: N } (the kernel deleted the org unit; this tenant's
+//         boards of it, with their stacks and cards, go)
 //
 // Entity-returning routes return the entity DIRECTLY (no {data} envelope) —
 // matching ServiceBoardClient's deserialize helpers, which read fields straight
@@ -53,6 +57,8 @@ import {
   stackExists,
   promoteActionItem,
   listPromotedActionItemIds,
+  eraseSubject,
+  deleteBoardsForOrgUnit,
 } from '../store/index.js'
 
 export interface ApiContext extends RouteContext {
@@ -163,6 +169,12 @@ const PromoteSchema = z.object({
     dueDate: z.string().nullable(),
   }),
   createdBy: z.string().min(1),
+})
+
+/** An identity-provider user id: a non-empty string, bounded like the kernel's erasure API bounds it. A strict
+ *  object, so a body that carries anything else is refused rather than half-read. */
+const EraseSubjectSchema = z.strictObject({
+  subjectId: z.string().min(1).max(512),
 })
 
 const PromotedIdsSchema = z.object({
@@ -419,6 +431,34 @@ export function buildApiRoutes(store: StoreFn): Route[] {
         const card = await promoteActionItem(sql, boardId, body.item, body.createdBy)
         sendJson(res, 201, card)
       }, 'board not found'),
+    },
+
+    // ── POST /api/v1/erase-subject (BD5) ─────────────────────────────────────
+    // The kernel's board erasure hook for a customer whose board lives in this database. Idempotent:
+    // an unknown subject, or a repeat, answers zero counts. A blocked database is the refusal 404, so
+    // the caller reports "nothing reachable now" and the replay at re-enable does it.
+    {
+      method: 'POST',
+      path: '/api/v1/erase-subject',
+      handler: wrap(async ({ req, res, tenant }) => {
+        const { subjectId } = EraseSubjectSchema.parse(await readBody(req))
+        const sql = await storeFn(tenant)
+        sendJson(res, 200, { counts: await eraseSubject(sql, subjectId) })
+      }),
+    },
+
+    // ── DELETE /api/v1/org-units/:id/boards (BD5) ────────────────────────────
+    // The kernel deleted the org unit; the cascade that removed its boards in the kernel's tables does
+    // not cross into this database. Stacks and cards follow by the leaf's own foreign keys.
+    {
+      method: 'DELETE',
+      path: '/api/v1/org-units/:id/boards',
+      handler: wrap(async ({ res, params, tenant }) => {
+        const orgUnitId = params['id']!
+        if (!UUID.test(orgUnitId)) return sendError(res, 400, 'orgUnitId must be a uuid')
+        const sql = await storeFn(tenant)
+        sendJson(res, 200, { deleted: await deleteBoardsForOrgUnit(sql, orgUnitId) })
+      }),
     },
   ]
 }

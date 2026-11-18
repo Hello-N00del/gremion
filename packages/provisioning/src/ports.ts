@@ -196,6 +196,34 @@ export interface ModulesPort {
   finalizeDue?(opts: { finalDeletion: boolean; deadlineMs: number }): Promise<import('@gremion/tenant-store/lifecycle').FinalizeResult>
   /** Module keys with an `enabled` plt.module_enablement row for the customer. */
   enabled(c: CustomerRef): Promise<string[]>
+  /**
+   * The compose service of the module's own database server, read from the catalogue's declaration
+   * (`runtime.database.postgresService`), or null when the module declares no database. The one switch
+   * for every step that only exists for a module with a database of its own. Optional: a fake that has
+   * no such module leaves it out, which reads as "declares none".
+   */
+  databaseService?(moduleId: string): string | null
+  /**
+   * Throws (a ProvisioningError PRECONDITION) unless that server answers a bounded `SELECT 1` as its
+   * admin. The create flow asks it BEFORE anything is written, so a create that cannot finish is refused
+   * instead of started. Optional like `databaseService`; the create flow refuses (fails closed) when a
+   * module declares a database and this is missing.
+   */
+  assertServerAnswers?(service: string): Promise<void>
+}
+
+/**
+ * Where a customer's board lives, written by the create flow once the board's own database exists
+ * (BoardLocationPort is the only writer on that path; `board-move` and the lifecycle guard write it
+ * elsewhere). One call, one customer, idempotent, and it never changes anything but an empty board.
+ */
+export interface BoardLocationPort {
+  /**
+   * Sets the location of the customer's board to `module`. `changed` is false when it already was.
+   * Refuses (throws) when the kernel board tables hold rows, or a move is running: the move is the only
+   * way to carry rows, and flagging `module` over them would hide them.
+   */
+  setModule(c: CustomerRef): Promise<{ changed: boolean }>
 }
 
 /** TASK-044 (lane note D2): one module's DPIA-applicability decision as a create or enable request carries it. */
@@ -254,6 +282,8 @@ export interface ProvisioningDeps {
   broker: BrokerPort
   modules: ModulesPort
   gate: GatePort
+  /** The board's location flag in the customer's kernel database (create path only). Required when the catalogue's board entry declares a database. */
+  boardLocation?: BoardLocationPort
   log?: (line: string) => void
   hooks?: { afterStep?(kind: import('./steps.ts').StepKind): void | Promise<void> }
 }

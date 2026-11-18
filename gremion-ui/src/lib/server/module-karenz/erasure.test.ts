@@ -238,6 +238,25 @@ describe('replayErasureForRestore', () => {
     expect(out.details.join('\n')).toMatch(/skipped \(id-only\)/)
   })
 
+  it('a hook that defers (its database is still blocked) fails the replay like an error does, never counts as a skip: the switch stays applying and the next pass replays again', async () => {
+    const l = ledgerDb()
+    l.at(new Date('2026-10-11T00:00:00Z'))
+    await recordKarenzErasure(l.db, 'kc-a')
+    await recordKarenzErasure(l.db, 'kc-b')
+    const calls: string[] = []
+    registerErasureHook(
+      hookOf('votes', async (ctx) => {
+        calls.push(ctx.subjectId)
+        return ctx.subjectId === 'kc-a' ? { status: 'deferred', reason: 'the database is blocked' } : { status: 'erased', counts: {} }
+      }),
+    )
+    const err = await replayErasureForRestore(ctxFor(l)).then(() => null, (e: unknown) => e)
+    expect(err).toBeInstanceOf(ErasureReplayError)
+    expect(calls).toEqual(['kc-a', 'kc-b'])
+    expect((err as Error).message).toMatch(/1 of 2/)
+    expect((err as Error).message).not.toMatch(/kc-a|blocked/)
+  })
+
   it('a module without a registered hook is reported as skipped in the detail, not as replayed, and does not fail', async () => {
     const l = ledgerDb()
     l.at(new Date('2026-10-11T00:00:00Z'))

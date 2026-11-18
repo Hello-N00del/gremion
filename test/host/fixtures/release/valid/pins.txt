@@ -20,3 +20,4 @@ element-call=ghcr.io/hello-n00del/gremion-element-call@sha256:aaaaaaaaaaaaaaaaaa
 calendar-service=ghcr.io/hello-n00del/gremion-calendar@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 content-service=ghcr.io/hello-n00del/gremion-content@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
 newsletter-service=ghcr.io/hello-n00del/gremion-newsletter@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+board-service=ghcr.io/hello-n00del/gremion-board@sha256:0000000000000000000000000000000000000000000000000000000000000000

@@ -624,10 +624,36 @@ case "$1 $2" in
      esac ;;
   pull*) [ -f "$GREMION_ROOT/.pull-fails" ] && exit 1 ; exit 0 ;;
   run*)
-     prev=""; tarfile=""
-     for a in "$@"; do [ "$prev" = "-cf" ] && tarfile="$a"; prev="$a"; done
-     mkdir -p "$out"
-     printf "tar-stub" > "${out}/${tarfile#/out/}"
+     case "$*" in
+     *":/out "*)
+        prev=""; tarfile=""
+        for a in "$@"; do [ "$prev" = "-cf" ] && tarfile="$a"; prev="$a"; done
+        mkdir -p "$out"
+        printf "tar-stub" > "${out}/${tarfile#/out/}"
+        ;;
+     *)
+        # A read-only container read of a host directory (the kept exports):
+        # `docker run --rm -v <dir>:/v:ro <image> <command using /v>`. The command
+        # runs here with /v swapped for <dir>; when ROOT_RUN is set it runs
+        # through that prefix, which stands for the container being root.
+        if [ -f "$GREMION_ROOT/.run-copies-nothing" ]; then
+          case "$*" in *"tar -cf - "*) tar -cf - -T /dev/null; exit 0 ;; esac
+        fi
+        shift
+        src=""
+        while [ $# -gt 0 ]; do
+          case "$1" in --rm) shift ;; -v) src="${2%%:/v:ro}"; shift 2 ;; *) break ;; esac
+        done
+        shift
+        args=(); for a in "$@"; do args+=("${a//\/v/$src}"); done
+        if [ -f "$GREMION_ROOT/.run-copies-short" ] && [ "$1" = tar ]; then
+          t="$(mktemp -d)"; tar -cf - -C "$src" . | tar -xf - -C "$t"
+          find "$t" -type f -exec truncate -s 1 {} +
+          tar -cf - -C "$t" .; rm -rf "$t"; exit 0
+        fi
+        exec ${ROOT_RUN:-} "${args[@]}"
+        ;;
+     esac
      ;;
 esac
 exit 0'
@@ -760,6 +786,133 @@ mkdir -p "$dst"
     run "$BACKUP"
     assert_recorded rsync "--exclude secrets/tenants/*.backup-key"
     assert_recorded rsync "--exclude *.backup-key"
+}
+
+# ---------------------------------------------------------------------------
+# kept module exports are on the backup path (BD2b)
+# ---------------------------------------------------------------------------
+
+# The host path the compose file bind-mounts at TENANT_EXPORT_DIR, relative to
+# the root ("data/module-exports"). Read from the compose file, never typed here.
+compose_export_dir_rel() {
+    local f="${PROJECT_ROOT}/docker-compose.app.yml" cpath
+    cpath="$(sed -n 's/^[[:space:]]*TENANT_EXPORT_DIR:[[:space:]]*//p' "$f" | tr -d '\r' | head -n 1)"
+    [ -n "$cpath" ] || { echo "no TENANT_EXPORT_DIR in docker-compose.app.yml" >&2; return 1; }
+    sed -n "s#^[[:space:]]*-[[:space:]]*\${GREMION_ROOT:-/opt/gremion}/\([^:]*\):${cpath}\$#\1#p" "$f" | tr -d '\r'
+}
+
+# The entries of BACKUP_HOST_DATA_DIRS in gremion-backup, one per line.
+backup_host_data_dirs() {
+    sed -n 's/^BACKUP_HOST_DATA_DIRS=(\(.*\))[[:space:]]*$/\1/p' "$BACKUP" | tr -s ' ' '\n' | grep -v '^$'
+}
+
+@test "TENANT_EXPORT_DIR is bind-mounted from exactly one host path, and that path is on the backup path" {
+    local rel
+    rel="$(compose_export_dir_rel)"
+    [ -n "$rel" ]
+    [ "$(printf '%s\n' "$rel" | wc -l)" -eq 1 ]
+    backup_host_data_dirs | grep -Fxq -- "$rel" \
+        || { echo "bind source '${rel}' is not in BACKUP_HOST_DATA_DIRS: $(backup_host_data_dirs | tr '\n' ' ')" >&2; return 1; }
+}
+
+@test "a kept module export is staged into the snapshot tree with its content" {
+    shim_baseline; shim_docker_full; shim_restic_ok; plant_etc_tree
+    shim_rsync_honouring_excludes
+    local rel; rel="$(compose_export_dir_rel)"
+    mkdir -p "${GREMION_ROOT}/${rel}/acme/board"
+    printf 'dump-bytes' >"${GREMION_ROOT}/${rel}/acme/board/20261101.dump"
+    printf 'abc  20261101.dump\n' >"${GREMION_ROOT}/${rel}/acme/board/20261101.dump.sha256"
+    run "$BACKUP" --label nightly-x
+    [ "$status" -eq 0 ]
+    cmp "${GREMION_ROOT}/${rel}/acme/board/20261101.dump" "${GREMION_ROOT}/backups/current/${rel}/acme/board/20261101.dump"
+    [ -s "${GREMION_ROOT}/backups/current/${rel}/acme/board/20261101.dump.sha256" ]
+    [[ "$output" == *"staged ${rel}: 2 file(s)"* ]]
+}
+
+@test "a host with no export directory yet still backs up, staging the path empty" {
+    shim_baseline; shim_docker_full; shim_restic_ok; plant_etc_tree
+    shim_rsync_honouring_excludes
+    run "$BACKUP" --label nightly-y
+    [ "$status" -eq 0 ]
+    [ -d "${GREMION_ROOT}/backups/current/$(compose_export_dir_rel)" ]
+    [ -z "$(find "${GREMION_ROOT}/backups/current/$(compose_export_dir_rel)" -type f)" ]
+}
+
+@test "an export file that does not reach the staged tree fails the run (post-condition read from the trees)" {
+    shim_baseline; shim_docker_full; shim_restic_ok; plant_etc_tree
+    shim_rsync_honouring_excludes
+    # The export copy exits 0 and delivers nothing.
+    touch "${GREMION_ROOT}/.run-copies-nothing"
+    local rel; rel="$(compose_export_dir_rel)"
+    mkdir -p "${GREMION_ROOT}/${rel}/acme/board"
+    printf 'dump-bytes' >"${GREMION_ROOT}/${rel}/acme/board/20261101.dump"
+    run "$BACKUP" --label nightly-z
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"staged ${rel} differs from the host directory"* ]]
+}
+
+@test "a staged export file of the wrong size fails the run (names alone are not the post-condition)" {
+    shim_baseline; shim_docker_full; shim_restic_ok; plant_etc_tree
+    shim_rsync_honouring_excludes
+    local rel; rel="$(compose_export_dir_rel)"
+    mkdir -p "${GREMION_ROOT}/${rel}/acme/board"
+    printf 'dump-bytes' >"${GREMION_ROOT}/${rel}/acme/board/20261101.dump"
+    # The container's tar delivers a truncated file under the right name.
+    touch "${GREMION_ROOT}/.run-copies-short"
+    run "$BACKUP" --label nightly-s
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"staged ${rel} differs from the host directory"* ]]
+}
+
+# BD2b review HIGH: the export tree is written by tenant-create as root (0700 dirs,
+# 0600 files) and the backup runs as the deploy user. Every other test here runs as
+# the test user and so cannot see ownership. This one runs the program as the deploy uid (1000, or on a sudo runner the calling user)
+# against a root-owned 0700 tree, as the host has it after the first module
+# switch-off; the container reads of the shim stand for root through a setuid copy
+# of setpriv.
+@test "a root-owned 0700 export tree is staged by a deploy-user run, and the run reaches restic" {
+    if [ "$(id -u)" -ne 0 ]; then
+        # The CI runner is not root but has passwordless sudo: run this one test as
+        # root in a nested bats, so it runs there instead of being skipped. A box
+        # with neither cannot run it.
+        sudo -n true 2>/dev/null || skip "needs root or passwordless sudo to plant a root-owned tree"
+        # BATS_ROOT/bin/bats, not `bats`: inside a test PATH leads to the libexec copy,
+        # which needs the outer run's environment, and sudo starts a clean one.
+        run sudo -n env -i "PATH=${PATH}" "HOME=/root" "DEPLOY_UID=$(id -u)" "DEPLOY_GID=$(id -g)" "${BATS_ROOT}/bin/bats" -f '^a root-owned 0700 export tree is staged' "$BATS_TEST_FILENAME"
+        [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+        [[ "$output" == *"ok 1 a root-owned 0700 export tree"* ]] || { echo "$output"; return 1; }
+        [[ "$output" != *"# skip"* ]] || { echo "the nested root run skipped: $output"; return 1; }
+        return 0
+    fi
+    command -v setpriv >/dev/null 2>&1 || skip "setpriv (util-linux) is not installed"
+    shim_baseline; shim_docker_full; shim_restic_ok; plant_etc_tree
+    shim_rsync_honouring_excludes
+    local rel tree; rel="$(compose_export_dir_rel)"
+    tree="${GREMION_ROOT}/${rel}/acme/board"
+    mkdir -p "$tree"
+    printf 'dump-bytes' >"${tree}/20261101.dump"
+    printf 'abc  20261101.dump\n' >"${tree}/20261101.dump.sha256"
+    local du="${DEPLOY_UID:-1000}" dg="${DEPLOY_GID:-1000}"
+    chown -R "${du}:${dg}" "$GREMION_ROOT"
+    # exactly what exportDatabase leaves: root:root, directories 0700, files 0600
+    chown -R root:root "${GREMION_ROOT}/${rel}/acme"
+    find "${GREMION_ROOT}/${rel}/acme" -type d -exec chmod 700 {} +
+    find "${GREMION_ROOT}/${rel}/acme" -type f -exec chmod 600 {} +
+    cp "$(command -v setpriv)" "${SHIM_DIR}/rootpriv"
+    chown root:root "${SHIM_DIR}/rootpriv"
+    chmod 4755 "${SHIM_DIR}/rootpriv"
+    export ROOT_RUN="${SHIM_DIR}/rootpriv --reuid=0 --regid=0 --clear-groups"
+    # the premise: the deploy user really cannot read that tree
+    run setpriv --reuid="$du" --regid="$dg" --clear-groups ls "${GREMION_ROOT}/${rel}/acme"
+    [ "$status" -ne 0 ]
+    run setpriv --reuid="$du" --regid="$dg" --clear-groups "$BACKUP" --label nightly-u
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    local staged="${GREMION_ROOT}/backups/current/${rel}/acme/board"
+    cmp "${tree}/20261101.dump" "${staged}/20261101.dump"
+    [ -s "${staged}/20261101.dump.sha256" ]
+    # the staged copy belongs to the deploy user, so restic (same user) can read it
+    [ "$(stat -c %u "${staged}/20261101.dump")" -eq "$du" ]
+    assert_recorded restic "backup"
 }
 
 # ---------------------------------------------------------------------------

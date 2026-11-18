@@ -95,15 +95,17 @@ export const LEAF_SERVICES = ['content', 'finance', 'files', 'votes', 'messages'
 )
 export const FIRST_PARTY_IMAGE = /^ghcr\.io\/hello-n00del\/gremion-/
 /**
- * The pilot's module leaves in the APP project (docker-compose.app.yml): service -> the one compose profile
+ * The module leaves in the APP project (docker-compose.app.yml): service -> the one compose profile
  * that gates it. Calendar, content and newsletter run as leaves (the evidence case table of the isolation
- * task and the running path are the same code); every other module is in-process. A leaf is long-running
- * but profile-gated, which the APP SHAPE rule would otherwise refuse, so this table is its exemption.
+ * task and the running path are the same code), and so does board once a customer's board lives in its own
+ * database; every other module is in-process. A leaf is long-running but profile-gated, which the APP SHAPE
+ * rule would otherwise refuse, so this table is its exemption.
  */
 export const LEAF_PROFILES = {
   'calendar-service': 'calendar',
   'content-service': 'content',
   'newsletter-service': 'newsletter',
+  'board-service': 'board',
 }
 
 // ── the placement table (TRD §2.1 topology, §2.2 workload classes) ─────────

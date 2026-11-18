@@ -126,6 +126,51 @@ refute_secrets_printed() {
     [[ "$output" != *"docker-compose.yml;"* ]]
 }
 
+# The board leaf's database password has ONE source: the file the module lifecycle sets the role m_board_app
+# from (etc/secrets/tenant-create/module_app_password_board). gremion-init-secrets derives BOARD_APP_PASSWORD
+# from it, but a host rendered before the board leaf gets its two new keys by hand (the upgrade runbook), and a
+# value typed or generated twice would be refused with 28P01 for every customer while /healthz stays green.
+@test "board: BOARD_APP_PASSWORD equal to the module password file passes, and the validator says it checked" {
+    render_filled
+    run "$VALIDATE" --env-file "${ENV_DIR}/app-blue.env" --release "$RELEASE"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"BOARD_APP_PASSWORD"* ]]
+}
+
+@test "board: a BOARD_APP_PASSWORD that differs from the module password file exits 1, naming the key and the file and printing no value" {
+    render_filled
+    local want; want="$(tr -d '\r\n' < "${GREMION_ROOT}/etc/secrets/tenant-create/module_app_password_board")"
+    [ -n "$want" ]
+    sed -i 's/^BOARD_APP_PASSWORD=.*/BOARD_APP_PASSWORD=a-second-generated-value/' "${ENV_DIR}/app-blue.env"
+    run "$VALIDATE" --env-file "${ENV_DIR}/app-blue.env" --release "$RELEASE"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"BOARD_APP_PASSWORD"* ]]
+    [[ "$output" == *"module_app_password_board"* ]]
+    [[ "$output" != *"a-second-generated-value"* ]]
+    [[ "$output" != *"$want"* ]]
+}
+
+@test "board: a module password file changed after the render makes both colours fail" {
+    render_filled
+    printf 'rotated-by-hand\n' > "${GREMION_ROOT}/etc/secrets/tenant-create/module_app_password_board"
+    local c
+    for c in blue green; do
+        run "$VALIDATE" --env-file "${ENV_DIR}/app-${c}.env" --release "$RELEASE"
+        [ "$status" -eq 1 ] || { echo "app-${c}: status ${status}"; return 1; }
+        [[ "$output" == *"module_app_password_board"* ]]
+    done
+}
+
+@test "board: a host without the module password file yet is not refused (gremion-init-secrets and gremion-tenant write it), and the state file never asks for it" {
+    render_filled
+    rm -f "${GREMION_ROOT}/etc/secrets/tenant-create/module_app_password_board"
+    run "$VALIDATE" --env-file "${ENV_DIR}/app-blue.env" --release "$RELEASE"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"BOARD_APP_PASSWORD"* ]]
+}
+
 @test "a missing release tree exits 2" {
     render_filled
     run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "${GREMION_ROOT}/releases/none"

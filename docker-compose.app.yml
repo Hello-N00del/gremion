@@ -218,19 +218,28 @@ services:
       ELEMENT_CALL_INTERNAL_URL: http://element-call:8080
       # Calendar, content and newsletter run as LEAVES (the evidence case table and the
       # running path are the same code; newsletter has no other backend). Votes, files
-      # and messages stay in-process and board stays default: no FILES_, VOTES_,
-      # MESSAGES_ or BOARD_BACKEND key belongs here (scripts/check-app-compose-env.test.mjs).
+      # and messages stay in-process: no FILES_, VOTES_ or MESSAGES_ key belongs here
+      # (scripts/check-app-compose-env.test.mjs).
+      # Board follows each customer's location flag: BOARD_BACKEND=auto is the router (kernel
+      # tables, or the board leaf below once the customer's board lives in its own database).
+      # It is written out, not left to the code default, so the running environment says it.
       CALENDAR_BACKEND:         service
       CONTENT_BACKEND:          service
       NEWSLETTER_BACKEND:       service
+      BOARD_BACKEND:            auto
       # This colour's own leaves, by their colour-suffixed alias, and the shared
       # secret each presents back to gremion-ui (tenant/leaf-trust.ts).
       CALENDAR_SERVICE_URL:     http://calendar-service-${COLOUR:?COLOUR required}:8080
       CONTENT_SERVICE_URL:      http://content-service-${COLOUR:?COLOUR required}:8080
       NEWSLETTER_SERVICE_URL:   http://newsletter-service-${COLOUR:?COLOUR required}:8080
+      BOARD_SERVICE_URL:        http://board-service-${COLOUR:?COLOUR required}:8080
       INTERNAL_CALENDAR_SECRET: ${INTERNAL_CALENDAR_SECRET:-}
       INTERNAL_CONTENT_SECRET:  ${INTERNAL_CONTENT_SECRET:-}
       INTERNAL_NEWSLETTER_SECRET: ${INTERNAL_NEWSLETTER_SECRET:-}
+      # The board leaf's guard secret: the board client presents it as x-internal-auth. The same value
+      # reaches board-service, whose own reference is required (${...:?}), so an unset value fails the
+      # whole render by name and never reaches this empty default.
+      INTERNAL_BOARD_SECRET:    ${INTERNAL_BOARD_SECRET:-}
     volumes:
       - config-data:/app/config
       # /data holds the per-tenant config files the provisioner writes
@@ -805,17 +814,18 @@ services:
         aliases: ["kernel-api-migrate-${COLOUR:?COLOUR required}"]
 
   # ============================================================
-  # The pilot's module leaves: calendar, content, newsletter
+  # The module leaves: calendar, content, newsletter, board
   # ============================================================
-  # Three leaf services, one per module profile (calendar, content, newsletter),
+  # Four leaf services, one per module profile (calendar, content, newsletter, board),
   # rendered into COMPOSE_PROFILES by gremion-init-secrets from
   # infra/host/module-profiles.json. Each is the module's own image, built from the
   # repo root (modules/<id>/Dockerfile), and reached ONLY by its colour-suffixed
   # alias on _app and _state: no edge network, no published port, no Traefik route.
   # Its database server is the state project's <id>-postgres (profile of the same
-  # name); the leaf connects as that server's admin and creates one database per
-  # customer itself (calendar_<slug> ...), which is not the database the module
-  # enable gate creates (docs/ops/pilot-services.md, named residual).
+  # name). Calendar, content and newsletter connect as that server's admin and create
+  # one database per customer themselves (calendar_<slug> ...), which is not the
+  # database the module enable gate creates (docs/ops/pilot-services.md, named
+  # residual). Board is the exception, see its own comment below.
   #
   # The broker URL is deliberately absent: the kernel NATS admits only the nkeys
   # tenant-create holds, so the leaves run with the relay loop OFF. Their outbox
@@ -934,6 +944,52 @@ services:
         aliases: ["newsletter-service-${COLOUR:?COLOUR required}"]
       state:
         aliases: ["newsletter-service-${COLOUR:?COLOUR required}"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/healthz | grep -q ok || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # The board leaf. Unlike the three above it does not create its own databases: the customer's
+  # board lives in t_<tenant>__board on the state project's board-postgres, created, migrated,
+  # exported and blocked by the module lifecycle (enable-module / disable-module of tenant-create),
+  # and the leaf only opens it. It therefore connects as the module's APP role m_board_app, never as
+  # the server admin: the Karenz block revokes CONNECT from that role, and a superuser ignores a
+  # revoked CONNECT, which would turn "module switched off" from a 404 into served data.
+  #
+  # One password, one source. m_board_app's password is set from the file
+  # etc/secrets/tenant-create/module_app_password_board (tenant-create's ensureModuleRoles, at every
+  # enable); gremion-init-secrets derives BOARD_APP_PASSWORD from that same file, so the URL below and
+  # the role cannot disagree. Both ${...:?} are required on purpose: a compose recreate without the
+  # env must fail by variable NAME, not start a leaf that answers 403 to every call or one whose
+  # every connection is refused with 28P01 (a leaf that boots healthy and fails every request).
+  # The other leaves use ${...:-} for their secret; this one does not.
+  board-service:
+    profiles: [board]
+    image: ghcr.io/hello-n00del/gremion-board:${IMAGE_TAG:?IMAGE_TAG required}
+    build:
+      context: .
+      dockerfile: modules/board/Dockerfile
+    restart: unless-stopped
+    logging: *logging
+    deploy: *limits-m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    labels:
+      traefik.enable: "false"
+      org.gremion.stack: "${STACK:?STACK required}"
+    environment:
+      COLOUR: ${COLOUR:?COLOUR required}
+      PORT: "8080"
+      # The module server and its app role; the leaf replaces the database name per customer.
+      GREMION_BOARD_PG_URL: postgresql://m_board_app:${BOARD_APP_PASSWORD:?BOARD_APP_PASSWORD required}@board-postgres:5432/postgres
+      INTERNAL_BOARD_SECRET: ${INTERNAL_BOARD_SECRET:?INTERNAL_BOARD_SECRET required}
+    networks:
+      app:
+        aliases: ["board-service-${COLOUR:?COLOUR required}"]
+      state:
+        aliases: ["board-service-${COLOUR:?COLOUR required}"]
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/healthz | grep -q ok || exit 1"]
       interval: 15s

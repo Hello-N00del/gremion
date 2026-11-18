@@ -143,6 +143,7 @@ jobs:
           - { name: calendar, image: ghcr.io/hello-n00del/gremion-calendar, services: calendar-service, dockerfile: modules/calendar/Dockerfile, context: . }
           - { name: content, image: ghcr.io/hello-n00del/gremion-content, services: content-service, dockerfile: modules/content/Dockerfile, context: . }
           - { name: newsletter, image: ghcr.io/hello-n00del/gremion-newsletter, services: newsletter-service, dockerfile: modules/publishing/Dockerfile, context: . }
+          - { name: board, image: ghcr.io/hello-n00del/gremion-board, services: board-service, dockerfile: modules/board/Dockerfile, context: . }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
