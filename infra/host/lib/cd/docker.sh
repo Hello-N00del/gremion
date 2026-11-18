@@ -100,8 +100,9 @@ cd_kv_get() {
 # owner and mode, leaving exactly one declaration. A bad key name, a value with
 # a newline or a carriage return, a missing file, a file that already declares
 # the key more than once and a copy that does not read back exactly are all
-# refused with the file untouched (the check of the duplicate runs BEFORE the
-# edit). The value reaches awk through the environment, so no value touches a
+# refused (the check of the duplicate runs BEFORE the edit, so that file is
+# left untouched; a copy that does not read back is detected AFTER the swap,
+# reported with 1, and the file then holds what the swap put there). The value reaches awk through the environment, so no value touches a
 # command line or an escape sequence.
 cd_set_env_key() {
     local f="${1:-}" k="${2:-}" v="${3-}" tmp n owner_ref owner_new
@@ -155,8 +156,10 @@ cd_set_env_key() {
 # of the profile set the env file declares, the set that is expected to run;
 # with the star it would list the one-shots too, and a wait for them could
 # never end. VERB must be the first word and must not start with a dash, and
-# no argument may be a global option of compose, so the shape cannot be
-# changed from outside. CD_DC_TIMEOUT (whole seconds, 0 or unset = none) bounds
+# no argument may be a global option of compose, and the COMPOSE_PROJECT_NAME,
+# COMPOSE_PROFILES, COMPOSE_FILE, COMPOSE_PATH_SEPARATOR and COMPOSE_ENV_FILES
+# of the caller's environment are dropped before compose starts, so the shape
+# cannot be changed from outside. CD_DC_TIMEOUT (whole seconds, 0 or unset = none) bounds
 # the call; a call that hits it returns 124, or 137 when compose ignored the
 # TERM and was killed ten seconds later: both mean "timed out".
 cd_dc() {
@@ -201,6 +204,10 @@ cd_dc() {
     root="$(_cd_docker_root)"
     (
         cd "$tree" || exit 2
+        # compose prefers these variables of the caller's environment to the
+        # env file, so a stray export would make it act on another project
+        # than the one the lookups of this library read.
+        unset COMPOSE_PROJECT_NAME COMPOSE_PROFILES COMPOSE_FILE COMPOSE_PATH_SEPARATOR COMPOSE_ENV_FILES
         GREMION_ROOT="$root" exec ${t[@]+"${t[@]}"} docker compose --env-file "$envf" ${star[@]+"${star[@]}"} "$@"
     ) </dev/null
 }
@@ -250,7 +257,7 @@ cd_project_cids() {
 # The services listed are those of the profile set the env file declares (the
 # set that is expected to run), not the profile-gated one-shots.
 # Returns 0 healthy, 3 when the window ends first, 2 for a usage error (a
-# missing tree included) or a compose that renders no service.
+# missing tree included, or a project name that cannot be resolved) or a compose that renders no service.
 # Sets CD_WAIT_BAD to the services that were not: " name(absent)
 # name(running starting)". Only service names and states appear there and in
 # the message on stderr, never a container id or name. Call it directly, not
@@ -265,6 +272,9 @@ cd_wait_healthy() {
     [[ "$poll" =~ ^[0-9]+(\.[0-9]+)?$ ]] || { _cd_docker_err "cd_wait_healthy: CD_WAIT_POLL_S is not a number"; return 2; }
     [[ -n "$tree" ]] || { _cd_docker_err "cd_wait_healthy: usage: PROJECT SECONDS TREE (the tree is required)"; return 2; }
     cd_envfile "$proj" >/dev/null || return 2
+    # A project name that cannot be resolved is a precondition, not a colour
+    # that is slow to get healthy: say so now, once, with its own message.
+    _cd_docker_proj "$proj" >/dev/null || return 2
     local listing
     listing="$(cd_dc "$tree" "$proj" config --services)" || {
         _cd_docker_err "cd_wait_healthy: the ${proj} project did not render"

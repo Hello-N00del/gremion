@@ -33,6 +33,7 @@ teardown() {
 # A docker shim that answers the calls docker.sh makes. State lives in $DK:
 #   argv.log            one line per call, args joined with '|'
 #   ctx.log             cwd and GREMION_ROOT of every compose call
+#   env.log             the COMPOSE_* variables every compose call could see
 #   stdin.log           whatever the last compose call could read on stdin
 #   built               images a `compose build` produced: the star adds the
 #                       profile-gated one-shot image, as the real compose does
@@ -49,6 +50,7 @@ shim_docker() {
 case "$1" in
   compose)
     printf 'cwd=%s root=%s\n' "$PWD" "${GREMION_ROOT:-}" >> "$DK/ctx.log"
+    env | grep -E '^COMPOSE_' | sort >> "$DK/env.log" || true
     IFS= read -r -t 0.3 -d '' data || true
     printf '%s' "$data" > "$DK/stdin.log"
     [ -f "$DK/slow" ] && sleep 5
@@ -259,6 +261,16 @@ load_lib() {
 
 mk_envfile() { printf 'A=1\nIMAGE_TAG=old\nIMAGE_TAG_OLD=keep\n# IMAGE_TAG=comment\nZ=9\n' > "$1"; }
 
+@test "cd_dc ignores the COMPOSE_* variables of the caller's environment: the env file decides" {
+    load_lib
+    export COMPOSE_PROJECT_NAME=fromshell-app-blue COMPOSE_PROFILES='*' COMPOSE_FILE=/elsewhere/x.yml \
+        COMPOSE_PATH_SEPARATOR=: COMPOSE_ENV_FILES=/elsewhere/x.env
+    cd_dc "$TREE" app-green up -d
+    cd_dc "$TREE" app-green build
+    [ "$(grep -c . "$DK/env.log" || true)" = 0 ]
+    [ "$(last_argv | tr '|' '\n' | grep -c -x -- '--profile')" = 1 ]
+}
+
 @test "cd_set_env_key replaces one declaration and leaves the other lines alone" {
     load_lib
     f="${BATS_TEST_TMPDIR}/x.env"
@@ -454,18 +466,24 @@ mk_envfile() { printf 'A=1\nIMAGE_TAG=old\nIMAGE_TAG_OLD=keep\n# IMAGE_TAG=comme
     load_lib
     f="${GREMION_ROOT}/etc/env/app-green.env"
     cp "$f" "${BATS_TEST_TMPDIR}/orig.env"
-    for variant in none dup bad foreign; do
-        cp "${BATS_TEST_TMPDIR}/orig.env" "$f"
-        case "$variant" in
-            none) sed -i '/^COMPOSE_PROJECT_NAME=/d' "$f" ;;
-            dup) echo 'COMPOSE_PROJECT_NAME=teststack-app-green' >> "$f" ;;
-            bad) sed -i 's/^COMPOSE_PROJECT_NAME=.*/COMPOSE_PROJECT_NAME=Bad Name/' "$f" ;;
-            foreign) sed -i 's/^COMPOSE_PROJECT_NAME=.*/COMPOSE_PROJECT_NAME=teststack-app-blue/' "$f" ;;
-        esac
-        run cd_svc_cid app-green gremion-ui
-        [ "$status" -eq 2 ]
-        run cd_project_cids app-green
-        [ "$status" -eq 2 ]
+    # Once with STACK set (its cross-check would catch a bad or foreign name
+    # first) and once with it unset, where only the format and suffix check of
+    # the name itself stands in the way.
+    for stack in teststack unset; do
+        if [ "$stack" = unset ]; then unset STACK; else export STACK="$stack"; fi
+        for variant in none dup bad foreign; do
+            cp "${BATS_TEST_TMPDIR}/orig.env" "$f"
+            case "$variant" in
+                none) sed -i '/^COMPOSE_PROJECT_NAME=/d' "$f" ;;
+                dup) echo 'COMPOSE_PROJECT_NAME=teststack-app-green' >> "$f" ;;
+                bad) sed -i 's/^COMPOSE_PROJECT_NAME=.*/COMPOSE_PROJECT_NAME=Bad Name/' "$f" ;;
+                foreign) sed -i 's/^COMPOSE_PROJECT_NAME=.*/COMPOSE_PROJECT_NAME=teststack-app-blue/' "$f" ;;
+            esac
+            run cd_svc_cid app-green gremion-ui
+            [ "$status" -eq 2 ]
+            run cd_project_cids app-green
+            [ "$status" -eq 2 ]
+        done
     done
     [ ! -e "$DK/argv.log" ]
 }
@@ -648,6 +666,34 @@ svc_state() {
 }
 
 # ------------------------------------------------------------- cd_image_id
+
+@test "cd_wait_healthy refuses (2) a project name that STACK or the env file contradicts, at once and without waiting" {
+    load_lib
+    printf 'gremion-ui\n' > "$DK/services"
+    svc_state gremion-ui 'running healthy'
+    f="${GREMION_ROOT}/etc/env/app-green.env"
+    cp "$f" "${BATS_TEST_TMPDIR}/orig.env"
+    CD_WAIT_POLL_S=0.1
+    for variant in stack none dup bad foreign; do
+        cp "${BATS_TEST_TMPDIR}/orig.env" "$f"
+        export STACK=teststack
+        case "$variant" in
+            stack) export STACK=other ;;
+            none) sed -i '/^COMPOSE_PROJECT_NAME=/d' "$f" ;;
+            dup) echo 'COMPOSE_PROJECT_NAME=teststack-app-green' >> "$f" ;;
+            bad) sed -i 's/^COMPOSE_PROJECT_NAME=.*/COMPOSE_PROJECT_NAME=Bad Name/' "$f" ;;
+            foreign) sed -i 's/^COMPOSE_PROJECT_NAME=.*/COMPOSE_PROJECT_NAME=teststack-app-blue/' "$f" ;;
+        esac
+        start=$SECONDS
+        cd_wait_healthy app-green 3 "$TREE" 2>"${BATS_TEST_TMPDIR}/err" && rc=0 || rc=$?
+        [ "$rc" -eq 2 ]
+        [ $((SECONDS - start)) -lt 2 ]
+        # the named reason survives; no colour is reported as unhealthy
+        grep -q 'COMPOSE_PROJECT_NAME' "${BATS_TEST_TMPDIR}/err"
+        ! grep -q 'not healthy' "${BATS_TEST_TMPDIR}/err"
+        [ -z "$CD_WAIT_BAD" ]
+    done
+}
 
 @test "cd_image_id prints the id of an image reference" {
     load_lib
