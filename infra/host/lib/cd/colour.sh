@@ -547,7 +547,8 @@ _cd_colour_l2_route_once() { # COLOUR
     local pair name svc url st urls
     for pair in app-next@file:gremion-ui public-next@file:gremion-public; do
         name="${pair%%:*}"
-        svc="$(cd_traefik_service "$name" 2>/dev/null)" || {
+        # cd_traefik_service says curl's own reason on stderr; it is left visible
+        svc="$(cd_traefik_service "$name")" || {
             _cd_colour_fail next_route_down 1 "layer 2: ${name} is not reported by the Traefik API"
             return 1
         }
