@@ -3,7 +3,8 @@
 # gremion-backup — §J of the netcup distribution-host design.
 #
 # Enumerates the artefact set FROM THE RUNNING SYSTEM (databases, state- and
-# mail-project volumes, /opt/gremion/etc minus the per-tenant backup keys;
+# mail-project volumes, /opt/gremion/etc minus the per-tenant backup keys, the
+# host data directories of BACKUP_HOST_DATA_DIRS (the kept module exports);
 # no object storage, TRD-066/354), stages it under $(gremion_root)/backups/current,
 # writes one restic snapshot, mirrors the repository off-site, verifies the
 # off-site copy by reading it back, writes runtime/last-backup.json and
@@ -639,9 +640,14 @@ assert_postgres_server_coverage() {
     ok "every running PostgreSQL server of ${STACK}-state is in BACKUP_POSTGRES_SERVICES (${n})"
 }
 
+# The pinned image every root-side read of the host runs in (volumes, kept exports).
+archive_image() {
+    printf '%s' "${BACKUP_ARCHIVE_IMAGE:-alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8}"
+}
+
 archive_volumes() {
     local v img
-    img="${BACKUP_ARCHIVE_IMAGE:-alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8}"
+    img="$(archive_image)"
     mkdir -p "${DUMP_DIR}/volumes"
     docker pull --quiet "$img" >/dev/null 2>&1 \
         || die "cannot pull archive image ${img}" 1
@@ -714,6 +720,68 @@ copy_etc() {
     rsync -a --delete "${ETC_EXCLUDES[@]}" "${src}/" "${dst}/" \
         || die "etc copy failed" 1
     assert_no_backup_keys "$dst"
+}
+
+# Host directories under $(gremion_root) that hold data nothing else backs up:
+# bind mounts of the app stack (not Docker volumes, so archive_volumes cannot see
+# them) and not part of etc/. Each entry is a path relative to the root and is
+# staged at the same relative path under the staged tree. data/module-exports is
+# where a switched-off module's database export is kept (compose service
+# tenant-create, TENANT_EXPORT_DIR): after day 30 that export is the only copy of
+# the data, so a host that loses its disk without this entry loses it for good.
+# test/host/backup.bats reads this list and the compose bind mount and fails when
+# they disagree; add a bind source of the app stack here, not in a second place.
+BACKUP_HOST_DATA_DIRS=( data/module-exports )
+
+# These trees are written by a container that runs as root (tenant-create) with
+# 0700 directories and 0600 files, and this program runs as the deploy user under
+# NoNewPrivileges: it cannot even list them. They are read the way archive_volumes
+# reads a volume, through a root container on the pinned archive image, and
+# unpacked here, as the deploy user, so the staged copy is the deploy user's own
+# (modes kept) and restic can read it.
+#
+# "<size> <path>" per file, for `sh -c` over a `find` result. The same text runs
+# on both sides of the comparison below.
+# shellcheck disable=SC2016  # the text is a script for another shell
+HOST_DIR_LISTING_SH='for f; do printf "%s %s\n" "$(wc -c <"$f")" "$f"; done'
+
+host_dir_listing() {   # $1 = absolute host directory, read as root; sorted listing
+    docker run --rm -v "${1}:/v:ro" "$(archive_image)" \
+        sh -c 'cd /v && find . -type f -exec sh -c "$0" sh {} +' "$HOST_DIR_LISTING_SH" \
+        | LC_ALL=C sort
+}
+
+staged_dir_listing() {   # $1 = staged directory, read as this user; same format
+    ( cd "$1" && find . -type f -exec sh -c "$HOST_DIR_LISTING_SH" sh {} + ) | LC_ALL=C sort
+}
+
+copy_host_data_dirs() {
+    local rel src dst want got
+    for rel in "${BACKUP_HOST_DATA_DIRS[@]}"; do
+        src="$(gremion_root)/${rel}"
+        dst="${DUMP_DIR}/${rel}"
+        mkdir -p "$dst"
+        if [ ! -d "$src" ]; then
+            # The stack's bind mount creates it on first start; before that there
+            # is nothing to lose. The staged directory stays, empty, so a snapshot
+            # always says the path was considered.
+            info "no ${rel} on this host yet: staged empty"
+            continue
+        fi
+        docker run --rm -v "${src}:/v:ro" "$(archive_image)" tar -cf - -C /v . \
+            | tar -xf - -C "$dst" --no-same-owner \
+            || die "copy of ${rel} failed" 1
+        # Post-condition read from the trees (file names and sizes), not from the
+        # exit codes of the copy: the source by the same root container, the
+        # staged side as this user.
+        want="$(host_dir_listing "$src")" \
+            || die "cannot inspect ${src}" 1
+        got="$(staged_dir_listing "$dst")" \
+            || die "cannot inspect ${dst}" 1
+        [ "$want" = "$got" ] \
+            || die "staged ${rel} differs from the host directory (files missing, extra or of another size)" 1
+        ok "staged ${rel}: $(printf '%s' "$got" | grep -c . || true) file(s)"
+    done
 }
 
 # Reads the produced tree, so it holds whatever route a key took to get there.
@@ -989,6 +1057,7 @@ main() {
     assert_dump_coverage
     archive_volumes
     copy_etc
+    copy_host_data_dirs
     restic_init_if_absent
     SNAP_BEFORE="$(snapshot_ids_of_class snapshot)"
     restic_run
