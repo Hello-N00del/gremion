@@ -70,7 +70,7 @@ function fakeSql(statements: Statement[], answer: Answer): FakeSql {
 /** The module server for board-postgres: every statement of its admin connection is recorded. */
 function recordingServer(admin: Statement[], opened: { database: string; role?: string }[], asked: string[]) {
   const adminSql = fakeSql(admin, (s) => {
-    if (/FROM pg_database d JOIN pg_roles r/.test(s.text)) return admin.some((a) => /^CREATE DATABASE /.test(a.text)) ? [{ owner: 'm_board' }] : []
+    if (/FROM pg_database d JOIN pg_roles r/.test(s.text)) return admin.some((a) => a.text.startsWith('CREATE DATABASE ')) ? [{ owner: 'm_board' }] : []
     if (/FROM pg_database WHERE datname/.test(s.text)) return [{ '?column?': 1 }]
     if (/count\(\*\)::int AS n FROM pg_stat_activity/.test(s.text)) return [{ n: 0 }]
     if (/has_database_privilege/.test(s.text)) return [{ can: false }]
@@ -100,29 +100,29 @@ function platformWorld(statements: Statement[]) {
     if (/current_database\(\)/.test(t)) return [{ db: 'gremion_platform' }]
     if (/FROM plt\.module m JOIN plt\.module_version v/.test(t)) return [{ module_id: MODULE_ROW, module_version_id: VERSION_ROW }]
     if (/SELECT module_id::text FROM plt\.module WHERE module_key/.test(t)) return [{ module_id: MODULE_ROW }]
-    if (/^INSERT INTO plt\.module_database/.test(t)) {
+    if (t.startsWith('INSERT INTO plt.module_database')) {
       db.present = true
       return []
     }
-    if (/^SELECT db_name/.test(t)) {
+    if (t.startsWith('SELECT db_name')) {
       return db.present ? [{ db_name: DB, state: db.state, export_path: db.exportPath, export_sha256: db.exportSha, exported_at: db.exportedAt }] : []
     }
-    if (/^UPDATE plt\.module_database SET state = /.test(t)) {
+    if (t.startsWith('UPDATE plt.module_database SET state = ')) {
       db.state = s.values[0] as string
       return [{ '?column?': 1 }]
     }
-    if (/^UPDATE plt\.module_database SET export_path = /.test(t)) {
+    if (t.startsWith('UPDATE plt.module_database SET export_path = ')) {
       db.exportPath = s.values[0] as string
       db.exportSha = s.values[1] as string
       db.exportedAt = new Date()
       return [{ '?column?': 1 }]
     }
-    if (/^UPDATE plt\.module_enablement/.test(t)) return [{ '?column?': 1 }]
-    if (/^INSERT INTO plt\.module_karenz/.test(t)) {
+    if (t.startsWith('UPDATE plt.module_enablement')) return [{ '?column?': 1 }]
+    if (t.startsWith('INSERT INTO plt.module_karenz')) {
       karenz.present = true
       return []
     }
-    if (/^SELECT karenz_id::text, state, final_at/.test(t)) {
+    if (t.startsWith('SELECT karenz_id::text, state, final_at')) {
       return karenz.present ? [{ karenz_id: KARENZ_ROW, state: 'open', final_at: karenz.finalAt, tenant_done_at: null }] : []
     }
     return []
@@ -155,13 +155,13 @@ describe('board has a module database of its own (the shipped module.json)', () 
 
     expect(asked).toEqual(['board-postgres'])
     const text = adminStatements.map((s) => s.text)
-    expect(text.some((s) => /^CREATE ROLE "m_board" NOLOGIN/.test(s))).toBe(true)
-    expect(text.some((s) => /^CREATE ROLE "m_board_app" LOGIN/.test(s))).toBe(true)
+    expect(text.some((s) => s.startsWith('CREATE ROLE "m_board" NOLOGIN'))).toBe(true)
+    expect(text.some((s) => s.startsWith('CREATE ROLE "m_board_app" LOGIN'))).toBe(true)
     expect(text).toContain(`CREATE DATABASE "${DB}" OWNER "m_board"`)
     expect(text).toContain(`GRANT CONNECT ON DATABASE "${DB}" TO "m_board_app"`)
     expect(opened).toEqual([{ database: DB, role: 'm_board' }])
     // the visible, resumable state is written first, with the board's own database name
-    expect(statements.find((s) => /^INSERT INTO plt\.module_database/.test(s.text))?.values).toContain(DB)
+    expect(statements.find((s) => s.text.startsWith('INSERT INTO plt.module_database'))?.values).toContain(DB)
   })
 
   it('disableModule exports the board database with the exporter, then blocks it: the app role loses CONNECT, and a Karenz row is opened with that export', async () => {
@@ -191,8 +191,8 @@ describe('board has a module database of its own (the shipped module.json)', () 
     expect(r.karenz?.karenzId).toBe(KARENZ_ROW)
     expect(adminStatements.map((s) => s.text)).toContain(`REVOKE CONNECT ON DATABASE "${DB}" FROM "m_board_app"`)
     // the export is recorded before the block, and the Karenz row carries the export of this switch-off
-    expect(statements.some((s) => /^UPDATE plt\.module_database SET export_path/.test(s.text))).toBe(true)
-    const karenzInsert = statements.find((s) => /^INSERT INTO plt\.module_karenz/.test(s.text))
+    expect(statements.some((s) => s.text.startsWith('UPDATE plt.module_database SET export_path'))).toBe(true)
+    const karenzInsert = statements.find((s) => s.text.startsWith('INSERT INTO plt.module_karenz'))
     expect(karenzInsert?.values.slice(-2)).toEqual([r.export?.path, r.export?.sha256])
     expect(platform.db.state).toBe('blocked')
   })
@@ -225,8 +225,8 @@ describe('board has a module database of its own (the shipped module.json)', () 
     const sql = fakeSql(statements, (s) => {
       if (s.text.startsWith('SELECT k.karenz_id::text')) return [row]
       if (/SELECT state FROM plt\.module_karenz WHERE karenz_id/.test(s.text)) return [{ state: 'open' }]
-      if (/^SELECT db_name/.test(s.text)) return [{ db_name: DB, state: dbRow.state, export_path: path, export_sha256: sha, exported_at: new Date() }]
-      if (/^UPDATE plt\.module_database SET state = /.test(s.text)) {
+      if (s.text.startsWith('SELECT db_name')) return [{ db_name: DB, state: dbRow.state, export_path: path, export_sha256: sha, exported_at: new Date() }]
+      if (s.text.startsWith('UPDATE plt.module_database SET state = ')) {
         dbRow.state = s.values[0] as string
         return [{ '?column?': 1 }]
       }
