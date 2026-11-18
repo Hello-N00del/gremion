@@ -3,7 +3,7 @@
   import { Button } from '$lib/components/ui/button'
   import { Input } from '$lib/components/ui/input'
   import { Label } from '$lib/components/ui/label'
-  import { t } from '$lib/i18n'
+  import { lang, t } from '$lib/i18n'
 
   interface Props {
     open: boolean
@@ -29,7 +29,7 @@
   }
 </script>
 
-<Dialog {open} {onClose}>
+<Dialog {open} {onClose} lang={$lang}>
   <DialogHeader>
     <DialogTitle>{$t('news.create.title')}</DialogTitle>
   </DialogHeader>

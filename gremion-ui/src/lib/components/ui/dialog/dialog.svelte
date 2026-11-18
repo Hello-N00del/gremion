@@ -12,6 +12,12 @@
      * is rendered; when a title exists it labels the dialog via aria-labelledby.
      */
     'aria-label'?: string
+    /**
+     * The language of the dialog's content when it differs from the page's (WCAG 3.1.2): a page declared
+     * German renders catalogue text in the person's language, so a dialog built from the catalogue passes
+     * `lang={$lang}`. Applied to the dialog container, so everything inside is covered.
+     */
+    lang?: string
     children?: import('svelte').Snippet
   }
 
@@ -20,6 +26,7 @@
     onClose,
     class: className = '',
     'aria-label': ariaLabel,
+    lang,
     children,
   }: Props = $props()
 
@@ -51,6 +58,7 @@
     aria-modal="true"
     aria-labelledby={hasTitle ? titleId : undefined}
     aria-label={hasTitle ? undefined : ariaLabel}
+    {lang}
     tabindex="-1"
     use:modal
     class={cn(

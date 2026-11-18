@@ -2,7 +2,7 @@
   import type { PageData } from './$types';
   import { enhance } from '$app/forms';
   import { untrack } from 'svelte';
-  import { t } from '$lib/i18n';
+  import { lang, t } from '$lib/i18n';
   import RichTextComposer from '$lib/components/news/RichTextComposer.svelte';
 
   let { data }: { data: PageData } = $props();
@@ -81,24 +81,25 @@
     ></iframe>
   {:else}
     <div class="flex-1 flex flex-col gap-3 overflow-y-auto p-6">
-      <p class="text-sm text-ink-muted">{$t('news.composer.collaboraUnavailable')}</p>
+      <p class="text-sm text-ink-muted" lang={$lang}>{$t('news.composer.collaboraUnavailable')}</p>
       <div class="flex items-center gap-3">
         <button
           type="button"
           onclick={saveComposer}
           disabled={composerSaving}
           class="inline-flex items-center px-3 py-1.5 text-sm border rounded-md hover:bg-surface-2 transition-colors disabled:opacity-50"
+          lang={$lang}
         >
           {composerSaving ? $t('news.composer.saving') : $t('news.composer.save')}
         </button>
         {#if composerSaved}
-          <span class="text-sm text-ink-muted">{$t('news.composer.saved')}</span>
+          <span class="text-sm text-ink-muted" lang={$lang}>{$t('news.composer.saved')}</span>
         {/if}
         {#if composerError}
           <span class="text-sm text-rust" role="alert">{composerError}</span>
         {/if}
       </div>
-      <RichTextComposer bind:value={body} ariaLabel={$t('news.composer.body')} />
+      <RichTextComposer bind:value={body} />
     </div>
   {/if}
 </div>

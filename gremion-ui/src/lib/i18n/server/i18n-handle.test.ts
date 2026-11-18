@@ -164,16 +164,39 @@ describe('createI18nHandle (TDD 2: the raw SSR response carries the resolved lan
     expect((event.locals as { locale?: string }).locale).toBe(header === 'en-US' ? 'en' : 'de')
   })
 
+  // Locale-en unit: the document's declared language (above) and the language
+  // the catalogue strings render in are separate decisions. Every string that
+  // has a message renders in the PERSON's locale on every route, a page that is
+  // still partly hard-coded German included; only <html lang> follows the page.
   it.each([
-    ['/legal/impressum', 'Dateien'],
-    ['/beschluesse', 'Dateien'],
-    ['/', 'Dateien'],
+    ['/legal/impressum', 'Files'],
+    ['/beschluesse', 'Files'],
+    ['/settings', 'Files'],
+    ['/', 'Files'],
     ['/auth/login', 'Files']
-  ])('page %s renders its catalogue strings (shell chrome, +error) in its own language: %s', async (routeId, expected) => {
+  ])('page %s renders its catalogue strings in the person locale: %s', async (routeId, expected) => {
     const event = { ...fakeEvent({ acceptLanguage: 'en-US' }), url: new URL(routeId, 'https://pilot.test'), route: { id: routeId } }
     const resolve = async () => new Response(messages['nav.files']!())
     const response = await createI18nHandle(customerIdOf)({ event, resolve } as never)
     expect(await response.text()).toBe(expected)
+  })
+
+  it('a German person gets German catalogue strings on a German-declared page', async () => {
+    const event = { ...fakeEvent({ acceptLanguage: 'de-DE' }), url: new URL('/settings', 'https://pilot.test'), route: { id: '/settings' } }
+    const resolve = async () => new Response(messages['nav.files']!())
+    const response = await createI18nHandle(customerIdOf)({ event, resolve } as never)
+    expect(await response.text()).toBe('Dateien')
+  })
+
+  it('an English person on a German-declared page: strings in English, <html> still lang="de" data-ui-locale="en"', async () => {
+    const event = { ...fakeEvent({ acceptLanguage: 'en-US' }), url: new URL('/settings', 'https://pilot.test'), route: { id: '/settings' } }
+    const resolve = async (e: unknown, opts?: Parameters<typeof renderAppHtml>[1]) => {
+      const html = (await renderAppHtml(e, opts).then((r) => r.text())) + messages['nav.files']!()
+      return new Response(html)
+    }
+    const body = await (await createI18nHandle(customerIdOf)({ event, resolve } as never)).text()
+    expect(body).toContain('<html lang="de" data-ui-locale="en">')
+    expect(body.endsWith('Files')).toBe(true)
   })
 
   it('never hands the request body to Paraglide (uploads are not cloned/teed)', async () => {

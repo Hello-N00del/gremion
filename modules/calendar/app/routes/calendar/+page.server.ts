@@ -1,6 +1,6 @@
 import type { PageServerLoad } from './$types'
 import type { SessionUser } from '$lib/auth'
-import { listOrgUnits, getOrgUnitIdsForUser } from '$lib/server/governance/org-units-db'
+import { listOrgUnits, getOrgUnitIdsWithOfficesForUser } from '$lib/server/governance/org-units-db'
 import { resolveCalendarBackendForPage } from '$lib/server/calendar/backend/resolve'
 import { deriveAbbr, deriveHue } from '$lib/governance/committee-color'
 
@@ -23,9 +23,11 @@ export const load: PageServerLoad = async ({ locals }) => {
   const backend = resolveCalendarBackendForPage()
 
   // DB unavailability shouldn't blank the calendar — fall back to empty list.
+  // "mine" is a display flag ("Dein Gremium", "Nur meine"): roster rows plus live offices, the
+  // same set the dashboard counts. Authorisation (event-authz) keeps reading the roster alone.
   const [committees, myIds, eventTypes] = await Promise.all([
     listOrgUnits().catch(() => []),
-    user ? getOrgUnitIdsForUser(user.id).catch(() => [] as readonly string[]) : Promise.resolve([] as readonly string[]),
+    user ? getOrgUnitIdsWithOfficesForUser(user.id).catch(() => [] as readonly string[]) : Promise.resolve([] as readonly string[]),
     backend.listEventTypes().catch(() => []),
   ])
 

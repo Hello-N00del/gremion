@@ -11,7 +11,9 @@ import { registerDataProvider, _resetRuntimeRegistryForTests } from '$lib/server
 // pre-existing calendar:upcoming-events seam above it in loadCommon.
 const getOrgUnitIdsForUser = vi.fn<(id: string) => Promise<readonly string[]>>()
 vi.mock('$lib/server/governance/org-units-db', () => ({
+  // The dashboard reads the display union (roster + office); one mock serves both names.
   getOrgUnitIdsForUser: (id: string) => getOrgUnitIdsForUser(id),
+  getOrgUnitIdsWithOfficesForUser: (id: string) => getOrgUnitIdsForUser(id),
 }))
 
 import { load } from './+page.server'

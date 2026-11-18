@@ -32,7 +32,8 @@
   const skipped = $derived(karenz.mail?.skippedHolders ?? 0)
 </script>
 
-<div class="space-y-3 rounded-md border border-border bg-surface-2 p-3 text-sm" data-testid="karenz-status">
+<!-- WCAG 3.1.2: the page is declared German while this renders in the person's language. -->
+<div class="space-y-3 rounded-md border border-border bg-surface-2 p-3 text-sm" data-testid="karenz-status" lang={$lang}>
   {#if karenz.state === 'finalizing'}
     <p role="status" class="font-medium">{$t('settings.modules.karenz.finalizing')}</p>
   {:else if karenz.state === 'restoring'}

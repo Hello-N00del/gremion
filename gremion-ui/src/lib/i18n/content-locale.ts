@@ -8,16 +8,27 @@
 // is listed in TRANSLATED_ROUTE_IDS as rendering from the catalogue. A new
 // route is German until someone translates it and adds it here;
 // content-locale.test.ts scans every +page.svelte and fails when the list and
-// the pages disagree in either direction. On a German page the catalogue
-// strings around it (shell chrome, +error) render German too: the handle runs
-// Paraglide in the content locale, and the root layout hands AppShell the same
-// locale, so the whole document speaks one language.
+// the pages disagree in either direction.
+//
+// This decides what the page is DECLARED in, not what the catalogue strings
+// render in. Since the locale-en unit every string that has a message renders
+// in the person's locale on every route (the handle runs Paraglide in it), so an
+// English person who switched the language reads the shell navigation and every
+// catalogue string in English, also on a page that is still declared German.
+// Where the two differ the shell marks its own parts with their language
+// (AppShell `pageLocale`, WCAG 3.1.2), and a page marks the regions it renders
+// from the catalogue with `lang={$lang}`. lang-marks.coverage.test.ts enforces that
+// over EVERY .svelte file (a markup `$t` with no lang-bearing element above it
+// fails, no hand-kept list of pages), and the render guards (settings, +error,
+// the module notices, files, news, dashboard) prove the marks on the output; the
+// hard-coded German inside a page stays German, unmarked, until TASK-161
+// migrates it.
 //
 // The decision is keyed by the SvelteKit route id (event.route.id on the
 // server, navigation.to.route.id on the client), not by pathname prefix: a
 // route id names exactly one page. A null route id (no route matched) renders
-// +error, inside the (not yet translated) shell for a signed-in person, so it
-// is German too. A document is declared in the person's locale only when
+// +error, whose disabled-module notice is still hard-coded German, so it is
+// German too. A document is declared in the person's locale only when
 // everything it renders is translated: the page tree and, for a route inside
 // the shell, the shell chrome.
 //
@@ -43,9 +54,10 @@ export const UI_LOCALE_ATTRIBUTE = 'data-ui-locale'
 
 /**
  * True when the page at `routeId` renders in the person's locale. A null route
- * id (no route matched) renders +error, which a signed-in person sees inside
- * the shell; the shell's TopBar and command palette still carry hard-coded
- * German, so that document is German too (content-locale.test.ts proves both).
+ * id (no route matched) renders +error, which is catalogue text except the
+ * disabled-module notice and the server's own messages, so that document stays
+ * declared German and +error marks its catalogue text with its own lang
+ * (content-locale.test.ts proves the list, error-lang-marks.ssr.test.ts the marks).
  */
 export function isTranslatedRoute(routeId: string | null | undefined): boolean {
   return routeId != null && TRANSLATED_ROUTE_IDS.has(routeId)

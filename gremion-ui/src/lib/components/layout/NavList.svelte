@@ -31,12 +31,12 @@
   }
 
   // Top-level leaves between sections are grouped into unlabelled lists.
-  type Group = { label: string | null; items: Leaf[]; key: string }
+  type Group = { label: string | null; lang?: string; items: Leaf[]; key: string }
   let groups = $derived.by(() => {
     const out: Group[] = []
     for (const node of nav) {
       if (node.kind === 'section') {
-        out.push({ label: node.label, key: `s:${out.length}:${node.label}`, items: node.children.filter((c): c is Leaf => c.kind === 'item') })
+        out.push({ label: node.label, lang: node.lang, key: `s:${out.length}:${node.label}`, items: node.children.filter((c): c is Leaf => c.kind === 'item') })
       } else {
         const last = out[out.length - 1]
         if (last && last.label === null) last.items.push(node)
@@ -55,6 +55,7 @@
     class="sb-item"
     class:active={current}
     aria-current={current ? 'page' : undefined}
+    lang={item.lang}
     aria-label={n > 0 ? `${item.label} ${n}` : item.label}
     data-nav-label={item.label}
     onclick={(e) => onnavigate?.(item.href, e)}
@@ -69,7 +70,7 @@
 
 {#each groups as group, i (group.key)}
   {#if group.label !== null}
-    <h2 class="sb-section nav-rail-hide" id="{idPrefix}-sec-{i}">{group.label}</h2>
+    <h2 class="sb-section nav-rail-hide" id="{idPrefix}-sec-{i}" lang={group.lang}>{group.label}</h2>
     <div class="sb-section-rule nav-rail-only" aria-hidden="true"></div>
     <ul class="sb-list" aria-labelledby="{idPrefix}-sec-{i}">
       {#each group.items as item, j (`${j}:${item.href}`)}

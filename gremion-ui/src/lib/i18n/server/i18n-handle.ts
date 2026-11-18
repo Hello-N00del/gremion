@@ -8,7 +8,10 @@
 //    `custom-gremion` server strategy (see paraglide-options.js for why the
 //    cascade cannot be split over Paraglide's built-in strategies).
 // 3. transformPageChunk fills app.html's `%paraglide.lang%`, so the raw server
-//    response already carries `<html lang="en">` before any script runs. The
+//    response already carries `<html lang="en">` before any script runs. That
+//    tag is the language the PAGE is written in (content-locale.ts); the
+//    strings render in the person's locale (step 2), which the tag carries
+//    aside as data-ui-locale where the two differ. The
 //    same mechanism tenantBrandStyleHandle uses; sequence() merges both.
 //
 // Person-preference and customer-default lookups are best-effort. The customer
@@ -103,11 +106,19 @@ export function createI18nHandle(customerIdOf: (locals: LocalsLike) => string | 
     const locale = await resolveRequestLocale(event as unknown as MinimalRequestEvent, customerIdOf)
     ;(event.locals as App.Locals & { locale?: Locale }).locale = locale
 
-    // R26-TRAIN4-FIX (WCAG 3.1.1): the page is rendered and declared in the
-    // language it is written in. SvelteKit has matched the route before handle
-    // runs; a route whose page is not translated (content-locale.ts, fail-safe
-    // German) is German for everyone. `locals.locale` stays the person's
-    // locale, and app.html carries it aside in data-ui-locale for the client.
+    // Two decisions, kept apart (WCAG 3.1.1 vs. the person's choice):
+    //  - the DECLARED language (`<html lang>`) is the language the page is
+    //    written in. SvelteKit has matched the route before handle runs; a route
+    //    whose page is not proven translated (content-locale.ts, fail-safe
+    //    German) is declared German for everyone, and app.html carries the
+    //    person's locale aside in data-ui-locale for the client.
+    //  - the RENDERED catalogue strings (the shell navigation, every `$t`/message
+    //    call on the page) are in the person's locale. A string that has an
+    //    English message renders in English on every route, a page that is still
+    //    partly hard-coded German included. Before, Paraglide ran in the
+    //    declared language, so an English person who had switched the language
+    //    kept reading German chrome on every route but the login page.
+    // `locals.locale` stays the person's locale (the settings switch reads it).
     const routeId = (event as { route?: { id: string | null } }).route?.id ?? null
     const contentLocale = contentLocaleFor(routeId, locale)
 
@@ -115,12 +126,11 @@ export function createI18nHandle(customerIdOf: (locals: LocalsLike) => string | 
     // cloning an upload would tee (and buffer) its body. The stand-in carries
     // only the URL, which is all a non-URL strategy needs.
     const probe = new Request(event.url)
-    resolvedLocales.set(probe, contentLocale)
+    resolvedLocales.set(probe, locale)
 
-    return paraglideMiddleware(probe, ({ locale: requestLocale }) =>
+    return paraglideMiddleware(probe, () =>
       resolve(event, {
-        transformPageChunk: ({ html }) =>
-          html.replace(`lang="${LANG_PLACEHOLDER}"`, htmlLangAttributes(requestLocale, locale))
+        transformPageChunk: ({ html }) => html.replace(`lang="${LANG_PLACEHOLDER}"`, htmlLangAttributes(contentLocale, locale))
       })
     )
   }

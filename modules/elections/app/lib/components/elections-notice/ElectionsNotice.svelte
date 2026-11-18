@@ -3,13 +3,13 @@
   // module. Facts and wording come from modules/elections/src/notice/notice.ts;
   // modules/elections/test/notice-keys.test.ts pins the catalogue text to it.
   // Nothing to close and no role branch: member and admin read the same text.
-  import { t } from '$lib/i18n'
+  import { lang, t } from '$lib/i18n'
 
   // The Du/Sie switch of the instance (UX-013); Du is the default form.
   let { address = 'du' }: { address?: 'du' | 'sie' } = $props()
 </script>
 
-<aside class="elections-notice" aria-label={$t('elections.notice.title')} data-testid="elections-notice">
+<aside class="elections-notice" lang={$lang} aria-label={$t('elections.notice.title')} data-testid="elections-notice">
   <h2 class="elections-notice__title">{$t('elections.notice.title')}</h2>
   <p>{$t('elections.notice.scope')}</p>
   <p>{$t(address === 'sie' ? 'elections.notice.followUpSie' : 'elections.notice.followUpDu')}</p>

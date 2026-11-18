@@ -33,7 +33,8 @@
     mode = null,
     ontoggle,
     suppressCurrent = false,
-    labels = DEFAULT_NAV_LABELS
+    labels = DEFAULT_NAV_LABELS,
+    lang
   }: {
     nav?: NavItem[]
     activeHref?: string
@@ -51,6 +52,8 @@
     suppressCurrent?: boolean
     /** Translated strings (AppShell passes navLabels($t)). */
     labels?: NavLabels
+    /** The language of the column when it differs from the page's (WCAG 3.1.2); unset: the page's. */
+    lang?: string
   } = $props()
 
   // Tenant brand (v4 re-audit slice 10) — prop-drilled from the root layout via
@@ -64,7 +67,7 @@
 </script>
 
 <!-- A plain column, not an <aside>: the <nav> inside is the landmark. -->
-<div class="nav-col sidebar" bind:this={column}>
+<div class="nav-col sidebar" {lang} bind:this={column}>
   <div class="sb-brand">
     <!-- P2.2-data: per-tenant logo (config.brand.logo_url → brand.logoUrl).
          Same .sb-logo size/box classes as the letter mark; null = today's

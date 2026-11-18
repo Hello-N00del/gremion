@@ -22,6 +22,7 @@ import type { Readable } from 'svelte/store'
 import * as compiled from './paraglide/messages.js'
 import { defineCustomClientStrategy, getLocale } from './paraglide/runtime.js'
 import { GREMION_STRATEGY, asSupportedLocale, type Locale } from './locale'
+import { uiLocaleOf } from './content-locale'
 
 export type Language = Locale
 
@@ -30,11 +31,13 @@ const messages = compiled as unknown as Record<string, MessageFn | undefined>
 
 if (browser) {
   defineCustomClientStrategy(GREMION_STRATEGY, {
-    // `<html lang>` is the language the current page renders in: the person's
-    // locale, or 'de' on a German-only route (content-locale.ts), where the
-    // person's locale waits in data-ui-locale until the root layout's
-    // onNavigate restores it for the next page.
-    getLocale: () => asSupportedLocale(document.documentElement.lang) ?? undefined,
+    // The person's locale as the document carries it: `<html lang>`, or, on a
+    // page declared in another language (a German-only route, content-locale.ts),
+    // data-ui-locale. Reading `lang` alone would render German here while the
+    // server rendered the strings in the person's locale, and hydration would
+    // flip them back. The server strategy (server/i18n-handle.ts) hands Paraglide
+    // the same locale, so both halves agree by construction.
+    getLocale: () => uiLocaleOf(document.documentElement),
     // Switching is a form POST + 303 (routes/settings/+page.server.ts), so the
     // next document arrives already rendered in the new locale. Nothing to do.
     setLocale: () => {}

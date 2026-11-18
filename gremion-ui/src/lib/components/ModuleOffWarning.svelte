@@ -41,6 +41,7 @@
 <div
   role="alertdialog"
   aria-labelledby={titleId}
+  lang={$lang}
   class="space-y-4 rounded-lg border border-rust/50 bg-rust-soft p-4 text-rust-ink"
 >
   <h3 id={titleId} class="text-base font-semibold text-rust">
@@ -58,8 +59,9 @@
       <ul class="list-disc space-y-0.5 pl-5 text-sm">
         {#each preview.deletes as item (item.key)}
           <li>
-            {item.label}:
-            {item.count === null ? $t('settings.modules.warn.allData') : `${item.count} ${item.unit}`.trim()}
+            <!-- The item names and units come from the server in German; only the all-data sentence is catalogue text. -->
+            <span lang="de">{item.label}</span>:
+            {#if item.count === null}{$t('settings.modules.warn.allData')}{:else}<span lang="de">{`${item.count} ${item.unit}`.trim()}</span>{/if}
           </li>
         {/each}
       </ul>
@@ -80,7 +82,7 @@
         <p class="text-sm font-medium">{$t('settings.modules.warn.retained')}</p>
         <ul class="list-disc space-y-0.5 pl-5 text-sm">
           {#each preview.retained as item (item.key)}
-            <li>{item.basis ? `${item.label} (${item.basis})` : item.label}</li>
+            <li lang="de">{item.basis ? `${item.label} (${item.basis})` : item.label}</li>
           {/each}
         </ul>
       </div>
