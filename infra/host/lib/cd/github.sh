@@ -7,6 +7,9 @@
 # nothing at the top level except plain assignments. It needs core.sh (config, clock, state,
 # history, hold) and the dispatcher's order (core first).
 #
+# The jq programs below are single-quoted on purpose: $name is jq's own variable syntax.
+# shellcheck disable=SC2016
+#
 # FAIL CLOSED. Anything other than a parsed HTTP 200 of the expected shape is "no verdict":
 # a 304, a 403, a 429, a 5xx, a timeout, an empty body, invalid JSON, a JSON of the wrong
 # shape, a truncated page, an exhausted budget. "No verdict" never becomes "green".
@@ -862,6 +865,7 @@ cd_gh_candidate() {
     fi
 
     # every commit of live..found must come from a merged pull request
+    # shellcheck disable=SC2034  # read through the nameref of _cd_gh_range_proof
     slice=("${range[@]:found_i}")
     rc=0
     _cd_gh_range_proof "$slug" slice || rc=$?

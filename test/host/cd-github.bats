@@ -16,6 +16,18 @@ load 'test_helper/cd-github'
 setup() { gh_setup; }
 teardown() { gh_teardown; }
 
+# gh_never CMD... -- the command must NOT succeed. A bare `! cmd` in the middle of a bats test
+# is not checked (bash exempts a negated command from errexit), so a guard written that way
+# can never fail.
+gh_never() {
+    if "$@" > "${BATS_TEST_TMPDIR:-/tmp}/gh-never.out" 2>&1; then
+        echo "unexpectedly succeeded: $*" >&2
+        cat "${BATS_TEST_TMPDIR:-/tmp}/gh-never.out" >&2 || true
+        return 1
+    fi
+    return 0
+}
+
 # gh_expect VERDICT [REASON] -- the last gh_verdict said that, and never "green" unless asked.
 gh_expect() {
     if [[ "$V" != "$1" ]]; then
@@ -73,6 +85,8 @@ gh_refused_run() {
     gh_verdict
     gh_expect none up_to_date
     [ "$(gh_calls)" -eq 0 ]
+    # nothing was fetched either: the answer came from the ls-remote of the tip alone
+    gh_never grep -q ' fetch ' "$SHIM_LOG"
 }
 
 @test "tip unchanged: the tip of a FINAL last verdict (red or none) makes no API call" {
@@ -116,7 +130,7 @@ gh_refused_run() {
     run grep -E '^git .*fetch' "$SHIM_LOG"
     [ "$status" -eq 0 ]
     [[ "$output" == *"refs/heads/main"* ]]
-    ! grep -E '^git .*fetch.*(^| )[0-9a-f]{40}( |$)' "$SHIM_LOG"
+    gh_never grep -E '^git .*fetch.*(^| )[0-9a-f]{40}( |$)' "$SHIM_LOG"
     [ -d "${GREMION_ROOT}/data/cd/mirror.git" ]
 }
 
@@ -588,7 +602,9 @@ gh_expect_json_hold() {
 # gh_transport_unknown STATUS [BODY] [HEADERS] -- the run list answers that; no verdict.
 gh_transport_unknown() {
     gh_scn_green
-    gh_route "*/workflows/ci.yml/runs?*head_sha=${C_B}*" "$1" "${2:-}" "${3:-}"
+    # the body is a perfectly good green run list unless the test says otherwise: only the
+    # transport is wrong, so a program that read the body before the status would go green
+    gh_route "*/workflows/ci.yml/runs?*head_sha=${C_B}*" "$1" "${2:-$(gh_body run-push-success "$C_B")}" "${3:-}"
     gh_verdict
     gh_expect unknown
     [ "$V" != green ]
@@ -824,9 +840,9 @@ gh_token_file() {
     [ "$(jq -r .verdict <<< "$output")" = green ]
     grep -q '^header = "Authorization: Bearer ghp_exampletoken0123456789ABCDEF"$' "${GH}/stdin.1"
     grep -q '^curl -K -$' "$SHIM_LOG"
-    ! grep -rq 'ghp_example' "$SHIM_LOG"
-    ! grep -q 'ghp_example' "${GH}"/env.*
-    ! grep -rq 'ghp_example' "${GREMION_ROOT}/data" "${GREMION_ROOT}/runtime"
+    gh_never grep -rq 'ghp_example' "$SHIM_LOG"
+    gh_never grep -q 'ghp_example' "${GH}"/env.*
+    gh_never grep -rq 'ghp_example' "${GREMION_ROOT}/data" "${GREMION_ROOT}/runtime"
     # the argv of every curl call is exactly -K -
     [ "$(grep -c '^curl ' "$SHIM_LOG")" -eq "$(gh_calls)" ]
     [ "$(grep '^curl ' "$SHIM_LOG" | sort -u)" = "curl -K -" ]
@@ -836,7 +852,7 @@ gh_token_file() {
     gh_scn_green
     gh_verdict
     gh_expect green
-    ! grep -q 'Authorization' "${GH}"/stdin.*
+    gh_never grep -q 'Authorization' "${GH}"/stdin.*
 }
 
 @test "token: an absent token file is not an error" {
@@ -844,7 +860,7 @@ gh_token_file() {
     cd_write_cfg CD_REPO_URL=https://github.com/org/repo CD_GITHUB_TOKEN_FILE=/nonexistent/gh-token
     gh_verdict
     gh_expect green
-    ! grep -q 'Authorization' "${GH}"/stdin.*
+    gh_never grep -q 'Authorization' "${GH}"/stdin.*
 }
 
 @test "token: a token file with a quote or a second line cannot add a curl directive" {
@@ -853,8 +869,8 @@ gh_token_file() {
 url = "https://example.invalid/'
     gh_verdict
     gh_expect green
-    ! grep -q 'Authorization' "${GH}"/stdin.*
-    ! grep -q 'example.invalid' "${GH}"/stdin.*
+    gh_never grep -q 'Authorization' "${GH}"/stdin.*
+    gh_never grep -q 'example.invalid' "${GH}"/stdin.*
 }
 
 @test "token: a 401 retries unauthenticated once and queues one token-expired mail" {
@@ -868,7 +884,7 @@ url = "https://example.invalid/'
     # the run list was asked twice: with the token (401), then without it
     [ "$(grep -c "head_sha=${C_B}" "${GH}/urls.log")" -eq 2 ]
     grep -q 'Authorization' "${GH}/stdin.1"
-    ! grep -q 'Authorization' "${GH}/stdin.2"
+    gh_never grep -q 'Authorization' "${GH}/stdin.2"
     [ "$(sed -n 1p "${GH}/urls.log")" = "$(sed -n 2p "${GH}/urls.log")" ]
     [ "$(grep -c '^stub cd_notify held reason=github_token_expired' "$SHIM_LOG")" -eq 1 ]
     # the expired token is remembered: the next evaluation does not send it again and the
@@ -877,7 +893,7 @@ url = "https://example.invalid/'
     before="$(gh_calls)"
     run --separate-stderr gh_lib 'cd_lock_take; cd_gh_candidate'
     [ "$(grep -c '^stub cd_notify held reason=github_token_expired' "$SHIM_LOG")" -eq 1 ]
-    ! grep -q 'Authorization' "${GH}/stdin.$((before + 1))"
+    gh_never grep -q 'Authorization' "${GH}/stdin.$((before + 1))"
 }
 
 @test "token: a 401 without a token is plain unknown" {
@@ -941,7 +957,7 @@ url = "https://example.invalid/'
 # -- proof mode -----------------------------------------------------------------------
 
 gh_proof_repo() {
-    local sha
+    local sha mode="${1:-1}"
     gh_hist_init
     gh_rg -C "$GH_WORK" checkout -q -b proof-x
     gh_rg -C "$GH_WORK" commit -q --allow-empty -m proof
@@ -949,14 +965,15 @@ gh_proof_repo() {
     gh_rg init -q --bare "$GH_PROOF"
     gh_rg -C "$GH_WORK" push -q "$GH_PROOF" "proof-x:proof/x"
     PROOF_SHA="$sha"
-    cd_write_cfg CD_REPO_URL=https://github.com/org/repo CD_PROOF_MODE=1 CD_PROOF_REPO=https://example.org/proof/repo
+    cd_write_cfg CD_REPO_URL=https://github.com/org/repo "CD_PROOF_MODE=${mode}" CD_PROOF_REPO=https://example.org/proof/repo
 }
 
 @test "proof: cd_gh_proof_source returns 2 when CD_PROOF_MODE is 0 and touches nothing" {
-    gh_hist_init
-    run --separate-stderr gh_lib 'cd_gh_proof_source "$1" proof/x' "$C_L0"
+    # everything is in place (the proof repository, its branch, CD_PROOF_REPO) except the flag
+    gh_proof_repo 0
+    run --separate-stderr gh_lib 'cd_gh_proof_source "$1" proof/x' "$PROOF_SHA"
     [ "$status" -eq 2 ]
-    ! grep -q '^git ' "$SHIM_LOG"
+    gh_never grep -q '^git ' "$SHIM_LOG"
     [ ! -e "${GREMION_ROOT}/data/cd/mirror.git" ]
 }
 
@@ -966,7 +983,7 @@ gh_proof_repo() {
     [ "$status" -eq 0 ]
     [ "$(gh_rg --git-dir="${GREMION_ROOT}/data/cd/mirror.git" rev-parse refs/proof/proof/x)" = "$PROOF_SHA" ]
     [ "$(gh_calls)" -eq 0 ]
-    ! grep -q '^curl' "$SHIM_LOG"
+    gh_never grep -q '^curl' "$SHIM_LOG"
     grep -q 'fetch.*https://example.org/proof/repo' "$SHIM_LOG"
 }
 
@@ -986,7 +1003,7 @@ gh_proof_repo() {
     [ "$status" -eq 2 ]
     run --separate-stderr gh_lib 'cd_gh_proof_source "$1" "-x"' "$PROOF_SHA"
     [ "$status" -eq 2 ]
-    ! grep -q ' fetch ' "$SHIM_LOG"
+    gh_never grep -q ' fetch ' "$SHIM_LOG"
 }
 
 @test "proof: proof mode without CD_PROOF_REPO is refused (2)" {
@@ -1041,8 +1058,8 @@ gh_proof_repo() {
 
 @test "hygiene: github.sh sources quietly, sets no options and never exits at the top level" {
     local f="${HOST_SRC}/lib/cd/github.sh"
-    ! grep -Eq '^set [-+][A-Za-z]' "$f"
-    ! grep -Eq '^(exit|return)([[:space:]]+[0-9$"]|[[:space:]]*$)' "$f"
+    gh_never grep -Eq '^set [-+][A-Za-z]' "$f"
+    gh_never grep -Eq '^(exit|return)([[:space:]]+[0-9$"]|[[:space:]]*$)' "$f"
     run bash -c 'set -euo pipefail; . "$1"; . "$2"; . "$3"; echo sourced' _ "${HOST_SRC}/lib/common.sh" "${HOST_SRC}/lib/cd/core.sh" "$f"
     [ "$status" -eq 0 ]
     [ "$output" = sourced ]
@@ -1071,5 +1088,5 @@ gh_proof_repo() {
             | grep -Ev '203\.0\.113\.|127\.0\.0\.1|0\.0\.0\.0' | grep -q . \
             || { echo "IPv4 in $g"; return 1; }
     done
-    ! grep -rEq '[A-Za-z0-9._-]+@' "${HOST_TEST_DIR}/fixtures/cd/github"
+    gh_never grep -rEq '[A-Za-z0-9._-]+@' "${HOST_TEST_DIR}/fixtures/cd/github"
 }
