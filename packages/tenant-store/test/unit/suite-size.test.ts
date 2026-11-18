@@ -37,7 +37,7 @@ export const NAMED: Record<'unit' | 'integration', Record<string, number>> = {
     'src/dump/dump.test.ts': 21,
     'test/unit/check-tenant-db-access.test.ts': 18,
     // board's own module database: enable, disable and the day-30 job touch board-postgres (the shipped module.json)
-    'test/unit/board-lifecycle.test.ts': 4,
+    'test/unit/board-lifecycle.test.ts': 5,
     'test/unit/suite-size.test.ts': 4,
   },
   integration: {

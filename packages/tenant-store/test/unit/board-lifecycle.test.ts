@@ -268,3 +268,33 @@ describe('board has a module database of its own (the shipped module.json)', () 
     expect(steps).toEqual(['export-verified', 'cas-finalizing', 'db-dropped', 'cas-dropped', 'export-deleted', 'platform-done'])
   })
 })
+
+// What the two earlier guards of the database-less board also covered: a module that declares no database
+// (votes ships none) is still enabled without a module server and without a plt.module_database row.
+describe('enableModule for a module that declares no database (votes)', () => {
+  it('asks no module server, writes no plt.module_database row and names no database', async () => {
+    const statements: Statement[] = []
+    const platform = platformWorld(statements)
+    const asked: string[] = []
+    const votes: LifecycleModule = {
+      id: 'votes',
+      dir: fileURLToPath(new URL('../../../../modules/votes', import.meta.url)),
+      moduleJson: JSON.parse(readFileSync(new URL('../../../../modules/votes/module.json', import.meta.url), 'utf8')) as LifecycleModule['moduleJson'],
+    }
+    const deps = {
+      platform: platform.sql,
+      enableGate: async () => ({ isolationTestResultId: ISOLATION_ROW, dpiaDecisionId: DPIA_ROW }),
+      server: (service: string) => {
+        asked.push(service)
+        throw new Error(`deps.server(${JSON.stringify(service)}) must not be called for a module without a database`)
+      },
+    } as unknown as LifecycleDeps
+
+    const r = await enableModule(TENANT, votes, ACTOR, deps)
+
+    expect(asked).toEqual([])
+    expect(r).toMatchObject({ tenantId: TENANT, moduleId: 'votes', database: null, created: false, applied: [], noop: false })
+    expect(statements.some((s) => s.text.includes('plt.module_database'))).toBe(false)
+    expect(statements.some((s) => s.text.startsWith('INSERT INTO plt.module_enablement'))).toBe(true)
+  })
+})
