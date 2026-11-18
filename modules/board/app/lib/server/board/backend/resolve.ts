@@ -9,8 +9,9 @@
 //   - resolveBoardBackendOr503()  → for +server.ts handlers (return Response)
 //   - resolveBoardBackendForPage() → for +page.server.ts loads (throw error())
 
-import { error } from '@sveltejs/kit'
+import { error, json } from '@sveltejs/kit'
 import { getBoardBackend, type BoardBackendPort } from './index'
+import { BoardUnavailableError } from './location'
 
 const UNAVAILABLE_BODY = 'Board backend unavailable'
 
@@ -32,6 +33,42 @@ export function resolveBoardBackendOr503(): BoardBackendPort | Response {
       status: 503,
       headers: { 'Retry-After': '30' },
     })
+  }
+}
+
+/**
+ * The router builds fine and fails per call: a write during a move, or a location flag that
+ * cannot be read, throws BoardUnavailableError from the backend's method (location.ts), not
+ * from getBoardBackend(). Wrap every board handler with one of the two helpers below so that
+ * becomes a 503 and never a 500; anything else passes through untouched (a SvelteKit
+ * error(403|404|400), a real bug). The cause of the failure stays in the server log and is
+ * never put into the response.
+ */
+export function mapBoardUnavailable<A extends unknown[]>(
+  handler: (...args: A) => Promise<Response> | Response,
+): (...args: A) => Promise<Response> {
+  return async (...args: A) => {
+    try {
+      return await handler(...args)
+    } catch (err) {
+      if (err instanceof BoardUnavailableError) {
+        return json({ message: err.message }, { status: 503, headers: { 'Retry-After': String(err.retryAfterSeconds) } })
+      }
+      throw err
+    }
+  }
+}
+
+/** The page-load twin of mapBoardUnavailable: error(503) with the German text, which SvelteKit
+ *  routes to +error.svelte. */
+export function mapBoardUnavailableForPage<A extends unknown[], R>(handler: (...args: A) => Promise<R>): (...args: A) => Promise<R> {
+  return async (...args: A) => {
+    try {
+      return await handler(...args)
+    } catch (err) {
+      if (err instanceof BoardUnavailableError) error(503, err.message)
+      throw err
+    }
   }
 }
 

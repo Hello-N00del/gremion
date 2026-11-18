@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { Role, hasRole } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
 import { resolveBoardOrgUnitScope } from '$lib/server/board/scope'
-import { resolveBoardBackendOr503 } from '$lib/server/board/backend/resolve'
+import { mapBoardUnavailable, resolveBoardBackendOr503 } from '$lib/server/board/backend/resolve'
 import { getActionItem, getProtocol } from '$lib/server/protocols/protocol-db'
 
 const schema = z.object({ actionItemId: z.string().min(1) })
@@ -15,7 +15,7 @@ const schema = z.object({ actionItemId: z.string().min(1) })
 // getActionItem() reads the kernel-owned protocol_action_items table and stays
 // in-process; the RESOLVED item is then handed to the BoardBackendPort so the
 // board leaf never reads protocol data (design §8 cross-DB rule).
-export const POST: RequestHandler = async ({ params, request, locals }) => {
+export const POST: RequestHandler = mapBoardUnavailable(async ({ params, request, locals }) => {
   const session = await locals.auth()
   const user = session?.user as SessionUser | undefined
   if (!user || !hasRole(user.roles, Role.Member)) throw error(403, 'Forbidden')
@@ -41,4 +41,4 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
     user.id,
   )
   return json({ data: card }, { status: 201 })
-}
+})

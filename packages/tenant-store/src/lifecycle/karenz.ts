@@ -54,8 +54,13 @@ export interface FinalizeDeps {
   /** Wall-clock budget; checked before each row (default 110000). */
   deadlineMs?: number
   now?: () => Date
-  /** A future date keeps the export (a retention hold, phase 3); the row records export_kept_until. */
-  exportHold?: (tenantId: string, moduleId: string) => Promise<Date | null> | Date | null
+  /**
+   * A future date keeps the export (a retention hold, phase 3); the row records export_kept_until. The third
+   * argument is read from the ROW, never from what this run did, so a run that is repeated after a crash
+   * decides the same way. The hold is asked for every row that has an export, except a restored Karenz whose
+   * database was never dropped. A throw, or a date that is not a valid date, leaves the export where it is.
+   */
+  exportHold?: (tenantId: string, moduleId: string, context: ExportHoldContext) => Promise<Date | null> | Date | null
   /** Modules (catalogue ids) whose database may not be dropped before retained_ok_at is set. */
   retentionRequired?: ReadonlySet<string>
   log?: (line: string) => void
@@ -75,6 +80,16 @@ export interface FinalizeResult {
   orphanedExports: string[]
 }
 
+/** What an export hold is told about the row it decides for (all of it read from the row and the module database row). */
+export interface ExportHoldContext {
+  /** The state of the Karenz row as the run read it (before this run moved it on). */
+  karenzState: KarenzState
+  /** The module database row was `dropped` when the row was read, or this run dropped it. */
+  databaseDropped: boolean
+  /** The row's final_at: day 30, the date a hold counts from. The same on every run. */
+  finalAt: Date
+}
+
 export interface DueRow {
   karenz_id: string
   customer_id: string
@@ -87,6 +102,9 @@ export interface DueRow {
   platform_done_at: Date | null
   tenant_done_at: Date | null
   retained_ok_at: Date | null
+  final_at: Date
+  /** Set once a hold kept the export (or by hand, to release it early); null until then. */
+  export_kept_until: Date | null
 }
 
 function sha256File(file: string): Promise<string> {
@@ -155,7 +173,7 @@ export async function finalizeDueKarenz(deps: FinalizeDeps): Promise<FinalizeRes
 
   const rows = await deps.platform<DueRow[]>`
     SELECT k.karenz_id::text, k.customer_id::text, k.module_id::text, m.module_key, k.state, k.export_path, k.export_sha256,
-           k.export_deleted_at, k.platform_done_at, k.tenant_done_at, k.retained_ok_at
+           k.export_deleted_at, k.platform_done_at, k.tenant_done_at, k.retained_ok_at, k.final_at, k.export_kept_until
       FROM plt.module_karenz k JOIN plt.module m ON m.module_id = k.module_id
      WHERE k.final_at <= ${now}
        AND ((k.state IN ('open', 'finalizing') AND k.platform_done_at IS NULL)
@@ -200,6 +218,12 @@ async function finalizeRow(
   const tenantId = r.customer_id
   const moduleKey = r.module_key
   const platformSide = r.state === 'open' || (r.state === 'finalizing' && r.platform_done_at === null)
+  // Read for every row of a module that declares a database, not only the ones whose platform side is still open:
+  // the export hold below asks whether the database is gone, and a row that a crash left half done has no blocked
+  // database any more. A module that declares none never has its module_database row touched.
+  const declaresDatabase = deps.catalogue.find((m) => m.id === moduleKey)?.moduleJson.runtime.database != null
+  const md = declaresDatabase ? await readModuleDatabase(deps.platform, tenantId, r.module_id) : null
+  let databaseDropped = md?.state === 'dropped'
 
   let blockedDb: { dbName: string; admin: Sql } | null = null
   // Built and checked before the claim when the database is dropped; the day-30 delete uses that same instance.
@@ -212,7 +236,6 @@ async function finalizeRow(
     }
     const database = mod.moduleJson.runtime.database
     if (database) {
-      const md = await readModuleDatabase(deps.platform, tenantId, r.module_id)
       if (md && md.state !== 'dropped') {
         if (md.state !== 'blocked') {
           throw new LifecycleError('CONCURRENT_STATE', `${md.dbName} is ${md.state}, not blocked: refusing to drop it for Karenz ${r.karenz_id}`)
@@ -246,15 +269,36 @@ async function finalizeRow(
     if (!(await casModuleDatabaseState(deps.platform, { customerId: tenantId, moduleId: r.module_id }, ['blocked'], 'dropped'))) {
       throw new LifecycleError('CONCURRENT_STATE', `${blockedDb.dbName} was dropped but its row left 'blocked'`)
     }
+    databaseDropped = true
     await hook('cas-dropped')
     log(`dropped ${blockedDb.dbName} (Karenz ${r.karenz_id})`)
   }
 
   let kept = false
   if (r.export_path !== null && r.export_deleted_at === null) {
-    const hold = await deps.exportHold?.(tenantId, moduleKey)
+    // Decided from the row, not from "this run dropped it": a run that crashed after the drop is repeated with a
+    // `dropped` database row and no blocked database, and the export may then be the last copy. Only a restored
+    // Karenz whose database was never dropped keeps nothing (nothing was lost).
+    //
+    // A date already recorded in export_kept_until decides by itself and the hold is not asked again: it is the
+    // date an earlier run kept the export to, or the one the operator set by hand (to now: the release before
+    // the date). Asked again, the hold would derive final_at + days once more and undo that release.
+    const recorded = r.export_kept_until
+    const consult = recorded === null && (r.state !== 'restored' || databaseDropped)
+    const hold =
+      recorded !== null
+        ? recorded
+        : consult
+          ? await deps.exportHold?.(tenantId, moduleKey, { karenzState: r.state, databaseDropped, finalAt: r.final_at })
+          : null
+    if (hold !== null && hold !== undefined && !(hold instanceof Date && Number.isFinite(hold.getTime()))) {
+      // fail closed: a hold that cannot be read as a date must never turn into a delete
+      throw new LifecycleError('INVALID_INPUT', `the export hold for Karenz ${r.karenz_id} is not a valid date; the export is kept`)
+    }
     if (hold && hold.getTime() > (deps.now?.() ?? new Date()).getTime()) {
-      await deps.platform`UPDATE plt.module_karenz SET export_kept_until = ${hold} WHERE karenz_id = ${r.karenz_id}`
+      if (recorded === null) {
+        await deps.platform`UPDATE plt.module_karenz SET export_kept_until = ${hold} WHERE karenz_id = ${r.karenz_id}`
+      }
       kept = true
       log(`export of Karenz ${r.karenz_id} kept until ${hold.toISOString()}`)
     } else {

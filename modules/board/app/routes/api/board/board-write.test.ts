@@ -1,4 +1,9 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, afterAll } from 'vitest'
+
+// These tests drive the routes through the in-process client on purpose: BOARD_BACKEND=inprocess
+// forces it and the location flag is not read. The router itself is covered by board-router.test.ts.
+vi.stubEnv('BOARD_BACKEND', 'inprocess')
+afterAll(() => vi.unstubAllEnvs())
 
 vi.mock('$lib/server/board/scope', () => ({ resolveBoardOrgUnitScope: vi.fn(async () => ['ou-1']) }))
 vi.mock('$lib/server/board/board-db', () => ({

@@ -128,12 +128,27 @@ the switch file probe these paths; `gremion-switch` substitutes
 The `gremion-ui` marker needs no host header, no proxy-trust header and no tenant
 row. That is possible because `/healthz` is on a **closed** list,
 `BOOT_AND_RESOLVE_EXEMPT_PATHS` (`gremion-ui/src/lib/server/boot-exempt.ts`),
-which is exactly `['/healthz', '/api/internal/']`; a test pins it by value, so a
-third entry is a reviewed change, not a drive-by. A request on that list that
-names no tenant is handed on by the tenant resolver without a lookup, skips
-Auth.js and the session guard, and is answered while the process boots:
+which is exactly `['/healthz', '/readyz', '/api/internal/']`; a test pins it by
+value, so a further entry is a reviewed change, not a drive-by. A request on that
+list that names no tenant is handed on by the tenant resolver without a lookup,
+skips Auth.js and the session guard, and is answered while the process boots:
 
 - `/healthz` always.
+- `/readyz` always, with its own handler. The anonymous answer is exactly
+  `{"ready":true}` (`200`) or `{"ready":false}` (`503`) and nothing else, because
+  anyone can reach it through any customer host. `ready` means boot has finished
+  and the control database answers a ping; the ping is remembered for 5 s, so a
+  flood of requests costs at most one ping per window, and the handler calls no
+  tenant database, module service or Matrix. A caller that presents the bearer
+  `INTERNAL_PUSH_SECRET` also gets the colour, the release ref
+  (`GREMION_RELEASE_REF`), tenant counts (total and not ready, never a slug) and
+  the reasons (`boot`, `control_db`). A tenant that is failed does not
+  make the process not ready; the counts exist so a caller can compare them with
+  another colour. The counts come from the boot-filled readiness map, which holds
+  only `ready` and `failed` entries: a tenant registered after boot and not yet
+  resolved is in neither number, a later migration of the live colour changes its
+  `notReady` only through the lazy re-migration, and a swap (one tenant heals,
+  another breaks) leaves the counts unchanged.
 - `/api/internal/…` only when the request names no tenant (no
   `x-forwarded-host`, no `x-tenant-id`), e.g. the switch's evict fan-out on the
   container network. A leaf callback or an internal hop that names a tenant is
@@ -147,7 +162,7 @@ Auth.js and the session guard, and is answered while the process boots:
 
 Two properties are accepted and deliberate:
 
-- **Liveness, not readiness.** A process that is still booting, or whose boot
+- **Liveness, not readiness.** (`/readyz` is the readiness probe, above.) A process that is still booting, or whose boot
   failed, also answers `200` on `/healthz`. `/api/health` stays the boot probe
   (`200` only once boot completed). Anything that must not route to a
   half-booted colour — the switch gate — has to read `/api/health` as well.
