@@ -1005,6 +1005,23 @@ exit 0'
     [ "$(cat "${GREMION_ROOT}/etc/secrets/tenant-create/module_app_password_calendar")" = "$before" ]
 }
 
+@test "init keeps the board app password file that gremion-init-secrets wrote: the leaf's env value and the role password stay one value" {
+    # gremion-init-secrets derives BOARD_APP_PASSWORD from this file (and writes it when absent); the module
+    # lifecycle sets the role m_board_app from the same file at every enable. If `init` replaced the file the
+    # env value and the role would drift apart and every board request would fail 28P01.
+    mkdir -p "${GREMION_ROOT}/etc/secrets/tenant-create"
+    chmod 700 "${GREMION_ROOT}/etc/secrets/tenant-create"
+    printf '%s
+' "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" > "${GREMION_ROOT}/etc/secrets/tenant-create/module_app_password_board"
+    chmod 600 "${GREMION_ROOT}/etc/secrets/tenant-create/module_app_password_board"
+    run "$LAUNCHER" init
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [ "$(cat "${GREMION_ROOT}/etc/secrets/tenant-create/module_app_password_board")" = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" ]
+    run "$LAUNCHER" init
+    [ "$status" -eq 0 ]
+    [ "$(cat "${GREMION_ROOT}/etc/secrets/tenant-create/module_app_password_board")" = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" ]
+}
+
 # ── TASK-044 (lane note D4, A5): the release tip reaches tenant-create ────────
 # The level-1 gate compares isolation evidence with GREMION_RELEASE_TIP, the
 # HEAD of the release tree gremion-deploy authenticated (H10). tc() derives it

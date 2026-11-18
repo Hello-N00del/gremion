@@ -171,13 +171,3 @@ copy_host_src() {
             || { echo "${f}: $(value_of "${ENV_DIR}/${f}" COMPOSE_PROFILES)"; return 1; }
     done
 }
-
-@test "gremion-tenant keeps the board file that gremion-init-secrets wrote (the keep-if-present rule, pinned on the real program text)" {
-    # render_tenant_create_secrets writes module_app_password_<id> through write_secret, which keeps a file that
-    # already has content. If either line changes, the two programs stop agreeing on the password.
-    local prog="${HOST_SRC}/bin/gremion-tenant"
-    grep -qE '^write_secret\(\) \{' "$prog"
-    grep -qE '\[\[ -s "\$f" \]\]' "$prog"
-    grep -qE 'openssl rand -hex 32 \| write_secret "\$\{dir\}/module_app_password_\$\{id\}"' "$prog"
-    grep -qE '^MODULE_SERVERS=".*\bboard\b' "$prog"
-}

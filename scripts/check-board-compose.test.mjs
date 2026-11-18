@@ -81,7 +81,10 @@ test('GREMION_BOARD_PG_URL names board-postgres and the module APP role, never t
 
 test('an unset or empty INTERNAL_BOARD_SECRET or BOARD_APP_PASSWORD fails the render by variable name, with or without the profile', () => {
   for (const profiles of ['board', 'production']) {
-    for (const [variable, other] of [['INTERNAL_BOARD_SECRET', { BOARD_APP_PASSWORD: PASSWORD }], ['BOARD_APP_PASSWORD', { INTERNAL_BOARD_SECRET: SECRET }]]) {
+    for (const { variable, other } of [
+      { variable: 'INTERNAL_BOARD_SECRET', other: { BOARD_APP_PASSWORD: PASSWORD } },
+      { variable: 'BOARD_APP_PASSWORD', other: { INTERNAL_BOARD_SECRET: SECRET } },
+    ]) {
       assert.throws(
         () => renderState({ envFile: APP_ENV, env: { COMPOSE_PROFILES: profiles, ...other, [variable]: '' } }),
         (err) => {
@@ -139,7 +142,7 @@ test('the leaf boots on the rendered environment: /healthz answers 200, the guar
       encoding: 'utf8',
       windowsHide: true,
     })
-    assert.equal(built.status, 0, `esbuild failed: ${String(built.stderr).slice(0, 400)}`)
+    assert.equal(built.status, 0, `esbuild failed: ${built.stderr.slice(0, 400)}`)
     // the bundle is ESM (--format=esm); the scratch directory has no package.json to say so
     writeFileSync(join(dir, 'package.json'), '{"type":"module"}')
 
