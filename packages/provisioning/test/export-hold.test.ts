@@ -34,6 +34,28 @@ describe('exportKeptUntil and exportHold', () => {
     expect(exportKeptUntil('board', finalAt)?.getTime()).toBe(exportKeptUntil('board', new Date(finalAt.getTime()))?.getTime())
   })
 
+  it('a change of the clock inside the year moves nothing: elapsed days are counted on the instant, under a zone that has daylight saving', () => {
+    // 2027-03-27 to 2028-03-27 holds a leap day AND the spring change of 2028 (26 March, Europe/Berlin). 365 calendar
+    // days counted on the local date land one hour off the instant that 365 x 24 h reach; only counting on the
+    // instant gives the same answer in every zone.
+    const before = process.env.TZ
+    process.env.TZ = 'Europe/Berlin'
+    try {
+      const probe = (y: number, m: number, d: number) => new Date(y, m, d, 12).getTimezoneOffset()
+      // the zone is really in effect: winter and summer differ, or this guard checks nothing
+      expect([probe(2027, 0, 15), probe(2027, 6, 15)], 'process.env.TZ did not take effect').toEqual([-60, -120])
+      const finalAt = new Date('2027-03-27T10:00:00Z')
+      expect(exportKeptUntil('board', finalAt)?.toISOString()).toBe('2028-03-26T10:00:00.000Z')
+      expect(exportKeptUntil('board', finalAt)?.getTime()).toBe(finalAt.getTime() + 365 * DAY)
+      // and the other direction: autumn change
+      const autumn = new Date('2027-10-30T10:00:00Z')
+      expect(exportKeptUntil('board', autumn)?.getTime()).toBe(autumn.getTime() + 365 * DAY)
+    } finally {
+      if (before === undefined) delete process.env.TZ
+      else process.env.TZ = before
+    }
+  })
+
   it('a module with no entry has no hold, including names that exist on every object', () => {
     for (const key of ['calendar', 'finance', 'lcfix', '', 'constructor', 'toString', '__proto__', 'hasOwnProperty']) {
       expect(exportKeptUntil(key, new Date('2026-12-01T10:00:00Z')), JSON.stringify(key)).toBeNull()
@@ -98,6 +120,13 @@ describe('the retention catalogue does not describe a board export that is not t
     expect(start, 'change note 2026-11-17').toBeGreaterThanOrEqual(0)
     const note = text.slice(start, text.indexOf('> **Change note 2026-10-27'))
     expect(note.replace(/\n> ?/g, ' ')).toMatch(conditional)
+  })
+
+  it('the change note says that a later change of the length does not re-date an export that is already kept', () => {
+    const start = text.indexOf('> **Change note 2026-11-17')
+    const note = text.slice(start, text.indexOf('> **Change note 2026-10-27')).replace(/\n> ?/g, ' ')
+    expect(note).toMatch(/already kept/i)
+    expect(note).toMatch(/does not re-date/i)
   })
 })
 

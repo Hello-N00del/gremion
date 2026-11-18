@@ -41,7 +41,11 @@
 > test fails when they disagree. This applies only once board has its own module database:
 > today board has none, is served from the kernel tenant database, and no board export is
 > taken at switch-off, so the rule keeps nothing until the release that gives board a
-> database (the runbook row for board stays true until then). This is a change of a
+> database (the runbook row for board stays true until then). The date is written to the
+> Karenz row by the first day-30 run that keeps the export and is read from there ever
+> after: a later change of `EXPORT_KEEP_DAYS` does not re-date an export that is already
+> kept, so when the DPO sets the final length, the stored dates of exports already kept are
+> moved by hand (the same hand step that releases an export early). This is a change of a
 > compliance document and goes to the DPO for review. Every other module keeps the 30-day
 > rule.
 
