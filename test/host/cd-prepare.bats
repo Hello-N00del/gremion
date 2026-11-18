@@ -16,6 +16,172 @@ FIX="${BATS_TEST_DIRNAME}/fixtures/cd/prepare"
 LIVE_SHA="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 PREV_SHA="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
+# The docker shim body (its header says which files it reads) and the stand-in for the
+# release tree's gremion-render. They live here, not as fixture files: a .sh file under
+# test/host must be shellchecked by make lint-sh, and these are bodies, not programs.
+docker_shim_body() {
+    cat <<'SHIM_EOF'
+# Body of the docker shim of cd-prepare.bats (installed through test_helper/host.bash shim).
+# State lives in $DK:
+#   argv.log      one line per call, args joined with '|'
+#   ctx.log       cwd, CD_DC_TIMEOUT and COMPOSE_PARALLEL_LIMIT of every compose call
+#   env.log       the COMPOSE_* variables every compose call could see
+#   <verb>.script one line per call of that compose verb (pull, build): "<exit> <text>",
+#                 the text goes to stderr; a call past the last line succeeds
+#   built         images a build produced (the star adds the one-shot images, as compose does)
+#   build.clobber a file naming an image key: a build moves that tag to another image
+#   config.warn   lines `config --quiet` prints on stderr (compose warns on an unset variable)
+#   config.fail   `config` exits 1
+#   services      the `config --services` answer
+#   cid.<proj>.<svc>, cids.<proj>   running containers
+#   status.<cid>  lines of the health answer
+#   ctr.<cid>     "<image id> <image reference>" of a container
+#   image.<key>   the id of an image reference (/ and : become _)
+#   rootdir       the answer of `docker info` (the docker root directory)
+#   df.root.after, df.docker.after   replace df.root and df.docker when `docker builder prune`
+#                 runs (it frees space)
+#   ps.fail       `docker ps` exits 1
+#   pull.advance  a pull takes this many seconds of the fake clock
+#   ignore.star   a compose call behaves as if the profile star were absent
+#   skip.oneshot.build   a build does not produce the one-shot images (it lies)
+#   build.same    a file naming an image key: the new gremion-ui image gets that image's id
+#                 (two colours with equal image ids)
+(IFS='|'; printf '%s\n' "$*" >>"$DK/argv.log")
+mk_image() {
+    ref="$1"
+    key=$(printf '%s' "$ref" | tr '/:' '__')
+    printf 'sha256:%s\n' "$(printf '%s' "$ref" | sha256sum | cut -d' ' -f1)" >"$DK/image.$key"
+    echo "$ref" >>"$DK/built"
+}
+run_script() {
+    f="$DK/$1.script"
+    n=$(cat "$DK/n.$1" 2>/dev/null || echo 0)
+    n=$((n + 1))
+    echo "$n" >"$DK/n.$1"
+    [ -f "$f" ] || return 0
+    line=$(sed -n "${n}p" "$f")
+    [ -n "$line" ] || return 0
+    rc="${line%% *}"
+    msg="${line#* }"
+    [ "$msg" = "$line" ] && msg=''
+    [ -n "$msg" ] && printf '%s\n' "$msg" >&2
+    return "$rc"
+}
+case "$1" in
+  compose)
+    printf 'cwd=%s timeout=%s par=%s\n' "$PWD" "${CD_DC_TIMEOUT:-}" "${COMPOSE_PARALLEL_LIMIT:-}" >>"$DK/ctx.log"
+    env | grep -E '^COMPOSE_' | sort >>"$DK/env.log" || true
+    envf=''; star=0; verb=''; prev=''
+    for a in "$@"; do
+        [ "$prev" = --env-file ] && envf="$a"
+        [ "$prev" = --profile ] && [ "$a" = '*' ] && star=1
+        prev="$a"
+    done
+    for a in "$@"; do
+        case "$a" in build|pull|config|up|down|ps|run) verb="$a"; break ;; esac
+    done
+    [ -f "$DK/ignore.star" ] && star=0
+    tag=$(sed -n 's/^IMAGE_TAG=//p' "$envf" | head -n 1)
+    case "$verb" in
+      build)
+        run_script build || exit $?
+        mk_image "ghcr.io/example/gremion-ui:$tag"
+        if [ "$star" = 1 ] && [ ! -f "$DK/skip.oneshot.build" ]; then
+            mk_image "ghcr.io/example/gremion-migrate:$tag"
+            mk_image "ghcr.io/example/gremion-kernel-api:$tag"
+        fi
+        if [ -f "$DK/build.same" ]; then
+            cp "$DK/image.$(cat "$DK/build.same")" "$DK/image.ghcr.io_example_gremion-ui_$tag"
+        fi
+        if [ -f "$DK/build.clobber" ]; then
+            printf 'sha256:%064d\n' 7 >"$DK/image.$(cat "$DK/build.clobber")"
+        fi ;;
+      pull)
+        if [ -f "$DK/pull.advance" ]; then
+            echo $(( $(cat "$GREMION_CD_NOW_FILE") + $(cat "$DK/pull.advance") )) >"$GREMION_CD_NOW_FILE"
+        fi
+        run_script pull || exit $? ;;
+      config)
+        [ -f "$DK/config.fail" ] && exit 1
+        case " $* " in
+          *" --images "*)
+            echo "ghcr.io/example/gremion-ui:$tag"
+            echo "docker.io/library/nats:2"
+            if [ "$star" = 1 ]; then
+                echo "ghcr.io/example/gremion-migrate:$tag"
+                echo "ghcr.io/example/gremion-kernel-api:$tag"
+            fi ;;
+          *" --services "*) [ -f "$DK/services" ] && cat "$DK/services" ;;
+          *) [ -f "$DK/config.warn" ] && cat "$DK/config.warn" >&2 ;;
+        esac ;;
+    esac
+    exit 0 ;;
+  ps)
+    [ -f "$DK/ps.fail" ] && exit 1
+    proj=''; svc=''
+    for a in "$@"; do
+        case "$a" in
+          label=com.docker.compose.project=*) proj="${a#label=com.docker.compose.project=}" ;;
+          label=com.docker.compose.service=*) svc="${a#label=com.docker.compose.service=}" ;;
+        esac
+    done
+    if [ -n "$svc" ]; then [ -f "$DK/cid.$proj.$svc" ] && cat "$DK/cid.$proj.$svc"
+    else [ -f "$DK/cids.$proj" ] && cat "$DK/cids.$proj"; fi
+    exit 0 ;;
+  inspect)
+    cid="${@: -1}"
+    case " $* " in
+      *".Config.Image"*) [ -f "$DK/ctr.$cid" ] || exit 1; cat "$DK/ctr.$cid"; exit 0 ;;
+    esac
+    [ -f "$DK/status.$cid" ] || exit 1
+    tail -n 1 "$DK/status.$cid"
+    exit 0 ;;
+  image)
+    ref="${@: -1}"; key=$(printf '%s' "$ref" | tr '/:' '__')
+    [ -f "$DK/image.$key" ] || { echo "Error: No such image: $ref" >&2; exit 1; }
+    cat "$DK/image.$key"
+    exit 0 ;;
+  info)
+    cat "$DK/rootdir"
+    exit 0 ;;
+  builder)
+    [ -f "$DK/df.root.after" ] && mv -f "$DK/df.root.after" "$DK/df.root"
+    [ -f "$DK/df.docker.after" ] && mv -f "$DK/df.docker.after" "$DK/df.docker"
+    exit 0 ;;
+esac
+exit 0
+SHIM_EOF
+}
+
+render_fixture_body() {
+    cat <<'RENDER_EOF'
+#!/usr/bin/env bash
+# Fixture for cd-prepare.bats: stands in for the release tree's gremion-render. It records
+# its call, and writes what the real one writes: an ignored output file and the host's
+# ipcrypt key. $DK/render.mode: fail (exit 1 with text on both streams) or dirty (also
+# leaves an untracked file that is not ignored).
+printf 'gremion-render %s root=%s\n' "$*" "${GREMION_ROOT:-}" >>"$DK/render.log"
+mode="$(cat "$DK/render.mode" 2>/dev/null || echo ok)"
+if [ "$mode" = fail ]; then
+    echo "RENDER-STDOUT-MARKER"
+    echo "RENDER-STDERR-MARKER" >&2
+    exit 1
+fi
+rel=""
+while [ $# -gt 0 ]; do
+    if [ "$1" = --release ]; then rel="$2"; shift; fi
+    shift
+done
+echo rendered >"$rel/rendered.out"
+mkdir -p "$GREMION_ROOT/etc/secrets"
+if [ ! -f "$GREMION_ROOT/etc/secrets/ipcrypt_key.txt" ]; then
+    echo 0123456789abcdef0123456789abcdef >"$GREMION_ROOT/etc/secrets/ipcrypt_key.txt"
+fi
+if [ "$mode" = dirty ]; then echo stray >"$rel/stray.txt"; fi
+exit 0
+RENDER_EOF
+}
+
 setup() {
     cd_setup
     export STACK=teststack TZ=UTC
@@ -32,7 +198,7 @@ if [ "$1" = transport ]; then cat "$DK/transport" 2>/dev/null || echo relay; fi
 exit 0
 EOF
     chmod +x "${GREMION_ROOT}/bin/gremion-mail"
-    shim docker "$(cat "${FIX}/docker.shim.sh")"
+    shim docker "$(docker_shim_body)"
     shim renice
     shim ionice
     # df: the answer is the number of KB in $DK/df.root or $DK/df.docker
@@ -123,7 +289,7 @@ mk_mirror() {
     git init -q -b main "$work"
     mkdir -p "$work/infra/host/bin"
     printf '/secrets/*\nrendered.out\n' >"$work/.gitignore"
-    cp "${FIX}/render.sh" "$work/infra/host/bin/gremion-render"
+    render_fixture_body >"$work/infra/host/bin/gremion-render"
     chmod +x "$work/infra/host/bin/gremion-render"
     git -C "$work" add -A
     git -C "$work" commit -q -m c1
