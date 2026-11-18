@@ -800,6 +800,15 @@ if ( exec 7>>"${GREMION_ROOT}/runtime/hostd.lock" && flock -n 7 ); then echo FRE
     [ "$status" -eq 2 ]
 }
 
+@test "render: a refused compose shape (no COMPOSE_FILE) says why, in cd_dc's own words" {
+    mk_tree
+    sed -i '/^COMPOSE_FILE=/d' "${GREMION_ROOT}/etc/env/app-green.env"
+    run prep 'cd_prepare_render "$TREE" green'
+    [ "$status" -eq 2 ]
+    has_in 'was refused' "$output"
+    has_in 'COMPOSE_FILE' "$output"
+}
+
 @test "render: a dirty tree after the render fails" {
     mk_tree
     echo dirty >"$DK/render.mode"

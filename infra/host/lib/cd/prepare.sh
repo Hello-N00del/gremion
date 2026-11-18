@@ -24,12 +24,15 @@
 # and notify.sh (the mail transport and the age of the outbox). It calls, when they
 # exist, cd_watch_probe_public (watch.sh) and cd_commit_prune (commit.sh).
 
+# The jq programs below are single-quoted on purpose ($name is jq's own variable syntax),
+# and CD_PREPARE_WHY is read by the driver, which shellcheck does not follow from here.
+# shellcheck disable=SC2016,SC2034
+
 # why the last precheck refused: a code word, empty when it passed
 CD_PREPARE_WHY=''
 
 # The build log patterns of an INFRASTRUCTURE failure (retried, never blocked): one array,
 # one test per entry. Everything else a failed build says is a failure of the commit.
-# shellcheck disable=SC2034  # read by the functions below and by the test file
 CD_PREPARE_INFRA_PATTERNS=(
     'no space left on device'
     'TLS handshake timeout'
@@ -587,7 +590,7 @@ cd_prepare_retag_restore() {
 # tree that is still clean. 2 on any failure; the render's own output goes to a 0600 log
 # under logs/ and only its name is reported, an unset variable is reported by NAME.
 cd_prepare_render() {
-    local tree="${1:-}" colour="${2:-}" proj render log key dst sha12 names st n err
+    local tree="${1:-}" colour="${2:-}" proj render log key dst sha12 names st n err why
     if ! _cd_prep_colour_ok "$colour" || [[ ! -d "$tree" ]]; then
         _cd_prep_err "render: usage: TREE blue|green"
         return 2
@@ -628,8 +631,14 @@ cd_prepare_render() {
     # (it holds values) is never kept.
     err="$(mktemp 2>/dev/null)" || { _cd_prep_err "render: cannot create a temporary file"; return 2; }
     if ! cd_dc "$tree" "$proj" config --quiet >/dev/null 2>"$err"; then
+        # the one line cd_dc itself writes about a refused shape is ours and safe to show;
+        # whatever compose says is not (it can quote values)
+        why="$(head -n 1 "$err" | tr -cd '[:print:]' | cut -c 1-200)" || why=''
         rm -f -- "$err"
-        _cd_prep_err "render: compose config of the ${colour} colour failed"
+        case "$why" in
+            'cd-docker: '*) _cd_prep_err "render: compose config of the ${colour} colour was refused: ${why#cd-docker: }" ;;
+            *) _cd_prep_err "render: compose config of the ${colour} colour failed" ;;
+        esac
         return 2
     fi
     names="$(sed -n 's/.*The \\\{0,1\}"\([A-Za-z_][A-Za-z0-9_]*\)\\\{0,1\}" variable is not set.*/\1/p' "$err" | sort -u | tr '\n' ' ')" || names=''
