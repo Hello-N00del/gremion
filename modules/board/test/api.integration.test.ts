@@ -670,6 +670,12 @@ describe('DELETE /api/v1/org-units/:id/boards', () => {
       expect(r.body).toEqual({ deleted: 1 })
       expect(await rb`SELECT 1 FROM board`).toHaveLength(1)
       expect(await rb`SELECT 1 FROM card`).toHaveLength(5)
+      // and the other way round: B's call deletes B's boards and leaves A's alone
+      await seedErasureCards(sql, OU1)
+      const rB = await callServer(server, 'DELETE', `/api/v1/org-units/${OU1}/boards`, headersFor(TENANT_B))
+      expect(rB.body).toEqual({ deleted: 1 })
+      expect(await rb`SELECT 1 FROM board`).toHaveLength(0)
+      expect(await sql`SELECT 1 FROM board`).toHaveLength(1)
     } finally {
       await dropScratchDb(admin, dbB)
     }
