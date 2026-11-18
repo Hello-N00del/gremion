@@ -206,5 +206,7 @@ cd_paths_init
 cd_classify "$@"' cls-run "$CLS_OLD" "$CLS_NEW" "$@"
 }
 
-# cls_is JQ_EXPR -- the last `run` output satisfies the jq expression.
-cls_is() { jq -e "$1" <<<"$output" >/dev/null; }
+# cls_is JQ_EXPR -- the last `run` output is exactly one JSON document and satisfies the jq
+# expression (slurped, because jq 1.6 answers 0 for -e on empty input: an empty output
+# would pass every assertion).
+cls_is() { jq -e -s "length == 1 and (.[0] | ${1})" <<<"$output" >/dev/null; }

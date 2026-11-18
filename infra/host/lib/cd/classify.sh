@@ -91,6 +91,19 @@ _cd_cls_entry() {
     printf '%s\n' "$line"
 }
 
+# _cd_cls_changed OLD NEW REL... -- 0 when any of the paths differs between the two trees,
+# 1 when none does, 2 when git cannot answer.
+_cd_cls_changed() {
+    local old="$1" new="$2" rel a b differs=1
+    shift 2
+    for rel in "$@"; do
+        a="$(_cd_cls_entry "$old" "$rel")" || return 2
+        b="$(_cd_cls_entry "$new" "$rel")" || return 2
+        [[ "$a" == "$b" ]] || differs=0
+    done
+    return "$differs"
+}
+
 # _cd_cls_tree_ok TREE -- a clean git work tree whose top level is TREE itself.
 _cd_cls_tree_ok() {
     local tree="$1" top real dirty
@@ -103,11 +116,18 @@ _cd_cls_tree_ok() {
     [[ -z "$dirty" ]]
 }
 
-# _cd_cls_json TREE REL -- 0 when TREE/REL is a regular file of valid JSON.
+# _cd_cls_jq_ok FILTER FILE -- 0 when FILE holds exactly one JSON value for which FILTER is
+# true. Not `jq -e` alone: jq 1.6 answers 0 for -e on an EMPTY file, which would read an
+# emptied file as a valid one.
+_cd_cls_jq_ok() {
+    jq -e -s "length == 1 and (.[0] | ${1})" "$2" >/dev/null 2>&1
+}
+
+# _cd_cls_json TREE REL -- 0 when TREE/REL is a regular file of one JSON document.
 _cd_cls_json() {
     local f="$1/$2"
     [[ -f "$f" && -r "$f" ]] || return 1
-    jq -e . "$f" >/dev/null 2>&1
+    _cd_cls_jq_ok true "$f"
 }
 
 # _cd_cls_host_files TREE -- JSON object {relpath: sha256} of the manifest set of a tree.
@@ -142,7 +162,7 @@ _cd_cls_compose() {
     if ! CD_DC_TIMEOUT="${CD_DC_TIMEOUT:-60}" cd_dc "$tree" state config --format json >"$raw" 2>/dev/null; then
         return 1
     fi
-    jq -e '(.services | type) == "object"' "$raw" >/dev/null 2>&1 || return 1
+    _cd_cls_jq_ok '(.services | type) == "object"' "$raw" || return 1
     # strip the tree prefix (longest first, at path boundaries) so a release tree's
     # location is not a difference
     printf '%s\n' "${prefixes[@]}" | LC_ALL=C sort -u | awk '{ print length($0) "\t" $0 }' \
@@ -191,7 +211,7 @@ _cd_cls_compose() {
 _cd_cls_body() {
     local old="$1" new="$2" tmp="$3" manifest="$4" skip_compose="$5"
     local compose="checked" ci_changed=false
-    local line a b c d kind chain file cls ncls mod hdr first phase ok n
+    local a b kind chain file cls mod hdr first phase ok n
     local -A old_class=() new_class=() chain_count=() chain_phase=()
     set +e
     _CLS_TMP="$tmp"
@@ -229,18 +249,17 @@ _cd_cls_body() {
     local mig_lines="$tmp/mig.tsv"
     : >"$mig_lines"
     if ((lockok)); then
-        local sd
         for side in old new; do
             tree="$old"
             [[ "$side" == new ]] && tree="$new"
-            jq -e '(.chains | type) == "object" and ([.chains[] | (.files | type) == "object"] | all)' \
-                "$tree/scripts/migrations/applied.lock.json" >/dev/null 2>&1 || { _cls_err "lock_shape:${side}"; lockok=0; }
-            jq -e '(.chains | type) == "array" and ([.chains[] | (.id | type) == "string"] | all)' \
-                "$tree/scripts/migrations/ranges.json" >/dev/null 2>&1 || { _cls_err "ranges_shape:${side}"; lockok=0; }
-            jq -e '(.chains | type) == "object" and ([.chains[] | type == "string"] | all)' \
-                "$tree/scripts/migrations/runner/chain-runners.json" >/dev/null 2>&1 || { _cls_err "runners_shape:${side}"; lockok=0; }
-            jq -e '(.waivers | type) == "array"' \
-                "$tree/scripts/migrations/runner/lint-waivers.json" >/dev/null 2>&1 || { _cls_err "waivers_shape:${side}"; lockok=0; }
+            _cd_cls_jq_ok '(.chains | type) == "object" and ([.chains[] | (.files | type) == "object"] | all)' \
+                "$tree/scripts/migrations/applied.lock.json" || { _cls_err "lock_shape:${side}"; lockok=0; }
+            _cd_cls_jq_ok '(.chains | type) == "array" and ([.chains[] | (.id | type) == "string"] | all)' \
+                "$tree/scripts/migrations/ranges.json" || { _cls_err "ranges_shape:${side}"; lockok=0; }
+            _cd_cls_jq_ok '(.chains | type) == "object" and ([.chains[] | type == "string"] | all)' \
+                "$tree/scripts/migrations/runner/chain-runners.json" || { _cls_err "runners_shape:${side}"; lockok=0; }
+            _cd_cls_jq_ok '(.waivers | type) == "array"' \
+                "$tree/scripts/migrations/runner/lint-waivers.json" || { _cls_err "waivers_shape:${side}"; lockok=0; }
         done
     fi
     if ((lockok)); then
@@ -310,8 +329,9 @@ _cd_cls_body() {
             if [[ -z "${new_class[$chain]+set}" ]]; then
                 _cls_err "chain_missing:${chain}"
             elif [[ "${old_class[$chain]}" != "${new_class[$chain]}" ]]; then
-                _cd_cls_known_class "${old_class[$chain]}" && _cd_cls_known_class "${new_class[$chain]}" \
-                    || _cls_err "class_unknown:${chain}"
+                if ! _cd_cls_known_class "${old_class[$chain]}" || ! _cd_cls_known_class "${new_class[$chain]}"; then
+                    _cls_err "class_unknown:${chain}"
+                fi
                 _cls_hold chain_class_changed "chain_class_changed:${chain}"
             fi
         done
@@ -389,30 +409,33 @@ _cd_cls_body() {
     done
 
     # -- the pull request gate --------------------------------------------------------
-    a="$(_cd_cls_entry "$old" .github/workflows)" && b="$(_cd_cls_entry "$new" .github/workflows)" \
-        || { _cls_err "ci_entry"; a=x; b=x; }
-    if [[ "$a" != "$b" ]]; then
-        ci_changed=true
-        _cls_hold ci_changed ci_changed
-    fi
+    _cd_cls_changed "$old" "$new" .github/workflows
+    case "$?" in
+        0)
+            ci_changed=true
+            _cls_hold ci_changed ci_changed
+            ;;
+        1) ;;
+        *) _cls_err "ci_entry" ;;
+    esac
 
     # -- edge, shared sql -----------------------------------------------------------------
-    local p
-    a=''
-    b=''
-    for p in infra/host/templates/edge docker/traefik; do
-        c="$(_cd_cls_entry "$old" "$p")" && d="$(_cd_cls_entry "$new" "$p")" || { _cls_err "edge_entry"; c=x; d=x; }
-        a+="$c;"
-        b+="$d;"
-    done
-    [[ "$a" == "$b" ]] || _cls_state edge
-    c="$(_cd_cls_entry "$old" docker/pgbouncer/pgbouncer-auth.sql)" && d="$(_cd_cls_entry "$new" docker/pgbouncer/pgbouncer-auth.sql)" \
-        || { _cls_err "sql_entry"; c=x; d=x; }
-    [[ "$c" == "$d" ]] || _cls_state shared_sql
+    _cd_cls_changed "$old" "$new" infra/host/templates/edge docker/traefik
+    case "$?" in
+        0) _cls_state edge ;;
+        1) ;;
+        *) _cls_err "edge_entry" ;;
+    esac
+    _cd_cls_changed "$old" "$new" docker/pgbouncer/pgbouncer-auth.sql
+    case "$?" in
+        0) _cls_state shared_sql ;;
+        1) ;;
+        *) _cls_err "sql_entry" ;;
+    esac
 
     # -- host programs: the NEW tree against the manifest --------------------------------------
     local host_json='{"changed":0,"groups":{}}'
-    if jq -e '.v == 1 and (.files | type) == "object" and ([.files[] | type == "string"] | all)' "$manifest" >/dev/null 2>&1; then
+    if _cd_cls_jq_ok '.v == 1 and (.files | type) == "object" and ([.files[] | type == "string"] | all)' "$manifest"; then
         if _cd_cls_host_files "$new" >"$tmp/hostfiles.json"; then
             host_json="$(jq -c -n --slurpfile m "$manifest" --slurpfile f "$tmp/hostfiles.json" '
                 def grp:
@@ -553,7 +576,6 @@ cd_cmd_classify() {
     local doc verdict reasons i max=200
     local -a shas=() extra=()
     local -A kinds=()
-    local -a trees=()
     [[ "$#" -ge 2 ]] || cd_die 2 "usage: gremion-cd classify FROM TO [--no-compose]"
     shift 2
     for a in "$@"; do

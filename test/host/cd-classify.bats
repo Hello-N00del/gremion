@@ -430,6 +430,10 @@ teardown() { cls_teardown; }
     cls_commit "$CLS_NEW"
     run cls_run
     cls_is '.holds | map(.reason) | index("classify_failed:module_json_invalid") != null'
+    : >"$CLS_NEW/modules/calendar/module.json"
+    cls_commit "$CLS_NEW"
+    run cls_run
+    cls_is '.holds | map(.reason) | index("classify_failed:module_json_invalid") != null'
 }
 
 @test "migrations: a contract-phase file is held contract_migration" {
@@ -637,13 +641,28 @@ teardown() { cls_teardown; }
     done
 }
 
-@test "fail closed: an unparseable applied.lock.json, chain-runners.json or lint-waivers.json" {
+@test "fail closed: an unparseable, empty or wrongly shaped applied.lock.json, ranges.json, chain-runners.json or lint-waivers.json" {
+    local f body
+    for f in applied.lock.json ranges.json runner/chain-runners.json runner/lint-waivers.json; do
+        for body in '{nope' '' '{}' '[]' 'null'; do
+            rm -rf "$CLS_NEW"
+            cp -a "${CLS_BASE}" "$CLS_NEW"
+            printf '%s' "$body" >"$CLS_NEW/scripts/migrations/$f"
+            cls_commit "$CLS_NEW"
+            run cls_run
+            [ "$status" -eq 0 ]
+            cls_is '.hold.kind == "classify_failed" and .app_only == false'
+        done
+    done
+}
+
+@test "fail closed: the same files emptied in the OLD (live) tree" {
     local f
-    for f in applied.lock.json runner/chain-runners.json runner/lint-waivers.json; do
-        rm -rf "$CLS_NEW"
-        cp -a "${CLS_BASE}" "$CLS_NEW"
-        echo '{nope' >"$CLS_NEW/scripts/migrations/$f"
-        cls_commit "$CLS_NEW"
+    for f in applied.lock.json ranges.json runner/chain-runners.json runner/lint-waivers.json; do
+        rm -rf "$CLS_OLD"
+        cp -a "${CLS_BASE}" "$CLS_OLD"
+        : >"$CLS_OLD/scripts/migrations/$f"
+        cls_commit "$CLS_OLD"
         run cls_run
         [ "$status" -eq 0 ]
         cls_is '.hold.kind == "classify_failed" and .app_only == false'
@@ -659,6 +678,9 @@ teardown() { cls_teardown; }
     run cls_run
     cls_is '.hold.reason == "classify_failed:manifest_unreadable"'
     echo 'garbage' >"${GREMION_ROOT}/data/cd/host-manifest.json"
+    run cls_run
+    cls_is '.hold.reason == "classify_failed:manifest_unreadable"'
+    : >"${GREMION_ROOT}/data/cd/host-manifest.json"
     run cls_run
     cls_is '.hold.reason == "classify_failed:manifest_unreadable"'
 }
