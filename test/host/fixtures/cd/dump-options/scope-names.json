@@ -1,0 +1,15 @@
+{
+  "comment": "Database names fed to BOTH the host program (gremion-migration-dump take) and scopeOf (packages/tenant-store/src/dump/hook.ts). parity: true means the two must agree on scope, customer id and module id. parity: false names are the recorded deviation: scopeOf refuses them (DUMP_SCOPE) or, for the kernel module, answers customer, while the host program keeps scope platform with null ids as it always did.",
+  "cases": [
+    { "database": "t_0123456789abcdef0123456789abcdef__finance",  "parity": true,  "scope": "customer", "customer_id": "01234567-89ab-cdef-0123-456789abcdef", "module_id": "finance" },
+    { "database": "t_aaaaaaaabbbbccccddddeeeeeeeeeeee__calendar", "parity": true,  "scope": "customer", "customer_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "module_id": "calendar" },
+    { "database": "t_00000000000070008000000000000001__board_x",  "parity": true,  "scope": "customer", "customer_id": "00000000-0000-7000-8000-000000000001", "module_id": "board_x" },
+    { "database": "gremion_platform",                             "parity": true,  "scope": "platform", "customer_id": null, "module_id": null },
+    { "database": "t_0123456789abcdef0123456789abcdef__kernel",   "parity": false, "scope": "platform", "customer_id": null, "module_id": null },
+    { "database": "gremion",                                      "parity": false, "scope": "platform", "customer_id": null, "module_id": null },
+    { "database": "control",                                      "parity": false, "scope": "platform", "customer_id": null, "module_id": null },
+    { "database": "calendar_some-slug",                           "parity": false, "scope": "platform", "customer_id": null, "module_id": null },
+    { "database": "t_0123456789ABCDEF0123456789abcdef__finance",  "parity": false, "scope": "platform", "customer_id": null, "module_id": null },
+    { "database": "t_0123456789abcdef0123456789abcde__finance",   "parity": false, "scope": "platform", "customer_id": null, "module_id": null }
+  ]
+}
