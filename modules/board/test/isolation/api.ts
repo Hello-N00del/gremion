@@ -23,6 +23,7 @@ export interface CreateCardInput {
   stackId: string
   title: string
   createdBy?: string | null
+  assigneeKeycloakId?: string | null
   description?: string | null
   order?: number
   protocolActionItemId?: string | null
@@ -54,4 +55,8 @@ export interface BoardApi {
   promote(as: TenantRef, boardId: string, input: PromoteInput): Promise<ApiResult>
   /** POST /api/v1/cards/promoted */
   promoted(as: TenantRef, candidateIds: readonly string[]): Promise<ApiResult>
+  /** POST /api/v1/erase-subject */
+  eraseSubject(as: TenantRef, subjectId: string): Promise<ApiResult>
+  /** DELETE /api/v1/org-units/:id/boards */
+  deleteOrgUnitBoards(as: TenantRef, orgUnitId: string): Promise<ApiResult>
 }
