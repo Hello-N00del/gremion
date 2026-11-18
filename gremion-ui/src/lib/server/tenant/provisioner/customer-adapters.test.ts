@@ -75,7 +75,7 @@ vi.mock('postgres', async (orig) => {
 
 const { customerAdapters, kernelServer, ensureKernelPostMigrationPrivileges, reconcileKernelAudit, inActiveContext } = await import('./customer-adapters')
 const { runWithTenant } = await import('$lib/server/tenant/context')
-const { runMigrations } = await import('$lib/server/db')
+const { runMigrations, getDb } = await import('$lib/server/db')
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', '..', '..')
 const BASE = JSON.parse(readFileSync(join(REPO, 'docker', 'keycloak', 'realm-export.base.json'), 'utf8')) as Record<string, unknown>
@@ -688,6 +688,72 @@ describe('inActiveContext: a tenant context for an active customer only (gremion
     reg.evictTenantRuntime.mockClear()
     registryRow('suspended')
     await expect(inActiveContext(C, async () => 1)).rejects.toThrow(/not active/)
+    expect(reg.evictTenantRuntime).toHaveBeenCalledTimes(2)
+  })
+})
+
+// The create flow's board location flag: the adapter picks the kernel context by the customer's status (a
+// create is `provisioning`, a rerun over a finished customer is `active`), runs the flag writer on THAT
+// customer's connection, and never reaches for another customer's (the pool is dropped around the call).
+describe('customerAdapters.boardLocation: the flag is written in the own kernel context of the customer', () => {
+  /** a connection that reads `module` at once, so the writer returns without a transaction */
+  const connectionReading = (location: string | null) => Object.assign(async () => (location === null ? [] : [{ location }]), { begin: vi.fn() })
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(runWithTenant).mockImplementation(async (_ctx, fn) => fn())
+    reg.contextForProvisioningTenant.mockResolvedValue({ id: C.id })
+    reg.resolveTenantById.mockResolvedValue({ id: C.id })
+    vi.mocked(getDb).mockReturnValue(connectionReading('module') as never)
+  })
+
+  it('a provisioning customer is served through the provisioning context', async () => {
+    reg.getTenantById.mockResolvedValue({ id: C.id, slug: C.slug, status: 'provisioning' })
+    const { a } = adapters(kcFake(true))
+    await expect(a.boardLocation.setModule(C)).resolves.toEqual({ changed: false })
+    expect(reg.contextForProvisioningTenant).toHaveBeenCalledTimes(1)
+    expect(reg.resolveTenantById).not.toHaveBeenCalled()
+  })
+
+  it('an active customer (a rerun of the create) is served through the active context', async () => {
+    reg.getTenantById.mockResolvedValue({ id: C.id, slug: C.slug, status: 'active' })
+    const { a } = adapters(kcFake(true))
+    await expect(a.boardLocation.setModule(C)).resolves.toEqual({ changed: false })
+    expect(reg.resolveTenantById).toHaveBeenCalledTimes(1)
+    expect(reg.contextForProvisioningTenant).not.toHaveBeenCalled()
+  })
+
+  it('an active customer is never flipped: kernel is refused (the move carries it), with no transaction opened', async () => {
+    reg.getTenantById.mockResolvedValue({ id: C.id, slug: C.slug, status: 'active' })
+    const conn = connectionReading('kernel')
+    vi.mocked(getDb).mockReturnValue(conn as never)
+    const { a } = adapters(kcFake(true))
+    await expect(a.boardLocation.setModule(C)).rejects.toMatchObject({ code: 'CUSTOMER_STATE', message: expect.stringContaining('board-move') })
+    expect(conn.begin).not.toHaveBeenCalled()
+  })
+
+  it('a provisioning customer with no row is written (a transaction is opened)', async () => {
+    reg.getTenantById.mockResolvedValue({ id: C.id, slug: C.slug, status: 'provisioning' })
+    const conn = connectionReading(null)
+    conn.begin.mockResolvedValue(true)
+    vi.mocked(getDb).mockReturnValue(conn as never)
+    const { a } = adapters(kcFake(true))
+    await a.boardLocation.setModule(C).catch(() => {}) // the read-back of this stand-in sees no row; only the write path is asserted
+    expect(conn.begin).toHaveBeenCalledTimes(1)
+  })
+
+  it('a customer without a control row fails by name and runs nothing', async () => {
+    reg.getTenantById.mockResolvedValue(null)
+    const { a } = adapters(kcFake(true))
+    await expect(a.boardLocation.setModule(C)).rejects.toThrow(/has no control row/)
+    expect(runWithTenant).not.toHaveBeenCalled()
+  })
+
+  it('drops the pool after the call, also when the writer throws', async () => {
+    reg.getTenantById.mockResolvedValue({ id: C.id, slug: C.slug, status: 'provisioning' })
+    vi.mocked(getDb).mockReturnValue(connectionReading('moving') as never)
+    reg.evictTenantRuntime.mockClear()
+    const { a } = adapters(kcFake(true))
+    await expect(a.boardLocation.setModule(C)).rejects.toMatchObject({ code: 'CUSTOMER_STATE' })
     expect(reg.evictTenantRuntime).toHaveBeenCalledTimes(2)
   })
 })

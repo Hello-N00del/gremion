@@ -27,11 +27,45 @@ function selectedOf(select: string): { value: string; label: string } {
 }
 
 describe('Neuer Mandant board hint', () => {
+  const hint = (): string => {
+    const m = html().match(/<p id="board-hint"[^>]*>([\s\S]*?)<\/p>/)
+    if (!m) throw new Error('no board hint in the form')
+    return m[1]!.replace(/<!--[\s\S]*?-->/g, '').replace(/\s+/g, ' ').trim()
+  }
+
   it('tells the operator an unticked board is still on and how to hide it', () => {
     const markup = html()
     expect(markup).toContain('id="board-hint"')
     expect(markup).toContain('Modul aktivieren')
     expect(markup).toContain('Modul deaktivieren')
+    expect(hint()).toContain('nicht angekreuztes')
+  })
+
+  it('says that a ticked board has its own database and can be restored for 30 days after it is switched off', () => {
+    const text = hint()
+    expect(text).toContain('eigene Datenbank')
+    expect(text).toContain('30 Tage')
+    expect(text).toContain('wiederherstellbar')
+  })
+
+  it('no longer says the board runs in-process on the kernel tables', () => {
+    const text = hint().toLowerCase()
+    for (const old of ['in-process', 'im prozess', 'kerntabellen', 'kernel tables', 'in-prozess']) expect(text).not.toContain(old)
+  })
+
+  it('is written in German and carries no emoji or pictograph', () => {
+    const text = hint()
+    expect(text).toMatch(/Board|board/)
+    expect(text).not.toMatch(/\p{Extended_Pictographic}/u)
+    expect(text).not.toMatch(/(the|database|restore)/i)
+  })
+
+  it('board stays selectable: its checkbox is not disabled, next to the note', () => {
+    const markup = render(Page, { props: { data: { ...DATA, modules: [{ id: 'board', name: 'Board', denied: null }] }, form: undefined } as never }).body
+    const box = markup.match(/<input type="checkbox" name="enable" value="board"[^>]*>/)?.[0]
+    expect(box).toBeDefined()
+    expect(box).not.toContain('disabled')
+    expect(markup).toContain('id="board-hint"')
   })
 })
 
