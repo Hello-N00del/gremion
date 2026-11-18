@@ -866,7 +866,7 @@ backup_host_data_dirs() {
 
 # BD2b review HIGH: the export tree is written by tenant-create as root (0700 dirs,
 # 0600 files) and the backup runs as the deploy user. Every other test here runs as
-# the test user and so cannot see ownership. This one runs the program as uid 1000
+# the test user and so cannot see ownership. This one runs the program as the deploy uid (1000, or on a sudo runner the calling user)
 # against a root-owned 0700 tree, as the host has it after the first module
 # switch-off; the container reads of the shim stand for root through a setuid copy
 # of setpriv.
@@ -878,7 +878,7 @@ backup_host_data_dirs() {
         sudo -n true 2>/dev/null || skip "needs root or passwordless sudo to plant a root-owned tree"
         # BATS_ROOT/bin/bats, not `bats`: inside a test PATH leads to the libexec copy,
         # which needs the outer run's environment, and sudo starts a clean one.
-        run sudo -n env -i "PATH=${PATH}" "HOME=/root" "${BATS_ROOT}/bin/bats" -f '^a root-owned 0700 export tree is staged' "$BATS_TEST_FILENAME"
+        run sudo -n env -i "PATH=${PATH}" "HOME=/root" "DEPLOY_UID=$(id -u)" "DEPLOY_GID=$(id -g)" "${BATS_ROOT}/bin/bats" -f '^a root-owned 0700 export tree is staged' "$BATS_TEST_FILENAME"
         [ "$status" -eq 0 ] || { echo "$output"; return 1; }
         [[ "$output" == *"ok 1 a root-owned 0700 export tree"* ]] || { echo "$output"; return 1; }
         [[ "$output" != *"# skip"* ]] || { echo "the nested root run skipped: $output"; return 1; }
@@ -892,7 +892,8 @@ backup_host_data_dirs() {
     mkdir -p "$tree"
     printf 'dump-bytes' >"${tree}/20261101.dump"
     printf 'abc  20261101.dump\n' >"${tree}/20261101.dump.sha256"
-    chown -R 1000:1000 "$GREMION_ROOT"
+    local du="${DEPLOY_UID:-1000}" dg="${DEPLOY_GID:-1000}"
+    chown -R "${du}:${dg}" "$GREMION_ROOT"
     # exactly what exportDatabase leaves: root:root, directories 0700, files 0600
     chown -R root:root "${GREMION_ROOT}/${rel}/acme"
     find "${GREMION_ROOT}/${rel}/acme" -type d -exec chmod 700 {} +
@@ -902,15 +903,15 @@ backup_host_data_dirs() {
     chmod 4755 "${SHIM_DIR}/rootpriv"
     export ROOT_RUN="${SHIM_DIR}/rootpriv --reuid=0 --regid=0 --clear-groups"
     # the premise: the deploy user really cannot read that tree
-    run setpriv --reuid=1000 --regid=1000 --clear-groups ls "${GREMION_ROOT}/${rel}/acme"
+    run setpriv --reuid="$du" --regid="$dg" --clear-groups ls "${GREMION_ROOT}/${rel}/acme"
     [ "$status" -ne 0 ]
-    run setpriv --reuid=1000 --regid=1000 --clear-groups "$BACKUP" --label nightly-u
-    [ "$status" -eq 0 ]
+    run setpriv --reuid="$du" --regid="$dg" --clear-groups "$BACKUP" --label nightly-u
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     local staged="${GREMION_ROOT}/backups/current/${rel}/acme/board"
     cmp "${tree}/20261101.dump" "${staged}/20261101.dump"
     [ -s "${staged}/20261101.dump.sha256" ]
     # the staged copy belongs to the deploy user, so restic (same user) can read it
-    [ "$(stat -c %u "${staged}/20261101.dump")" -eq 1000 ]
+    [ "$(stat -c %u "${staged}/20261101.dump")" -eq "$du" ]
     assert_recorded restic "backup"
 }
 
