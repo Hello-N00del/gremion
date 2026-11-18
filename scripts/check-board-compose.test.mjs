@@ -138,15 +138,22 @@ test('the leaf boots on the rendered environment: /healthz answers 200, the guar
   let child
   try {
     const boardRequire = createRequire(join(ROOT, 'modules/board/package.json'))
-    const esbuild = boardRequire.resolve('esbuild/bin/esbuild')
+    // the JS API, not node <bin>: on Linux bin/esbuild is the native executable, not a script
+    const esbuild = boardRequire('esbuild')
     mkdirSync(join(dir, 'dist'), { recursive: true })
     cpSync(join(ROOT, 'modules/board/migrations'), join(dir, 'migrations'), { recursive: true })
-    const built = spawnSync(process.execPath, [esbuild, 'src/index.ts', '--bundle', '--platform=node', '--format=esm', '--target=node22', `--outfile=${join(dir, 'dist/index.js')}`, '--log-level=error', '--banner:js=import{createRequire as __cr}from"node:module";const require=__cr(import.meta.url);'], {
-      cwd: join(ROOT, 'modules/board'),
-      encoding: 'utf8',
-      windowsHide: true,
+    const built = esbuild.buildSync({
+      absWorkingDir: join(ROOT, 'modules/board'),
+      entryPoints: ['src/index.ts'],
+      bundle: true,
+      platform: 'node',
+      format: 'esm',
+      target: 'node22',
+      outfile: join(dir, 'dist/index.js'),
+      logLevel: 'error',
+      banner: { js: 'import{createRequire as __cr}from"node:module";const require=__cr(import.meta.url);' },
     })
-    assert.equal(built.status, 0, `esbuild failed: ${built.stderr.slice(0, 400)}`)
+    assert.equal(built.errors.length, 0, `esbuild failed: ${JSON.stringify(built.errors).slice(0, 400)}`)
     // the bundle is ESM (--format=esm); the scratch directory has no package.json to say so
     writeFileSync(join(dir, 'package.json'), '{"type":"module"}')
 
