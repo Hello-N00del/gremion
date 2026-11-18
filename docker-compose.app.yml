@@ -941,6 +941,52 @@ services:
       retries: 3
       start_period: 15s
 
+  # The board leaf. Unlike the three above it does not create its own databases: the customer's
+  # board lives in t_<tenant>__board on the state project's board-postgres, created, migrated,
+  # exported and blocked by the module lifecycle (enable-module / disable-module of tenant-create),
+  # and the leaf only opens it. It therefore connects as the module's APP role m_board_app, never as
+  # the server admin: the Karenz block revokes CONNECT from that role, and a superuser ignores a
+  # revoked CONNECT, which would turn "module switched off" from a 404 into served data.
+  #
+  # One password, one source. m_board_app's password is set from the file
+  # etc/secrets/tenant-create/module_app_password_board (tenant-create's ensureModuleRoles, at every
+  # enable); gremion-init-secrets derives BOARD_APP_PASSWORD from that same file, so the URL below and
+  # the role cannot disagree. Both ${...:?} are required on purpose: a compose recreate without the
+  # env must fail by variable NAME, not start a leaf that answers 403 to every call or one whose
+  # every connection is refused with 28P01 (a leaf that boots healthy and fails every request).
+  # The other leaves use ${...:-} for their secret; this one does not.
+  board-service:
+    profiles: [board]
+    image: ghcr.io/hello-n00del/gremion-board:${IMAGE_TAG:?IMAGE_TAG required}
+    build:
+      context: .
+      dockerfile: modules/board/Dockerfile
+    restart: unless-stopped
+    logging: *logging
+    deploy: *limits-m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    labels:
+      traefik.enable: "false"
+      org.gremion.stack: "${STACK:?STACK required}"
+    environment:
+      COLOUR: ${COLOUR:?COLOUR required}
+      PORT: "8080"
+      # The module server and its app role; the leaf replaces the database name per customer.
+      GREMION_BOARD_PG_URL: postgresql://m_board_app:${BOARD_APP_PASSWORD:?BOARD_APP_PASSWORD required}@board-postgres:5432/postgres
+      INTERNAL_BOARD_SECRET: ${INTERNAL_BOARD_SECRET:?INTERNAL_BOARD_SECRET required}
+    networks:
+      app:
+        aliases: ["board-service-${COLOUR:?COLOUR required}"]
+      state:
+        aliases: ["board-service-${COLOUR:?COLOUR required}"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/healthz | grep -q ok || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
 # ============================================================
 # Networks
 # ============================================================
