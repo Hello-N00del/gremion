@@ -128,6 +128,18 @@ describe('the retention catalogue describes a board export that is taken', () =>
     expect(note.replace(/\n> ?/g, ' ')).not.toMatch(stale)
   })
 
+  it('RC-BRD and the change note say that a board still held in the kernel tables has nothing to export at switch-off', () => {
+    // A customer whose board was switched on while board had no database of its own keeps the cards in the kernel
+    // tables: its switch-off opens the 30-day clock but exports nothing, and the catalogue must not promise an export
+    // for it.
+    const start = text.indexOf('> **Change note 2026-11-17')
+    const note = text.slice(start, text.indexOf('> **Change note 2026-10-27')).replace(/\n> ?/g, ' ')
+    for (const [name, body] of [['RC-BRD', lineOf('| RC-BRD ')], ['the change note', note]] as const) {
+      expect(body, name).toMatch(/kernel tables/i)
+      expect(body, name).toMatch(/nothing to export/i)
+    }
+  })
+
   it('the change note says that a later change of the length does not re-date an export that is already kept', () => {
     const start = text.indexOf('> **Change note 2026-11-17')
     const note = text.slice(start, text.indexOf('> **Change note 2026-10-27')).replace(/\n> ?/g, ' ')

@@ -197,6 +197,37 @@ describe('board has a module database of its own (the shipped module.json)', () 
     expect(platform.db.state).toBe('blocked')
   })
 
+  it('disableModule for a customer enabled before the declaration (no plt.module_database row) still opens the Karenz clock: no module server, no export, never a switch-off with no clock', async () => {
+    // The shape of every customer whose board was enabled while board declared no database: an enabled
+    // enablement and no module_database row, their cards in the kernel tables. Once the module declares a
+    // database this path must not drop the clock the database-less declaration used to open (a switch-off
+    // that is not on any day-30 list), and it must not reach for a module server that holds nothing of theirs.
+    const statements: Statement[] = []
+    const platform = platformWorld(statements)
+    expect(platform.db.present).toBe(false)
+    const asked: string[] = []
+    const deps = {
+      platform: platform.sql,
+      exportDir: EXPORT_DIR,
+      exporter: new Proxy({}, { get: (_t, prop) => { throw new Error(`the exporter (${String(prop)}) must not be used without a module database row`) } }),
+      server: (service: string) => {
+        asked.push(service)
+        throw new Error(`deps.server(${JSON.stringify(service)}) must not be called without a module database row`)
+      },
+    } as unknown as LifecycleDeps
+
+    const r = await disableModule(TENANT, boardModule(), ACTOR, deps)
+
+    expect(asked).toEqual([])
+    expect(r).toMatchObject({ tenantId: TENANT, moduleId: 'board', dropped: false, blocked: false, export: null, noop: false })
+    expect(r.karenz?.karenzId).toBe(KARENZ_ROW)
+    expect(statements.some((s) => /UPDATE plt\.module_enablement SET state = 'disabled'/.test(s.text))).toBe(true)
+    const karenzInsert = statements.find((s) => s.text.startsWith('INSERT INTO plt.module_karenz'))
+    expect(karenzInsert).toBeDefined()
+    expect(karenzInsert?.values.slice(-2)).toEqual([null, null])
+    expect(statements.some((s) => s.text.startsWith('INSERT INTO plt.module_database'))).toBe(false)
+  })
+
   it('finalizeDueKarenz at day 30 drops the blocked board database and deletes its export when no hold applies', async () => {
     const statements: Statement[] = []
     const dbRow = { state: 'blocked' }
