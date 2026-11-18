@@ -44,6 +44,8 @@ teardown() {
 #   image.<ref>         the image id of a reference (/ and : become _)
 #   slow                a compose call sleeps 5 s (timeout test)
 #   ps.fail             `docker ps` exits 1
+#   image.daemon        `docker image inspect` fails as a daemon that does
+#                       not answer (not as a missing image)
 shim_docker() {
     shim docker "$(cat <<'EOF'
 (IFS='|'; printf '%s\n' "$*" >> "$DK/argv.log")
@@ -89,6 +91,7 @@ case "$1" in
     exit 0 ;;
   image)
     ref="${@: -1}"; key=$(printf '%s' "$ref" | tr '/:' '__')
+    [ -f "$DK/image.daemon" ] && { echo "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?" >&2; exit 1; }
     [ -f "$DK/image.$key" ] || { echo "Error: No such image: $ref" >&2; exit 1; }
     cat "$DK/image.$key"
     exit 0 ;;
@@ -237,6 +240,69 @@ load_lib() {
     run cd_dc "$TREE" app-green up
     [ "$status" -eq 2 ]
     [ ! -s "$DK/argv.log" ]
+}
+
+# The compose project name and the compose files come from the env file and
+# from nowhere else: without them compose would fall back to the name of the
+# tree directory and to docker-compose.yml, and could start a third stack
+# beside the live colours. A missing key is a named stop, never a default.
+@test "cd_dc refuses (2) an env file with neither COMPOSE_PROJECT_NAME nor COMPOSE_FILE, naming the key, and never starts compose" {
+    load_lib
+    f="${GREMION_ROOT}/etc/env/app-green.env"
+    sed -i '/^COMPOSE_PROJECT_NAME=/d;/^COMPOSE_FILE=/d' "$f"
+    for verb in up build config ps; do
+        run --separate-stderr cd_dc "$TREE" app-green "$verb"
+        [ "$status" -eq 2 ]
+        [[ "$stderr" == *COMPOSE_PROJECT_NAME* ]]
+        [ "$(printf '%s\n' "$stderr" | wc -l)" -eq 1 ]
+    done
+    [ ! -e "$DK/argv.log" ]
+}
+
+@test "cd_dc refuses (2) an env file that lacks only COMPOSE_FILE, naming it, and never starts compose" {
+    load_lib
+    sed -i '/^COMPOSE_FILE=/d' "${GREMION_ROOT}/etc/env/app-green.env"
+    run --separate-stderr cd_dc "$TREE" app-green up -d
+    [ "$status" -eq 2 ]
+    [[ "$stderr" == *COMPOSE_FILE* ]]
+    [ "$(printf '%s\n' "$stderr" | wc -l)" -eq 1 ]
+    [ ! -e "$DK/argv.log" ]
+}
+
+@test "cd_dc refuses (2) a repeated or empty COMPOSE_FILE, a repeated or foreign COMPOSE_PROJECT_NAME and a STACK that disagrees, and starts compose never" {
+    load_lib
+    f="${GREMION_ROOT}/etc/env/app-green.env"
+    cp "$f" "${BATS_TEST_TMPDIR}/orig.env"
+    for variant in filedup fileempty namedup foreign stack; do
+        cp "${BATS_TEST_TMPDIR}/orig.env" "$f"
+        export STACK=teststack
+        case "$variant" in
+            filedup) echo 'COMPOSE_FILE=other.yml' >> "$f" ;;
+            fileempty) sed -i 's/^COMPOSE_FILE=.*/COMPOSE_FILE=/' "$f" ;;
+            namedup) echo 'COMPOSE_PROJECT_NAME=teststack-app-green' >> "$f" ;;
+            foreign) sed -i 's/^COMPOSE_PROJECT_NAME=.*/COMPOSE_PROJECT_NAME=teststack-app-blue/' "$f" ;;
+            stack) export STACK=otherstack ;;
+        esac
+        run --separate-stderr cd_dc "$TREE" app-green up -d
+        [ "$status" -eq 2 ]
+        [ -n "$stderr" ]
+    done
+    [ ! -e "$DK/argv.log" ]
+}
+
+@test "cd_dc runs compose for the state project once its env file declares both keys" {
+    load_lib
+    cd_dc "$TREE" state up -d
+    [ "$(last_argv)" = "compose|--env-file|${GREMION_ROOT}/etc/env/state.env|up|-d" ]
+}
+
+@test "cd_dc says so on stderr when compose hits CD_DC_TIMEOUT" {
+    load_lib
+    touch "$DK/slow"
+    CD_DC_TIMEOUT=1
+    run --separate-stderr cd_dc "$TREE" app-green up
+    [ "$status" -eq 124 ] || [ "$status" -eq 137 ]
+    [[ "$stderr" == *"timed out"* ]]
 }
 
 @test "cd_dc returns the exit status of compose" {
@@ -609,15 +675,24 @@ svc_state() {
 }
 
 @test "cd_wait_healthy: a service that never turns healthy times out at the deadline, not before" {
+    # A fake clock that moves one second per reading, so the test does not
+    # depend on how a real, whole-second clock falls against the window: with
+    # a 3 s window the first reading is 1000, the deadline 1003, and the loop
+    # looks at the service once per reading until a reading reaches 1003.
     load_lib
-    printf 'gremion-ui\n' > "$DK/services"
+    printf 'gremion-ui
+' > "$DK/services"
     svc_state gremion-ui 'running starting'
-    CD_WAIT_POLL_S=0.2
-    t0=$SECONDS
-    cd_wait_healthy app-green 1 "$TREE" 2>/dev/null && rc=0 || rc=$?
+    echo 1000 > "${BATS_TEST_TMPDIR}/clock"
+    cd_now() { local t; t=$(cat "${BATS_TEST_TMPDIR}/clock"); echo $((t + 1)) > "${BATS_TEST_TMPDIR}/clock"; echo "$t"; }
+    CD_WAIT_POLL_S=0.05
+    cd_wait_healthy app-green 3 "$TREE" 2>"${BATS_TEST_TMPDIR}/err" && rc=0 || rc=$?
     [ "$rc" -eq 3 ]
-    [ $((SECONDS - t0)) -ge 1 ]
-    [ "$(cat "$DK/n.cid-gremion-ui")" -ge 2 ]
+    # readings: 1000 (deadline), then one after each of the looks at 1001,
+    # 1002 and 1003; the third look is the one that meets the deadline
+    [ "$(cat "$DK/n.cid-gremion-ui")" -eq 3 ]
+    [ "$(cat "${BATS_TEST_TMPDIR}/clock")" -eq 1004 ]
+    grep -q 'not healthy after 3s' "${BATS_TEST_TMPDIR}/err"
 }
 
 @test "cd_wait_healthy reads time through cd_now when core provides it" {
@@ -729,17 +804,38 @@ svc_state() {
 
 @test "cd_image_id returns 1 with no output for an unknown image or an answer that is no image id" {
     load_lib
-    run cd_image_id gremion-ui:pilot-none
+    run --separate-stderr cd_image_id gremion-ui:pilot-none
     [ "$status" -eq 1 ]
     [ "$output" = "" ]
+    [[ "$stderr" == *"no such image"* ]]
+    [ "$(printf '%s
+' "$stderr" | wc -l)" -eq 1 ]
     echo "not-an-id" > "$DK/image.gremion-ui_pilot-odd"
-    run cd_image_id gremion-ui:pilot-odd
+    run --separate-stderr cd_image_id gremion-ui:pilot-odd
     [ "$status" -eq 1 ]
     [ "$output" = "" ]
+    [ "$(printf '%s
+' "$stderr" | wc -l)" -eq 1 ]
     run cd_image_id ''
     [ "$status" -eq 2 ]
     run cd_image_id '--all'
     [ "$status" -eq 2 ]
+}
+
+@test "cd_image_id tells a daemon that does not answer (2, with the reason) from a missing image (1)" {
+    load_lib
+    touch "$DK/image.daemon"
+    run --separate-stderr cd_image_id gremion-ui:pilot-aaaaaaaaaaaa
+    [ "$status" -eq 2 ]
+    [ "$output" = "" ]
+    [[ "$stderr" == *"docker did not answer"* ]]
+    [[ "$stderr" == *"Cannot connect"* ]]
+    [ "$(printf '%s
+' "$stderr" | wc -l)" -eq 1 ]
+    # the same ref with a healthy daemon and no such image is still 1
+    rm -f "$DK/image.daemon"
+    run --separate-stderr cd_image_id gremion-ui:pilot-aaaaaaaaaaaa
+    [ "$status" -eq 1 ]
 }
 
 # --------------------------------------------------------- cd_colour_other
@@ -795,13 +891,19 @@ svc_state() {
 @test "cd_traefik_service returns 1 on a failed call or an answer that is no JSON object" {
     load_lib
     shim curl 'exit 22'
-    run cd_traefik_service app@file
+    run --separate-stderr cd_traefik_service app@file
     [ "$status" -eq 1 ]
     [ "$output" = "" ]
+    [[ "$stderr" == "cd-docker: cd_traefik_service: "* ]]
+    [ "$(printf '%s
+' "$stderr" | wc -l)" -eq 1 ]
     shim curl 'printf "<html>edge</html>"'
-    run cd_traefik_service app@file
+    run --separate-stderr cd_traefik_service app@file
     [ "$status" -eq 1 ]
     [ "$output" = "" ]
+    [[ "$stderr" == "cd-docker: cd_traefik_service: "* ]]
+    [ "$(printf '%s
+' "$stderr" | wc -l)" -eq 1 ]
     shim curl 'printf "[]"'
     run cd_traefik_service app@file
     [ "$status" -eq 1 ]
