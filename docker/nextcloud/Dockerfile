@@ -2,7 +2,7 @@
 # gremion-nextcloud). The official apache image, pinned by digest: the tag names
 # the major, the digest is what runs. To re-pin after an intentional bump:
 #   docker buildx imagetools inspect nextcloud:33-apache --format '{{.Manifest.Digest}}'
-FROM nextcloud:33-apache@sha256:81cb09055a20142521a267cea2bc27e6a81a065871c70850d209f08803567dbc
+FROM nextcloud:35-apache@sha256:8041f24690c5631da46d2391e1fd7efcde95c6cf08695047f3dd7ce7783934b4
 
 # Custom configuration, copied into the Nextcloud source tree. On the first
 # container start the entrypoint copies /usr/src/nextcloud into /var/www/html (the
