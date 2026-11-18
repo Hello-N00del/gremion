@@ -164,16 +164,16 @@ wd() { run nlib 'cd_cmd_watchdog'; }
     [ "$(mails_with no_tick)" -eq 1 ]
 }
 
-@test "state-free: the watchdog never writes the state file or takes the cd lock for good" {
+@test "state-free: the watchdog never writes the state file, not even the dedupe mark of a mail it queues (the mark goes to its own file)" {
     cd_need_flock
-    fresh_hb
+    hb $(( NOW - 1000 ))
     local before
     before="$(cat "${GREMION_ROOT}/data/cd/state.json")"
-    cd_write_cfg
-    cd_advance 3
     wd
     [ "$status" -eq 0 ]
+    [ "$(mails_with no_tick)" -eq 1 ]
     [ "$(cat "${GREMION_ROOT}/data/cd/state.json")" = "$before" ]
+    grep -q '^stalled:no_tick-' "${GREMION_ROOT}/data/cd/notified.marks"
 }
 
 # ---------------------------------------------------------------------------
