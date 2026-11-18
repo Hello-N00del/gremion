@@ -555,6 +555,28 @@ exec_bit_exempt() {  # $1 = repo-relative path
   [ "$n" -ge 30 ]   # vacuity: infra/host and test/host are not empty
 }
 
+@test "every text fixture under test/host/fixtures pins eol=lf (a Windows checkout must not hand a CRLF shim to the Linux runner)" {
+  local meta path bad="" n=0
+  # `git ls-files --eol` prints "i/lf w/crlf attr/text eol=lf<TAB>path": the
+  # attribute column holds a space, so split on the tab only.
+  while IFS=$'\t' read -r meta path; do
+    [ -n "$path" ] || continue
+    # binary fixtures are not text: no line-ending conversion applies to them
+    [[ "$meta" == i/-text* ]] && continue
+    n=$((n + 1))
+    case "$meta" in
+      *eol=lf*) ;;
+      *) bad="$bad $path" ;;
+    esac
+  done < <(git -C "$KERNEL_ROOT" ls-files --eol -- test/host/fixtures)
+  if [ -n "$bad" ]; then
+    echo "fixtures without an eol=lf attribute (core.autocrlf=true checks them out with CRLF; an extensionless shim then dies on its own carriage returns inside the bats container):$bad" >&2
+    echo "extend the test/host/fixtures rule in .gitattributes" >&2
+  fi
+  [ -z "$bad" ]
+  [ "$n" -ge 10 ]   # vacuity: the fixture list must not have silently emptied
+}
+
 # ---------------------------------------------------------------------------
 # The local container runner, and the tools CI needs to actually RUN the suite
 # rather than skip through it.
