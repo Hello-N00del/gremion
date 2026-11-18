@@ -127,9 +127,18 @@ case "$1" in
         *"server_version_num"*) printf "18\n"; exit 0 ;;
         *"pg_database_size"*)   printf "%s\n" "${DB_BYTES:-1000}"; exit 0 ;;
         *"pg_get_userbyid"*)    printf "gremion\n"; exit 0 ;;
-        *"DROP DATABASE"*)      rm -f "$ST"; exit 0 ;;
+        *"DROP DATABASE"*)
+            rm -f "$ST"
+            # a REVOKE in the same call (run after the CREATE) closes PUBLIC at once
+            for a in "$@"; do
+                case "$a" in
+                  "REVOKE ALL ON DATABASE "*" FROM PUBLIC") materialize; grep -v '^PUBLIC ' "$ST" > "$ST.n" || true; mv "$ST.n" "$ST" ;;
+                esac
+            done
+            exit 0 ;;
         *"REVOKE "*|*"GRANT "*)
-            [ -z "${ACL_REPLAY_NOOP:-}" ] || exit 0
+            # the knob drops a replay that carries a GRANT; a bare REVOKE still takes
+            if [ -n "${ACL_REPLAY_NOOP:-}" ]; then case "$args" in *"GRANT "*) exit 0 ;; esac; fi
             if [ -n "${ACL_GRANT_FAIL:-}" ]; then case "$args" in *"GRANT "*) printf "ERROR:  role does not exist
 " >&2; exit 1 ;; esac; fi
             for a in "$@"; do
@@ -772,7 +781,79 @@ m_app CONNECT f
     [ "$status" -eq 1 ]
     [[ "$output" == *"RESTORE_ACL_FAILED"* ]]
     [ "$(ledger_events)" = "created " ]
-    [ "$(grep -c 'REVOKE ALL ON DATABASE' "$SHIM_LOG")" -eq 2 ]
+    # the call that recreates the database, the replay, and the best-effort close
+    [ "$(grep -c 'REVOKE ALL ON DATABASE' "$SHIM_LOG")" -eq 3 ]
+    assert_absent '^PUBLIC ' "${SHIM_DIR}/acl.state" "PUBLIC must stay closed"
+}
+
+@test "a pg_restore that fails after the DROP leaves a blocked gate database closed, not open" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    printf 'gremion CONNECT f\ngremion CREATE f\ngremion TEMPORARY f\n' > "${SHIM_DIR}/acl.state"
+    RESTORE_EXIT=1 run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"RESTORE_FAILED"* ]]
+    [ "$(ledger_events)" = "created " ]
+    assert_present '^gremion CONNECT ' "${SHIM_DIR}/acl.state" "the recreated database was given an ACL"
+    assert_absent '^PUBLIC ' "${SHIM_DIR}/acl.state" "PUBLIC must not be left able to connect"
+    assert_absent '^m_app ' "${SHIM_DIR}/acl.state" "the app role must not regain CONNECT"
+}
+
+@test "a pg_restore that fails after the DROP leaves a database whose app role was granted closed to PUBLIC" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    printf 'gremion CONNECT f\ngremion CREATE f\ngremion TEMPORARY f\nm_app CONNECT f\n' > "${SHIM_DIR}/acl.state"
+    RESTORE_EXIT=1 run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    assert_present '^gremion CONNECT ' "${SHIM_DIR}/acl.state" "the recreated database was given an ACL"
+    assert_absent '^PUBLIC ' "${SHIM_DIR}/acl.state" "PUBLIC must not be left able to connect"
+}
+
+@test "a pg_restore that fails on a database that PUBLIC could always reach adds no REVOKE" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    printf 'PUBLIC CONNECT f\nPUBLIC TEMPORARY f\ngremion CONNECT f\ngremion CREATE f\ngremion TEMPORARY f\n' > "${SHIM_DIR}/acl.state"
+    : > "$SHIM_LOG"
+    RESTORE_EXIT=1 run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    refute_recorded docker "REVOKE "
+}
+
+@test "a replay that does not take also closes PUBLIC best-effort before the mismatch is reported" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    printf 'gremion CONNECT f\ngremion CREATE f\ngremion TEMPORARY f\nm_app CONNECT f\n' > "${SHIM_DIR}/acl.state"
+    ACL_REPLAY_NOOP=1 run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"RESTORE_ACL_MISMATCH"* ]]
+    # one call that is a bare REVOKE: neither the DROP/CREATE call nor the replay
+    n="$(grep '^docker ' "$SHIM_LOG" | grep -F 'REVOKE ALL ON DATABASE' | grep -vF 'DROP DATABASE' | grep -vFc 'GRANT ' || true)"
+    [ "$n" -eq 1 ]
+    assert_absent '^PUBLIC ' "${SHIM_DIR}/acl.state" "PUBLIC must not be left able to connect"
+}
+
+@test "restore refuses a ledger line whose pg_service was edited by hand, before anything is dropped" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    jq -c '.pg_service = "evil service"' "${DUMPS}/ledger.jsonl" > "${DUMPS}/ledger.new"
+    mv "${DUMPS}/ledger.new" "${DUMPS}/ledger.jsonl"
+    : > "$SHIM_LOG"
+    run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"LEDGER_CORRUPT"* ]]
+    refute_recorded docker "DROP DATABASE"
+}
+
+@test "restore refuses a ledger line whose pg_user was edited by hand, before anything is dropped" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    jq -c '.pg_user = "Fin;ance"' "${DUMPS}/ledger.jsonl" > "${DUMPS}/ledger.new"
+    mv "${DUMPS}/ledger.new" "${DUMPS}/ledger.jsonl"
+    : > "$SHIM_LOG"
+    run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"LEDGER_CORRUPT"* ]]
+    refute_recorded docker "DROP DATABASE"
 }
 
 @test "a grantee name the replay cannot quote safely is refused BEFORE the database is dropped" {

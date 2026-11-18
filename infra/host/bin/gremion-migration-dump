@@ -53,7 +53,11 @@
 #       Takes no server option: a dump taken with --pg-service/--pg-user is
 #       restored on that server as that role (read from its ledger line), and the
 #       database ACL that a dump does not carry is read before the DROP and put
-#       back (a restored gate database keeps its lock-down).
+#       back (a restored gate database keeps its lock-down). A database that was
+#       closed to PUBLIC is closed again in the call that recreates it, before
+#       pg_restore, so a restore that fails midway does not leave it open; the
+#       replay and its read-back follow the restore, and a failed replay or a
+#       mismatch revokes PUBLIC again (best effort) before it exits 1.
 #   gremion-migration-dump status [--release R]
 #
 # CONFIGURATION  state.env (load_env) when $GREMION_ROOT/etc/env/state.env
@@ -501,8 +505,16 @@ acl_read() {
         FROM pg_catalog.pg_database d WHERE d.datname = '${2}'"
 }
 
+# acl_close_public <container> <db> — best effort: take CONNECT and TEMPORARY
+# away from PUBLIC. A failure is not reported; the caller dies anyway.
+acl_close_public() {
+    docker exec "$1" psql -X -U "$(pg_user)" -d postgres -q \
+        -c "REVOKE ALL ON DATABASE \"${2}\" FROM PUBLIC" </dev/null >/dev/null 2>&1 || true
+}
+
 cmd_restore() {
     local rel="$1" db="$2" since="$3" live dump path c owner ev at id s
+    local create_args=()
     local acl_json="null" acl_stmts="" acl_before="" acl_after="" acl_roles=() acl_args=()
     take_lock
     live="$(live_dumps)"
@@ -555,8 +567,17 @@ cmd_restore() {
     else
         info "restoring ${db} from ${path}: everything written since ${since} is lost (accepted by the operator)"
     fi
+    # When the replay starts by revoking PUBLIC (the database was closed to it),
+    # that REVOKE also runs in the call that creates the database, before
+    # pg_restore: a restore that fails midway must not leave a closed gate
+    # database open to PUBLIC. The restore connects as the superuser and is not
+    # affected. The replay after the restore stays the authority.
+    if [[ "$acl_stmts" == "REVOKE ALL ON DATABASE "* ]]; then
+        create_args=(-c "REVOKE ALL ON DATABASE \"${db}\" FROM PUBLIC")
+    fi
     docker exec "$c" psql -X -U "$(pg_user)" -d postgres -v ON_ERROR_STOP=1 -q \
-        -c "DROP DATABASE \"${db}\" WITH (FORCE)" -c "CREATE DATABASE \"${db}\" OWNER \"${owner}\"" </dev/null \
+        -c "DROP DATABASE \"${db}\" WITH (FORCE)" -c "CREATE DATABASE \"${db}\" OWNER \"${owner}\"" \
+        ${create_args[@]+"${create_args[@]}"} </dev/null \
         || die "RESTORE_FAILED: could not recreate ${db}" 1
     docker exec -i "$c" pg_restore --no-owner --role="$owner" --exit-on-error --single-transaction \
         -U "$(pg_user)" -d "$db" < "$path" \
@@ -570,14 +591,17 @@ cmd_restore() {
             # The data is back but the grants are not: close the door to PUBLIC
             # (best effort) rather than leave a gate database open. The dump is
             # still live; running the restore again drops and replays it.
-            docker exec "$c" psql -X -U "$(pg_user)" -d postgres -q \
-                -c "REVOKE ALL ON DATABASE \"${db}\" FROM PUBLIC" </dev/null >/dev/null 2>&1 || true
+            acl_close_public "$c" "$db"
             die "RESTORE_ACL_FAILED: the data of ${db} is restored but its grants could not be replayed (PUBLIC was revoked, nothing else was granted) — fix the cause and run the restore again" 1
         fi
-        acl_after="$(acl_fingerprint "$c" "$db" ${acl_roles[@]+"${acl_roles[@]}"})" \
-            || die "RESTORE_ACL_MISMATCH: the data of ${db} is restored but its privileges could not be read back — run the restore again" 1
-        [[ "$acl_after" == "$acl_before" ]] \
-            || die "RESTORE_ACL_MISMATCH: the data of ${db} is restored but PUBLIC or a grantee has other CONNECT/TEMPORARY rights than before — do not start the app; run the restore again" 1
+        if ! acl_after="$(acl_fingerprint "$c" "$db" ${acl_roles[@]+"${acl_roles[@]}"})"; then
+            acl_close_public "$c" "$db"
+            die "RESTORE_ACL_MISMATCH: the data of ${db} is restored but its privileges could not be read back (PUBLIC was revoked) — run the restore again" 1
+        fi
+        if [[ "$acl_after" != "$acl_before" ]]; then
+            acl_close_public "$c" "$db"
+            die "RESTORE_ACL_MISMATCH: the data of ${db} is restored but PUBLIC or a grantee has other CONNECT/TEMPORARY rights than before (PUBLIC was revoked) — do not start the app; run the restore again" 1
+        fi
     fi
     at="$(now_iso)"
     ev="$(jq -c --arg at "$at" --arg since "$since" '
