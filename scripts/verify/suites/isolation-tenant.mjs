@@ -15,15 +15,18 @@
 //   votes       in-process     app half, recording fake Nextcloud
 //   files       in-process     app half, recording fake WebDAV
 //   messaging   in-process     app half, recording fake Synapse
-//   board       in-process     real route handlers, real getDb(), two real tenant databases
+//   board       router         real route handlers and router, real getDb(); a `kernel` customer in-process,
+//                              two `module` customers through the real board service, on real Postgres
 //
 // elections, finance, vault and handover have NO case on purpose: a result for
 // a module that cannot be enabled would be evidence for code that is not running.
-// The board case is `real-pg-app`: the board's data lives in the kernel's own
-// per-customer database, so the proof runs the handlers the pilot runs against two
-// physically separate Postgres databases (gremion-ui's integration config), not
-// against a recording fake. The board LEAF (BOARD_BACKEND=service, test
-// environment only) is not what this case proves.
+// The board case is `real-pg-app`: a customer's board lives either in the kernel's own
+// per-customer database or in the board module's own database, and the router (the
+// customer's location flag) decides per call. The proof runs the handlers and the
+// router the pilot runs against physically separate Postgres databases (gremion-ui's
+// integration config): one customer located `kernel`, two located `module` and served
+// by the real board service, not a recording fake. The board service's own two-tenant
+// suite (modules/board/test/isolation*) is a separate suite that this part does not run.
 // The board case states GREMION_PRODUCTION_STACK=none for the databases it creates
 // itself, which replaces the production-stack guard for that case: the safety rests
 // on the server being a throwaway one (loopback, not 5432, see throwawayServerProblem;
