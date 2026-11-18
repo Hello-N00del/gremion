@@ -62,7 +62,7 @@ make_dump_dir() {
 # docker: `ps` answers the state postgres (and, by service label, the module
 # servers), `exec … psql` the version/size/owner/ACL, `exec … pg_dump` writes a
 # fake archive naming its database, and `exec -i … pg_restore --list` reads it
-# back. The shim enforces the roles as the real servers do (U6a, F9): the main
+# back. The shim enforces the roles as the real servers do: the main
 # server `pgc` has the superuser `postgres` only, the module server `fpgc` has
 # `finance` only and `npgc` has `newsletter` only, so `-U postgres` against a
 # module server fails with `role "postgres" does not exist`.
@@ -458,8 +458,9 @@ seed_live_dump() { # <tag>
 }
 
 # ---------------------------------------------------------------------------
-# U6a: take --pg-service / --pg-user (decision 11), the leak rule (F48), the
-# gate-database scope and the ACL that survives a restore (F53)
+# take --pg-service / --pg-user (module servers), the leak rule (a module
+# database name can carry a customer slug), the gate-database scope and the ACL
+# that survives a restore
 # ---------------------------------------------------------------------------
 
 SCOPE_FIXTURE="${PROJECT_ROOT}/test/host/fixtures/cd/dump-options/scope-names.json"
@@ -488,7 +489,7 @@ take_module() { # <release> <db> [service] [role]
     [[ "$output" == *"DUMP_SERIES"* ]]
 }
 
-@test "the role is its own variable parsed AFTER load_env: state.env's POSTGRES_USER never wins (F9)" {
+@test "the role is its own variable parsed AFTER load_env: state.env's POSTGRES_USER never wins" {
     make_dump_dir
     grep -q '^POSTGRES_USER=postgres$' "${GREMION_ROOT}/etc/env/state.env"
     run take_module r-mod "$SLUG_DB"
@@ -512,12 +513,16 @@ take_module() { # <release> <db> [service] [role]
     make_dump_dir
     run "$TOOL" take --release r-mod --db "$SLUG_DB" --pg-service finance-postgres
     [ "$status" -eq 2 ]
+    [[ "$output" == *"come together or not at all"* ]]
     run "$TOOL" take --release r-mod --db "$SLUG_DB" --pg-user finance
     [ "$status" -eq 2 ]
+    [[ "$output" == *"come together or not at all"* ]]
     run "$TOOL" restore --release r-mod --db "$SLUG_DB" --accept-loss-since t --pg-service finance-postgres --pg-user finance
     [ "$status" -eq 2 ]
+    [[ "$output" == *"belong to take only"* ]]
     run "$TOOL" switched --release r-mod --pg-service finance-postgres --pg-user finance
     [ "$status" -eq 2 ]
+    [[ "$output" == *"belong to take only"* ]]
     no_docker_calls
     [ ! -e "${DUMPS}/ledger.jsonl" ]
 }
@@ -611,7 +616,7 @@ leak_free() { # <needle> <accumulated output>
     [ -z "$(find "$DUMPS" -name "*${needle}*")" ] || { echo "LEAK in file name" >&2; return 1; }
 }
 
-@test "F48: a module database name reaches no journal line, no stdout line and no dump file name, through take, reuse, restore, switched and discard" {
+@test "leak rule: a module database name reaches no journal line, no stdout line and no dump file name, through take, reuse, restore, switched and discard" {
     make_dump_dir
     local all="" id
     run take_module r-leak "$SLUG_DB"; [ "$status" -eq 0 ]; all+="$output"
@@ -635,7 +640,7 @@ leak_free() { # <needle> <accumulated output>
     jq -e -s 'map(select(.event == "created")) | length == 2 and all(.[]; .database == "calendar_some-slug")' "${DUMPS}/ledger.jsonl"
 }
 
-@test "F48: the refusal messages on stderr may name the database (stderr is not the journal)" {
+@test "leak rule: the refusal messages on stderr may name the database (stderr is not the journal)" {
     make_dump_dir
     run take_module r-a "$SLUG_DB"; [ "$status" -eq 0 ]
     run take_module r-b "$SLUG_DB"
@@ -683,7 +688,7 @@ leak_free() { # <needle> <accumulated output>
 }
 
 # ---------------------------------------------------------------------------
-# restore: server and role from the ledger line, ACL put back (F46, F53)
+# restore: server and role from the ledger line, ACL put back
 # ---------------------------------------------------------------------------
 
 @test "restore of a module line uses its container and role for owner, ACL read, DROP, CREATE and pg_restore" {

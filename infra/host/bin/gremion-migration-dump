@@ -62,9 +62,9 @@
 #   GREMION_MIGRATION_DUMP_PG_CONTAINER names the postgres container directly
 #   (a scratch stack); otherwise it is the ${STACK}-state project's `postgres`.
 #
-# LEDGER FIELDS  1:1 with DB-OPS-MIGRATION-DUMP plus host-only fields that the
-#   node writer does not set: `database`, `file`, and, when --pg-service/--pg-user
-#   were given, `pg_service` and `pg_user`. For a gate-database name
+# LEDGER FIELDS  1:1 with DB-OPS-MIGRATION-DUMP plus two host-only fields that
+#   the node writer (packages/tenant-store/src/dump) never sets: `pg_service` and
+#   `pg_user`, written when --pg-service/--pg-user were given. For a gate-database name
 #   t_<hex32>__<module> (module not kernel) the created line carries scope
 #   `customer`, `customer_id` (uuid form) and `module_id`, as the node writer's
 #   scopeOf answers; every other name keeps scope `platform` and null ids (the
@@ -295,7 +295,7 @@ take_host_dump() {
     chmod 700 "${DUMP_DIR}/${rel}"
     at="$(now_iso)"
     id="$(uuidv7)"
-    # A database on a module server can carry a customer slug (F48): its dump
+    # A database on a module server can carry a customer slug: its dump
     # file is named after the service and the id, never after the database.
     if [[ -n "$MD_SERVICE" ]]; then file="${rel}/${MD_SERVICE}.${id}.dump"; else file="${rel}/${db}.${id}.dump"; fi
     DUMP_ID="$id"
@@ -515,7 +515,7 @@ cmd_restore() {
     [[ "$(sha256sum "$path" | cut -d' ' -f1)" == "$(jq -r '.sha256' <<< "$dump")" ]] \
         || die "DUMP_UNVERIFIED: ${path} no longer matches its ledger sha256 — not restored" 1
     # The server and the role of a dump come from its ledger line: restore takes
-    # no option (F46). They go into a docker filter and an argv, so a line that
+    # no option. They go into a docker filter and an argv, so a line that
     # was edited by hand is checked again.
     MD_SERVICE="$(jq -r '.pg_service // ""' <<< "$dump")"
     MD_ROLE="$(jq -r '.pg_user // ""' <<< "$dump")"
@@ -530,7 +530,7 @@ cmd_restore() {
     owner="$(psql_at "$c" postgres "SELECT pg_catalog.pg_get_userbyid(datdba) FROM pg_catalog.pg_database WHERE datname = '${db}'")" \
         || die "RESTORE_FAILED: could not read the owner of ${db} (wrong server or role?) — nothing was dropped" 1
     [[ -n "$owner" ]] || die "database ${db} does not exist on ${c}" 1
-    # F53: a dump does not carry the database ACL, so a restored database would
+    # A dump does not carry the database ACL, so a restored database would
     # come back with the default one (PUBLIC may connect). The grants are read
     # BEFORE the DROP, and a state that cannot be replayed refuses here, while
     # nothing has been changed. A module server only: the main server restore
@@ -621,7 +621,7 @@ main() {
         esac
     done
 
-    # The server options (decision 11): take only, both or neither, checked
+    # The server options (module servers): take only, both or neither, checked
     # before anything runs. They are held in locals here and copied into the
     # (unexported) MD_* variables only AFTER load_env below: state.env carries
     # POSTGRES_USER, and load_env exports every key over the caller's value.
