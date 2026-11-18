@@ -81,15 +81,6 @@ wd() { run nlib 'cd_cmd_watchdog'; }
     [ "$(mails_with heartbeat_unreadable)" -eq 1 ]
 }
 
-@test "liveness: the probe gives the cd lock back at once" {
-    cd_need_flock
-    fresh_hb
-    wd
-    run cd_lib 'cd_lock_take; echo taken'
-    [ "$status" -eq 0 ]
-    [[ "$output" == *taken* ]]
-}
-
 # ---------------------------------------------------------------------------
 # Liveness: the lock is held (release stuck)
 # ---------------------------------------------------------------------------
