@@ -440,3 +440,96 @@ describe('ServiceBoardClient — malformed-200 shape guard (#387)', () => {
     ).rejects.toThrow(/malformed listBoardsForOrgUnits response/)
   })
 })
+
+describe('ServiceBoardClient — erasure calls (BD5)', () => {
+  it('eraseSubject → POST /api/v1/erase-subject with only { subjectId }; returns the two counts', async () => {
+    resetStub({ body: { counts: { card_assignee: 2, card_created_by: 5 } } })
+    const client = new ServiceBoardClient()
+    const counts = await withTenant(() => client.eraseSubject('u-1'))
+    expect(lastRequest!.method).toBe('POST')
+    expect(lastRequest!.url).toBe('/api/v1/erase-subject')
+    expect(lastRequest!.body).toEqual({ subjectId: 'u-1' })
+    expect(lastRequest!.headers['x-tenant-id']).toBe('tenant-uuid-board')
+    expect(lastRequest!.headers['x-tenant-slug']).toBe('board-test')
+    expect(lastRequest!.headers['x-internal-auth']).toBe('board-secret-5678')
+    expect(counts).toEqual({ card_assignee: 2, card_created_by: 5 })
+  })
+
+  it.each([
+    ['no counts', {}],
+    ['a count that is not a number', { counts: { card_assignee: '2', card_created_by: 0 } }],
+    ['a negative count', { counts: { card_assignee: -1, card_created_by: 0 } }],
+    ['a fractional count', { counts: { card_assignee: 1.5, card_created_by: 0 } }],
+    ['a missing count', { counts: { card_assignee: 1 } }],
+  ])('eraseSubject THROWS on a 200 with %s (never a claimed erasure)', async (_name, body) => {
+    resetStub({ body })
+    const client = new ServiceBoardClient()
+    await expect(withTenant(() => client.eraseSubject('u-1'))).rejects.toThrow(/malformed eraseSubject response/)
+  })
+
+  it('eraseSubject is not retried (a POST), a 503 surfaces as BoardServiceError', async () => {
+    resetStub({ firstStatus: 503, subsequentStatus: 200, body: { counts: { card_assignee: 0, card_created_by: 0 } } })
+    const client = new ServiceBoardClient()
+    await expect(withTenant(() => client.eraseSubject('u-1'))).rejects.toSatisfy(
+      (e: unknown) => e instanceof BoardServiceError && e.status === 503,
+    )
+    expect(stubBehaviour.callCount).toBe(1)
+  })
+
+  it('eraseSubject surfaces a 404 (blocked database) as BoardServiceError 404, not as zero counts', async () => {
+    resetStub({ firstStatus: 404, body: { success: false, error: 'tenant_not_provisioned' } })
+    const client = new ServiceBoardClient()
+    await expect(withTenant(() => client.eraseSubject('u-1'))).rejects.toSatisfy(
+      (e: unknown) => e instanceof BoardServiceError && e.status === 404,
+    )
+  })
+
+  it('deleteBoardsForOrgUnit → DELETE /api/v1/org-units/<id>/boards (id encoded); returns the number deleted', async () => {
+    resetStub({ body: { deleted: 3 } })
+    const client = new ServiceBoardClient()
+    expect(await withTenant(() => client.deleteBoardsForOrgUnit('ou 1/x'))).toBe(3)
+    expect(lastRequest!.method).toBe('DELETE')
+    expect(lastRequest!.url).toBe('/api/v1/org-units/ou%201%2Fx/boards')
+    expect(lastRequest!.headers['x-internal-auth']).toBe('board-secret-5678')
+  })
+
+  it.each([{}, { deleted: '3' }, { deleted: -1 }, { deleted: 0.5 }])(
+    'deleteBoardsForOrgUnit THROWS on a 200 whose count is not a whole number (%j)',
+    async (body) => {
+      resetStub({ body })
+      const client = new ServiceBoardClient()
+      await expect(withTenant(() => client.deleteBoardsForOrgUnit('ou-1'))).rejects.toThrow(/malformed deleteBoardsForOrgUnit response/)
+    },
+  )
+
+  it('deleteBoardsForOrgUnit is not retried on 503', async () => {
+    resetStub({ firstStatus: 503, subsequentStatus: 200, body: { deleted: 1 } })
+    const client = new ServiceBoardClient()
+    await expect(withTenant(() => client.deleteBoardsForOrgUnit('ou-1'))).rejects.toSatisfy(
+      (e: unknown) => e instanceof BoardServiceError && e.status === 503,
+    )
+    expect(stubBehaviour.callCount).toBe(1)
+  })
+})
+
+describe('ServiceBoardClient — the refusal code of a leaf error (BD5)', () => {
+  it('BoardServiceError carries the leaf error code, so a blocked database can be told from an unknown route', async () => {
+    resetStub({ firstStatus: 404, body: { success: false, error: 'tenant_not_provisioned' } })
+    const client = new ServiceBoardClient()
+    await expect(withTenant(() => client.eraseSubject('u-1'))).rejects.toSatisfy(
+      (e: unknown) => e instanceof BoardServiceError && e.status === 404 && e.code === 'tenant_not_provisioned',
+    )
+    resetStub({ firstStatus: 404, body: { success: false, error: 'not found' } })
+    await expect(withTenant(() => client.eraseSubject('u-1'))).rejects.toSatisfy(
+      (e: unknown) => e instanceof BoardServiceError && e.status === 404 && e.code === 'not found',
+    )
+  })
+
+  it('has no code when the leaf body has no error text', async () => {
+    resetStub({ firstStatus: 500, body: {} })
+    const client = new ServiceBoardClient()
+    await expect(withTenant(() => client.eraseSubject('u-1'))).rejects.toSatisfy(
+      (e: unknown) => e instanceof BoardServiceError && e.status === 500 && e.code === undefined,
+    )
+  })
+})

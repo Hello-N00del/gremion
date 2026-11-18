@@ -62,7 +62,14 @@ export interface ErasureResidual {
 }
 
 /** What a hook may report. A throw is reported `failed` (or `skipped` when the
- *  error is a connection error), never `erased`. */
+ *  error is a connection error), never `erased`.
+ *
+ *  `deferred` is for an erasure that is owed and cannot be carried out RIGHT NOW because the
+ *  module's data is switched off (its database is blocked), and that the replay at the
+ *  module's re-enable will carry out. It is not `erased` (nothing was reached), so the
+ *  report stays incomplete. The orchestrator records it as `skipped` with the reason;
+ *  the replay treats it as a failure, because a module must not come back with the
+ *  erasure still owed. */
 export type ErasureHookResult =
   | {
       readonly status: 'erased'
@@ -70,6 +77,7 @@ export type ErasureHookResult =
       readonly residuals?: readonly ErasureResidual[]
     }
   | { readonly status: 'skipped'; readonly reason: string }
+  | { readonly status: 'deferred'; readonly reason: string }
 
 export interface ModuleErasureHook<Db = unknown> {
   /** The module id (module.json `id`, equal to the config.modules key). */

@@ -36,5 +36,7 @@ export function everyRouteCall(ids: { orgUnitId?: string; boardId?: string; stac
       path: `/api/v1/boards/${boardId}/promote`,
       body: { item: { id: randomUUID(), text: 'route-call', assigneeKeycloakId: null, dueDate: null }, createdBy: 'route-call' },
     },
+    { route: 'POST /api/v1/erase-subject', method: 'POST', path: '/api/v1/erase-subject', body: { subjectId: 'route-call' } },
+    { route: 'DELETE /api/v1/org-units/:id/boards', method: 'DELETE', path: `/api/v1/org-units/${orgUnitId}/boards` },
   ]
 }

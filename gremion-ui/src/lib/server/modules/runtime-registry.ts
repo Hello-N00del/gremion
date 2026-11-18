@@ -187,6 +187,12 @@ export interface DashBudgetSummary {
   spentCents: number
 }
 
+/** What the board module's org-unit cleanup did (see 'board:delete-org-unit-boards'). */
+export type BoardOrgUnitCleanup =
+  | { readonly status: 'not-due' }
+  | { readonly status: 'deleted'; readonly boards: number }
+  | { readonly status: 'deferred' }
+
 /**
  * The typed data-provider contract: each key maps to the provider signature its
  * registered module must satisfy. registerDataProvider/getDataProvider are
@@ -225,6 +231,14 @@ export interface DataProviderContract {
    *  (e.g. FINANCE_BACKEND=service, a named residual); the handover kernel then
    *  renders the empty-facts shape. Absent provider = empty facts too. */
   'finance:handover-facts': (orgUnitKeys: string[]) => Promise<HandoverFinanceFactsCore | null>
+  /** Board: remove the boards of an org unit that was just deleted from the board module's own database.
+   *  The kernel's deleteOrgUnit(id) asks AFTER its transaction committed (never the tx form). The answer says
+   *  which of three things happened: `not-due` (the boards live in the kernel tables, where the database
+   *  cascade did it, so no call was made), `deleted` (the board module removed `boards` boards) or `deferred`
+   *  (a call was owed and could not be made because the board database is blocked, so the boards stay there).
+   *  A rejection is logged by the caller and never undoes the delete. Absent provider (board module off) =
+   *  no call. */
+  'board:delete-org-unit-boards': (orgUnitId: string) => Promise<BoardOrgUnitCleanup>
   /** Messages: Matrix unread total for the shell bell/sidebar badge (layout loadUnread). */
   'messages:unread-count': (accessToken: string | null) => Promise<number>
   /** Messages: rooms with unread>0 (name + count + last activity) for the D11
