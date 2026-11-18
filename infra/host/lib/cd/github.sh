@@ -43,9 +43,14 @@
 #   hold      a named hold: not_ancestor, batch_too_large, blocked, range_unverified (with
 #             "uncovered": the short SHAs) or ruleset_missing
 # Flags: --dry-run (no mail, no state write), --accept-range REASON (the operator override
-# of range_unverified; logged), --allow-blocked and --allow-batch (release-now of a
-# candidate that contains a block, or a batch above CD_MAX_BATCH). One positional argument
-# names the commit to judge instead of the tip (release-now; 12 to 40 hex).
+# of range_unverified; one line, no CR or LF; it exists only with its history line: when the
+# line cannot be written the answer is unknown history_unwritable), --allow-blocked and
+# --allow-batch (release-now of a candidate that contains a block, or a batch above
+# CD_MAX_BATCH), --force-blocked (implies --allow-blocked and also takes the commit of an
+# open block itself; without it that commit is the hold blocked, whether it was named or the
+# walk came to it). One positional argument names the commit to judge instead of the tip
+# (release-now; 12 to 40 hex): that commit is judged ALONE, with no walk back, so a red named
+# commit is none (no_green_commit), never its green parent.
 #
 # The json line also carries "final" (true or false), and "tip", "walked", "commits" or
 # "uncovered" where they apply. final says whether the answer can change before the tip does.
@@ -57,6 +62,10 @@
 # hold that costs no call to judge again (not_ancestor, batch_too_large, blocked) and for
 # ruleset_missing (the operator may restore the rule without a new commit); it is true for
 # up_to_date, tip_unchanged, range_unverified and a walk that ended on completed red runs.
+# Because a completed red run is final, a green re-run of the SAME tip is not seen by the
+# poll; it is seen after a new commit, or by a release-now of that commit (a named commit
+# is judged afresh, whatever poll.verdict says). The driver and the operator documentation
+# say so.
 #
 # THE STATE THIS FILE READS (the driver writes it, this file never writes poll): poll.tip12,
 # poll.verdict and poll.last_at. A tip that equals the live commit, or equals the tip of a
@@ -64,6 +73,11 @@
 # verdict is asked again at most once per five minutes (reason recheck_wait in between).
 #
 # THE REAL-DATA BOUNDARY. A mail carries a reason code and short commit SHAs only.
+#
+# THE MAILS THIS FILE QUEUES (through cd_notify, which the notifier unit provides): kind
+# held with reason=range_unverified (sha12, uncovered) and kind held with
+# reason=github_token_expired. The second is a notice: no hold is set by it. The notifier
+# must accept both reason codes under the kind held.
 
 CD_GH_API_BASE="https://api.github.com"
 _CD_GH_WORKFLOW_PATH=".github/workflows/ci.yml"
@@ -116,7 +130,8 @@ _cd_gh_mirror() {
 _cd_gh_mg() { git --git-dir="$CD_MIRROR_DIR" "$@" </dev/null; }
 
 # cd_gh_tip -- the tip of main by `git ls-remote` of the named ref: the git protocol, so
-# polling costs no API call. 1 when the remote does not answer one clean line.
+# polling costs no API call. 1 when the remote does not answer one clean line for exactly
+# refs/heads/main.
 cd_gh_tip() {
     local url out
     url="$(cd_cfg CD_REPO_URL)" || return 2
@@ -125,6 +140,9 @@ cd_gh_tip() {
         _cd_gh_err "tip: the remote did not answer"
         return 1
     }
+    # git matches a pattern as the TAIL of a ref name, so a branch named like
+    # "x/refs/heads/main" answers too: keep only the line of the ref itself
+    out="$(printf '%s\n' "$out" | awk '$2 == "refs/heads/main"')"
     if [[ "$out" =~ ^([0-9a-f]{40})[[:space:]]+refs/heads/main$ ]]; then
         printf '%s\n' "${BASH_REMATCH[1]}"
         return 0
@@ -629,7 +647,9 @@ _cd_gh_commit_verdict() {
         esac
     fi
     rc=0
-    body="$(cd_gh_api "repos/${slug}/actions/runs/${id}/jobs?per_page=100" \
+    # the jobs of THAT attempt: the run list named the attempt whose conclusion is judged, and a
+    # re-run that starts between the two calls must not change whose jobs are read (and cached)
+    body="$(cd_gh_api "repos/${slug}/actions/runs/${id}/attempts/${attempt}/jobs?per_page=100" \
         '(.jobs | type) == "array" and (.total_count | type) == "number"')" || rc=$?
     if [[ "$rc" != 0 ]]; then
         _CD_GH_WHY="jobs_unavailable"
@@ -766,7 +786,7 @@ _cd_gh_out() {
 
 # cd_gh_candidate [FLAGS] [SHA] -- see the header.
 cd_gh_candidate() {
-    local dry=0 accept_range="" allow_blocked=0 allow_batch=0 want="" live="" poll_tip="" poll_verdict="" poll_at=""
+    local dry=0 accept_range="" allow_blocked=0 force_blocked=0 allow_batch=0 want="" live="" poll_tip="" poll_verdict="" poll_at=""
     local tip="" tip12 slug max_batch walkback now line rc n limit i found="" found_i=0 c
     local -a range=() slice=()
     _CD_GH_TIMEDEP=0
@@ -774,10 +794,12 @@ cd_gh_candidate() {
         case "$1" in
             --dry-run) dry=1; shift ;;
             --allow-blocked) allow_blocked=1; shift ;;
+            --force-blocked) allow_blocked=1; force_blocked=1; shift ;;
             --allow-batch) allow_batch=1; shift ;;
             --accept-range)
                 accept_range="${2:-}"
-                if [[ -z "$accept_range" || "$accept_range" == *$'\n'* ]]; then
+                # the history refuses a line break of either kind: so does this check, before any call
+                if [[ -z "$accept_range" || "$accept_range" == *$'\n'* || "$accept_range" == *$'\r'* ]]; then
                     _cd_gh_err "--accept-range needs a one-line reason"
                     return 2
                 fi
@@ -874,11 +896,19 @@ cd_gh_candidate() {
         fi
     fi
 
-    # the verdict, newest first, at most CD_WALKBACK commits back
+    # the verdict, newest first, at most CD_WALKBACK commits back. A named commit is judged
+    # alone: release-now of a red commit must not release its parent instead.
     limit="$n"
     (( limit > walkback )) && limit="$walkback"
+    [[ -n "$want" ]] && limit=1
     for (( i = 0; i < limit; i++ )); do
         c="${range[i]}"
+        # --allow-blocked lets a candidate CONTAIN a block (the fix); the blocked commit itself
+        # is never selected without --force-blocked, whether it was named or the walk came to it
+        if (( force_blocked == 0 )) && cd_is_blocked "$c"; then
+            _cd_gh_out hold "$c" blocked
+            return 0
+        fi
         _cd_gh_commit_verdict "$slug" "$c"
         case "$_CD_GH_V" in
             green) found="$c"; found_i="$i"; break ;;
@@ -911,8 +941,13 @@ cd_gh_candidate() {
         local -a short=()
         for c in "${_CD_GH_UNCOVERED[@]}"; do short+=("${c:0:12}"); done
         if [[ -n "$accept_range" ]]; then
+            # the override exists only with its history line: no line, no override
             if (( dry == 0 )); then
-                cd_hist range_accepted sha12="${found:0:12}" count="${#short[@]}" reason="$accept_range" || true
+                if ! cd_hist range_accepted sha12="${found:0:12}" count="${#short[@]}" reason="$accept_range"; then
+                    _cd_gh_err "--accept-range: the history line could not be written, the override is refused"
+                    _cd_gh_out unknown "$found" history_unwritable "$(jq -cn --arg t "$tip" '{tip: $t}')"
+                    return 0
+                fi
             fi
         else
             if (( dry == 0 )) && _cd_gh_once "range_unverified:${found:0:12}"; then

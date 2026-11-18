@@ -61,6 +61,16 @@ gh_refused_run() {
     grep -Eq '^git -C [^ ]+ ls-remote https://github.com/org/repo refs/heads/main$' "$SHIM_LOG"
 }
 
+@test "tip: a branch whose name ends in /refs/heads/main does not make the answer ambiguous" {
+    gh_scn_green
+    gh_rg -C "$GH_WORK" branch -q "side/refs/heads/main" "$C_L0"
+    gh_publish "side/refs/heads/main"
+    gh_rg --git-dir="$GH_REMOTE" for-each-ref refs/heads | grep -q 'side/refs/heads/main'
+    run --separate-stderr gh_lib 'cd_gh_tip'
+    [ "$status" -eq 0 ]
+    [ "$output" = "$C_B" ]
+}
+
 @test "tip: a remote that does not answer is no tip (1), never an empty success" {
     gh_scn_green
     rm -rf "$GH_REMOTE"
@@ -166,12 +176,12 @@ gh_refused_run() {
         '{total_count: 49, jobs: ($f + [{id: 2999, name: "Verify gate", head_sha: $s, status: "completed", conclusion: "success"}])}' \
         > "${GH}/full49.json"
     jq '.jobs |= .[0:30]' "${GH}/full49.json" > "${GH}/page30.json"
-    gh_route "*/actions/runs/${id}/jobs*" 200 "${GH}/page30.json"
-    gh_route "*/actions/runs/${id}/jobs?per_page=100*" 200 "${GH}/full49.json"
+    gh_route "*/actions/runs/${id}/attempts/*/jobs*" 200 "${GH}/page30.json"
+    gh_route "*/actions/runs/${id}/attempts/*/jobs?per_page=100*" 200 "${GH}/full49.json"
     gh_verdict
     gh_expect green
     # the same list served as a page of 30 is a truncated list: no verdict, never green
-    gh_route "*/actions/runs/${id}/jobs?per_page=100*" 200 "${GH}/page30.json"
+    gh_route "*/actions/runs/${id}/attempts/*/jobs?per_page=100*" 200 "${GH}/page30.json"
     rm -rf "${GREMION_ROOT}/data/cd/cache"
     gh_verdict
     gh_expect unknown gate_truncated
@@ -577,6 +587,28 @@ gh_expect_json_hold() {
     [ "$status" -eq 2 ]
 }
 
+@test "range: a reason with a carriage return is refused (2), like one with a line feed: the history refuses both" {
+    gh_scn_green
+    gh_route_pulls "$C_A"
+    gh_route "*/commits/${C_B}/pulls" 200 "$(gh_prs .)"
+    run --separate-stderr gh_lib 'cd_gh_candidate --accept-range "$1"' $'by hand\rsecond'
+    [ "$status" -eq 2 ]
+    run --separate-stderr gh_lib 'cd_gh_candidate --accept-range "$1"' $'by hand\nsecond'
+    [ "$status" -eq 2 ]
+    [ "$(gh_calls)" -eq 0 ]
+}
+
+@test "range: an override whose history line cannot be written is refused, never green without the line" {
+    gh_scn_green
+    gh_route_pulls "$C_A"
+    gh_route "*/commits/${C_B}/pulls" 200 "$(gh_prs .)"
+    # the history file cannot be appended to (a directory stands where it should be)
+    mkdir -p "${GREMION_ROOT}/data/cd/history.jsonl"
+    gh_verdict --accept-range "reviewed by hand"
+    gh_never test "$V" = green
+    gh_expect unknown history_unwritable
+}
+
 # -- the merge-method precondition ---------------------------------------------
 
 @test "merge methods: squash only plus a linear-history rule passes" {
@@ -642,6 +674,16 @@ gh_expect_json_hold() {
     gh_no_run "$C_A"
     gh_verdict
     gh_expect none
+}
+
+@test "attempts: the job list is asked of the attempt the conclusion came from" {
+    gh_scn_green
+    gh_route_ci "$C_B" '.workflow_runs[0].run_attempt = 3'
+    local id="$GH_LAST_ID"
+    gh_verdict
+    gh_expect green
+    grep -q "/actions/runs/${id}/attempts/3/jobs?per_page=100" "${GH}/urls.log"
+    gh_never grep -q "/actions/runs/${id}/jobs" "${GH}/urls.log"
 }
 
 @test "attempts: a higher run_number decides over a lower one" {
@@ -826,12 +868,12 @@ gh_transport_unknown() {
     gh_expect green
     gh_verdict
     gh_expect green
-    [ "$(grep -c "/runs/${idb}/jobs" "${GH}/urls.log")" -eq 1 ]
+    [ "$(grep -c "/runs/${idb}/attempts/[0-9]*/jobs" "${GH}/urls.log")" -eq 1 ]
     gh_route "*/workflows/ci.yml/runs?*head_sha=${C_B}*" 200 \
         "$(gh_body run-push-success "$C_B" ".workflow_runs[0].id = ${idb} | .workflow_runs[0].run_attempt = 2")"
     gh_verdict
     gh_expect green
-    [ "$(grep -c "/runs/${idb}/jobs" "${GH}/urls.log")" -eq 2 ]
+    [ "$(grep -c "/runs/${idb}/attempts/[0-9]*/jobs" "${GH}/urls.log")" -eq 2 ]
 }
 
 @test "cache: pending, unknown and a 304 are never cached" {
@@ -933,7 +975,7 @@ url = "https://example.invalid/'
     gh_scn_green
     gh_token_file
     gh_route "*/workflows/ci.yml/runs?*head_sha=${C_B}*" 401A "$(gh_body run-push-success "$C_B" '.workflow_runs[0].id = 1002')"
-    gh_route "*/actions/runs/1002/jobs?*" 200 "$(gh_body jobs-ci "$C_B")"
+    gh_route "*/actions/runs/1002/attempts/*/jobs?*" 200 "$(gh_body jobs-ci "$C_B")"
     run --separate-stderr gh_lib 'cd_lock_take; cd_gh_candidate'
     [ "$(jq -r .verdict <<< "$output")" = green ]
     # the run list was asked twice: with the token (401), then without it
@@ -977,6 +1019,66 @@ url = "https://example.invalid/'
     gh_route_pulls "$C_A"
     gh_verdict
     gh_expect green
+    [ "$S" = "$C_A" ]
+}
+
+# gh_block SHA -- an open block on SHA (build_failed).
+gh_block() {
+    run --separate-stderr gh_lib 'cd_lock_take; cd_block_add "$1" build_failed test' "$1"
+    [ "$status" -eq 0 ]
+}
+
+@test "named commit: a red commit named on the command line is judged alone, its green parent is never taken" {
+    gh_scn_green
+    gh_route_ci "$C_B" '.workflow_runs[0].conclusion = "failure"'
+    gh_verdict "${C_B:0:12}"
+    gh_expect none no_green_commit
+    [ -z "$S" ]
+    gh_verdict "$C_B"
+    gh_expect none no_green_commit
+    # the same commit, no name: the walk goes back to the parent
+    gh_verdict
+    gh_expect green
+    [ "$S" = "$C_A" ]
+}
+
+@test "named commit: a queued commit past CD_PENDING_MAX_MIN, named on the command line, is none, never walked back from" {
+    gh_scn_green
+    gh_route_ci "$C_B" ".workflow_runs[0].status = \"queued\" | .workflow_runs[0].conclusion = null | .workflow_runs[0].created_at = \"$(gh_iso -$((91 * 60)))\""
+    gh_verdict "${C_B:0:12}"
+    gh_expect none no_green_commit
+}
+
+@test "named commit: the exact blocked commit is refused with --allow-blocked, a descendant is taken, --force-blocked takes it" {
+    cd_need_flock
+    gh_scn_green
+    gh_block "$C_A"
+    # a candidate that contains the block is held without a flag
+    gh_verdict "${C_B:0:12}"
+    gh_expect hold blocked
+    # the fix (a descendant) is taken with --allow-blocked
+    gh_verdict --allow-blocked "${C_B:0:12}"
+    gh_expect green
+    [ "$S" = "$C_B" ]
+    # the blocked commit itself is not
+    gh_verdict --allow-blocked "${C_A:0:12}"
+    gh_expect hold blocked
+    [ "$S" = "$C_A" ]
+    gh_verdict --allow-blocked "$C_A"
+    gh_expect hold blocked
+    # only --force-blocked takes it
+    gh_verdict --force-blocked "${C_A:0:12}"
+    gh_expect green
+    [ "$S" = "$C_A" ]
+}
+
+@test "named commit: --allow-blocked on a walk never settles on the blocked commit (a red tip, the parent is the block)" {
+    cd_need_flock
+    gh_scn_green
+    gh_route_ci "$C_B" '.workflow_runs[0].conclusion = "failure"'
+    gh_block "$C_A"
+    gh_verdict --allow-blocked
+    gh_expect hold blocked
     [ "$S" = "$C_A" ]
 }
 

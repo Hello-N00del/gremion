@@ -197,7 +197,7 @@ gh_route_ci() {
     run="$(gh_body run-push-success "$sha" ".workflow_runs[0].id = ${id} | ${rf}")"
     jobs="$(gh_body jobs-ci "$sha" "$jf")"
     gh_route "*/workflows/ci.yml/runs?*head_sha=${sha}*" 200 "$run"
-    gh_route "*/actions/runs/${id}/jobs?*" 200 "$jobs"
+    gh_route "*/actions/runs/${id}/attempts/*/jobs?*" 200 "$jobs"
     GH_LAST_ID="$id"
 }
 
