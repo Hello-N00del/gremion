@@ -170,6 +170,7 @@ describe('org-units-db', () => {
   it('getOrgUnitIdsWithOfficesForUser adds units held by a live office; getOrgUnitIdsForUser stays roster-only', async () => {
     const roster = await seedUnit()
     const office = await seedUnit()
+    const graceOnly = await seedUnit()
     const expired = await seedUnit()
     await addOrgUnitMember({ orgUnitId: roster, userKeycloakId: 'u-office', membershipType: 'elected', termStart: null, termEnd: null })
     const hold = async (unitId: string, status: string) => {
@@ -182,9 +183,11 @@ describe('org-units-db', () => {
       await getDb()`UPDATE role_assignments SET status = ${status} WHERE id = ${a.id}`
     }
     await hold(office, 'active')
+    // An office in its grace period still counts, on a unit with no roster row of its own.
+    await hold(graceOnly, 'grace')
     await hold(roster, 'grace')
     await hold(expired, 'expired')
     expect([...(await getOrgUnitIdsForUser('u-office'))]).toEqual([roster])
-    expect([...(await getOrgUnitIdsWithOfficesForUser('u-office'))].sort()).toEqual([roster, office].sort())
+    expect([...(await getOrgUnitIdsWithOfficesForUser('u-office'))].sort()).toEqual([roster, office, graceOnly].sort())
   })
 })

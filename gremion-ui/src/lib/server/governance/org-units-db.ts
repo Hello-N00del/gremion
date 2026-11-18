@@ -328,10 +328,12 @@ export async function getOrgUnitIdsForUser(userKeycloakId: string): Promise<read
  * The units a person belongs to for DISPLAY: roster rows plus the units where they hold a
  * live office (role_assignments status active|grace, via committee_roles.org_unit_id).
  * Roles and membership are independent (assigning an office does not seat the holder, and
- * removing a member does not end their office), so a Vorstand office holder can sit in a body
- * without a roster row. Dashboard counts use this union so the figure matches the bodies the
- * person sees themselves in. It must NOT feed authorisation: access to a unit stays with
- * getOrgUnitIdsForUser (roster only).
+ * removing a member does not end their office), so an office holder can hold a body without a
+ * roster row (the UI assigns offices from the roster, so this arises when a holder is removed
+ * from the roster later, or through the API). The dashboard count and placement check and the
+ * calendar's "mine" marks use this union. The members directory (placement, per-unit listing and
+ * its committee_only redaction) is deliberately NOT on it: it stays roster-based. It must NOT
+ * feed authorisation: access to a unit stays with getOrgUnitIdsForUser (roster only).
  */
 export async function getOrgUnitIdsWithOfficesForUser(userKeycloakId: string): Promise<readonly string[]> {
   const rows = await getDb()<Array<{ org_unit_id: string }>>`
