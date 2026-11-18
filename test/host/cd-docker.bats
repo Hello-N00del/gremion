@@ -257,6 +257,28 @@ load_lib() {
     [ "$status" -eq 2 ]
 }
 
+# A value with a leading zero is a decimal number of seconds, never octal: 08
+# must not switch the bound off (octal error) and 010 is ten, not eight.
+@test "cd_dc reads a CD_DC_TIMEOUT with a leading zero as decimal" {
+    load_lib
+    shim timeout 'shift 3; exec "$@"'
+    hash -r
+    export CD_DC_TIMEOUT=08
+    run cd_dc "$TREE" app-green up
+    [ "$status" -eq 0 ]
+    grep -q '^timeout -k 10 8 docker compose' "$SHIM_LOG"
+    : > "$SHIM_LOG"
+    export CD_DC_TIMEOUT=010
+    run cd_dc "$TREE" app-green up
+    [ "$status" -eq 0 ]
+    grep -q '^timeout -k 10 10 docker compose' "$SHIM_LOG"
+    : > "$SHIM_LOG"
+    export CD_DC_TIMEOUT=00
+    run cd_dc "$TREE" app-green up
+    [ "$status" -eq 0 ]
+    ! grep -q '^timeout ' "$SHIM_LOG"
+}
+
 # ------------------------------------------------------------ cd_set_env_key
 
 mk_envfile() { printf 'A=1\nIMAGE_TAG=old\nIMAGE_TAG_OLD=keep\n# IMAGE_TAG=comment\nZ=9\n' > "$1"; }
@@ -877,18 +899,20 @@ svc_state() {
 }
 
 @test "cd_set_env_key refuses to replace a file whose owner it cannot keep" {
-    [ "$(id -u)" = 0 ] || skip "needs root to give a file a foreign owner"
+    # No root needed: chown is a no-op and stat reports a foreign owner for the
+    # temporary copy only, which is what a refused chown leaves behind.
     load_lib
     f="${BATS_TEST_TMPDIR}/x.env"
     mk_envfile "$f"
-    chown 1234:4321 "$f"
+    real_stat="$(command -v stat)"
     shim chown 'exit 0'
+    shim stat "case \"\${*: -1}\" in *x.env.*) echo 9999:9999 ;; *) exec ${real_stat} \"\$@\" ;; esac"
     hash -r
     before="$(cksum < "$f")"
-    run cd_set_env_key "$f" IMAGE_TAG changed
+    run --separate-stderr cd_set_env_key "$f" IMAGE_TAG changed
     [ "$status" -eq 1 ]
+    [[ "$stderr" == *"cannot keep the owner"* ]]
     [ "$(cksum < "$f")" = "$before" ]
-    [ "$(stat -c %u:%g "$f")" = 1234:4321 ]
     [ "$(ls "${BATS_TEST_TMPDIR}" | grep -c '^x.env')" = 1 ]
 }
 

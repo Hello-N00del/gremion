@@ -197,7 +197,9 @@ cd_dc() {
         *) ;;
     esac
     tmo="${CD_DC_TIMEOUT:-0}"
-    [[ "$tmo" =~ ^[0-9]+$ ]] || { _cd_docker_err "cd_dc: CD_DC_TIMEOUT is not a whole number of seconds"; return 2; }
+    [[ "$tmo" =~ ^[0-9]{1,9}$ ]] || { _cd_docker_err "cd_dc: CD_DC_TIMEOUT is not a whole number of seconds"; return 2; }
+    # decimal, never octal: a leading zero (08, 010) is not a base prefix
+    tmo="$((10#$tmo))"
     if [[ "$tmo" -gt 0 ]]; then
         t=(timeout -k 10 "$tmo")
     fi
