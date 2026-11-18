@@ -102,7 +102,8 @@ test('an unset or empty INTERNAL_BOARD_SECRET or BOARD_APP_PASSWORD fails the re
 })
 
 test('no leak: the password reaches board-service only, the secret reaches board-service and gremion-ui only', () => {
-  const r = render('board')
+  // every profile on: a service behind another profile (calendar, content, tenant-create ...) is judged too
+  const r = render('*')
   const holders = (needle) =>
     Object.entries(r.services)
       .filter(([, svc]) => JSON.stringify(svc).includes(needle))

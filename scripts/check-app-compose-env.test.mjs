@@ -34,6 +34,14 @@ test('every :? var of docker-compose.app.yml has a source in the host app.env or
   assert.deepEqual(missing, [])
 })
 
+test('every :? var of docker-compose.app.yml has a value in the release render fixture (a missing one fails the release render of both colours)', () => {
+  // scripts/release/fixtures/render/render.env is the only variable source of `check-image-digests.mjs --render`;
+  // compose interpolates every service, profile-gated or not, so one unset required reference fails the render.
+  // an active, non-empty assignment: a commented-out line or an empty value is still `required` for compose
+  const have = new Set([...read('scripts/release/fixtures/render/render.env').matchAll(/^([A-Z][A-Z0-9_]*)=\S/gm)].map((m) => m[1]))
+  assert.deepEqual(required.filter((v) => !have.has(v)), [])
+})
+
 test('state.env carries the generated DB passwords app.env carries (one sentinel group, one value)', () => {
   const state = defined(read('infra/host/templates/env/state.env.tmpl'))
   for (const v of ['PLATFORM_DB_PASSWORD', 'PANEL_DB_PASSWORD', 'KERNEL_API_DB_PASSWORD']) assert.ok(state.has(v), `${v} missing from state.env.tmpl`)
