@@ -10,11 +10,13 @@
 //      with 28P01 for every customer while /healthz stays green);
 //   3. no leak: a secret reaches only the services that need it, and a refusal names a variable, never a value;
 //   4. the leaf boots on the rendered environment: /healthz answers and the guard answers 403 without the secret.
-// The password's single source (the file the module lifecycle sets the role from) is test/host/board-compose.bats,
-// and its authentication against a real Postgres is modules/board/test/compose-password.integration.test.ts.
-import { test } from 'node:test'
+//   5. the password authenticates: a role set from the password file accepts exactly the URL the render produces and
+//      refuses another password with 28P01, on a throwaway Postgres this file starts and removes by name.
+// The password's single source (the file the module lifecycle sets the role from) is test/host/board-compose.bats.
+import { after, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { createServer } from 'node:net'
@@ -174,4 +176,89 @@ test('the leaf boots on the rendered environment: /healthz answers 200, the guar
     if (child) child.kill()
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+// ── 5. the password authenticates ──────────────────────────────────────────────────────────────────────────────
+//
+// A throwaway Postgres (one container, a name starting bd-, a random loopback port, removed by name afterwards) whose
+// role m_board_app has the password FROM THE FILE gremion-tenant writes, read trimmed like the one-shot's reqFileEnv.
+// The URL is the one `docker compose config` renders from an env whose BOARD_APP_PASSWORD is that file's content (what
+// gremion-init-secrets derives, test/host/board-compose.bats); only the host and port are swapped for the scratch
+// server. If the env carried a second generated value this would be 28P01 for every customer, while the leaf's
+// /healthz stays green. The scram verifier ensureModuleRoles stores is what `ALTER ROLE ... PASSWORD` stores on a
+// server whose password_encryption is scram-sha-256 (the default); the lifecycle suite of the leaf
+// (modules/board/test/lifecycle.integration.test.ts) proves the real enableModule.
+const PG_IMAGE = 'postgres:18'
+const PG_NAME = `bd-board-pw-${randomBytes(4).toString('hex')}`
+let pgStarted = false
+after(() => {
+  if (pgStarted) spawnSync('docker', ['rm', '-f', PG_NAME], { encoding: 'utf8' })
+})
+
+function docker(args) {
+  const r = spawnSync('docker', args, { encoding: 'utf8', windowsHide: true })
+  if (r.error) throw new Error(`docker could not be run: ${r.error.message}`)
+  return r
+}
+
+async function startScratchPostgres(superPassword) {
+  pgStarted = true
+  const run = docker(['run', '-d', '--rm', '--name', PG_NAME, '-p', '127.0.0.1::5432', '-e', `POSTGRES_PASSWORD=${superPassword}`, PG_IMAGE])
+  assert.equal(run.status, 0, `could not start ${PG_IMAGE}: ${run.stderr.slice(0, 300)}`)
+  const mapped = docker(['port', PG_NAME, '5432/tcp']).stdout.trim().split('\n')[0] ?? ''
+  const port = Number(mapped.slice(mapped.lastIndexOf(':') + 1))
+  assert.ok(port > 1024 && port !== 5432, `unexpected scratch port ${mapped}`)
+  const until = Date.now() + 60_000
+  for (;;) {
+    // pg_isready answers during the image's first-boot restart too, so ask for a real answer over TCP
+    const q = docker(['exec', PG_NAME, 'psql', '-U', 'postgres', '-h', '127.0.0.1', '-tAc', 'select 1'])
+    if (q.status === 0 && q.stdout.trim() === '1') break
+    assert.ok(Date.now() < until, 'the scratch Postgres did not come up in 60 s')
+    await new Promise((r) => setTimeout(r, 500))
+  }
+  return port
+}
+
+test('the rendered URL authenticates as m_board_app against a role set from the password file, and another password is refused with 28P01', async () => {
+  const postgres = createRequire(join(ROOT, 'modules/board/package.json'))('postgres')
+  const superPassword = randomBytes(12).toString('hex')
+  const port = await startScratchPostgres(superPassword)
+
+  // the file gremion-tenant writes (openssl rand -hex 32 plus a newline), read the way the one-shot reads it (trimmed)
+  const filePassword = `${randomBytes(32).toString('hex')}\n`.trim()
+  const admin = postgres(`postgres://postgres:${superPassword}@127.0.0.1:${port}/postgres`, { max: 1, prepare: false, onnotice: () => {} })
+  try {
+    // hex only, so the literal needs no escaping
+    assert.match(filePassword, /^[0-9a-f]{64}$/)
+    await admin.unsafe(`CREATE ROLE m_board_app LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '${filePassword}'`)
+    const [enc] = await admin`SHOW password_encryption`
+    assert.equal(enc.password_encryption, 'scram-sha-256')
+  } finally {
+    await admin.end({ timeout: 2 })
+  }
+
+  const url = new URL(render('board', { BOARD_APP_PASSWORD: filePassword }).services['board-service'].environment.GREMION_BOARD_PG_URL)
+  assert.equal(decodeURIComponent(url.username), 'm_board_app')
+  url.hostname = '127.0.0.1'
+  url.port = String(port)
+
+  const connectedAs = async (u) => {
+    const sql = postgres(u.toString(), { max: 1, prepare: false, onnotice: () => {}, connect_timeout: 10 })
+    try {
+      const [row] = await sql`SELECT current_user AS u`
+      return row.u
+    } finally {
+      await sql.end({ timeout: 2 })
+    }
+  }
+  assert.equal(await connectedAs(url), 'm_board_app', 'the URL the render produced did not authenticate')
+
+  // the control: a different password is refused, so the check can fail (a server on trust authentication would not)
+  const wrong = new URL(url.toString())
+  wrong.password = encodeURIComponent(`${filePassword}x`)
+  const refused = await connectedAs(wrong).then(
+    () => null,
+    (err) => err,
+  )
+  assert.equal(refused?.code, '28P01', 'a wrong password was not refused with 28P01')
 })
