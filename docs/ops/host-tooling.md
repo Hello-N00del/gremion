@@ -150,6 +150,7 @@ than exit codes.
 | `gremion-restore-into --stack S --snapshot ID\|latest [--rto]` | restore a snapshot into a *different* stack, never into `etc/`, then neuter and prove by content |
 | `gremion-neuter --stack S` | point every SMTP host at a null sink and blank the publish tokens in stack `S` — env files, tenant `config.json`, the control registry and every Keycloak realm's `smtpServer` — asserted through `docker exec … env` and a kcadm read-back |
 | `gremion-operator-ca create\|issue\|verify\|install\|status` | the operator's device-certificate authority for the control panel's client-certificate gate (`docs/runbooks/control-panel-access.md`): `create` and `issue` run on the operator's own machine (the CA key never reaches the host; 90-day device certificates as PKCS#12), `install` places the CA certificate at `etc/edge/mtls/operator-ca.pem` and makes Traefik re-read it, `status` and `verify` read |
+| `gremion-cd <verb>` | continuous deployment of the host (CD stage 1, in progress): the dispatcher maps a verb to a function of the `lib/cd/*.sh` libraries. Installed so far: `help`, `version`, `status`, `hold`, `resume` and the library functions the release driver will call (release candidate from the CI runs on `main`, release classification, notifications and the watchdog). Nothing schedules it yet; exit codes 0 ok, 1 a failed assertion, 2 usage or a bad config, 3 busy or blocked |
 
 ### The release tip of an enable (`GREMION_RELEASE_TIP`)
 

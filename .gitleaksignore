@@ -27,3 +27,11 @@ b093c87efee5aa33e9c69575816e46a23fd91a3f:packages/tenant-store/src/lifecycle/pla
 b093c87efee5aa33e9c69575816e46a23fd91a3f:scripts/migrations/applied.lock.json:generic-api-key:181
 c19f9854d36ee5fc5d6d414bc560c53695e776c7:packages/tenant-store/src/lifecycle/platform-migrations/manifest.json:generic-api-key:12
 c19f9854d36ee5fc5d6d414bc560c53695e776c7:scripts/migrations/applied.lock.json:generic-api-key:181
+
+# Board leaf test fixture values (a made-up internal secret and password the
+# scratch board-service boots with), not credentials: generic-api-key fires on the
+# SECRET/PASSWORD names. Commit-pinned and directory-mode, line-pinned (fail closed).
+119ad2a81a02245725ccae197cd785553998950b:scripts/check-board-compose.test.mjs:generic-api-key:33
+119ad2a81a02245725ccae197cd785553998950b:scripts/check-board-compose.test.mjs:generic-api-key:34
+scripts/check-board-compose.test.mjs:generic-api-key:33
+scripts/check-board-compose.test.mjs:generic-api-key:34

@@ -1,0 +1,8 @@
+{
+  "number": 100,
+  "state": "closed",
+  "merged_at": "2023-11-14T20:00:00Z",
+  "merge_commit_sha": "__SHA__",
+  "base": { "ref": "main", "repo": { "full_name": "org/repo" } },
+  "head": { "ref": "topic" }
+}

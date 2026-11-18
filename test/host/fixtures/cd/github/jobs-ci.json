@@ -1,0 +1,9 @@
+{
+  "total_count": 4,
+  "jobs": [
+    { "id": 2001, "run_id": 1001, "name": "Static checks", "head_sha": "__SHA__", "status": "completed", "conclusion": "success" },
+    { "id": 2002, "run_id": 1001, "name": "Unit tests", "head_sha": "__SHA__", "status": "completed", "conclusion": "success" },
+    { "id": 2003, "run_id": 1001, "name": "Render ops", "head_sha": "__SHA__", "status": "completed", "conclusion": "success" },
+    { "id": 2004, "run_id": 1001, "name": "Verify gate", "head_sha": "__SHA__", "status": "completed", "conclusion": "success" }
+  ]
+}
