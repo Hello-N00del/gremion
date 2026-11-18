@@ -249,7 +249,7 @@ describe('the location flag', () => {
     await createPhaseB(s, d)
     expect(w.control.get('musterstadt')?.status).toBe('active')
     const before = [...w.mutations]
-    await expect(enableCustomerModule('musterstadt', 'board', { operatorId: OPERATOR, dpia: DPIA }, d)).rejects.toMatchObject({ code: 'CUSTOMER_STATE', message: expect.stringContaining('board-move') })
+    await expect(enableCustomerModule('musterstadt', 'board', { operatorId: OPERATOR, dpia: DPIA }, d)).rejects.toMatchObject({ code: 'CUSTOMER_STATE', message: expect.stringContaining('not part of this release') })
     expect(w.mutations).toEqual(before)
     expect(w.moduleDbs.size).toBe(0)
     expect(w.enabled.get(a.customer.id)?.has('board') ?? false).toBe(false)

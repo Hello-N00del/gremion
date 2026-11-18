@@ -62,15 +62,15 @@ export async function setBoardLocationModule(sql: Sql): Promise<{ changed: boole
 
 /**
  * The read-only form, for a customer that is already active (a rerun of the create over a finished
- * customer): `module` is the answer that was set while it was still being created; anything else is a
- * refusal that points at the move. No transaction, no lock, no write.
+ * customer, or a later enable of board): `module` is the answer that was set while it was still being created; anything
+ * else is a refusal that names the move, which is not part of this release. No transaction, no lock, no write.
  */
 export async function assertBoardLocationModule(sql: Sql): Promise<{ changed: boolean }> {
   const location = await readLocation(sql)
   if (location === 'module') return { changed: false }
   throw new ProvisioningError(
     'CUSTOMER_STATE',
-    `the board location of this active customer reads ${location ?? 'no row'}, not module: it is not set while the customer is live; run board-move to put the board in its own database`,
+    `the board location of this active customer reads ${location ?? 'no row'}, not module: it is not set while the customer is live. Only the board-move step carries a live board into its own database, and that step is not part of this release, so the board cannot be switched on for this customer yet`,
   )
 }
 
