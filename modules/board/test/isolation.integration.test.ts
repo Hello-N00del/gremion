@@ -10,12 +10,13 @@
 //
 // A decoy shared database (board_test_shared, the pre-D13 BOARD_PG_URL) is set in
 // the env too: the leaf must never fall back to it.
-import { randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
+import { blockModuleDatabase, unblockModuleDatabase } from '@gremion/tenant-store/lifecycle'
 import { buildApp } from '../src/app.ts'
 import { createBoard, createCard, createStack, promoteActionItem, type Sql, type TenantRef } from '../src/store/index.ts'
 import { leafApi, leafRequest } from './isolation/leaf-api.ts'
-import { BOARD_ROUTE_KINDS, boardIsolationCase, type BoardRecord } from './isolation/case.ts'
+import { BOARD_ROUTE_KINDS, boardIsolationCase, forgedSlug, type BoardRecord } from './isolation/case.ts'
 import { describeFailures, runIsolation } from './isolation/harness.ts'
 import type { BoardApi } from './isolation/api.ts'
 import {
@@ -23,9 +24,11 @@ import {
   createEmptyDb,
   databaseNames,
   dropScratchDb,
+  connectScratchDb,
   provisionDb,
   scratchDbUrl,
   scratchServerUrl,
+  scratchServerUrlAs,
   tenantBoardDb,
   userTableCount,
   type ScratchSql,
@@ -35,6 +38,8 @@ import { TENANT_A, TENANT_B, TENANT_C } from './support/tenants.ts'
 
 const SECRET = 'r29bk-isolation-secret'
 const DECOY_DB = 'board_test_shared'
+/** The module's ONE app role: it is shared by every tenant's board database. */
+const APP_ROLE = 'm_board_app'
 
 let admin: ScratchSql
 let app: ReturnType<typeof buildApp>
@@ -80,6 +85,8 @@ afterAll(async () => {
   if (admin) {
     for (const t of [TENANT_A, TENANT_B, TENANT_C]) await dropScratchDb(admin, tenantBoardDb(t.id))
     await dropScratchDb(admin, DECOY_DB)
+    // the app role of the blocked-database case: dropped after the databases it held grants on
+    await admin.unsafe(`DROP ROLE IF EXISTS ${APP_ROLE}`)
     await admin.end({ timeout: 5 })
   }
 }, 60_000)
@@ -211,5 +218,80 @@ describe('two-tenant isolation through the board routes (A7)', () => {
     expect(report.aborted, describeFailures(report)).toBeUndefined()
     expect(report.attempts.length, 'zero attempts: vacuous').toBeGreaterThan(0)
     expect(report.ok, describeFailures(report)).toBe(true)
+  })
+})
+
+// The isolation is by DATABASE NAME keyed on the tenant id, not by role: m_board_app is one role per module and
+// holds CONNECT on every tenant's board database, so a role-level boundary between tenants does not exist and is
+// not claimed here. What a module switch-off does is revoke that role's CONNECT on ONE tenant's database (the
+// Karenz block); the other tenants' databases are untouched, and the leaf must keep serving them.
+describe("blocking one tenant's database (the Karenz CONNECT revoke) leaves the other tenant served", () => {
+  it('A answers 404 tenant_not_provisioned on every route, B keeps reading and writing, and unblocking A restores it', async () => {
+    const dbA = tenantBoardDb(TENANT_A.id)
+    const dbB = tenantBoardDb(TENANT_B.id)
+    const password = randomBytes(24).toString('base64url')
+    // the superuser ignores a CONNECT revoke, so this leaf connects as the module's app role
+    const [{ exists }] = await admin<{ exists: boolean }[]>`SELECT EXISTS (SELECT FROM pg_roles WHERE rolname = ${APP_ROLE}) AS exists`
+    await admin.unsafe(`${exists ? 'ALTER' : 'CREATE'} ROLE ${APP_ROLE} LOGIN PASSWORD '${password}'`)
+    for (const db of [dbA, dbB]) {
+      await admin.unsafe(`GRANT CONNECT ON DATABASE "${db}" TO ${APP_ROLE}`)
+      const owner = connectScratchDb(db, { max: 1 })
+      try {
+        await owner.unsafe(`GRANT USAGE ON SCHEMA public TO ${APP_ROLE}`)
+        await owner.unsafe(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${APP_ROLE}`)
+        await owner.unsafe(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${APP_ROLE}`)
+      } finally {
+        await owner.end({ timeout: 5 })
+      }
+    }
+    const leaf = buildApp({
+      GREMION_BOARD_PG_URL: scratchServerUrlAs(APP_ROLE, password),
+      BOARD_PG_URL: scratchDbUrl(DECOY_DB),
+      INTERNAL_BOARD_SECRET: SECRET,
+    })
+    await new Promise<void>((resolve) => leaf.server.listen(0, '127.0.0.1', resolve))
+    const roleApi = leafApi(leaf.server, SECRET)
+    try {
+      const a = await seed(TENANT_A)
+      const b = await seed(TENANT_B)
+      const deckOf = async (rec: BoardRecord) => roleApi.deck(rec.tenant, rec.boardId)
+      const fingerprintOf = boardIsolationCase(roleApi, seed).fingerprint
+      // positive controls first: as the app role, before any block, both tenants are served their own data
+      for (const rec of [a, b]) {
+        const r = await deckOf(rec)
+        expect(r.status, `${rec.tenant.slug} before the block`).toBe(200)
+        expect(JSON.stringify(r.body)).toContain(rec.canary)
+      }
+      const bFingerprintBefore = await fingerprintOf(TENANT_B, b)
+
+      await blockModuleDatabase(admin as never, dbA, TENANT_A.id, 'board', APP_ROLE)
+
+      for (const call of everyRouteCall({ orgUnitId: a.orgUnitId, boardId: a.boardId, stackId: a.stackIds[0], cardId: a.cardId })) {
+        const r = await leafRequest(leaf.server, SECRET, TENANT_A, call.method, call.path, call.body)
+        expect({ route: call.route, status: r.status, body: r.body }).toEqual({
+          route: call.route,
+          status: 404,
+          body: { success: false, error: 'tenant_not_provisioned' },
+        })
+      }
+      // B is served, reads and writes, and B's data is exactly what it was
+      const bRead = await deckOf(b)
+      expect(bRead.status).toBe(200)
+      expect(JSON.stringify(bRead.body)).toContain(b.canary)
+      expect(JSON.stringify(bRead.body)).not.toContain(a.canary)
+      expect(await fingerprintOf(TENANT_B, b)).toBe(bFingerprintBefore)
+      const bWrite = await roleApi.createCard(TENANT_B, { stackId: b.stackIds[0], title: 'written-while-a-is-blocked', createdBy: 'case' })
+      expect(bWrite.status).toBe(201)
+      // a request that names A's slug with B's id is no way in either: it is B's database that answers
+      const forged = await roleApi.deck(forgedSlug(TENANT_B, TENANT_A), b.boardId)
+      expect(JSON.stringify(forged.body)).not.toContain(a.canary)
+      // the block did not touch A's data: unblocked, A is served again with exactly what it had
+      await unblockModuleDatabase(admin as never, dbA, TENANT_A.id, 'board', APP_ROLE)
+      const aBack = await deckOf(a)
+      expect(aBack.status).toBe(200)
+      expect(JSON.stringify(aBack.body)).toContain(a.canary)
+    } finally {
+      await leaf.close()
+    }
   })
 })
