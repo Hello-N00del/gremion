@@ -16,14 +16,17 @@
 // English person who switched the language reads the shell navigation and every
 // catalogue string in English, also on a page that is still declared German.
 // Where the two differ the shell marks its own parts with their language
-// (AppShell `pageLocale`, WCAG 3.1.2); the hard-coded German inside a page
-// stays German until TASK-161 migrates it.
+// (AppShell `pageLocale`, WCAG 3.1.2), and a page marks the regions it renders
+// from the catalogue with `lang={$lang}` (the settings page, +error, the shared
+// module notices: settings-lang-marks.ssr.test.ts and error-lang-marks.ssr.test.ts
+// render both locales and fail on catalogue text without it); the hard-coded
+// German inside a page stays German, unmarked, until TASK-161 migrates it.
 //
 // The decision is keyed by the SvelteKit route id (event.route.id on the
 // server, navigation.to.route.id on the client), not by pathname prefix: a
 // route id names exactly one page. A null route id (no route matched) renders
-// +error, inside the (not yet translated) shell for a signed-in person, so it
-// is German too. A document is declared in the person's locale only when
+// +error, whose disabled-module notice is still hard-coded German, so it is
+// German too. A document is declared in the person's locale only when
 // everything it renders is translated: the page tree and, for a route inside
 // the shell, the shell chrome.
 //
@@ -49,9 +52,10 @@ export const UI_LOCALE_ATTRIBUTE = 'data-ui-locale'
 
 /**
  * True when the page at `routeId` renders in the person's locale. A null route
- * id (no route matched) renders +error, which a signed-in person sees inside
- * the shell; the shell's TopBar and command palette still carry hard-coded
- * German, so that document is German too (content-locale.test.ts proves both).
+ * id (no route matched) renders +error, which is catalogue text except the
+ * disabled-module notice and the server's own messages, so that document stays
+ * declared German and +error marks its catalogue text with its own lang
+ * (content-locale.test.ts proves the list, error-lang-marks.ssr.test.ts the marks).
  */
 export function isTranslatedRoute(routeId: string | null | undefined): boolean {
   return routeId != null && TRANSLATED_ROUTE_IDS.has(routeId)

@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { PageData, LayoutData } from './$types'
   import Icon from '$lib/components/ui/Icon.svelte'
-  import { t } from '$lib/i18n'
+  import { lang, t } from '$lib/i18n'
   import { scopeLabels, type ScopeKind } from '$lib/auth/labels'
   import { goto } from '$app/navigation'
   import { untrack } from 'svelte'
@@ -212,9 +212,13 @@
   }
 </script>
 
+<!--
+  WCAG 3.1.2: this page is declared German (<html lang>, content-locale.ts) while the catalogue strings
+  render in the person's locale, so every region made of them says so. Hard-coded German stays unmarked.
+-->
 <div class="settings-wrap">
   <div class="page-head">
-    <div>
+    <div lang={$lang}>
       <div class="eyebrow">{$t('settings.title')}</div>
       <h1 class="page-title">{$t('settings.title')}</h1>
       <div class="page-sub">
@@ -224,7 +228,7 @@
   </div>
 
   <div class="set-layout">
-    <nav class="set-nav" aria-label={$t('settings.nav.aria')}>
+    <nav class="set-nav" lang={$lang} aria-label={$t('settings.nav.aria')}>
       {#each groups as g (g.name)}
         <div class="set-nav-group">{g.name}</div>
         {#each g.items as s (s.key)}
@@ -249,7 +253,7 @@
     </nav>
 
     <div class="set-panel">
-      <div class="set-panel-head">
+      <div class="set-panel-head" lang={$lang}>
         <h2>{cur.label}</h2>
         <p>{SUBTITLE[cur.key]}</p>
       </div>
@@ -266,9 +270,9 @@
                 <span class="scope-chip {chipClass(s.kind)}">{s.label}</span>
               {/each}
               {#if data.stepUpEnforced && data.mfaEnrolled === true}
-                <span class="pill pill-success"><Icon name="shield" size={11} /> {$t('settings.profile.mfaOn')}</span>
+                <span class="pill pill-success" lang={$lang}><Icon name="shield" size={11} /> {$t('settings.profile.mfaOn')}</span>
               {:else if data.stepUpEnforced && data.mfaEnrolled === false}
-                <span class="pill"><Icon name="shield" size={11} /> {$t('settings.profile.mfaOff')}</span>
+                <span class="pill" lang={$lang}><Icon name="shield" size={11} /> {$t('settings.profile.mfaOff')}</span>
               {/if}
             </div>
           </div>
@@ -278,7 +282,7 @@
           emailActionAvailable={data.emailActionAvailable}
           accountActionResult={data.accountActionResult}
         />
-        <div class="profil-note">
+        <div class="profil-note" lang={$lang}>
           {$t('settings.profileNote.head')}
           <b>{$t('settings.section.darstellung')}</b>.
         </div>

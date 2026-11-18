@@ -4,7 +4,7 @@
   import Icon from '$lib/components/ui/Icon.svelte'
   import { resolveBrand } from '$lib/brand'
   import { PLUGGABLE_MODULES } from '$lib/instance-status'
-  import { t } from '$lib/i18n'
+  import { lang, t } from '$lib/i18n'
   import ModuleOffNotice from '$lib/components/ModuleOffNotice.svelte'
   import { onMount } from 'svelte'
   import { initTheme } from '$lib/stores/theme'
@@ -64,6 +64,12 @@
     return page.error?.message ?? $t('error.detail.unknown')
   })
 
+  // The detail is a catalogue message for the statuses it knows; for any other the server's own message is shown
+  // as it came (those are German), so it keeps the page's language instead of the person's.
+  const detailIsCatalogue = $derived(
+    page.status === 403 || page.status === 404 || page.status === 500 || !page.error?.message,
+  )
+
   const heading = $derived(
     moduleOff
       ? 'Modul nicht aktiv'
@@ -83,12 +89,13 @@
   <ModuleOffNotice moduleId={moduleOff.id} isItAdmin={isItAdmin} />
 {:else}
 <div class="error-page">
-  <div class="error-card">
+  <!-- WCAG 3.1.2: the page is declared German (<html lang>), the messages render in the person's locale. -->
+  <div class="error-card" lang={$lang}>
     <div class="error-status" aria-hidden="true">{page.status}</div>
     <div class="eyebrow">{brand.product} · {page.status}</div>
     <h1 class="display error-heading">{heading}</h1>
 
-      <p class="error-detail">{detail}</p>
+      <p class="error-detail" lang={detailIsCatalogue ? undefined : 'de'}>{detail}</p>
 
       {#if page.status === 403}
         {#if sessionUser}

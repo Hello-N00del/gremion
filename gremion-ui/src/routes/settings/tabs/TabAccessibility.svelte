@@ -31,7 +31,7 @@
   ])
 </script>
 
-<div class="py-4 space-y-8">
+<div class="py-4 space-y-8" lang={$lang}>
 
   <!-- Language (moved out of TabGeneral, #168) -->
   <section>

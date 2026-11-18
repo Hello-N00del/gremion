@@ -139,7 +139,7 @@
       title={$t('topbar.instance.title')}
     >
       <Icon name={instanceMeta.icon} size={11} aria-hidden="true" />
-      <span class="inst-txt">INSTANZ · {instanceMeta.label}</span>
+      <span class="inst-txt" lang="de">INSTANZ · {instanceMeta.label}</span>
     </a>
   {/if}
 

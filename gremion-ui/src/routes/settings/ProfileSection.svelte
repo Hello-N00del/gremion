@@ -4,7 +4,7 @@
   // (actions `profileName` and `accountAction`, logic in $lib/server/profile).
   // Plain form POSTs, so everything works with JavaScript off.
   import { page } from '$app/state'
-  import { t } from '$lib/i18n'
+  import { lang, t } from '$lib/i18n'
 
   type Profile = { firstName: string; lastName: string; email: string }
   type ActionResult = { action: 'UPDATE_PASSWORD' | 'CONFIGURE_TOTP' | 'UPDATE_EMAIL'; status: 'success' | 'cancelled' | 'error' }
@@ -37,7 +37,7 @@
   } as const
 </script>
 
-<section class="mt-6" aria-labelledby="profil-name-h">
+<section class="mt-6" lang={$lang} aria-labelledby="profil-name-h">
   <h3 id="profil-name-h" class="text-sm font-semibold mb-1" style="font-family: var(--font-display);">{$t('settings.profile.name.h')}</h3>
   {#if profile}
     <p class="text-xs text-ink-muted mb-3">{$t('settings.profile.name.help')}</p>
@@ -97,7 +97,7 @@
   {/if}
 </section>
 
-<section class="mt-8" aria-labelledby="profil-login-h">
+<section class="mt-8" lang={$lang} aria-labelledby="profil-login-h">
   <h3 id="profil-login-h" class="text-sm font-semibold mb-1" style="font-family: var(--font-display);">{$t('settings.profile.login.h')}</h3>
   <p class="text-xs text-ink-muted mb-3">
     {$t('settings.profile.login.help')}

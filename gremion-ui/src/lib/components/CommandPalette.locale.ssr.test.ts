@@ -61,4 +61,21 @@ describe('command palette follows the interface locale', () => {
     }
     expect(html).not.toContain('Command palette')
   })
+
+  // WCAG 3.1.2: a rail label the translation does not reach stays German (localizeNav marks it lang 'de');
+  // the palette lists it inside its English dialog, so it keeps that mark.
+  test('en: a page label the translation did not reach is marked German inside the English dialog', async () => {
+    const request = new Request('https://pilot.test/')
+    localeOf.set(request, 'en')
+    const reached = { kind: 'item' as const, href: '/calendar', label: 'Calendar', icon: 'calendar' }
+    const kept = { kind: 'item' as const, href: '/ausschuesse', label: 'Ausschüsse', icon: 'users', lang: 'de' }
+    const response = await paraglideMiddleware(
+      request,
+      () => new Response(render(CommandPalette, { props: { open: true, nav: [reached, kept], lang: 'en' } }).body)
+    )
+    const html = await response.text()
+    expect(html).toMatch(/role="dialog"[^>]* lang="en"/)
+    expect(html).toMatch(/<span class="cp-label[^"]*" lang="de">Ausschüsse<\/span>/)
+    expect(html).toMatch(/<span class="cp-label[^"]*">Calendar<\/span>/)
+  })
 })

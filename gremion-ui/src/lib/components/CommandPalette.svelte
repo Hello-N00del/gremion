@@ -1,8 +1,8 @@
 <script lang="ts" module>
   // A flat, searchable command. `kind` drives the section grouping in the list.
   export type PaletteCommand =
-    | { kind: 'page'; label: string; href: string; icon?: string; hint?: string }
-    | { kind: 'action'; label: string; href: string; icon?: string; hint?: string }
+    | { kind: 'page'; label: string; href: string; icon?: string; hint?: string; lang?: string }
+    | { kind: 'action'; label: string; href: string; icon?: string; hint?: string; lang?: string }
 </script>
 
 <script lang="ts">
@@ -47,7 +47,7 @@
     const out: PaletteCommand[] = []
     for (const node of items) {
       if (node.kind === 'item') {
-        out.push({ kind: 'page', label: node.label, href: node.href, icon: node.icon })
+        out.push({ kind: 'page', label: node.label, href: node.href, icon: node.icon, lang: node.lang })
       } else if (node.kind === 'section') {
         out.push(...flattenNav(node.children))
       }
@@ -200,7 +200,7 @@
               onmousemove={() => (activeIndex = idx)}
             >
               {#if cmd.icon}<Icon name={cmd.icon} size={15} aria-hidden="true" />{/if}
-              <span class="cp-label">{cmd.label}</span>
+              <span class="cp-label" lang={cmd.lang}>{cmd.label}</span>
               <span class="cp-path">{cmd.href}</span>
             </div>
           {/each}
@@ -222,7 +222,7 @@
               onmousemove={() => (activeIndex = idx)}
             >
               {#if cmd.icon}<Icon name={cmd.icon} size={15} aria-hidden="true" />{/if}
-              <span class="cp-label">{cmd.label}</span>
+              <span class="cp-label" lang={cmd.lang}>{cmd.label}</span>
               {#if cmd.hint}<span class="cp-hint">{cmd.hint}</span>{/if}
             </div>
           {/each}

@@ -41,6 +41,7 @@
 <div
   role="alertdialog"
   aria-labelledby={titleId}
+  lang={$lang}
   class="space-y-4 rounded-lg border border-rust/50 bg-rust-soft p-4 text-rust-ink"
 >
   <h3 id={titleId} class="text-base font-semibold text-rust">

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { t } from '$lib/i18n'
+  import { lang, t } from '$lib/i18n'
   import type { OperatorModuleItem } from '$lib/modules/switch-preview'
 
   // The modules the customer has that the council cannot switch (content, files, messaging, publishing, the
@@ -9,10 +9,10 @@
 </script>
 
 {#if modules.length > 0}
-  <ul class="space-y-3" aria-label={$t('settings.modules.operator.list')}>
+  <ul class="space-y-3" lang={$lang} aria-label={$t('settings.modules.operator.list')}>
     {#each modules as m (m.moduleId)}
       <li class="space-y-1 rounded-lg border border-border p-4" data-module={m.moduleId} data-managed-by="operator">
-        <h3 class="text-sm font-semibold">{m.label}</h3>
+        <h3 class="text-sm font-semibold" lang="de">{m.label}</h3>
         <p class="text-xs text-ink-muted">
           <span>{$t('settings.modules.state.on')}</span>
           ·
