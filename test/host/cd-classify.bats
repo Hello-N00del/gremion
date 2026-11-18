@@ -29,7 +29,7 @@ teardown() { cls_teardown; }
 @test "the real classifier answers: the cross-unit stub is not what ran" {
     run cls_run
     [ "$status" -eq 0 ]
-    ! grep -q '^stub cd_classify' "$SHIM_LOG"
+    if grep -q '^stub cd_classify' "$SHIM_LOG"; then false; fi
     cls_is '.v == 1'
 }
 
@@ -302,7 +302,7 @@ teardown() { cls_teardown; }
     cls_is '.state_tier == ["compose_state:nats"]'
     [[ "$output" != *"$canary"* ]]
     [[ "$stderr" != *"$canary"* ]]
-    ! grep -q "$canary" "$SHIM_LOG"
+    if grep -q "$canary" "$SHIM_LOG"; then false; fi
     # no temporary directory of the classifier is left behind (it held the rendered config)
     [ -z "$(find "$TMPDIR" -mindepth 1 -maxdepth 1 -name 'cd-classify*' 2>/dev/null)" ]
 }
@@ -398,8 +398,8 @@ exec '"$real"' "$@"'
     kill -TERM "$pid"
     wait "$pid" || true
     [ -z "$(find "$TMPDIR" -mindepth 1 -maxdepth 1 -name 'cd-classify*' 2>/dev/null)" ]
-    ! grep -rqs "$canary" "$TMPDIR"
-    ! grep -q "$canary" "$BATS_TEST_TMPDIR/term.out"
+    if grep -rqs "$canary" "$TMPDIR"; then false; fi
+    if grep -q "$canary" "$BATS_TEST_TMPDIR/term.out"; then false; fi
 }
 
 @test "a caller whose own TERM handler returns keeps that handler after the classifier was terminated" {
@@ -532,6 +532,22 @@ echo "int=[$(trap -p INT)]"' cls-run "$CLS_OLD" "$CLS_NEW"
     run cls_run
     [ "$status" -eq 0 ]
     cls_is '.app_only == false and .hold.kind == "classify_failed" and (.holds | map(.reason) | index("classify_failed:chain_missing:control") != null)'
+}
+
+@test "migrations: an unknown class in both chain-runners.json is classify_failed, with no new file in that chain" {
+    cls_class "$CLS_OLD" mail bogus
+    cls_class "$CLS_NEW" mail bogus
+    cls_commit "$CLS_OLD"
+    cls_commit "$CLS_NEW"
+    run cls_run
+    [ "$status" -eq 0 ]
+    cls_is '.app_only == false and .hold.kind == "classify_failed" and (.holds | map(.reason) | index("classify_failed:class_unknown:mail") != null)'
+}
+
+@test "the class document has exactly the documented keys, and no reconcile field" {
+    run cls_run
+    [ "$status" -eq 0 ]
+    cls_is 'keys == ["app_only","ci_changed","compose","hold","holds","host","migrations","state_tier","v"] and (has("reconcile") | not)'
 }
 
 @test "migrations: a chain and class pair the program cannot apply is classify_failed (allow-list)" {

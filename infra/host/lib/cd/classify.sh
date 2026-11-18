@@ -367,6 +367,14 @@ _cd_cls_body() {
             [[ -n "$chain" ]] || continue
             new_class["$chain"]="$cls"
         done < <(jq -r '.chains | to_entries[] | "\(.key)\t\(.value)"' "$new/scripts/migrations/runner/chain-runners.json")
+        # an unknown class in EITHER file is classify_failed, whether or not a new file
+        # lands in that chain
+        for chain in "${!old_class[@]}"; do
+            _cd_cls_known_class "${old_class[$chain]}" || _cls_err "class_unknown:${chain}"
+        done
+        for chain in "${!new_class[@]}"; do
+            _cd_cls_known_class "${new_class[$chain]}" || _cls_err "class_unknown:${chain}"
+        done
         # a chain the live file has must stay in the new file; a chain only the new file has
         # and every class that differs is chain_class_changed
         for chain in "${!old_class[@]}"; do
