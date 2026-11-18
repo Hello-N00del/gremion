@@ -216,16 +216,16 @@ _cd_cls_compose() {
         ($ps | split("\n") | map(select(length > 0))) as $list
         | walk(if type == "string" then
                  reduce $list[] as $p (.; gsub("(?<![A-Za-z0-9_./-])" + ($p | esc) + "(?![A-Za-z0-9_.-])"; "@TREE@"))
-               else . end)' "$raw" >"$norm" || return 1
+               else (.) end)' "$raw" >"$norm" || return 1
     # the paths inside the tree that a service reads: bind sources, configs, build context
     jq -r '
-        . as $root
+        (.) as $root
         | ($root.services // {}) | to_entries[] | .value as $s
         | ( (($s.volumes // [])[] | select(type == "object" and .type == "bind") | .source),
-            ($s.build | if type == "object" then .context elif type == "string" then . else empty end),
-            (($s.configs // [])[] | (if type == "string" then . else .source end) as $n | ($root.configs[$n].file? // empty)) )
+            ($s.build | if type == "object" then .context elif type == "string" then (.) else empty end),
+            (($s.configs // [])[] | (if type == "string" then (.) else .source end) as $n | ($root.configs[$n].file? // empty)) )
         | select(type == "string" and startswith("@TREE@"))
-        | ltrimstr("@TREE@") | ltrimstr("/") | if . == "" then "." else . end' "$norm" \
+        | ltrimstr("@TREE@") | ltrimstr("/") | if . == "" then "." else (.) end' "$norm" \
         | LC_ALL=C sort -u >"$tmp/rels.txt" || return 1
     : >"$tmp/paths.tsv"
     while IFS= read -r rel; do
@@ -237,12 +237,12 @@ _cd_cls_compose() {
     jq -R -s -c 'split("\n") | map(select(length > 0) | split("\t") | {key: .[0], value: .[1]}) | from_entries' \
         "$tmp/paths.tsv" >"$tmp/paths.json" || return 1
     jq -S -c --slurpfile p "$tmp/paths.json" '
-        . as $root | $p[0] as $p
+        (.) as $root | $p[0] as $p
         | def reads($s):
             [ (($s.volumes // [])[] | select(type == "object" and .type == "bind") | .source),
-              ($s.build | if type == "object" then .context elif type == "string" then . else empty end),
-              (($s.configs // [])[] | (if type == "string" then . else .source end) as $n | ($root.configs[$n].file? // empty)) ]
-            | map(select(type == "string" and startswith("@TREE@")) | ltrimstr("@TREE@") | ltrimstr("/") | if . == "" then "." else . end)
+              ($s.build | if type == "object" then .context elif type == "string" then (.) else empty end),
+              (($s.configs // [])[] | (if type == "string" then (.) else .source end) as $n | ($root.configs[$n].file? // empty)) ]
+            | map(select(type == "string" and startswith("@TREE@")) | ltrimstr("@TREE@") | ltrimstr("/") | if . == "" then "." else (.) end)
             | unique | map({key: ., value: ($p[.] // "absent")}) | from_entries;
         { top: ($root | del(.services)),
           services: (($root.services // {}) | with_entries(.value as $s | .value = {def: $s, paths: reads($s)})) }' \
@@ -311,7 +311,7 @@ _cd_cls_body() {
         jq -r -n --slurpfile o "$old/scripts/migrations/applied.lock.json" --slurpfile n "$new/scripts/migrations/applied.lock.json" '
             ($o[0].chains) as $oc | ($n[0].chains) as $nc
             | ( $nc | to_entries[] | .key as $c | (.value.files | to_entries[])
-                | . as $e | ($oc[$c].files // {})[$e.key] as $was
+                | (.) as $e | ($oc[$c].files // {})[$e.key] as $was
                 | if $was == null then "new\t\($c)\t\($e.key)"
                   elif $was != $e.value then "changed\t\($c)\t\($e.key)" else empty end ),
               ( $oc | to_entries[] | .key as $c | (.value.files | to_entries[])
