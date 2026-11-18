@@ -32,6 +32,22 @@
 > which differs from the DSB question text ("sofort") and goes to the DSB with part 2. The
 > job's destructive steps run only when `KARENZ_FINAL_DELETION=on`; it ships `off` (a dry
 > run), and it is turned on only after the phase-3 finance extraction is verified.
+>
+> **Change note 2026-11-17 (board export kept after day 30):** operator decision: the board
+> export is not deleted on day 30. The Karenz job drops the blocked database and keeps the
+> board export for a fixed number of days after day 30 (`EXPORT_KEEP_DAYS` in
+> `packages/provisioning/src/export-hold.ts`). The length is **provisional** until the DPO
+> confirms it; the constant and the two rows RC-MOD-EXPORT and RC-BRD change together, and a
+> test fails when they disagree. This applies only once board has its own module database:
+> today board has none, is served from the kernel tenant database, and no board export is
+> taken at switch-off, so the rule keeps nothing until the release that gives board a
+> database (the runbook row for board stays true until then). The date is written to the
+> Karenz row by the first day-30 run that keeps the export and is read from there ever
+> after: a later change of `EXPORT_KEEP_DAYS` does not re-date an export that is already
+> kept, so when the DPO sets the final length, the stored dates of exports already kept are
+> moved by hand (the same hand step that releases an export early). This is a change of a
+> compliance document and goes to the DPO for review. Every other module keeps the 30-day
+> rule.
 
 > **Change note 2026-10-27 (TRD-144/145):** the scheduled purge run exists
 > (`packages/tenant-store/src/lifecycle/purge.ts`, `gremion-purge.timer`). It executes only
@@ -424,7 +440,7 @@ their deletion rules are the file store operator's and are out of this catalogue
 
 | Row | Category (profile) | Start event | Basis | Window | Reading |
 |---|---|---|---|---|---|
-| RC-BRD | Boards and cards (`rp-brd-board`, `rp-brd-card`) | module disabled, body archived, or end of the Wahlperiode | Art. 5(1)(e) | **1 year** after the Wahlperiode ends (the successor board's first year); **grace** after disablement | [A-L4] Sets the schema's undecided "+ n" placeholder [D-nc] under this reading |
+| RC-BRD | Boards and cards (`rp-brd-board`, `rp-brd-card`) | module disabled, body archived, or end of the Wahlperiode | Art. 5(1)(e) | **1 year** after the Wahlperiode ends (the successor board's first year); **grace** after disablement; the board export kept **365 days after day 30** applies only once board has its own module database (today it has none: board is served from the kernel tenant database and no export is taken at switch-off); provisional until the DPO confirms; the same number as RC-MOD-EXPORT. From then on erasure of a person does not reach the kept export, which holds the card text and the two person columns (`created_by`, `assignee_keycloak_id`): open question for the DPO | [A-L4] Sets the schema's undecided "+ n" placeholder [D-nc] under this reading |
 | RC-PWD | Vault items, collection references, instance configuration (`rp-pwd-native-item`, `rp-pwd-collectionreference`, `rp-pwd-instanceconfig`) | item deleted; body archived; module disabled (export first) | Art. 5(1)(e), 25, 32 | item **on event**; otherwise **grace** | [A-G] |
 
 ### 7.9 Public portal (pub)
@@ -496,7 +512,7 @@ answer arrives; only the windows below are re-dated (§3).
 
 | Row | Category (profile) | Start event | Basis | Window | Reading |
 |---|---|---|---|---|---|
-| RC-MOD-EXPORT | The (customer, module) `pg_dump` taken before a module database is dropped (TRD-424): board `rp-brd-module-data`, calendar `rp-cal-module-data`, content `rp-pub-module-data`, finance `rp-fin-module-data`, publishing `rp-nws-module-data`, vault `rp-pwd-module-data` | export verified (the module is switched off for the customer) | Art. 5(1)(e); the export is a backup of the blocked database during the Karenz | **grace (30 days)** from the verified export at switch-off, then the export is deleted with the blocked database; where the export holds K4 finance records the RC-FIN-* hold prevails: finance is extracted by class (RC-FIN-BOOKS 10 y, RC-FIN-VOUCH 8 y, RC-FIN-CORR 6 y; phase 3) and the dump itself is not kept for the hold, but the finance dump is deleted only once that extraction is verified; until then the export is kept until its hold ends | [D 2026-10-30 DSB Q14]; [A-G] module grace confirmed |
+| RC-MOD-EXPORT | The (customer, module) `pg_dump` taken before a module database is dropped (TRD-424): board `rp-brd-module-data`, calendar `rp-cal-module-data`, content `rp-pub-module-data`, finance `rp-fin-module-data`, publishing `rp-nws-module-data`, vault `rp-pwd-module-data` | export verified (the module is switched off for the customer) | Art. 5(1)(e); the export is a backup of the blocked database during the Karenz | **grace (30 days)** from the verified export at switch-off, then the export is deleted with the blocked database; the one exception is board: its export is kept **365 days after day 30** (`EXPORT_KEEP_DAYS`; the DPO sets the length) and deleted after that, only once board has its own module database (today it has none and no board export is taken); where the export holds K4 finance records the RC-FIN-* hold prevails: finance is extracted by class (RC-FIN-BOOKS 10 y, RC-FIN-VOUCH 8 y, RC-FIN-CORR 6 y; phase 3) and the dump itself is not kept for the hold, but the finance dump is deleted only once that extraction is verified; until then the export is kept until its hold ends | [D 2026-10-30 DSB Q14]; [A-G] module grace confirmed |
 | RC-MOD-DATA | Module data the platform still holds for a module **without its own database** when that module is disabled for a customer: elections `rp-ele-module-data`, files `rp-fil-module-data`, handover `rp-hnd-module-data`, messaging `rp-msg-module-data`, votes `rp-gov-module-data` | module switched off for the customer | Art. 5(1)(e), 17 | **grace (30 days)**, then deleted by the Karenz job; kept regardless: sealed read-only copies written at switch-off for categories with their own row (RC-ELE results, RC-GOV-RES, RC-GOV-SECRET, RC-HND-TRACK 2 years); finance is a database module and follows RC-MOD-EXPORT; chat rooms follow RC-MSG-ROOM; file contents stay in the council's file store (§7.6) | [D R29-I24] profile ids; window [D 2026-10-30 DSB Q14], [A-MOD] resolved |
 
 ---

@@ -63,6 +63,8 @@ export const NAMED: Record<'unit' | 'integration', Record<string, number>> = {
     'test/integration/audit-append-only.test.ts': 6,
     // kernel issue #89: the purger access re-ensure (a customer made before the grants existed); +3 schema USAGE / table grants
     'test/integration/purger-connect.test.ts': 9,
+    // the export hold at day 30 (board export kept after the database is dropped) on the scratch stack (kept, released by hand, repeated after a crash)
+    'test/integration/export-hold.test.ts': 9,
     // pilot wave 2: the isolation evidence producer's file meets the parser and the gate
     'test/isolation-evidence-producer.test.ts': 5,
   },
