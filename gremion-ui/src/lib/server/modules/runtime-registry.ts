@@ -225,6 +225,13 @@ export interface DataProviderContract {
    *  (e.g. FINANCE_BACKEND=service, a named residual); the handover kernel then
    *  renders the empty-facts shape. Absent provider = empty facts too. */
   'finance:handover-facts': (orgUnitKeys: string[]) => Promise<HandoverFinanceFactsCore | null>
+  /** Board: remove the boards of an org unit that was just deleted from the board module's own database.
+   *  The kernel's deleteOrgUnit(id) asks AFTER its transaction committed (never the tx form). Resolves
+   *  the number of boards removed, or null when no call was due (the boards live in the kernel tables,
+   *  where the database cascade did it) or none could be made (the board database is blocked); a
+   *  rejection is logged by the caller and never undoes the delete. Absent provider (board module
+   *  off) = no call. */
+  'board:delete-org-unit-boards': (orgUnitId: string) => Promise<number | null>
   /** Messages: Matrix unread total for the shell bell/sidebar badge (layout loadUnread). */
   'messages:unread-count': (accessToken: string | null) => Promise<number>
   /** Messages: rooms with unread>0 (name + count + last activity) for the D11

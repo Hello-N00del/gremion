@@ -18,6 +18,7 @@
 // It is a no-op when NATS_URL is unset. The relay (./register.server) publishes it
 // so the finance org_unit_mirror stays in sync.
 import { getDb } from '../db'
+import { getDataProvider } from '$lib/server/modules/runtime-registry'
 import { getRunner as genericGetRunner, unpackTxArgs, type PgTransaction, type SqlRunner } from '$lib/server/db/tx'
 import { loadOrgSchema, type OrgSchema } from './org-schema'
 import { enqueueOrgUnitEvent, type OrgUnitEventInput } from './org-unit-event-outbox'
@@ -200,6 +201,40 @@ export async function setSubsystemWanted(
   }
 }
 
+/**
+ * After the org unit's own transaction committed: remove its boards from the board module's own
+ * database. While a customer's boards live in the kernel tables the database cascade
+ * (board.org_unit_id ON DELETE CASCADE, migration 0034) does it and the provider answers null; in the
+ * module database nothing cascades, so the board module is asked through the runtime-registry seam (the
+ * kernel never imports module code). A failure is logged and left to be found later: the org unit is
+ * gone either way, and a delete that fails because a board call failed would leave the caller retrying
+ * a delete that already happened. The log carries a count or an error class, never an id or a name.
+ */
+async function deleteBoardsAfterCommit(orgUnitId: string): Promise<void> {
+  const provider = getDataProvider('board:delete-org-unit-boards')
+  if (!provider) return
+  try {
+    const removed = await provider(orgUnitId)
+    if (removed !== null && removed > 0) {
+      console.info(`[org-units] boards of a deleted org unit removed from the board database: ${removed}`)
+    }
+  } catch (err) {
+    const cls = err instanceof Error && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(err.name) ? err.name : 'Error'
+    console.error(
+      `[org-units] the boards of a deleted org unit could not be removed from the board database (${cls}); they stay there until they are cleaned up`,
+    )
+  }
+}
+
+/**
+ * Delete an org unit.
+ *
+ * `deleteOrgUnit(id)` opens its own transaction and, AFTER that commits, asks the board module to remove
+ * the org unit's boards from its own database (deleteBoardsAfterCommit). `deleteOrgUnit(tx, id)` runs
+ * inside the CALLER's transaction and NEVER makes that call: the caller may still roll back, and a call
+ * made before the commit would delete the boards of an org unit that survives. A caller of the tx form
+ * that needs the boards gone is responsible for the call after its own commit.
+ */
 export async function deleteOrgUnit(id: string): Promise<void>
 export async function deleteOrgUnit(tx: PgTransaction, id: string): Promise<void>
 export async function deleteOrgUnit(
@@ -214,6 +249,9 @@ export async function deleteOrgUnit(
       await enqueueOrgUnitEvent(sql, { eventType: 'deleted', aggregateId: id, payload: { id } })
     }
   })
+  // Own transaction only, and only after it committed. Asked even when no row matched, so a retry after
+  // a lost call still cleans up (the call is idempotent).
+  if (!tx) await deleteBoardsAfterCommit(id)
 }
 
 export async function listOrgUnitMembers(orgUnitId: string): Promise<readonly OrgUnitMember[]> {

@@ -28,10 +28,14 @@ import type {
  *  HTTP status so callers can map it to SvelteKit errors / Responses. */
 export class BoardServiceError extends Error {
   readonly status: number
-  constructor(status: number, message: string) {
+  /** The leaf's own error text (`{ success:false, error }`), e.g. 'tenant_not_provisioned' for a blocked or
+   *  dropped database; undefined when the body carried none. A 404 for an unknown route has another one. */
+  readonly code: string | undefined
+  constructor(status: number, message: string, code?: string) {
     super(`[board-service-client] Leaf returned ${status}: ${message}`)
     this.name = 'BoardServiceError'
     this.status = status
+    this.code = code
   }
 }
 
@@ -101,6 +105,11 @@ function readDataArray(res: unknown, op: string): unknown[] {
     )
   }
   return data
+}
+
+/** A row count as the leaf reports it: a whole number, never negative. Anything else is a malformed answer. */
+function isCount(v: unknown): v is number {
+  return typeof v === 'number' && Number.isInteger(v) && v >= 0
 }
 
 function deserializeStack(raw: Record<string, unknown>): Stack {
@@ -174,13 +183,17 @@ export class ServiceBoardClient implements BoardBackendPort {
       })
       if (!res.ok) {
         let errMsg = `HTTP ${res.status}`
+        let code: string | undefined
         try {
           const errBody = (await res.json()) as { error?: string }
-          if (errBody.error) errMsg = errBody.error
+          if (errBody.error) {
+            errMsg = errBody.error
+            code = errBody.error
+          }
         } catch {
           /* ignore JSON parse failure */
         }
-        throw new BoardServiceError(res.status, errMsg)
+        throw new BoardServiceError(res.status, errMsg, code)
       }
       return res.json()
     } finally {
@@ -335,5 +348,38 @@ export class ServiceBoardClient implements BoardBackendPort {
       order: input.order,
     })) as Record<string, unknown>
     return deserializeStack(res)
+  }
+
+  // ── Kernel-driven calls (not part of BoardBackendPort) ─────────────────────
+  // The kernel's erasure hook and its org-unit delete reach the board's own database only through
+  // these two. They are not on the port: no route or page calls them, so the router's read/write
+  // classification does not apply (a customer in `moving` still has its boards in the kernel tables,
+  // and the callers choose the kernel path themselves, see erasure.ts).
+
+  /** POST /api/v1/erase-subject. Not retried (a POST). A 404 (blocked database) surfaces as a
+   *  BoardServiceError, never as zero counts: the caller decides what "not reachable now" means. */
+  async eraseSubject(subjectId: string): Promise<{ card_assignee: number; card_created_by: number }> {
+    const res = (await this.leafFetch('POST', '/api/v1/erase-subject', { subjectId })) as {
+      counts?: { card_assignee?: unknown; card_created_by?: unknown }
+    } | null
+    const assignee = res?.counts?.card_assignee
+    const createdBy = res?.counts?.card_created_by
+    if (!isCount(assignee) || !isCount(createdBy)) {
+      throw new Error('[board-service-client] malformed eraseSubject response: expected { counts } of whole numbers from the board leaf')
+    }
+    return { card_assignee: assignee, card_created_by: createdBy }
+  }
+
+  /** DELETE /api/v1/org-units/:id/boards: the boards of that org unit in the customer's board database
+   *  (stacks and cards with them). Not retried. Returns how many boards were deleted. */
+  async deleteBoardsForOrgUnit(orgUnitId: string): Promise<number> {
+    const res = (await this.leafFetch('DELETE', `/api/v1/org-units/${encodeURIComponent(orgUnitId)}/boards`)) as {
+      deleted?: unknown
+    } | null
+    const deleted = res?.deleted
+    if (!isCount(deleted)) {
+      throw new Error('[board-service-client] malformed deleteBoardsForOrgUnit response: expected { deleted } as a whole number from the board leaf')
+    }
+    return deleted
   }
 }
