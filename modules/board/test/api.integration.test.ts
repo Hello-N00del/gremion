@@ -9,9 +9,9 @@
 import http from 'node:http'
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
 import { buildApp, type BoardApp } from '../src/app.ts'
-import { createBoard, createStack, type Sql } from '../src/store/index.ts'
+import { createBoard, createCard, createStack, type Sql } from '../src/store/index.ts'
 import { connectAdmin, dropScratchDb, provisionDb, scratchServerUrl, tenantBoardDb, type ScratchSql } from './support/scratch-pg.ts'
-import { TENANT_A } from './support/tenants.ts'
+import { TENANT_A, TENANT_B } from './support/tenants.ts'
 
 const TEST_SECRET = 'test-board-secret-123'
 
@@ -522,6 +522,156 @@ describe('POST /api/v1/boards/:id/stacks', () => {
     for (const body of [{}, { name: '', order: 0 }, { name: 'x'.repeat(61), order: 0 }, { name: 'x', order: -1 }, { name: 'x', order: 1.5 }, { name: 'x' }]) {
       const r = await callServer(server, 'POST', `/api/v1/boards/${b.id}/stacks`, guardHeaders(), body)
       expect(r.status, JSON.stringify(body)).toBe(400)
+    }
+  })
+})
+
+// -- erasure routes (the kernel's erasure hook and org-unit delete call these) ---
+
+const SUBJECT = 'kc-subject-erase'
+const OTHER_SUBJECT = 'kc-other-person'
+
+function headersFor(tenant: { id: string; slug: string }): Record<string, string> {
+  return { ...guardHeaders(), 'x-tenant-id': tenant.id, 'x-tenant-slug': tenant.slug }
+}
+
+/** One board with one stack and the five cards the erasure cases need. */
+async function seedErasureCards(handle: Sql, orgUnitId = OU1): Promise<void> {
+  const b = await createBoard(handle, { orgUnitId, name: 'Erasure' })
+  const s = await createStack(handle, { boardId: b.id, name: 'To Do', order: 0 })
+  const card = (title: string, assignee: string | null, createdBy: string | null) =>
+    createCard(handle, { stackId: s.id, title, assigneeKeycloakId: assignee, createdBy })
+  await card('assigned to subject, made by other', SUBJECT, OTHER_SUBJECT)
+  await card('made by subject, assigned to other', OTHER_SUBJECT, SUBJECT)
+  await card('both subject', SUBJECT, SUBJECT)
+  await card('unrelated', OTHER_SUBJECT, OTHER_SUBJECT)
+  await card('unowned', null, null)
+}
+
+const cardPeople = async (handle: Sql) =>
+  Object.fromEntries(
+    (
+      await handle<{ title: string; assignee_keycloak_id: string | null; created_by: string | null }[]>`
+      SELECT title, assignee_keycloak_id, created_by FROM card`
+    ).map((r) => [r.title, [r.assignee_keycloak_id, r.created_by]]),
+  )
+
+describe('POST /api/v1/erase-subject', () => {
+  it('unassigns the subject, pseudonymises authorship, keeps every card, and returns both counts', async () => {
+    await seedErasureCards(sql)
+    const r = await callServer(server, 'POST', '/api/v1/erase-subject', guardHeaders(), { subjectId: SUBJECT })
+    expect(r).toEqual({ status: 200, body: { counts: { card_assignee: 2, card_created_by: 2 } } })
+    expect(await cardPeople(sql)).toEqual({
+      'assigned to subject, made by other': [null, OTHER_SUBJECT],
+      'made by subject, assigned to other': [OTHER_SUBJECT, 'erased'],
+      'both subject': [null, 'erased'],
+      unrelated: [OTHER_SUBJECT, OTHER_SUBJECT],
+      unowned: [null, null],
+    })
+  })
+
+  it('an unknown subject answers zero counts and changes nothing; a repeat answers zero counts', async () => {
+    await seedErasureCards(sql)
+    const before = await cardPeople(sql)
+    const none = await callServer(server, 'POST', '/api/v1/erase-subject', guardHeaders(), { subjectId: 'kc-nobody' })
+    expect(none).toEqual({ status: 200, body: { counts: { card_assignee: 0, card_created_by: 0 } } })
+    expect(await cardPeople(sql)).toEqual(before)
+    await callServer(server, 'POST', '/api/v1/erase-subject', guardHeaders(), { subjectId: SUBJECT })
+    const again = await callServer(server, 'POST', '/api/v1/erase-subject', guardHeaders(), { subjectId: SUBJECT })
+    expect(again.body).toEqual({ counts: { card_assignee: 0, card_created_by: 0 } })
+  })
+
+  it('answers 403 without x-internal-auth and with a wrong secret, and changes nothing', async () => {
+    await seedErasureCards(sql)
+    const before = await cardPeople(sql)
+    const { 'x-internal-auth': _omit, ...noAuth } = guardHeaders()
+    expect((await callServer(server, 'POST', '/api/v1/erase-subject', noAuth, { subjectId: SUBJECT })).status).toBe(403)
+    expect((await callServer(server, 'POST', '/api/v1/erase-subject', { ...guardHeaders(), 'x-internal-auth': 'nope' }, { subjectId: SUBJECT })).status).toBe(403)
+    expect(await cardPeople(sql)).toEqual(before)
+  })
+
+  it('refuses a body with extra fields, a non-string id, an empty id and no id (400), and changes nothing', async () => {
+    await seedErasureCards(sql)
+    const before = await cardPeople(sql)
+    for (const body of [{ subjectId: SUBJECT, extra: true }, { subjectId: 7 }, { subjectId: ['a'] }, { subjectId: '' }, {}]) {
+      const r = await callServer(server, 'POST', '/api/v1/erase-subject', guardHeaders(), body)
+      expect(r.status, JSON.stringify(body)).toBe(400)
+    }
+    expect(await cardPeople(sql)).toEqual(before)
+  })
+
+  it("touches only the calling tenant's database: tenant B's rows are unchanged", async () => {
+    const dbB = tenantBoardDb(TENANT_B.id)
+    await provisionDb(admin, dbB)
+    const rb = await app.storeFor(TENANT_B)
+    if (typeof rb !== 'function') throw new Error(`[api] app.storeFor(B) refused: ${JSON.stringify(rb)}`)
+    try {
+      await rb`DELETE FROM card`
+      await rb`DELETE FROM stack`
+      await rb`DELETE FROM board`
+      await seedErasureCards(sql)
+      await seedErasureCards(rb)
+      const beforeB = await cardPeople(rb)
+      const r = await callServer(server, 'POST', '/api/v1/erase-subject', guardHeaders(), { subjectId: SUBJECT })
+      expect(r.body).toEqual({ counts: { card_assignee: 2, card_created_by: 2 } })
+      expect(await cardPeople(rb)).toEqual(beforeB)
+      expect(Object.values(await cardPeople(rb)).flat()).toContain(SUBJECT)
+      // and the other way round: B's call erases B's rows, A keeps what A has
+      const afterA = await cardPeople(sql)
+      const rB = await callServer(server, 'POST', '/api/v1/erase-subject', headersFor(TENANT_B), { subjectId: SUBJECT })
+      expect(rB.body).toEqual({ counts: { card_assignee: 2, card_created_by: 2 } })
+      expect(await cardPeople(sql)).toEqual(afterA)
+    } finally {
+      await dropScratchDb(admin, dbB)
+    }
+  })
+})
+
+describe('DELETE /api/v1/org-units/:id/boards', () => {
+  it('deletes the boards, stacks and cards of that org unit only and returns the number of boards', async () => {
+    await seedErasureCards(sql, OU1)
+    await seedErasureCards(sql, OU1)
+    await seedErasureCards(sql, OU2)
+    const r = await callServer(server, 'DELETE', `/api/v1/org-units/${OU1}/boards`, guardHeaders())
+    expect(r).toEqual({ status: 200, body: { deleted: 2 } })
+    const left = await sql<{ org_unit_id: string }[]>`SELECT org_unit_id FROM board`
+    expect(left.map((b) => b.org_unit_id)).toEqual([OU2])
+    const [n] = await sql<{ stacks: string; cards: string }[]>`SELECT (SELECT count(*) FROM stack) AS stacks, (SELECT count(*) FROM card) AS cards`
+    expect([Number(n!.stacks), Number(n!.cards)]).toEqual([1, 5])
+  })
+
+  it('an org unit with no board answers deleted 0', async () => {
+    await seedErasureCards(sql, OU2)
+    const r = await callServer(server, 'DELETE', `/api/v1/org-units/${OU1}/boards`, guardHeaders())
+    expect(r).toEqual({ status: 200, body: { deleted: 0 } })
+    expect(await sql`SELECT 1 FROM board`).toHaveLength(1)
+  })
+
+  it('answers 403 without the secret, 400 for a malformed id, and deletes nothing', async () => {
+    await seedErasureCards(sql, OU1)
+    const { 'x-internal-auth': _omit, ...noAuth } = guardHeaders()
+    expect((await callServer(server, 'DELETE', `/api/v1/org-units/${OU1}/boards`, noAuth)).status).toBe(403)
+    expect((await callServer(server, 'DELETE', '/api/v1/org-units/not-a-uuid/boards', guardHeaders())).status).toBe(400)
+    expect(await sql`SELECT 1 FROM board`).toHaveLength(1)
+  })
+
+  it("never deletes another tenant's boards of the same org unit id", async () => {
+    const dbB = tenantBoardDb(TENANT_B.id)
+    await provisionDb(admin, dbB)
+    const rb = await app.storeFor(TENANT_B)
+    if (typeof rb !== 'function') throw new Error(`[api] app.storeFor(B) refused: ${JSON.stringify(rb)}`)
+    try {
+      await rb`DELETE FROM card`
+      await rb`DELETE FROM stack`
+      await rb`DELETE FROM board`
+      await seedErasureCards(sql, OU1)
+      await seedErasureCards(rb, OU1)
+      const r = await callServer(server, 'DELETE', `/api/v1/org-units/${OU1}/boards`, guardHeaders())
+      expect(r.body).toEqual({ deleted: 1 })
+      expect(await rb`SELECT 1 FROM board`).toHaveLength(1)
+      expect(await rb`SELECT 1 FROM card`).toHaveLength(5)
+    } finally {
+      await dropScratchDb(admin, dbB)
     }
   })
 })

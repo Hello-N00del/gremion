@@ -210,3 +210,31 @@ export async function listPromotedActionItemIds(sql: Sql, candidateIds: readonly
     WHERE c.protocol_action_item_id IN ${sql(candidateIds as string[])}`
   return rows.map((r) => r.protocol_action_item_id)
 }
+
+// ── erasure and org-unit cascade (called by the kernel; BD5) ─────────────────
+
+/** What an erased person's authorship is replaced with: a marker that matches no user. The app's erasure
+ *  hook writes the same value to the kernel copy (app/lib/server/board/erasure.ts); both tests pin it. */
+export const ERASED_MARKER = 'erased'
+
+/**
+ * The board erasure of one person, in THIS tenant's database: the subject is unassigned from the cards
+ * they hold and replaced by the marker on the cards they made. Both updates run in ONE transaction, so a
+ * failure of the second leaves the first undone and the caller's retry starts clean. Idempotent: a repeat
+ * answers zero counts. Counts only, never an id.
+ */
+export async function eraseSubject(sql: Sql, subjectId: string): Promise<{ card_assignee: number; card_created_by: number }> {
+  return sql.begin(async (tx) => ({
+    card_assignee: (await tx`UPDATE card SET assignee_keycloak_id = NULL WHERE assignee_keycloak_id = ${subjectId}`).count,
+    card_created_by: (await tx`UPDATE card SET created_by = ${ERASED_MARKER} WHERE created_by = ${subjectId}`).count,
+  })) as Promise<{ card_assignee: number; card_created_by: number }>
+}
+
+/**
+ * The boards of one org unit (stacks and cards go with them: the leaf's own foreign keys cascade). The
+ * kernel calls this when it deletes the org unit, because the cascade that did it while the boards lived
+ * in the kernel's tables does not cross into this database. Returns how many boards were deleted.
+ */
+export async function deleteBoardsForOrgUnit(sql: Sql, orgUnitId: string): Promise<number> {
+  return (await sql`DELETE FROM board WHERE org_unit_id = ${orgUnitId}`).count
+}

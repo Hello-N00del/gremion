@@ -17,7 +17,7 @@ const routes = buildApiRoutes(storeThatThrows)
 const router = createRouter(routes)
 
 describe('board leaf route table — exact endpoint set', () => {
-  it('registers exactly the ten BoardBackendPort endpoints (seven + the two create routes, R29-BOARD-STORE-K A5, + the card edit)', () => {
+  it('registers exactly the ten BoardBackendPort endpoints (seven + the two create routes, R29-BOARD-STORE-K A5, + the card edit) and the two kernel-driven erasure routes', () => {
     const set = routes.map((r) => `${r.method} ${r.path}`).sort()
     expect(set).toEqual(
       [
@@ -31,8 +31,33 @@ describe('board leaf route table — exact endpoint set', () => {
         'PATCH /api/v1/cards/:id/move',
         'POST /api/v1/cards/promoted',
         'POST /api/v1/boards/:id/promote',
+        'POST /api/v1/erase-subject',
+        'DELETE /api/v1/org-units/:id/boards',
       ].sort(),
     )
+  })
+})
+
+describe('board leaf erasure routes', () => {
+  it('matches POST /api/v1/erase-subject with no params', () => {
+    const m = router.match('POST', '/api/v1/erase-subject')
+    expect(m.type).toBe('matched')
+    if (m.type === 'matched') expect(m.params).toEqual({})
+  })
+
+  it('answers method-not-allowed for GET on /api/v1/erase-subject (POST only)', () => {
+    const m = router.match('GET', '/api/v1/erase-subject')
+    expect(m.type).toBe('method-not-allowed')
+  })
+
+  it('extracts :id for DELETE /api/v1/org-units/:id/boards', () => {
+    const m = router.match('DELETE', '/api/v1/org-units/11111111-1111-1111-1111-111111111111/boards')
+    expect(m.type).toBe('matched')
+    if (m.type === 'matched') expect(m.params).toEqual({ id: '11111111-1111-1111-1111-111111111111' })
+  })
+
+  it('answers method-not-allowed for GET on /api/v1/org-units/:id/boards (DELETE only)', () => {
+    expect(router.match('GET', '/api/v1/org-units/x/boards').type).toBe('method-not-allowed')
   })
 })
 
