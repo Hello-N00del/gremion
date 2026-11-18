@@ -32,6 +32,9 @@ import type { AdminSpec, ControlRow, CustomerRef, DpiaSpec, GovernancePostCondit
 import { assertCustomerSlug, principalFor, tokenFor } from './slug.ts'
 import { EXECUTION_ORDER, isComplete, type StepKind, type StepStatus } from './steps.ts'
 
+/** The module whose customer data lives in the kernel database until its location flag says `module`. */
+const BOARD_MODULE = 'board'
+
 const HOST = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/
 const EMAIL = /^[^\s@<>()[\]\\,;:"]{1,64}@(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/
 
@@ -119,6 +122,27 @@ export async function assertEnableLoaded(enable: readonly string[], deps: Pick<P
   }
 }
 
+/**
+ * The board's database server answers, checked BEFORE the phase writes anything (phase A: no row, no realm
+ * exists yet; phase B: no administrator is invited for a create that cannot finish). Only the board is
+ * asked: it is the one module whose create path writes a location flag, and a pre-check on every module
+ * that declares a database would also change the creates with calendar, content, newsletter and finance,
+ * whose servers a create has never been refused over. A passing check does not promise the server stays up:
+ * if it fails a moment later, the create stops inside enableModule, whose order (database first,
+ * enablement last) leaves no `enabled` row without a database, and a rerun resumes. Does nothing while the
+ * catalogue's board entry declares no database. A declared database with no way to ask fails closed:
+ * never a skipped check.
+ */
+export async function assertBoardServerAnswers(modules: readonly string[], deps: Pick<ProvisioningDeps, 'modules'>): Promise<void> {
+  if (!modules.includes(BOARD_MODULE)) return
+  const service = deps.modules.databaseService?.(BOARD_MODULE) ?? null
+  if (!service) return
+  if (!deps.modules.assertServerAnswers) {
+    throw new ProvisioningError('PRECONDITION', `module servers are not checked by this port set, but the board declares a database on ${service}; nothing was written`)
+  }
+  await deps.modules.assertServerAnswers(service)
+}
+
 /** The control row for `slug`, created `provisioning` with its primary host if absent. */
 async function ensureControlRow(deps: ProvisioningDeps, slug: string, host: string): Promise<{ row: ControlRow; created: boolean }> {
   const existing = await deps.control.getBySlug(slug)
@@ -149,6 +173,8 @@ export async function createPhaseA(spec: CreateSpec, deps: ProvisioningDeps): Pr
   await assertEnableLoaded(v.enable, deps)
   // TASK-044 D2: a stale tip, a missing pass or a missing DPIA decision fails before a realm exists
   await preflightGate(v.enable, spec.dpia, (await deps.control.getBySlug(v.slug))?.id ?? null, spec.operatorId, deps.gate)
+  // the board's database server being down refuses the create here, with nothing written to clean up
+  await assertBoardServerAnswers(v.enable, deps)
   const { row, created } = await ensureControlRow(deps, v.slug, v.host)
   const c = refOf(row, v.host)
   await openLedger(deps.ledger, c.id, spec.operatorId)
@@ -291,6 +317,14 @@ export async function createPhaseB(spec: CreateSpec, deps: ProvisioningDeps): Pr
   if (c.status !== 'provisioning' && c.status !== 'active') throw new ProvisioningError('CUSTOMER_STATE', `customer ${v.slug} is ${c.status}; resume it instead`)
   // TASK-044 D2: re-checked before the accounts step (the tip or a result may have moved since phase A)
   await preflightGate(v.enable, spec.dpia, c.id, spec.operatorId, deps.gate)
+  // only the modules not enabled yet need their server: a finished module is not asked again on a rerun
+  const alreadyEnabled = new Set(await deps.modules.enabled(c))
+  await assertBoardServerAnswers(v.enable.filter((m) => !alreadyEnabled.has(m)), deps)
+  // an active customer is never flipped, so one whose board location is not `module` is refused here, before
+  // any module is enabled. Not conditional on the board being enabled yet: a board enabled before it declared
+  // a database has no module database row, and the real enableModule would create an empty database beside
+  // the kernel rows before the location step could refuse
+  if (c.status === 'active' && v.enable.includes(BOARD_MODULE)) await ensureBoardLocation(c, deps)
   const run = await runPhase('b', {
     customerId: c.id,
     operatorId: spec.operatorId,
@@ -308,12 +342,29 @@ export async function createPhaseB(spec: CreateSpec, deps: ProvisioningDeps): Pr
   // decision recorded (reused on a resume), then enableModule through the gate.
   for (const moduleId of v.enable) {
     await enableOne(c, moduleId, { operatorId: spec.operatorId, dpia: spec.dpia?.[moduleId] }, deps)
+    // the board's own database exists now (enableModule records the enablement last): say where the board lives
+    if (moduleId === BOARD_MODULE) await ensureBoardLocation(c, deps)
   }
   const enabled = (await deps.modules.enabled(c)).sort()
   const broker = await deps.broker.ensure(c, enabled)
   const activated = spec.deferActivation ? false : (await activateCustomer(c, deps)).activated
   if (!(await deps.config.setupComplete(c))) await deps.config.markSetupComplete(c)
   return { customer: c, run, enabled, reloaded: broker.reloaded, activated }
+}
+
+/**
+ * A customer created with board ticked gets the flag `module` for the board, once the board's own database
+ * exists, so the board is served from it from the first request and no move ever runs on a new customer.
+ * Does nothing while the catalogue's board entry declares no database (it reads the declaration, as the
+ * lifecycle guard does), so a customer is never flagged `module` without a database behind it. Runs on every pass of phase B, enable no-op or not: a crash between the enable and this call is
+ * repaired by the rerun. Only this create path writes it; a later enable of board is the lifecycle guard's.
+ */
+async function ensureBoardLocation(c: CustomerRef, deps: ProvisioningDeps): Promise<void> {
+  if (!deps.modules.databaseService?.(BOARD_MODULE)) return
+  if (!deps.boardLocation) {
+    throw new ProvisioningError('PRECONDITION', `the board declares a database but this port set has no way to write its location for ${c.slug}; the customer is left provisioning`)
+  }
+  await deps.boardLocation.setModule(c)
 }
 
 /**

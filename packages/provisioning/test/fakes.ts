@@ -3,6 +3,7 @@
 // call changes that state -- so "a rerun makes zero mutating calls" is an
 // assertion on this list, not on call counts.
 import { EnableRefused, type EnableGate, type EnableRefusedCode, type UnprovenEnablement } from '@gremion/tenant-store/lifecycle'
+import { ProvisioningError } from '../src/errors.ts'
 import { memoryLedger } from '../src/ledger.ts'
 import type { AdminSpec, ControlRow, CustomerRef, DpiaSpec, GatePort, GovernancePostCondition, KernelPostCondition, ProvisioningDeps, SmtpReadBack } from '../src/ports.ts'
 
@@ -72,6 +73,21 @@ export interface World {
    * enable them happily).
    */
   unloaded: Set<string>
+  /**
+   * Catalogue modules that declare a database of their own, module id -> compose service. Empty by
+   * default: no module of the fake catalogue has one, so nothing here changes for the older suites.
+   */
+  declared: Map<string, string>
+  /**
+   * A module database server's answers left, per service: absent = always up, 0 = down. Every ask of the
+   * server (the pre-check and the enable's own first query) consumes one answer, so `1` is "answers the
+   * pre-check once, then refuses".
+   */
+  serverAnswers: Map<string, number>
+  /** `${customerId}/${moduleId}` of the module databases that exist (the enable creates one BEFORE it records the enablement). */
+  moduleDbs: Set<string>
+  /** The board_location flag per customer id (absent = no row = kernel). */
+  boardFlag: Map<string, 'kernel' | 'module'>
 }
 
 export function world(): World {
@@ -93,7 +109,19 @@ export function world(): World {
     actors: [],
     knobs: { seedsOn: false, runnerShape: 'gremion-ui', dnsFails: false },
     unloaded: new Set([UNDECIDED_MODULE]),
+    declared: new Map(),
+    serverAnswers: new Map(),
+    moduleDbs: new Set(),
+    boardFlag: new Map(),
   }
+}
+
+/** One ask of a module database server: throws when it is down, consumes an answer when it counts them. */
+function askServer(w: World, service: string): void {
+  const left = w.serverAnswers.get(service)
+  if (left === undefined) return
+  if (left <= 0) throw new Error(`connect ECONNREFUSED (${service})`)
+  w.serverAnswers.set(service, left - 1)
 }
 
 const emptySmtp = (): SmtpReadBack => ({ host: null, port: null, user: null, from: null, starttls: null })
@@ -312,13 +340,37 @@ export function deps(w: World, catalogue = ['board', 'calendar', 'publishing', '
       async unloaded(ids) {
         return ids.filter((id) => w.unloaded.has(id))
       },
+      databaseService: (id) => w.declared.get(id) ?? null,
+      async assertServerAnswers(service) {
+        try {
+          askServer(w, service)
+        } catch (err) {
+          throw new ProvisioningError('PRECONDITION', `the database server ${service} does not answer (${(err as Error).message}); nothing was written`)
+        }
+      },
       async enable(c, moduleId, gate: EnableGate, operatorId, actorKind) {
         w.actors.push(`enable ${moduleId} ${actorKind ?? 'operator'}`)
         const mine = w.enabled.get(c.id) ?? new Map()
-        if (mine.has(moduleId)) return { noop: true, database: null }
+        // the real enableModule: an enablement with no module database row (a module enabled before it declared a
+        // database) is not a no-op, it creates the database
+        if (mine.has(moduleId)) {
+          const service = w.declared.get(moduleId)
+          if (!service || w.moduleDbs.has(`${c.id}/${moduleId}`)) return { noop: true, database: null }
+          askServer(w, service)
+          w.moduleDbs.add(`${c.id}/${moduleId}`)
+          m(`pg:create-module-db ${c.slug}/${moduleId}`)
+          return { noop: false, database: `t_x__${moduleId}` }
+        }
         if (w.unloaded.has(moduleId)) throw Object.assign(new Error(`module ${moduleId} has no plt.module_version`), { code: 'MODULE_VERSION_UNKNOWN' })
         const g = await gate(c.id, moduleId)
         if (!g) throw Object.assign(new Error(`the enable gate refused (${c.id}, ${moduleId})`), { code: 'GATE_REFUSED' })
+        // the real enableModule: the server is asked first, the database is created, and only then is the enablement recorded
+        const service = w.declared.get(moduleId)
+        if (service) {
+          askServer(w, service)
+          w.moduleDbs.add(`${c.id}/${moduleId}`)
+          m(`pg:create-module-db ${c.slug}/${moduleId}`)
+        }
         mine.set(moduleId, { gateRefs: [g.isolationTestResultId, g.dpiaDecisionId], by: operatorId })
         w.enabled.set(c.id, mine)
         m(`pg:enable ${c.slug}/${moduleId}`)
@@ -338,6 +390,21 @@ export function deps(w: World, catalogue = ['board', 'calendar', 'publishing', '
       },
     },
     gate: fakeGate(w),
+    boardLocation: {
+      async setModule(c) {
+        // an active customer is only read, never flipped (the real adapter's assertBoardLocationModule)
+        if (w.control.get(c.slug)?.status === 'active') {
+          if (w.boardFlag.get(c.id) === 'module') return { changed: false }
+          throw new ProvisioningError('CUSTOMER_STATE', `the board location of this active customer reads ${w.boardFlag.get(c.id) ?? 'no row'}, not module`)
+        }
+        // the flag is only ever written once the board's own database exists
+        if (!w.moduleDbs.has(`${c.id}/board`)) throw new Error('the board location flag was written before the board database exists')
+        if (w.boardFlag.get(c.id) === 'module') return { changed: false }
+        w.boardFlag.set(c.id, 'module')
+        m(`board:flag-module ${c.slug}`)
+        return { changed: true }
+      },
+    },
   }
 }
 

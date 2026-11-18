@@ -82,6 +82,7 @@ export type {
   BrokerPort,
   ConfigPort,
   ControlPort,
+  BoardLocationPort,
   ControlRow,
   CustomerRef,
   CustomerStatus,

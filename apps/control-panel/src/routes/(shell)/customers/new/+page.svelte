@@ -117,7 +117,7 @@
         {/if}
       {/each}
       <p class="muted">„vault“ (Tresor) bleibt im Pilotbetrieb abgeschaltet und ist nicht wählbar. Module ohne Isolationsprüfung sind ebenfalls nicht wählbar; die DPIA-Entscheidung trägt weiterhin die Betreiberin oder der Betreiber ein.</p>
-      <p id="board-hint" class="muted">Ein nicht angekreuztes „board“ ist für den Kunden trotzdem eingeschaltet. Zum Ausblenden später auf der Kundenseite „Modul aktivieren“ und dann „Modul deaktivieren“ verwenden.</p>
+      <p id="board-hint" class="muted">Ein angekreuztes „board“ bekommt eine eigene Datenbank und ist nach dem Ausschalten 30 Tage lang wiederherstellbar. Ein nicht angekreuztes „board“ ist für den Kunden trotzdem eingeschaltet, ohne eigene Datenbank und ohne diese Wiederherstellung. Zum Ausblenden später auf der Kundenseite „Modul aktivieren“ und dann „Modul deaktivieren“ verwenden.</p>
       {#if errors.enable}<span class="err">{errors.enable}</span>{/if}
       {#if errors.dpia}<span id="err-dpia" class="err">{errors.dpia}</span>{/if}
     </fieldset>
