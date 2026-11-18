@@ -1,6 +1,6 @@
 # Upgrade: one release onto a running installation
 
-- Version: 9.1.1
+- Version: 9.2.0
 - Status: provisional (see Known gaps)
 - Wall-clock budget: one working day, from step 1 to the asserted post-condition (PRD-PLAT-005)
 - Implements: TRD-200 (upgrade), TRD-206 (the pre-migration dump, R18-4), TRD-189 (blue/green as the deploy path)
@@ -134,6 +134,31 @@ sudo -u gremion sed -i '/^COMPOSE_FILE=/s/docker-compose\.pins\.yml/docker-compo
 stat -c '%U %a %n' "$f"            # still gremion 600
 grep -n '^COMPOSE_FILE=' "$f"      # docker-compose.yml:docker-compose.prod.yml:docker-compose.state-pins.yml
 grep -n 'state-pins' /opt/gremion/etc/env/app-blue.env /opt/gremion/etc/env/app-green.env   # nothing
+```
+
+   Once per host (the board leaf): `docker-compose.app.yml` now starts a `board-service`
+   leaf behind the `board` profile and marks two values of it required, for both colours:
+   `INTERNAL_BOARD_SECRET` and `BOARD_APP_PASSWORD`. An `app-<colour>.env` rendered before
+   this change lacks both, and `gremion-validate-env` below fails closed naming them. Do not
+   re-render with `gremion-init-secrets --force` (it rotates every secret). Add the two keys
+   by hand, as `gremion`: the secret is a fresh hex value, the password is the content of the
+   module password file the board role `m_board_app` is set from, so the leaf and the role
+   have one source. If that file does not exist yet, run `gremion-tenant init` first; it
+   writes it and keeps one that is there. Run `gremion-validate-env` again afterwards: it
+   compares the key with the file and says which side to change.
+
+```bash
+pwf=/opt/gremion/etc/secrets/tenant-create/module_app_password_board
+test -s "$pwf" && stat -c '%U %a %n' "$pwf"                        # gremion 600
+sec="$(openssl rand -hex 32)"
+for c in blue green; do
+  f="/opt/gremion/etc/env/app-${c}.env"
+  grep -q '^INTERNAL_BOARD_SECRET=' "$f" || printf 'INTERNAL_BOARD_SECRET=%s
+' "$sec" | sudo -u gremion tee -a "$f" >/dev/null
+  grep -q '^BOARD_APP_PASSWORD=' "$f" || printf 'BOARD_APP_PASSWORD=%s
+' "$(tr -d '[:space:]' < "$pwf")" | sudo -u gremion tee -a "$f" >/dev/null
+  stat -c '%U %a %n' "$f"                                           # still gremion 600
+done
 ```
 
    Then validate:
@@ -550,6 +575,7 @@ live, a deploy of any other tag stops at its step 5 and prints both commands.
 
 ## Changelog
 
+- 9.2.0 (2026-11-18): the board leaf. Step 2 gains a conditional, once-per-host block: an `app-<colour>.env` rendered before the `board-service` leaf lacks the two required keys `INTERNAL_BOARD_SECRET` and `BOARD_APP_PASSWORD`; they are added by hand (no `--force` re-render), the password from the module password file. Minor: a conditional step part added that an install already carrying the keys skips.
 - 9.1.1 (2026-11-14): step 8a ends with `gremion-tenant init --realm-only` (the plain `init` stops on the governance keys of a host that also needs step 9, so the step could not complete) and quotes the init refusal as it now reads. Patch: a command and a quotation corrected, no step added or removed.
 - 9.1.0 (2026-11-13): the operator control panel behind a client certificate. New step 8a, before the governance step whose `gremion-tenant init` would otherwise refuse it: an ops realm made by the previous template is brought up to the current one by hand with kcadm (no self-service password reset, the unused required actions off, `loa2` as the control-panel client's default and minimum ACR) and re-stamped, because `init` refuses a realm whose fingerprint is not the release's. Step 8a opens with a precondition (the realm's stored fingerprint must be the previous template's for this origin, else stop) and also sets the control-panel client's description; the init refusals tell an origin mismatch from a template mismatch. New optional key `CONTROL_PANEL_HOST` (state.env): the panel on a host outside the platform domain, empty or absent keeps `control.<PLATFORM_DOMAIN>`. Minor: a step added that an install whose ops realm is current skips, and a key every existing install can leave unset.
 - 9.0.0 (2026-11-08): TASK-084-a. New step 9, after the reconcile: bring the governance server up on an installation first brought up before it existed (the two `GOVERNANCE_PG_*` keys in `state.env`, the `governance-postgres` container of the state project, and `gremion-tenant init` for the admin login file and the credential directory), with its post-condition lines. Only a customer create and delete read the governance server; every other `gremion-tenant` verb runs without it. Major: a step added and the post-condition changed.

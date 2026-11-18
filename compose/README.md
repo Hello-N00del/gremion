@@ -23,7 +23,7 @@ This directory holds:
 - `compose/control-panel/`: the standalone control panel for a host without
   the pooled stack (TASK-043 G11).
 - No `compose/services/` directory exists. The extracted module services
-  (`calendar-service`, `content-service`, `newsletter-service`, each behind
+  (`calendar-service`, `content-service`, `newsletter-service`, `board-service`, each behind
   its module's compose profile) are services of the root
   `docker-compose.app.yml`: `traefik.enable=false`, the `<svc>-${COLOUR}`
   alias on the colour's own `app` network and on `${STACK}_state` (no edge

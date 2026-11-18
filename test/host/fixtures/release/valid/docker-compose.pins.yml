@@ -31,3 +31,6 @@ services:
   newsletter-service:
     build: !reset null
     image: ghcr.io/hello-n00del/gremion-newsletter@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+  board-service:
+    build: !reset null
+    image: ghcr.io/hello-n00del/gremion-board@sha256:0000000000000000000000000000000000000000000000000000000000000000
