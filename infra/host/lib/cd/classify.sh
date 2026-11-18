@@ -580,7 +580,11 @@ _cd_cls_emit() {
 }
 
 # _cd_cls_untrap -- the traps of the caller back in place (cd_classify set TERM, INT, HUP).
+# Once only: the abort handler runs it, and so does the code after wait; a second run would
+# wipe the handlers that a caller's own trap function (one that returns) is still using.
 _cd_cls_untrap() {
+    [[ -n "${_CD_CLS_TRAPPED:-}" ]] || return 0
+    _CD_CLS_TRAPPED=''
     trap - TERM INT HUP
     [[ -z "${_CD_CLS_PREV_TRAP:-}" ]] || eval "$_CD_CLS_PREV_TRAP"
     _CD_CLS_PREV_TRAP=''
@@ -636,6 +640,7 @@ cd_classify() {
     _CD_CLS_RUN="$tmp"
     _CD_CLS_PID=''
     _CD_CLS_PREV_TRAP="$(trap -p TERM INT HUP)"
+    _CD_CLS_TRAPPED=1
     trap '_cd_cls_abort TERM' TERM
     trap '_cd_cls_abort INT' INT
     trap '_cd_cls_abort HUP' HUP
