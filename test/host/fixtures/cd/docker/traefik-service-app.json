@@ -1,0 +1,1 @@
+{"loadBalancer":{"servers":[{"url":"http://gremion-ui-green:3000"}],"passHostHeader":true},"status":"enabled","serverStatus":{"http://gremion-ui-green:3000":"UP"},"name":"app@file","provider":"file","type":"loadbalancer"}
