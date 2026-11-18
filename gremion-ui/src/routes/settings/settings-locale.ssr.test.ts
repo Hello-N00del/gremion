@@ -5,8 +5,10 @@
 // were hard-coded German, so an English person who had just switched the
 // language on this very page still read German around the switch.
 //
-// Rendered in Paraglide's request scope, as the i18n handle does. The tab bodies
-// themselves (organisation, services, email, ...) are not part of this unit.
+// Rendered in Paraglide's request scope, as the i18n handle does. The Profil tab (the landing tab of every
+// person) and the Darstellung tab (where the language is switched) follow it; the administrator-only tab bodies
+// (organisation, services, email,
+// legal, data protection, backups, retention, danger zone) are still German and are not part of this unit.
 import { describe, expect, test, vi } from 'vitest'
 import { render } from 'svelte/server'
 import SettingsBody from './SettingsBody.svelte'
@@ -75,17 +77,71 @@ describe('settings chrome follows the interface locale', () => {
     expect(html).not.toContain('Danger zone')
   })
 
+  test('en: the appearance tab (where the language is switched) is English throughout', async () => {
+    const html = (await settings('en', 'darstellung')).replace(/\s+/g, ' ')
+    for (const text of ['Colour vision correction', 'No correction', 'Red-green deficiency', 'Blue-yellow deficiency', 'Preview', 'Accent', 'Amber', '>Appearance<', 'Choose between light and dark mode.', ' Light<', 'Font size', 'Extra large', '>Animations<', 'Reduce animations', 'aria-label="Reduce animations"']) {
+      expect(html, text).toContain(text)
+    }
+    for (const german of ['Farbsehkorrektur', 'Keine Korrektur', 'Rot-Grün', 'Vorschau', 'Bernstein', 'Erscheinungsbild', 'Schriftgröße', 'Sehr groß', 'Animationen', 'Bewegungseffekte']) {
+      expect(html, german).not.toContain(german)
+    }
+  })
+
+  test('de: the appearance tab keeps its German wording', async () => {
+    const html = (await settings('de', 'darstellung')).replace(/\s+/g, ' ')
+    for (const text of ['>Farbsehkorrektur<', 'Keine Korrektur', 'Deuteranopie / Protanopie — betrifft ca. 8 % der Männer', '>Vorschau<', '>Bernstein<', '>Erscheinungsbild<', 'Wählen Sie zwischen hellem und dunklem Modus.', ' Hell<', '>Schriftgröße<', 'Sehr groß', 'aria-label="Animationen reduzieren"', 'Deaktiviert Übergänge und Bewegungseffekte in der Oberfläche']) {
+      expect(html, text).toContain(text)
+    }
+    expect(html).not.toContain('Colour vision')
+  })
+
+  test('en: the profile tab (the page every person lands on) is English', async () => {
+    const withProfile = { ...data, profile: { firstName: 'A', lastName: 'B', email: 'a@example.test' }, emailActionAvailable: true }
+    const request = new Request('https://pilot.test/settings')
+    localeOf.set(request, 'en')
+    const response = await paraglideMiddleware(
+      request,
+      () => new Response(render(SettingsBody, { props: { data: withProfile as never, activeSection: 'profil' } }).body)
+    )
+    const html = (await response.text()).replace(/\s+/g, ' ')
+    for (const text of ['>First name<', '>Last name<', 'Save name', 'Sign-in', 'Change password', 'Set up two-factor code again', 'Change email address', 'This is how you appear in committees, messages and files.']) {
+      expect(html, text).toContain(text)
+    }
+    for (const german of ['Vorname', 'Nachname', 'Namen speichern', 'Anmeldung', 'Passwort ändern', 'neu einrichten', 'E-Mail-Adresse ändern', 'So erscheinen Sie']) {
+      expect(html, german).not.toContain(german)
+    }
+  })
+
+  test('de: the profile tab keeps its German wording', async () => {
+    const withProfile = { ...data, profile: { firstName: 'A', lastName: 'B', email: 'a@example.test' }, emailActionAvailable: true }
+    const request = new Request('https://pilot.test/settings')
+    localeOf.set(request, 'de')
+    const response = await paraglideMiddleware(
+      request,
+      () => new Response(render(SettingsBody, { props: { data: withProfile as never, activeSection: 'profil' } }).body)
+    )
+    const html = (await response.text()).replace(/\s+/g, ' ')
+    for (const text of ['>Vorname<', '>Nachname<', 'Namen speichern', '>Anmeldung<', 'Passwort ändern', 'Zwei-Faktor-Code neu einrichten', 'E-Mail-Adresse ändern', 'So erscheinen Sie in Gremium, Nachrichten und Dateien.']) {
+      expect(html, text).toContain(text)
+    }
+    expect(html).not.toContain('Save name')
+  })
+
+  // Source line breaks inside a sentence render as one space; compare the rendered text, not the markup.
+  const flat = (html: string) => html.replace(/\s+/g, ' ')
+
   test('en: the sidebar note and the profile note are English', async () => {
-    const html = await settings('en')
-    expect(html).toContain('<b>Members</b>')
-    expect(html).toContain('are managed directly through the navigation')
-    expect(html).toContain('You find the interface language under')
+    const html = flat(await settings('en'))
+    expect(html).toContain('<b>Members</b>, <b>Committees</b> and <b>Votes</b> are managed directly through the navigation')
+    expect(html).toMatch(/You find the interface language under <b[^>]*>Appearance &amp; accessibility<\/b>/)
     expect(html).not.toContain('Sprache der Oberfläche')
+    expect(html).not.toContain('verwalten Sie direkt')
   })
 
   test('de: the sidebar note keeps its German wording and bold words', async () => {
-    const html = await settings('de')
-    expect(html).toMatch(/<b>Mitglieder<\/b>, <b>Gremien<\/b>\s+und <b>Abstimmungen<\/b>\s+verwalten Sie direkt über die Navigation/)
-    expect(html).toMatch(/Sprache der Oberfläche finden Sie unter\s*<b[^>]*>Darstellung &amp; Barrierefreiheit<\/b>/)
+    const html = flat(await settings('de'))
+    expect(html).toContain('<b>Mitglieder</b>, <b>Gremien</b> und <b>Abstimmungen</b> verwalten Sie direkt über die Navigation')
+    expect(html).toMatch(/Sprache der Oberfläche finden Sie unter <b[^>]*>Darstellung &amp; Barrierefreiheit<\/b>/)
+    expect(html).not.toContain('managed directly')
   })
 })

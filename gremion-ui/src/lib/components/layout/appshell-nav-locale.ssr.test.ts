@@ -127,3 +127,53 @@ describe('language of parts (WCAG 3.1.2): chrome that differs from the page is m
     expect(columnTag(html)).not.toMatch(/\blang=/)
   })
 })
+
+describe('the top bar follows the interface locale (server render)', () => {
+  test('en: search, theme and sign-out controls and the breadcrumb landmark are English', async () => {
+    const html = await shell({ request: 'en', locale: 'en' })
+    for (const text of ['Open command palette (Ctrl + K)', 'Dark theme', 'Log out', 'Motion, file, person…']) {
+      expect(html, text).toContain(text)
+    }
+    for (const german of ['Befehlspalette öffnen', 'Dunkles Thema', 'Abmelden', 'Antrag, Datei, Person…']) {
+      expect(html, german).not.toContain(german)
+    }
+    expect(html).toContain('aria-label="Breadcrumb"')
+  })
+
+  test('de: the German originals', async () => {
+    const html = await shell({ request: 'de', locale: 'de' })
+    for (const text of ['Befehlspalette öffnen (Strg + K)', 'Dunkles Thema', 'Abmelden', 'Antrag, Datei, Person…', 'aria-label="Navigationspfad"']) {
+      expect(html, text).toContain(text)
+    }
+    expect(html).not.toContain('Open command palette')
+  })
+
+  test('English top-bar controls around a German-declared page carry lang="en" (WCAG 3.1.2)', async () => {
+    const html = await shell({ request: 'en', locale: 'en', pageLocale: 'de' })
+    expect(/<button[^>]*\bclass="search[ "][^>]*>/.exec(html)?.[0]).toMatch(/\blang="en"/)
+    expect(/<button[^>]*aria-pressed[^>]*>/.exec(html)?.[0]).toMatch(/\blang="en"/)
+    expect(/<button[^>]*aria-label="Log out"[^>]*>/.exec(html)?.[0]).toMatch(/\blang="en"/)
+  })
+})
+
+describe('language of parts: words the translation does not reach keep their own language', () => {
+  const reterm = () => retermNav(fullNav(), { gremien: 'Fachschaftsräte', navCommittees: 'Fachschaften' })
+  /** True when `text` sits inside a link or heading that carries lang="de". */
+  const markedDe = (html: string, text: string) =>
+    new RegExp(String.raw`<(?:a|h2)[^>]*\blang="de"(?:(?!</(?:a|h2)>)[\s\S])*?[>\s]${text}<`).test(html)
+
+  test("a tenant's re-termed rail label inside English chrome is marked German", async () => {
+    const html = await shell({ request: 'en', locale: 'en', pageLocale: 'de', nav: reterm() })
+    expect(markedDe(html, 'Fachschaftsräte')).toBe(true)
+    expect(markedDe(html, 'Fachschaften')).toBe(true)
+    // A translated label is English like its column, so it carries no mark of its own.
+    expect(html).toContain('>Overview<')
+    expect(markedDe(html, 'Overview')).toBe(false)
+  })
+
+  test('no marks where the chrome speaks the page language', async () => {
+    const html = await shell({ request: 'de', locale: 'de', pageLocale: 'de', nav: reterm() })
+    expect(html).toContain('>Fachschaften<')
+    expect(markedDe(html, 'Fachschaften')).toBe(false)
+  })
+})

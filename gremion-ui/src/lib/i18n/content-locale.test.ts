@@ -283,7 +283,10 @@ describe('the proof itself', () => {
   })
 })
 
-describe('every page is declared in the language it renders in (guard)', () => {
+// This pins the DECLARED language (`<html lang>`): a page is declared English only when the scan proves its
+// text comes from the catalogue. It does not claim that nothing German renders under an English person's
+// locale; catalogue strings inside a page declared German render in the person's locale (locale-en unit).
+describe('a page is declared English only when its text is proven to come from the catalogue (guard)', () => {
   // Every +page.svelte under routes/, shell routes included: the round-3 scan
   // looked only at the routes outside the shell and so missed /beschluesse.
   const pages = filesUnder(ROUTES)

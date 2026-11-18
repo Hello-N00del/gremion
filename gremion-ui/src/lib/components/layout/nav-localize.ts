@@ -46,22 +46,38 @@ export const NAV_LABEL_MESSAGE_KEYS: Readonly<Record<string, string>> = {
   Systemstatus: 'nav.item.systemStatus'
 }
 
-/** One label in `locale`: German stays, otherwise the catalogue message when there is one. */
-export function localizeNavLabel(label: string, locale: string, tr: (key: string) => string): string {
-  if (locale === 'de') return label
+/** The language the rail's label literals are written in. */
+export const NAV_SOURCE_LANG = 'de'
+
+/** The catalogue message for `label` in `tr`'s language, or null: no entry, or a catalogue without the message. */
+function catalogueText(label: string, tr: (key: string) => string): string | null {
   const key = Object.hasOwn(NAV_LABEL_MESSAGE_KEYS, label) ? NAV_LABEL_MESSAGE_KEYS[label] : undefined
-  if (!key) return label
+  if (!key) return null
   const text = tr(key)
   // translate() answers with the key itself for a message the catalogue lacks.
-  return text === key ? label : text
+  return text === key ? null : text
 }
 
-/** The nav tree with every label in `locale`. Same shape; a new tree only where something changed. */
+/** One label in `locale`: German stays, otherwise the catalogue message when there is one. */
+export function localizeNavLabel(label: string, locale: string, tr: (key: string) => string): string {
+  if (locale === NAV_SOURCE_LANG) return label
+  return catalogueText(label, tr) ?? label
+}
+
+/**
+ * The nav tree with every label in `locale`. Same shape; a new tree only where something changed.
+ *
+ * A label the translation does not reach (a tenant's re-termed wording, a module entry without a
+ * message) stays German, so it is marked `lang: 'de'` and sits inside the localized column as such
+ * (WCAG 3.1.2) instead of passing for English.
+ */
 export function localizeNav(nav: NavItem[], locale: string, tr: (key: string) => string): NavItem[] {
-  if (locale === 'de') return nav
+  if (locale === NAV_SOURCE_LANG) return nav
   return nav.map((item) => {
-    const label = localizeNavLabel(item.label, locale, tr)
-    if (item.kind === 'section') return { ...item, label, children: localizeNav(item.children, locale, tr) }
-    return { ...item, label }
+    const text = catalogueText(item.label, tr)
+    const label = text ?? item.label
+    const lang = text === null ? NAV_SOURCE_LANG : undefined
+    if (item.kind === 'section') return { ...item, label, lang, children: localizeNav(item.children, locale, tr) }
+    return { ...item, label, lang }
   })
 }

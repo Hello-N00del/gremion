@@ -100,6 +100,29 @@ describe('localizeNavLabel / localizeNav', () => {
     expect(localizeNavLabel('Einstellungen', 'en', (k) => k)).toBe('Einstellungen')
   })
 
+  test('a label the translation does not reach is marked German; a translated one is not', () => {
+    const tree: NavItem[] = [
+      { kind: 'section', label: 'Fachschaften', children: [
+        { kind: 'item', href: '/a', label: 'Einstellungen', icon: 'settings' },
+        { kind: 'item', href: '/b', label: 'Eigene Seite', icon: 'file' },
+        // Same word in both languages: translated (a catalogue entry), so no German mark.
+        { kind: 'item', href: '/c', label: 'Newsletter', icon: 'send' }
+      ] }
+    ]
+    const out = localizeNav(tree, 'en', trEn)
+    const section = out[0]!
+    expect(section.lang).toBe('de')
+    const kids = section.kind === 'section' ? section.children : []
+    expect(kids.map((k) => [k.label, k.lang])).toEqual([
+      ['Settings', undefined],
+      ['Eigene Seite', 'de'],
+      ['Newsletter', undefined]
+    ])
+    // A catalogue without the message leaves the German label, marked as German.
+    const bare = localizeNav(tree, 'en', (k) => k)
+    expect(bare[0]!.kind === 'section' && bare[0]!.children[0]!.lang).toBe('de')
+  })
+
   test('the input tree is not mutated', () => {
     const before = JSON.stringify(navSchema)
     localizeNav(navSchema, 'en', trEn)

@@ -5,17 +5,30 @@
   // KIT-2 rule (R25-3): $app/state, not the deprecated $app/stores.
   import { page } from '$app/state'
 
-  const MODES: { key: ColorblindType; label: string; desc: string }[] = [
-    { key: 'none', label: 'Keine Korrektur',    desc: 'Standard-Palette, keine Anpassung' },
-    { key: 'rg',   label: 'Rot-Grün-Schwäche',  desc: 'Deuteranopie / Protanopie — betrifft ca. 8 % der Männer' },
-    { key: 'by',   label: 'Blau-Gelb-Schwäche', desc: 'Tritanopie — sehr selten' },
-  ]
+  const MODES: { key: ColorblindType; label: string; desc: string }[] = $derived([
+    { key: 'none', label: $t('settings.appearance.cb.none.label'), desc: $t('settings.appearance.cb.none.desc') },
+    { key: 'rg',   label: $t('settings.appearance.cb.rg.label'),   desc: $t('settings.appearance.cb.rg.desc') },
+    { key: 'by',   label: $t('settings.appearance.cb.by.label'),   desc: $t('settings.appearance.cb.by.desc') },
+  ])
 
-  const FONT_SIZES: { key: string; label: string }[] = [
-    { key: 'normal', label: 'Normal'    },
-    { key: 'large',  label: 'Groß'      },
-    { key: 'xlarge', label: 'Sehr groß' },
-  ]
+  const FONT_SIZES: { key: string; label: string }[] = $derived([
+    { key: 'normal', label: $t('settings.appearance.font.normal') },
+    { key: 'large',  label: $t('settings.appearance.font.large') },
+    { key: 'xlarge', label: $t('settings.appearance.font.xlarge') },
+  ])
+
+  const SWATCHES: [string, string][] = $derived([
+    [$t('settings.appearance.swatch.accent'), 'var(--ds-accent)'],
+    [$t('settings.appearance.swatch.amber'), 'var(--ember)'],
+    [$t('settings.appearance.swatch.green'), 'var(--pine)'],
+    [$t('settings.appearance.swatch.red'), 'var(--rust)'],
+    [$t('settings.appearance.swatch.dark'), '#161513'],
+  ])
+
+  const THEMES: { key: 'light' | 'dark'; label: string; icon: string }[] = $derived([
+    { key: 'light', label: $t('settings.appearance.theme.light'), icon: 'sun' },
+    { key: 'dark',  label: $t('settings.appearance.theme.dark'),  icon: 'moon' },
+  ])
 </script>
 
 <div class="py-4 space-y-8">
@@ -65,11 +78,8 @@
 
   <!-- Color vision -->
   <section>
-    <h3 class="text-sm font-semibold mb-1" style="font-family: var(--font-display);">Farbsehkorrektur</h3>
-    <p class="text-xs text-ink-muted mb-4">
-      Passt die Farbpalette der Oberfläche an Ihre Sehbedingungen an.
-      Die Einstellung wird lokal gespeichert und nur auf Ihrem Gerät angewendet.
-    </p>
+    <h3 class="text-sm font-semibold mb-1" style="font-family: var(--font-display);">{$t('settings.appearance.cb.heading')}</h3>
+    <p class="text-xs text-ink-muted mb-4">{$t('settings.appearance.cb.help')}</p>
 
     <div class="space-y-2">
       {#each MODES as mode}
@@ -95,15 +105,9 @@
 
     <!-- Palette preview -->
     <div class="mt-4 p-3 rounded-lg border border-border bg-surface-2/40">
-      <div class="text-[10px] font-mono uppercase tracking-wider text-ink-muted mb-2">Vorschau</div>
+      <div class="text-[10px] font-mono uppercase tracking-wider text-ink-muted mb-2">{$t('settings.appearance.preview')}</div>
       <div class="flex gap-2">
-        {#each [
-          ['Akzent', 'var(--ds-accent)'],
-          ['Bernstein', 'var(--ember)'],
-          ['Grün', 'var(--pine)'],
-          ['Rot', 'var(--rust)'],
-          ['Dunkel', '#161513'],
-        ] as [label, color]}
+        {#each SWATCHES as [label, color]}
           <div class="flex-1 text-center">
             <div class="h-6 rounded-md" style="background: {color};"></div>
             <div class="text-[9px] font-mono text-ink-muted mt-1">{label}</div>
@@ -115,16 +119,13 @@
 
   <!-- Theme -->
   <section>
-    <h3 class="text-sm font-semibold mb-1" style="font-family: var(--font-display);">Erscheinungsbild</h3>
-    <p class="text-xs text-ink-muted mb-4">Wählen Sie zwischen hellem und dunklem Modus.</p>
+    <h3 class="text-sm font-semibold mb-1" style="font-family: var(--font-display);">{$t('settings.appearance.theme.heading')}</h3>
+    <p class="text-xs text-ink-muted mb-4">{$t('settings.appearance.theme.help')}</p>
     <div class="flex gap-2">
-      {#each [
-        { key: 'light', label: 'Hell',   icon: 'sun'  },
-        { key: 'dark',  label: 'Dunkel', icon: 'moon' },
-      ] as theme}
+      {#each THEMES as theme}
         <button
           type="button"
-          onclick={() => themeMode.set(theme.key as 'light' | 'dark')}
+          onclick={() => themeMode.set(theme.key)}
           class="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg border transition-colors text-sm"
           style={$themeMode === theme.key
             ? 'border-color: var(--ds-accent); background: oklch(95% 0.03 252); color: oklch(35% 0.12 252);'
@@ -139,8 +140,8 @@
 
   <!-- Font size -->
   <section>
-    <h3 class="text-sm font-semibold mb-1" style="font-family: var(--font-display);">Schriftgröße</h3>
-    <p class="text-xs text-ink-muted mb-4">Ändert die Basisgröße der Benutzeroberfläche.</p>
+    <h3 class="text-sm font-semibold mb-1" style="font-family: var(--font-display);">{$t('settings.appearance.font.heading')}</h3>
+    <p class="text-xs text-ink-muted mb-4">{$t('settings.appearance.font.help')}</p>
     <div class="flex gap-2">
       {#each FONT_SIZES as f}
         <button
@@ -159,19 +160,19 @@
 
   <!-- Motion -->
   <section>
-    <h3 class="text-sm font-semibold mb-1" style="font-family: var(--font-display);">Animationen</h3>
-    <p class="text-xs text-ink-muted mb-3">Reduzieren Sie Bewegungseffekte, wenn Sie empfindlich auf Animationen reagieren.</p>
+    <h3 class="text-sm font-semibold mb-1" style="font-family: var(--font-display);">{$t('settings.appearance.motion.heading')}</h3>
+    <p class="text-xs text-ink-muted mb-3">{$t('settings.appearance.motion.help')}</p>
     <label class="flex items-center gap-3 cursor-pointer">
       <input
         type="checkbox"
-        aria-label="Animationen reduzieren"
+        aria-label={$t('settings.appearance.motion.label')}
         class="rounded border-border"
         checked={$reducedMotion}
         onchange={(e) => reducedMotion.set((e.target as HTMLInputElement).checked)}
       />
       <div>
-        <div class="text-sm">Animationen reduzieren</div>
-        <div class="text-xs text-ink-muted">Deaktiviert Übergänge und Bewegungseffekte in der Oberfläche</div>
+        <div class="text-sm">{$t('settings.appearance.motion.label')}</div>
+        <div class="text-xs text-ink-muted">{$t('settings.appearance.motion.desc')}</div>
       </div>
     </label>
   </section>

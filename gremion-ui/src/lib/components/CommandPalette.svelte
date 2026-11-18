@@ -11,16 +11,20 @@
   import Icon from '$lib/components/ui/Icon.svelte'
   import type { NavItem } from '$lib/components/layout/nav-schema'
   import { themeMode } from '$lib/stores/theme'
+  import { t } from '$lib/i18n'
 
   // `nav` is the SAME role/PAGE_ACCESS-filtered tree the sidebar renders, so the
   // palette can never surface a page the user is not allowed to reach. `actions`
   // are likewise gated upstream (the caller only passes ones the role permits).
   let {
     open = $bindable(false),
-    nav = []
+    nav = [],
+    lang
   }: {
     open?: boolean
     nav?: NavItem[]
+    /** The language of the dialog when it differs from the page's (WCAG 3.1.2); unset: the page's. */
+    lang?: string
   } = $props()
 
   // Quick actions — institutional Sie-Form labels. Theme-toggle runs locally;
@@ -29,9 +33,9 @@
   // Umfrage) rode with their now-carved-out modules; the governance-only kernel
   // ships just the theme toggle. Feature modules can re-register their own quick
   // actions when present.
-  const actions: PaletteCommand[] = [
-    { kind: 'action', label: 'Theme wechseln', href: '__theme', icon: 'moon', hint: 'Hell / Dunkel umschalten' }
-  ]
+  let actions: PaletteCommand[] = $derived([
+    { kind: 'action', label: $t('palette.action.theme'), href: '__theme', icon: 'moon', hint: $t('palette.action.themeHint') }
+  ])
 
   let query = $state('')
   let activeIndex = $state(0)
@@ -152,7 +156,8 @@
       class="cp-panel"
       role="dialog"
       aria-modal="true"
-      aria-label="Befehlspalette"
+      {lang}
+      aria-label={$t('palette.title')}
       tabindex="-1"
       onclick={(e) => e.stopPropagation()}
       onkeydown={onKeydown}
@@ -164,8 +169,8 @@
           bind:value={query}
           class="cp-input"
           type="text"
-          placeholder="Suche … Antrag, Datei, Person"
-          aria-label="Suche … Antrag, Datei, Person"
+          placeholder={$t('palette.search')}
+          aria-label={$t('palette.search')}
           aria-controls={listboxId}
           aria-activedescendant={flatResults.length > 0 ? `cp-opt-${activeIndex}` : undefined}
           autocomplete="off"
@@ -174,13 +179,13 @@
         <kbd class="cp-esc">ESC</kbd>
       </div>
 
-      <div class="cp-results" id={listboxId} role="listbox" aria-label="Ergebnisse">
+      <div class="cp-results" id={listboxId} role="listbox" aria-label={$t('palette.results')}>
         {#if flatResults.length === 0}
-          <div class="cp-empty">Keine Treffer für „{query}“</div>
+          <div class="cp-empty">{$t('palette.noMatches.before')}{query}{$t('palette.noMatches.after')}</div>
         {/if}
 
         {#if filteredPages.length > 0}
-          <div class="cp-section">Seiten</div>
+          <div class="cp-section">{$t('palette.section.pages')}</div>
           {#each filteredPages as cmd, i (cmd.href)}
             {@const idx = pageIndex(i)}
             <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -202,7 +207,7 @@
         {/if}
 
         {#if filteredActions.length > 0}
-          <div class="cp-section">Aktionen</div>
+          <div class="cp-section">{$t('palette.section.actions')}</div>
           {#each filteredActions as cmd, i (cmd.label)}
             {@const idx = actionIndex(i)}
             <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -224,14 +229,14 @@
         {/if}
 
         <!-- Stub: people/file search is not wired yet (no unified search API). -->
-        <div class="cp-section">Personen &amp; Dateien</div>
-        <div class="cp-stub">Personen — folgt</div>
+        <div class="cp-section">{$t('palette.section.people')}</div>
+        <div class="cp-stub">{$t('palette.people.soon')}</div>
       </div>
 
       <div class="cp-foot">
-        <span><kbd>↑</kbd><kbd>↓</kbd> Navigieren</span>
-        <span><kbd>↵</kbd> Öffnen</span>
-        <span><kbd>ESC</kbd> Schließen</span>
+        <span><kbd>↑</kbd><kbd>↓</kbd> {$t('palette.hint.navigate')}</span>
+        <span><kbd>↵</kbd> {$t('palette.hint.open')}</span>
+        <span><kbd>ESC</kbd> {$t('palette.hint.close')}</span>
       </div>
     </div>
   </div>

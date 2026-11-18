@@ -4,6 +4,7 @@
   // (actions `profileName` and `accountAction`, logic in $lib/server/profile).
   // Plain form POSTs, so everything works with JavaScript off.
   import { page } from '$app/state'
+  import { t } from '$lib/i18n'
 
   type Profile = { firstName: string; lastName: string; email: string }
   type ActionResult = { action: 'UPDATE_PASSWORD' | 'CONFIGURE_TOTP' | 'UPDATE_EMAIL'; status: 'success' | 'cancelled' | 'error' }
@@ -19,39 +20,30 @@
     | undefined)
   const actionError = $derived(page.form?.accountAction?.error as 'invalid' | 'unavailable' | 'unavailable-now' | 'forbidden' | undefined)
 
-  const ACTION_NAME: Record<ActionResult['action'], string> = {
-    UPDATE_PASSWORD: 'Das Passwort',
-    CONFIGURE_TOTP: 'Der Zwei-Faktor-Code',
-    UPDATE_EMAIL: 'Die E-Mail-Adresse',
-  }
-  const SUCCESS: Record<ActionResult['action'], string> = {
-    UPDATE_PASSWORD: 'Ihr Passwort wurde geändert.',
-    CONFIGURE_TOTP: 'Der neue Zwei-Faktor-Code ist eingerichtet.',
-    UPDATE_EMAIL: 'Die Änderung der E-Mail-Adresse wurde angestoßen. Falls eine Bestätigungs-E-Mail ankommt, öffnen Sie den Link darin, damit die neue Adresse gilt.',
-  }
   const resultText = $derived.by(() => {
     if (!accountActionResult) return null
     const { action, status } = accountActionResult
-    if (status === 'success') return { ok: true, text: SUCCESS[action] }
-    if (status === 'cancelled') return { ok: false, text: `${ACTION_NAME[action]} wurde nicht geändert. Sie haben abgebrochen, Ihre Anmeldung bleibt bestehen.` }
-    return { ok: false, text: `${ACTION_NAME[action]} konnte nicht geändert werden. Ihre Anmeldung bleibt bestehen, bitte versuchen Sie es erneut.` }
+    const k = action === 'UPDATE_PASSWORD' ? 'password' : action === 'CONFIGURE_TOTP' ? 'totp' : 'email'
+    if (status === 'success') return { ok: true, text: $t(`settings.profile.success.${k}`) }
+    if (status === 'cancelled') return { ok: false, text: $t(`settings.profile.cancelled.${k}`) }
+    return { ok: false, text: $t(`settings.profile.failed.${k}`) }
   })
 
-  const ACTION_ERROR_TEXT = {
-    invalid: 'Diese Aktion ist nicht möglich.',
-    unavailable: 'Diese Aktion ist bei Ihnen nicht eingeschaltet.',
-    'unavailable-now': 'Die Anmeldung konnte gerade nicht gestartet werden. Bitte versuchen Sie es später erneut.',
-    forbidden: 'Diese Aktion ist nicht möglich.',
+  const ACTION_ERROR_KEY = {
+    invalid: 'settings.profile.err.invalid',
+    unavailable: 'settings.profile.err.unavailable',
+    'unavailable-now': 'settings.profile.err.unavailableNow',
+    forbidden: 'settings.profile.err.invalid',
   } as const
 </script>
 
 <section class="mt-6" aria-labelledby="profil-name-h">
-  <h3 id="profil-name-h" class="text-sm font-semibold mb-1" style="font-family: var(--font-display);">Name</h3>
+  <h3 id="profil-name-h" class="text-sm font-semibold mb-1" style="font-family: var(--font-display);">{$t('settings.profile.name.h')}</h3>
   {#if profile}
-    <p class="text-xs text-ink-muted mb-3">So erscheinen Sie in Gremium, Nachrichten und Dateien.</p>
+    <p class="text-xs text-ink-muted mb-3">{$t('settings.profile.name.help')}</p>
     <form method="POST" action="/settings?/profileName" class="grid gap-3 sm:grid-cols-2 max-w-xl">
       <div>
-        <label for="profil-firstName" class="block text-xs font-medium mb-1">Vorname</label>
+        <label for="profil-firstName" class="block text-xs font-medium mb-1">{$t('settings.profile.firstName')}</label>
         <input
           id="profil-firstName"
           name="firstName"
@@ -65,7 +57,7 @@
         />
       </div>
       <div>
-        <label for="profil-lastName" class="block text-xs font-medium mb-1">Nachname</label>
+        <label for="profil-lastName" class="block text-xs font-medium mb-1">{$t('settings.profile.lastName')}</label>
         <input
           id="profil-lastName"
           name="lastName"
@@ -79,58 +71,57 @@
         />
       </div>
       <div class="sm:col-span-2">
-        <button type="submit" class="btn">Namen speichern</button>
+        <button type="submit" class="btn">{$t('settings.profile.saveName')}</button>
       </div>
     </form>
     {#if nameForm?.saved}
       <p role="status" class="mt-3 text-xs text-ink-2">
-        Gespeichert. In der Kopfzeile und in anderen Bereichen erscheint der neue Name nach Ihrer nächsten Anmeldung.
+        {$t('settings.profile.saved')}
       </p>
     {:else if nameForm?.error === 'chars' || nameForm?.errors?.firstName === 'chars' || nameForm?.errors?.lastName === 'chars'}
       <p role="alert" class="mt-3 text-xs text-rust-ink">
-        Der Name enthält Zeichen, die nicht erlaubt sind: &lt; &gt; &amp; &quot; $ % ! # ? § ; * ~ / \ | ^ = [ ] &#123; &#125; ( ).
-        Bitte entfernen Sie diese Zeichen.
+        {$t('settings.profile.chars.head')} &lt; &gt; &amp; &quot; $ % ! # ? § ; * ~ / \ | ^ = [ ] &#123; &#125; ( ).
+        {$t('settings.profile.chars.tail')}
       </p>
     {:else if nameForm?.error === 'invalid'}
       <p role="alert" class="mt-3 text-xs text-rust-ink">
-        Bitte geben Sie Vor- und Nachname ein, jeweils 1 bis 80 Zeichen ohne Steuerzeichen.
+        {$t('settings.profile.invalid')}
       </p>
     {:else if nameForm?.error === 'not-saved'}
-      <p role="alert" class="mt-3 text-xs text-rust-ink">Der Name konnte gerade nicht gespeichert werden. Bitte versuchen Sie es später erneut.</p>
+      <p role="alert" class="mt-3 text-xs text-rust-ink">{$t('settings.profile.notSaved')}</p>
     {:else if nameForm?.error === 'forbidden'}
-      <p role="alert" class="mt-3 text-xs text-rust-ink">Das Speichern ist nicht möglich.</p>
+      <p role="alert" class="mt-3 text-xs text-rust-ink">{$t('settings.profile.forbidden')}</p>
     {/if}
   {:else}
-    <p class="text-xs text-ink-muted">Ihr Name kann gerade nicht geladen werden. Bitte laden Sie die Seite später neu.</p>
+    <p class="text-xs text-ink-muted">{$t('settings.profile.loadFailed')}</p>
   {/if}
 </section>
 
 <section class="mt-8" aria-labelledby="profil-login-h">
-  <h3 id="profil-login-h" class="text-sm font-semibold mb-1" style="font-family: var(--font-display);">Anmeldung</h3>
+  <h3 id="profil-login-h" class="text-sm font-semibold mb-1" style="font-family: var(--font-display);">{$t('settings.profile.login.h')}</h3>
   <p class="text-xs text-ink-muted mb-3">
-    Dafür melden Sie sich zur Sicherheit noch einmal an, mit Zwei-Faktor-Code, falls Sie einen eingerichtet haben.
-    Danach kommen Sie hierher zurück.
+    {$t('settings.profile.login.help')}
   </p>
   {#if resultText}
     <p role={resultText.ok ? 'status' : 'alert'} class="mb-3 text-xs {resultText.ok ? 'text-ink-2' : 'text-rust-ink'}">{resultText.text}</p>
   {/if}
   {#if actionError}
-    <p role="alert" class="mb-3 text-xs text-rust-ink">{ACTION_ERROR_TEXT[actionError] ?? ACTION_ERROR_TEXT.invalid}</p>
+    <p role="alert" class="mb-3 text-xs text-rust-ink">{$t(ACTION_ERROR_KEY[actionError] ?? ACTION_ERROR_KEY.invalid)}</p>
   {/if}
   <div class="flex flex-wrap gap-2">
     <form method="POST" action="/settings?/accountAction">
-      <button type="submit" name="action" value="password" class="btn">Passwort ändern</button>
+      <button type="submit" name="action" value="password" class="btn">{$t('settings.profile.btn.password')}</button>
     </form>
     <form method="POST" action="/settings?/accountAction">
-      <button type="submit" name="action" value="totp" class="btn">Zwei-Faktor-Code neu einrichten</button>
+      <button type="submit" name="action" value="totp" class="btn">{$t('settings.profile.btn.totp')}</button>
     </form>
     {#if emailActionAvailable}
       <form method="POST" action="/settings?/accountAction">
-        <button type="submit" name="action" value="email" class="btn">E-Mail-Adresse ändern</button>
+        <button type="submit" name="action" value="email" class="btn">{$t('settings.profile.btn.email')}</button>
       </form>
     {/if}
   </div>
   <p class="mt-2 text-xs text-ink-muted">
-    „Zwei-Faktor-Code neu einrichten“ fügt ein weiteres Gerät hinzu; bereits eingerichtete Geräte bleiben gültig.
+    {$t('settings.profile.totpNote')}
   </p>
 </section>

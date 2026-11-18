@@ -56,7 +56,9 @@
     /**
      * The language the page itself is declared in (`<html lang>`). Where it
      * differs from the chrome's, the chrome parts are marked with their own
-     * lang (WCAG 3.1.2), so a German-declared page does not carry unmarked
+     * lang (WCAG 3.1.2: the rail, hamburger, drawer, the top bar's controls and the
+     * command palette; the breadcrumbs are German folder names and keep the
+     * page's), so a German-declared page does not carry unmarked
      * English chrome. Unset: no marking.
      */
     pageLocale?: Language
@@ -189,7 +191,7 @@
     lang={chromeLang}
   />
   <div class="app-shell-body">
-    <TopBar {brand} nav={navView} unread={counts.unread} modules={topbarModules} {bodyContext}>
+    <TopBar {brand} nav={navView} unread={counts.unread} modules={topbarModules} {bodyContext} lang={chromeLang}>
       {#snippet leading()}
         <button
           bind:this={hamburger}
