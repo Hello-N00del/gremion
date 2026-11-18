@@ -857,6 +857,84 @@ for c in "$2" "$1" "$3" "$4"; do if cd_contains_open_block "$c"; then echo yes; 
     [ "${lines[3]}" = "no" ]
 }
 
+@test "blocks: cd_contains_open_block resolves a 12-hex candidate and ignores the case" {
+    cd_need_flock
+    cd_git_fixture
+    run cd_lib 'cd_lock_take; cd_block_add "$1" build_failed x
+for c in "${2:0:12}" "${1:0:12}" "${3:0:12}" "${4:0:12}" "${2^^}" "${2:0:12}" "${3^^}" "${4^^}"; do
+    if cd_contains_open_block "$c"; then echo yes; else echo no; fi
+done' "$C2" "$C3" "$C1" "$D1"
+    # candidates: C3 short (descends from the block), the block short, C1 short (parent),
+    # D1 short (other branch), C3 upper, C3 short, C1 upper, D1 upper
+    [ "$status" -eq 0 ]
+    [ "${lines[0]}" = "yes" ]
+    [ "${lines[1]}" = "yes" ]
+    [ "${lines[2]}" = "no" ]
+    [ "${lines[3]}" = "no" ]
+    [ "${lines[4]}" = "yes" ]
+    [ "${lines[5]}" = "yes" ]
+    [ "${lines[6]}" = "no" ]
+    [ "${lines[7]}" = "no" ]
+}
+
+@test "blocks: a 12-hex candidate the mirror cannot resolve counts as contained (unknown is not green)" {
+    cd_need_flock
+    cd_git_fixture
+    run cd_lib 'cd_lock_take; cd_block_add "$1" build_failed x
+if cd_contains_open_block 0123456789ab; then echo yes; else echo no; fi
+rm -rf "$CD_MIRROR_DIR"
+if cd_contains_open_block "${2:0:12}"; then echo yes; else echo no; fi
+if cd_contains_open_block "${1:0:12}"; then echo yes; else echo no; fi' "$C2" "$C1"
+    [ "$status" -eq 0 ]
+    [ "${lines[0]}" = "yes" ]
+    [ "${lines[1]}" = "yes" ]
+    [ "${lines[2]}" = "yes" ]
+}
+
+@test "blocks: cd_is_blocked ignores the case of a short or a full sha" {
+    cd_need_flock
+    run cd_lib 'cd_lock_take; cd_block_add '"$SHA_A"' build_failed x
+for c in "$1" "${1:0:12}" "${1^^}" "${1:0:12}" "$2" "${2^^}"; do
+    if cd_is_blocked "$c"; then echo blocked; else echo free; fi
+done' "$SHA_A" "$SHA_B"
+    [ "$status" -eq 0 ]
+    [ "${lines[0]}" = "blocked" ]
+    [ "${lines[1]}" = "blocked" ]
+    [ "${lines[2]}" = "blocked" ]
+    [ "${lines[3]}" = "blocked" ]
+    [ "${lines[4]}" = "free" ]
+    [ "${lines[5]}" = "free" ]
+}
+
+@test "blocks: garbage input never reads as free or as not contained, with or without a block" {
+    cd_need_flock
+    cd_git_fixture
+    local garbage='"" "x" "zzzzzzzzzzzz" "abc" "aaaaaaaaaaa" "aaaaaaaaaaaaa" "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" "aaaaaaaaaaaa;ls" "aaaaaaaaaaaa aaaaaaaaaaaa" "-aaaaaaaaaaaa" "HEAD"'
+    run cd_lib 'for c in '"$garbage"'; do
+    if cd_is_blocked "$c"; then echo blocked; else echo free; fi
+    if cd_contains_open_block "$c"; then echo yes; else echo no; fi
+done 2>/dev/null'
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s\n' "$output" | grep -c '^blocked$')" -eq 12 ]
+    [ "$(printf '%s\n' "$output" | grep -c '^yes$')" -eq 12 ]
+    run cd_lib 'cd_lock_take; cd_block_add '"$SHA_A"' build_failed x
+for c in '"$garbage"'; do
+    if cd_is_blocked "$c"; then echo blocked; else echo free; fi
+    if cd_contains_open_block "$c"; then echo yes; else echo no; fi
+done 2>/dev/null'
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s\n' "$output" | grep -c '^blocked$')" -eq 12 ]
+    [ "$(printf '%s\n' "$output" | grep -c '^yes$')" -eq 12 ]
+}
+
+@test "blocks: an unparseable candidate says why on stderr" {
+    run cd_lib 'cd_is_blocked notasha 2>&1 >/dev/null; cd_contains_open_block notasha 2>&1 >/dev/null'
+    [ "$status" -eq 0 ]
+    [ "${#lines[@]}" -eq 2 ]
+    [[ "${lines[0]}" == *is_blocked* ]]
+    [[ "${lines[1]}" == *contains_open_block* ]]
+}
+
 @test "blocks: an unreadable block list stops the program (never 'not blocked')" {
     cd_need_flock
     run cd_lib 'cd_lock_take; cd_block_add '"$SHA_A"' build_failed x'
