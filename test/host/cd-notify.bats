@@ -388,6 +388,15 @@ body_of() { sed -n '/^$/,$p' "$1" | sed '1d'; }
     [[ "$output" == *"rc2=0"* ]]
 }
 
+@test "caller: a write that fails after the file is created (file size limit) leaves no mail file behind, so flush cannot send a blank mail" {
+    run nlib '( trap "" XFSZ; ulimit -f 0; cd_notify held sha12='"$SHA_A"'; echo "rc=$?" ); echo after'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"rc=0"* ]]
+    [[ "$output" == *"after"* ]]
+    [ "$(mail_count)" -eq 0 ]
+    [ -z "$(find "${GREMION_ROOT}/data/cd/outbox" -mindepth 1 2>/dev/null)" ]
+}
+
 @test "caller: a cd_notify under the lock does not kill the program's heartbeat when the state is unreadable" {
     cd_need_flock
     printf '{' > "${GREMION_ROOT}/data/cd/state.json"

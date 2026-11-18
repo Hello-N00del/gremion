@@ -296,18 +296,31 @@ _cd_nf_ledger_add() {
 # -- queue -------------------------------------------------------------------------------
 # _cd_nf_write_file KIND NOW BODY SUBJECT TO -- the file, mode 0600, the first free name.
 _cd_nf_write_file() {
-    local kind="$1" now="$2" subject="$3" body="$4" to="$5" dir path n=1 date_h id
+    local kind="$1" now="$2" subject="$3" body="$4" to="$5" dir path tmp n=1 date_h id
     dir="${CD_DATA}/outbox"
     cd_mkdir "$CD_DATA" && cd_mkdir "$dir" || return 1
     date_h="$(date -u -d "@${now}" '+%a, %d %b %Y %H:%M:%S +0000')" || return 1
     id="${now}.${kind}.${RANDOM}${RANDOM}@gremion-cd.invalid"
+    # The whole mail goes to a dot-named temp first (the flush glob never matches it), so a
+    # failed write (disk full, quota) is told apart from a taken name and leaves nothing for
+    # the flush to send. The temp is then linked to the first free name: ln fails only when
+    # the name exists, and the finished mail appears in one step.
+    tmp="${dir}/.q.$$.${RANDOM}${RANDOM}"
+    if ! ( set -o noclobber; umask 077; printf 'To: %s\nSubject: %s\nDate: %s\nMessage-ID: <%s>\nMIME-Version: 1.0\nContent-Type: text/plain; charset=utf-8\n\n%s\n' \
+            "$to" "$subject" "$date_h" "$id" "$body" > "$tmp" ) 2>/dev/null; then
+        rm -f -- "$tmp" 2>/dev/null || true
+        return 1
+    fi
     path="${dir}/${now}-${kind}.eml"
-    while ! ( set -o noclobber; umask 077; printf 'To: %s\nSubject: %s\nDate: %s\nMessage-ID: <%s>\nMIME-Version: 1.0\nContent-Type: text/plain; charset=utf-8\n\n%s\n' \
-            "$to" "$subject" "$date_h" "$id" "$body" > "$path" ) 2>/dev/null; do
+    while ! ln -- "$tmp" "$path" 2>/dev/null; do
         n=$(( n + 1 ))
-        (( n > 200 )) && return 1
+        if (( n > 200 )); then
+            rm -f -- "$tmp" 2>/dev/null || true
+            return 1
+        fi
         path="${dir}/${now}-${kind}-${n}.eml"
     done
+    rm -f -- "$tmp" 2>/dev/null || true
     printf '%s\n' "$path"
 }
 
