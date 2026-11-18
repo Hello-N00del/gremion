@@ -722,6 +722,25 @@ describe('customerAdapters.boardLocation: the flag is written in the own kernel 
     expect(reg.contextForProvisioningTenant).not.toHaveBeenCalled()
   })
 
+  it('an active customer is never flipped: kernel is refused (the move carries it), with no transaction opened', async () => {
+    reg.getTenantById.mockResolvedValue({ id: C.id, slug: C.slug, status: 'active' })
+    const conn = connectionReading('kernel')
+    vi.mocked(getDb).mockReturnValue(conn as never)
+    const { a } = adapters(kcFake(true))
+    await expect(a.boardLocation.setModule(C)).rejects.toMatchObject({ code: 'CUSTOMER_STATE', message: expect.stringContaining('board-move') })
+    expect(conn.begin).not.toHaveBeenCalled()
+  })
+
+  it('a provisioning customer with no row is written (a transaction is opened)', async () => {
+    reg.getTenantById.mockResolvedValue({ id: C.id, slug: C.slug, status: 'provisioning' })
+    const conn = connectionReading(null)
+    conn.begin.mockResolvedValue(true)
+    vi.mocked(getDb).mockReturnValue(conn as never)
+    const { a } = adapters(kcFake(true))
+    await a.boardLocation.setModule(C).catch(() => {}) // the read-back of this stand-in sees no row; only the write path is asserted
+    expect(conn.begin).toHaveBeenCalledTimes(1)
+  })
+
   it('a customer without a control row fails by name and runs nothing', async () => {
     reg.getTenantById.mockResolvedValue(null)
     const { a } = adapters(kcFake(true))

@@ -10,6 +10,10 @@
 // before the lock is granted and is seen by the count, or waits until the flag is `module`; a row can never
 // land in the kernel tables after the count and sit unseen behind the flag.
 //
+//   - an ACTIVE customer is never flipped (assertBoardLocationModule reads and refuses): it has live
+//     traffic and the router keeps its answer for 5 seconds, so a write that read `kernel` just before
+//     a flip would land in the kernel tables behind the new flag, and the table lock cannot see it. Only a
+//     customer still being created has no traffic. The move closes that gap for a live customer;
 //   - a flag that already says `module` is left alone: no transaction, no lock, no write (a rerun of the
 //     create over a finished customer makes no change);
 //   - a move that is running (`moving`) is refused: the move owns the flag until it flips it;
@@ -54,6 +58,20 @@ export async function setBoardLocationModule(sql: Sql): Promise<{ changed: boole
   const after = await readLocation(sql)
   if (after !== 'module') throw new ProvisioningError('POSTCONDITION', `the board location reads ${after ?? 'no row'} after it was set to module`)
   return { changed }
+}
+
+/**
+ * The read-only form, for a customer that is already active (a rerun of the create over a finished
+ * customer): `module` is the answer that was set while it was still being created; anything else is a
+ * refusal that points at the move. No transaction, no lock, no write.
+ */
+export async function assertBoardLocationModule(sql: Sql): Promise<{ changed: boolean }> {
+  const location = await readLocation(sql)
+  if (location === 'module') return { changed: false }
+  throw new ProvisioningError(
+    'CUSTOMER_STATE',
+    `the board location of this active customer reads ${location ?? 'no row'}, not module: it is not set while the customer is live; run board-move to put the board in its own database`,
+  )
 }
 
 async function readLocation(sql: Sql): Promise<string | null> {

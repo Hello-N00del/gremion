@@ -81,6 +81,16 @@ describe('the board database server is asked before anything is written', () => 
     await expect(createPhaseB(s, d)).resolves.toMatchObject({ enabled: ['calendar'] })
   })
 
+  it('only the board is asked: another module that declares a database on a server that is down does not change its create', async () => {
+    const w = boardWorld()
+    w.declared.set('calendar', 'calendar-postgres')
+    w.serverAnswers.set('calendar-postgres', 0)
+    const d = deps(w)
+    const s = spec({ enable: ['calendar'] })
+    await expect(createPhaseA(s, d)).resolves.toMatchObject({ registered: true })
+    expect(w.serverAnswers.get('calendar-postgres')).toBe(0) // never asked: no answer consumed, no refusal raised
+  })
+
   it('a declared database with no way to ask the server fails closed instead of skipping the check', async () => {
     const w = boardWorld()
     const d = deps(w)

@@ -7,7 +7,7 @@
 //   - rows, a running move or a flag that does not read back as `module` are refusals, never a quiet pass;
 //   - every message carries counts only.
 import { describe, expect, it } from 'vitest'
-import { setBoardLocationModule } from './board-location-flag'
+import { assertBoardLocationModule, setBoardLocationModule } from './board-location-flag'
 
 interface Model {
   location: 'kernel' | 'moving' | 'module' | null
@@ -107,5 +107,28 @@ describe('setBoardLocationModule', () => {
 
   it('a flag that does not read back as module after the commit is a failure, not a success', async () => {
     await expect(setBoardLocationModule(fakeSql({ location: null, counts: EMPTY, readBack: 'kernel' }, []))).rejects.toMatchObject({ code: 'POSTCONDITION' })
+  })
+})
+
+// An ACTIVE customer has live traffic and a router that keeps its answer for 5 seconds: a flip from
+// kernel to module under them could leave a write that read `kernel` just before it in the kernel tables,
+// hidden behind the new flag. The create flow therefore only READS the flag of an active customer.
+describe('assertBoardLocationModule (the read-only form for an active customer)', () => {
+  it('module is accepted without a transaction, a lock or a write', async () => {
+    const log: string[] = []
+    expect(await assertBoardLocationModule(fakeSql({ location: 'module', counts: { board: 4, stack: 4, card: 4 } }, log))).toEqual({ changed: false })
+    expect(log.some((l) => /BEGIN|LOCK|INSERT|UPDATE/.test(l))).toBe(false)
+  })
+
+  it.each([
+    ['kernel', 'kernel' as const],
+    ['moving', 'moving' as const],
+    ['no row', null],
+  ])('%s is refused, naming board-move, with no transaction, lock or write', async (_n, location) => {
+    const log: string[] = []
+    const err = await assertBoardLocationModule(fakeSql({ location, counts: EMPTY }, log)).then(() => null, (e: Error & { code?: string }) => e)
+    expect(err).toMatchObject({ code: 'CUSTOMER_STATE' })
+    expect(err?.message).toContain('board-move')
+    expect(log.some((l) => /BEGIN|LOCK|INSERT|UPDATE/.test(l))).toBe(false)
   })
 })

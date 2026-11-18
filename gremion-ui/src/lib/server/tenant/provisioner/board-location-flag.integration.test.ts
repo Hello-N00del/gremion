@@ -59,6 +59,25 @@ describe('setBoardLocationModule on a real kernel database', () => {
     expect((await flag())?.location).toBe('moving')
   })
 
+  it('works as a role that holds DML on the four tables and nothing more (not a superuser, not the owner)', async () => {
+    const role = 'bd7_flag_app'
+    const tables = 'board, stack, card, board_location'
+    await sql().unsafe(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${role}') THEN CREATE ROLE ${role} NOLOGIN NOSUPERUSER NOBYPASSRLS; END IF; END $$`)
+    await sql().unsafe(`GRANT SELECT, INSERT, UPDATE, DELETE ON ${tables} TO ${role}`)
+    // the startup option makes every statement of this connection run as the role (privileges are checked against current_user)
+    const asRole = postgres(process.env.DATABASE_URL!, { max: 1, onnotice: () => {}, connection: { options: `-c role=${role}` } })
+    try {
+      const [who] = await asRole<{ u: string; super: boolean }[]>`SELECT current_user AS u, (SELECT rolsuper FROM pg_roles WHERE rolname = current_user) AS super`
+      expect(who).toEqual({ u: role, super: false })
+      expect(await setBoardLocationModule(asRole)).toEqual({ changed: true })
+      expect((await flag())?.location).toBe('module')
+    } finally {
+      await asRole.end({ timeout: 5 })
+      await sql().unsafe(`REVOKE ALL ON ${tables} FROM ${role}`)
+      await sql().unsafe(`DROP ROLE ${role}`)
+    }
+  })
+
   it('a writer still in flight cannot land a row behind the flag: the call waits for its tables and fails on the lock timeout', async () => {
     const org = await orgUnitId()
     // a second connection to the same database: an uncommitted insert into board, the way the kernel erasure hook or a cascade would be mid-transaction
