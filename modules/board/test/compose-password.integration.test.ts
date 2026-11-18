@@ -114,6 +114,6 @@ describe('board leaf password: one source, proven by authenticating', () => {
       () => null,
       (e: unknown) => e as { code?: string },
     )
-    expect(err?.code).toBe('28P01')
+    expect(err?.code, 'the scratch server did not ask for the password (trust authentication): this suite needs scram').toBe('28P01')
   })
 })

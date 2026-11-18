@@ -27,6 +27,11 @@ set -euo pipefail
 #                                     a value that EMBEDS a group (the reader
 #                                     password in GREMION_PUBLIC_DB_URL) contains
 #                                     it: exit 1.
+#   5. board password source       -- an app file that declares BOARD_APP_PASSWORD
+#                                     holds the content of etc/secrets/tenant-create/
+#                                     module_app_password_board, the file the board
+#                                     module role is set from (absent file: no
+#                                     finding): exit 1.
 #
 # Alias equality is judged WITHIN one file. A pair split across files (e.g.
 # app-blue.env's AUTH_KEYCLOAK_SECRET against state.env's
@@ -169,6 +174,32 @@ check_aliases() {
     [[ "$__gve_failures" -gt "$before" ]] || ok "alias equality: ${pairs} aliased key(s) agree"
 }
 
+# The board leaf's database password has ONE source: the file the module lifecycle sets the role
+# m_board_app from (etc/secrets/tenant-create/module_app_password_board, written by gremion-tenant
+# or, first, by gremion-init-secrets). gremion-init-secrets derives BOARD_APP_PASSWORD from it, but a
+# host rendered before the board leaf gets its new keys by hand, and a second value (typed, or
+# generated once more) is refused by the module server with 28P01 for EVERY customer while the
+# leaf's /healthz stays green. Judged only for a file whose template declares the key (the app
+# files); an absent secret file is not a failure (nothing has set the role yet). Findings name the
+# key and the file, never a value.
+check_board_app_password() {
+    grep -qE '^BOARD_APP_PASSWORD=' "$__gve_template" || return 0
+    local file want
+    file="$(gremion_root)/etc/secrets/tenant-create/module_app_password_board"
+    if [[ ! -s "$file" ]]; then
+        ok "BOARD_APP_PASSWORD: ${file} is not written yet, nothing to compare with"
+        return 0
+    fi
+    want="$(cat "$file")"
+    want="${want#"${want%%[![:space:]]*}"}"
+    want="${want%"${want##*[![:space:]]}"}"
+    if [[ "${BOARD_APP_PASSWORD-}" != "$want" ]]; then
+        fail "BOARD_APP_PASSWORD differs from the content of ${file} (the module role m_board_app is set from that file): set it to the file's content"
+        return 0
+    fi
+    ok "BOARD_APP_PASSWORD equals the module password file (one source for the role and the leaf)"
+}
+
 # Every key the template declares must be declared by the file, and every
 # key the operator fills in (template value CHANGE_ME_OPERATOR_*) must hold
 # something other than blanks. Key PRESENCE is read from the file by name; no
@@ -218,6 +249,7 @@ main() {
     check_template_keys
     check_compose_files
     check_aliases
+    check_board_app_password
     if [[ "$__gve_failures" -gt 0 ]]; then
         die "VALIDATE-ENV: ${__gve_failures} problem(s) in $(basename "$__gve_env_file")" "$GREMION_EXIT_ASSERT"
     fi
