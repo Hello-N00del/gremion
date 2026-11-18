@@ -20,6 +20,7 @@
 // routes answer with 503. Falling back to 'kernel' would write to the old copy of a board that has
 // already moved, and that write would be lost.
 
+import type { Sql } from '@gremion/db'
 import { getDb } from '$lib/server/db'
 import { currentTenantId } from '$lib/server/tenant/context'
 
@@ -95,11 +96,31 @@ function decide(rows: readonly Row[]): BoardLocation {
 }
 
 async function readFresh(): Promise<BoardLocation> {
-  const rows = await getDb()<Row[]>`
+  return readLocationFrom(getDb())
+}
+
+async function readLocationFrom(db: Sql): Promise<BoardLocation> {
+  const rows = await db<Row[]>`
     SELECT location, extract(epoch FROM (now() - changed_at))::float8 AS age_s
     FROM board_location
     LIMIT 1`
   return decide(rows)
+}
+
+/**
+ * One uncached read of the flag through a connection the caller already holds (the erasure hook
+ * reads it inside its own transaction, on the customer's own connection). Same rules as
+ * getBoardLocation: no row is 'kernel', a stale 'moving' reads as 'kernel', and a flag that cannot
+ * be read throws BoardLocationUnreadableError, never a guess.
+ */
+export async function readBoardLocationFrom(db: Sql): Promise<BoardLocation> {
+  try {
+    return await readLocationFrom(db)
+  } catch (err) {
+    const code = (err as { code?: unknown } | null)?.code
+    console.error(`[board-location] flag unreadable (${typeof code === 'string' ? code : 'error'})`)
+    throw new BoardLocationUnreadableError(err)
+  }
 }
 
 /**

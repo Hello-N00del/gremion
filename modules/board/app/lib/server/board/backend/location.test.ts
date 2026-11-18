@@ -36,6 +36,7 @@ vi.mock('$lib/server/db', () => ({
 
 import {
   getBoardLocation,
+  readBoardLocationFrom,
   resetBoardLocationCacheForTests,
   BoardLocationUnreadableError,
   BoardUnavailableError,
@@ -221,5 +222,26 @@ describe('getBoardLocation: a running move refreshes its row and never goes stal
     expect(await getBoardLocation()).toBe('kernel')
     vi.advanceTimersByTime(BOARD_LOCATION_CACHE_TTL_MS)
     expect(await getBoardLocation()).toBe('moving')
+  })
+})
+
+describe('readBoardLocationFrom: one uncached read through a connection the caller holds', () => {
+  const dbReturning = (next: unknown[] | Error) => (async () => {
+    if (next instanceof Error) throw next
+    return next
+  }) as never
+
+  it('answers with the same rules and never from the cache', async () => {
+    state.script = [row('kernel')]
+    expect(await getBoardLocation()).toBe('kernel')
+    expect(await readBoardLocationFrom(dbReturning(row('module')))).toBe('module')
+    expect(await readBoardLocationFrom(dbReturning([]))).toBe('kernel')
+    expect(await readBoardLocationFrom(dbReturning(row('moving', BOARD_MOVE_STALE_S + 1)))).toBe('kernel')
+    expect(await readBoardLocationFrom(dbReturning(row('moving', 1)))).toBe('moving')
+  })
+
+  it('a flag that cannot be read throws, never a guess', async () => {
+    await expect(readBoardLocationFrom(dbReturning(new Error('down')))).rejects.toBeInstanceOf(BoardLocationUnreadableError)
+    await expect(readBoardLocationFrom(dbReturning(row('elsewhere')))).rejects.toBeInstanceOf(BoardLocationUnreadableError)
   })
 })
