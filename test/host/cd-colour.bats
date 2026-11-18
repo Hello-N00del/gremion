@@ -42,6 +42,11 @@ setup() {
     printf 'blue\n' > "${GREMION_ROOT}/runtime/active-colour"
     shim_docker
     shim_curl
+    # the real mv, recorded in its own log (SHIM_LOG must stay empty for the worker gate)
+    REAL_MV="$(command -v mv)"
+    export REAL_MV
+    printf '#!/usr/bin/env bash\n(IFS="|"; printf "%%s\\n" "$*" >> "$DK/mv.log")\nexec "$REAL_MV" "$@"\n' > "${SHIM_DIR}/mv"
+    chmod +x "${SHIM_DIR}/mv"
     shim git "case \"\$*\" in *rev-parse*) printf '%s\n' '${TIP}' ;; esac"
 }
 
@@ -177,7 +182,7 @@ case "$url" in
     [ -f "$DK/traefik.$name" ] || { echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; }
     cat "$DK/traefik.$name" ;;
   */healthz)
-    printf 'ok\n200' ;;
+    printf '{"ok":true}\n200' ;;
   */readyz)
     line=$(nextline "$DK/pub.seq") || exit 7
     printf '%s\n%s' "${line#*|}" "${line%%|*}" ;;
@@ -322,6 +327,8 @@ ready_green() { call "cd_colour_ready green ${TAG_NEW} \"\$TREE\""; }
     [[ "$output" == "rc=0"* ]]
     # nothing but the one gate file is in the directory
     [ "$(ls -A "${GREMION_ROOT}/runtime/workers")" = green ]
+    # written to a temp file in the same directory and renamed over the gate file
+    assert_present "^-f\|-T\|--\|${GREMION_ROOT}/runtime/workers/\.green\.[A-Za-z0-9]+\|${GREMION_ROOT}/runtime/workers/green$" "$DK/mv.log" "the gate file was not renamed into place"
     if fs_carries_modes "${GREMION_ROOT}/runtime/workers"; then
         [ "$(stat -c %a "${GREMION_ROOT}/runtime/workers/green")" = 644 ]
         [ "$(stat -c %a "${GREMION_ROOT}/runtime/workers")" = 755 ]
@@ -622,6 +629,13 @@ ready_green() { call "cd_colour_ready green ${TAG_NEW} \"\$TREE\""; }
 @test "ready: layer 2, the public /readyz answering 503" {
     happy
     seqf "$DK/pub.seq" '503|{"ready":false}'
+    ready_green
+    [[ "$output" == *"rc=1 reason=public_ready"* ]]
+}
+
+@test "ready: layer 2, the public status code is checked on its own (503 with a ready body)" {
+    happy
+    seqf "$DK/pub.seq" '503|{"ready":true}'
     ready_green
     [[ "$output" == *"rc=1 reason=public_ready"* ]]
 }
