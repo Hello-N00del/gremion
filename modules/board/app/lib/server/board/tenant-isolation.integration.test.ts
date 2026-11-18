@@ -529,15 +529,11 @@ describe('board: three customers on real PostgreSQL, one served in-process and t
       expect(boardDb!.db).toBe(inModule(who) ? LEAF_DB[who] : DB_NAME[who])
       expect(await countWhere(who, 'board', 'id = $1', seed[who].boardId)).toBe(1)
       for (const other of othersOf(who)) expect(await countWhere(who, 'board', 'id = $1', seed[other].boardId)).toBe(0)
-      // a module customer's kernel tables hold no board rows: the board is served by the module database, not by a stale copy
-      if (inModule(who)) {
-        const [kernelRows] = await kernelAdmin[who]<{ n: string }[]>`SELECT (SELECT count(*) FROM board) + (SELECT count(*) FROM stack) + (SELECT count(*) FROM card) AS n`
-        expect(Number(kernelRows!.n)).toBe(0)
-        expect(existing).toContain(LEAF_DB[who])
-      } else {
-        // the kernel customer has no module database at all
-        expect(existing).not.toContain(LEAF_DB[who])
-      }
+      // a module customer's kernel tables hold no board rows (the board is served by the module database, not by a
+      // stale copy); the kernel customer's hold its board (1), stacks (3) and cards (2), and it has no module database
+      const [kernelRows] = await kernelAdmin[who]<{ n: string }[]>`SELECT (SELECT count(*) FROM board) + (SELECT count(*) FROM stack) + (SELECT count(*) FROM card) AS n`
+      expect(Number(kernelRows!.n)).toBe(inModule(who) ? 0 : 1 + STACKS.length + 2)
+      expect(existing.includes(LEAF_DB[who])).toBe(inModule(who))
     }
   })
 
@@ -606,11 +602,9 @@ describe('board: three customers on real PostgreSQL, one served in-process and t
       const stacks = await boardAdmin[who]<{ name: string }[]>`SELECT name FROM stack WHERE board_id = ${newBoardId} ORDER BY sort_order`
       expect(stacks.map((s) => s.name)).toEqual(STACKS)
       expect(await fingerprint(who)).not.toBe(ownBefore)
-      if (inModule(who)) {
-        // not in its own kernel tables either
-        const [stray] = await kernelAdmin[who]<{ n: string }[]>`SELECT count(*)::text AS n FROM card WHERE title = ${`control-card-${tag}`}`
-        expect(stray!.n).toBe('0')
-      }
+      // a module customer's card is not in its own kernel tables; a kernel customer's is only there
+      const [inKernel] = await kernelAdmin[who]<{ n: string }[]>`SELECT count(*)::text AS n FROM card WHERE title = ${`control-card-${tag}`}`
+      expect(inKernel!.n).toBe(inModule(who) ? '0' : '1')
       for (const o of others) {
         expect(await fingerprint(o)).toBe(before[o])
         expect(await countWhere(o, 'card', 'title = $1', `control-card-${tag}`)).toBe(0)
