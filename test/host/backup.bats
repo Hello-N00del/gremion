@@ -871,7 +871,17 @@ backup_host_data_dirs() {
 # switch-off; the container reads of the shim stand for root through a setuid copy
 # of setpriv.
 @test "a root-owned 0700 export tree is staged by a deploy-user run, and the run reaches restic" {
-    [ "$(id -u)" -eq 0 ] || skip "needs root to plant a root-owned tree and to drop to the deploy uid"
+    if [ "$(id -u)" -ne 0 ]; then
+        # The CI runner is not root but has passwordless sudo: run this one test as
+        # root in a nested bats, so it runs there instead of being skipped. A box
+        # with neither cannot run it.
+        sudo -n true 2>/dev/null || skip "needs root or passwordless sudo to plant a root-owned tree"
+        run sudo -n env "PATH=${PATH}" bats -f '^a root-owned 0700 export tree is staged' "$BATS_TEST_FILENAME"
+        [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+        [[ "$output" == *"ok 1 a root-owned 0700 export tree"* ]] || { echo "$output"; return 1; }
+        [[ "$output" != *"# skip"* ]] || { echo "the nested root run skipped: $output"; return 1; }
+        return 0
+    fi
     command -v setpriv >/dev/null 2>&1 || skip "setpriv (util-linux) is not installed"
     shim_baseline; shim_docker_full; shim_restic_ok; plant_etc_tree
     shim_rsync_honouring_excludes

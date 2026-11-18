@@ -61,7 +61,7 @@ copy_host_src() {
     # the file is kept as it was
     [ "$(cat "$(board_file)")" = "$FILE_VALUE" ]
     # the state tier has no use for it
-    ! grep -q '^BOARD_APP_PASSWORD=' "${ENV_DIR}/state.env"
+    assert_absent '^BOARD_APP_PASSWORD=' "${ENV_DIR}/state.env"
     # and no value reaches the log
     [[ "$output" != *"$FILE_VALUE"* ]]
 }
@@ -149,7 +149,7 @@ copy_host_src() {
     for k in INTERNAL_CALENDAR_SECRET INTERNAL_CONTENT_SECRET INTERNAL_NEWSLETTER_SECRET INTERNAL_PUSH_SECRET BOARD_APP_PASSWORD; do
         [ "$v" != "$(value_of "${ENV_DIR}/app-blue.env" "$k")" ] || { echo "INTERNAL_BOARD_SECRET equals ${k}"; return 1; }
     done
-    ! grep -q '^INTERNAL_BOARD_SECRET=' "${ENV_DIR}/state.env"
+    assert_absent '^INTERNAL_BOARD_SECRET=' "${ENV_DIR}/state.env"
     if fs_carries_modes "$ENV_DIR"; then
         for f in app-blue.env app-green.env; do [ "$(stat -c '%a' "${ENV_DIR}/${f}")" = "600" ]; done
     fi
