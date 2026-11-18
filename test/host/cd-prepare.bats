@@ -32,7 +32,7 @@ if [ "$1" = transport ]; then cat "$DK/transport" 2>/dev/null || echo relay; fi
 exit 0
 EOF
     chmod +x "${GREMION_ROOT}/bin/gremion-mail"
-    shim docker "$(cat "${FIX}/docker.shim")"
+    shim docker "$(cat "${FIX}/docker.shim.sh")"
     shim renice
     shim ionice
     # df: the answer is the number of KB in $DK/df.root or $DK/df.docker
@@ -121,7 +121,9 @@ mk_mirror() {
     local work="${GREMION_ROOT}/.fixture-work" bare="${GREMION_ROOT}/data/cd/mirror.git"
     export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.org GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.org
     git init -q -b main "$work"
-    cp -R "${FIX}/tree/." "$work/"
+    mkdir -p "$work/infra/host/bin"
+    printf '/secrets/*\nrendered.out\n' >"$work/.gitignore"
+    cp "${FIX}/render.sh" "$work/infra/host/bin/gremion-render"
     chmod +x "$work/infra/host/bin/gremion-render"
     git -C "$work" add -A
     git -C "$work" commit -q -m c1
@@ -211,8 +213,10 @@ precheck() {
     [ "$status" -eq 4 ]
     has_in 'why=disk' "$output"
     assert_recorded docker 'builder prune -f --keep-storage 12GB'
-    # the image prune of the commit unit is tried when the builder cache is not enough
-    assert_recorded_stub cd_commit_prune
+    # the gate prunes the builder cache and nothing else: the image prune is the commit unit's
+    refute_stub_recorded cd_commit_prune
+    refute_recorded docker 'rmi'
+    refute_recorded docker 'image prune'
 }
 
 @test "precheck: the docker root directory is measured, not only the host root" {
@@ -229,7 +233,6 @@ precheck() {
     precheck
     [ "$status" -eq 0 ]
     assert_recorded docker 'builder prune'
-    refute_stub_recorded cd_commit_prune
 }
 
 @test "precheck does not prune when the disk is fine" {
@@ -354,6 +357,25 @@ precheck() {
     precheck
     [ "$status" -eq 2 ]
     has_in 'why=mail_transport' "$output"
+}
+
+@test "precheck: a transport that cannot be read is refused even with CD_ALLOW_NO_MAIL=1 (cannot tell is no pass)" {
+    cd_write_cfg CD_ALLOW_NO_MAIL=1
+    echo garbage >"$DK/transport"
+    precheck
+    [ "$status" -eq 2 ]
+    has_in 'why=mail_transport' "$output"
+    rm -f "${GREMION_ROOT}/bin/gremion-mail"
+    precheck
+    [ "$status" -eq 2 ]
+    has_in 'why=mail_transport' "$output"
+}
+
+@test "precheck: a clock that cannot be read is refused (2), not read as 'outside a quiet window'" {
+    echo notanepoch >"$GREMION_CD_NOW_FILE"
+    precheck
+    [ "$status" -eq 2 ]
+    has_in 'why=clock' "$output"
 }
 
 @test "precheck: with CD_ALLOW_NO_MAIL=1 on a non-relay transport both mail checks are skipped" {
@@ -871,12 +893,12 @@ classify() { # TEXT -> kind
 }
 
 @test "classify: connection reset is infra" {
-    classify 'read tcp 192.0.2.1:1->192.0.2.2:443: read: connection reset by peer'
+    classify 'read tcp 203.0.113.1:1->203.0.113.2:443: read: connection reset by peer'
     [ "$output" = "infra" ]
 }
 
 @test "classify: i/o timeout is infra" {
-    classify 'dial tcp 192.0.2.2:443: i/o timeout'
+    classify 'dial tcp 203.0.113.2:443: i/o timeout'
     [ "$output" = "infra" ]
 }
 
@@ -1058,14 +1080,33 @@ classify() { # TEXT -> kind
     [ "$(grep -c -- '|build' "$DK/argv.log")" -eq 1 ]
 }
 
+@test "build: the build gets what the pull left of the one time limit" {
+    retagged
+    echo 600 >"$DK/pull.advance"
+    run prep 'cd_prepare_build "$TREE" green "$TAG"'
+    [ "$status" -eq 0 ]
+    grep -qF -- "timeout=3600" "$DK/ctx.log"
+    grep -qF -- "timeout=3000" "$DK/ctx.log"
+}
+
+@test "build: a pull that uses up the limit leaves nothing for the build (3, no build call)" {
+    retagged
+    cd_write_cfg CD_BUILD_TIMEOUT_MIN=1
+    echo 61 >"$DK/pull.advance"
+    run prep 'cd_prepare_build "$TREE" green "$TAG"'
+    [ "$status" -eq 3 ]
+    has_in 'timed out' "$output"
+    [ "$(dk_count "|build")" = "0" ]
+}
+
 @test "build: the container log of a failure goes to a 0600 file under logs/ and nothing of it is printed" {
     retagged
-    printf '%s\n' '1 SECRET-SLUG-MARKER acme-council config line' >"$DK/build.script"
+    printf '%s\n' '1 SECRET-SLUG-MARKER example-slug config line' >"$DK/build.script"
     run --separate-stderr prep 'cd_prepare_build "$TREE" green "$TAG"'
     [ "$status" -eq 1 ]
     refute_in 'SECRET-SLUG-MARKER' "$output"
     refute_in 'SECRET-SLUG-MARKER' "$stderr"
-    refute_in 'acme-council' "$stderr"
+    refute_in 'example-slug' "$stderr"
     has_in "cd-build-${TAG}.log" "$stderr"
     log="${GREMION_ROOT}/logs/cd-build-${TAG}.log"
     [ "$(stat -c %a "$log")" = "600" ]

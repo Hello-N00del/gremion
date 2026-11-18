@@ -18,6 +18,7 @@
 #   df.root.after, df.docker.after   replace df.root and df.docker when `docker builder prune`
 #                 runs (it frees space)
 #   ps.fail       `docker ps` exits 1
+#   pull.advance  a pull takes this many seconds of the fake clock
 #   ignore.star   a compose call behaves as if the profile star were absent
 #   skip.oneshot.build   a build does not produce the one-shot images (it lies)
 #   build.same    a file naming an image key: the new gremion-ui image gets that image's id
@@ -73,6 +74,9 @@ case "$1" in
             printf 'sha256:%064d\n' 7 >"$DK/image.$(cat "$DK/build.clobber")"
         fi ;;
       pull)
+        if [ -f "$DK/pull.advance" ]; then
+            echo $(( $(cat "$GREMION_CD_NOW_FILE") + $(cat "$DK/pull.advance") )) >"$GREMION_CD_NOW_FILE"
+        fi
         run_script pull || exit $? ;;
       config)
         [ -f "$DK/config.fail" ] && exit 1

@@ -22,7 +22,7 @@
 # DEPENDS ON core.sh (config, state, locks, clock, history) and docker.sh (cd_dc,
 # cd_envfile, cd_kv_get, cd_set_env_key, cd_project_cids, cd_image_id, cd_wait_healthy)
 # and notify.sh (the mail transport and the age of the outbox). It calls, when they
-# exist, cd_watch_probe_public (watch.sh) and cd_commit_prune (commit.sh).
+# exist, cd_watch_probe_public (watch.sh).
 
 # The jq programs below are single-quoted on purpose ($name is jq's own variable syntax),
 # and CD_PREPARE_WHY is read by the driver, which shellcheck does not follow from here.
@@ -237,9 +237,17 @@ cd_prepare_precheck() {
 
     # mail: a release nobody can be told about is refused, unless the operator said so
     if cd_notify_transport_ok; then relay=1; fi
-    if ((relay == 0)) && [[ "$(cd_cfg CD_ALLOW_NO_MAIL)" != 1 ]]; then
-        _cd_prep_refuse mail_transport "the mail transport is not the relay and CD_ALLOW_NO_MAIL is not 1"
-        return 2
+    if ((relay == 0)); then
+        # the flag excuses the Stalwart transport only: a transport that cannot be read is
+        # "cannot tell", never a pass
+        if [[ "${CD_NOTIFY_TRANSPORT_VALUE:-}" != stalwart ]]; then
+            _cd_prep_refuse mail_transport "the mail transport cannot be read"
+            return 2
+        fi
+        if [[ "$(cd_cfg CD_ALLOW_NO_MAIL)" != 1 ]]; then
+            _cd_prep_refuse mail_transport "the mail transport is not the relay and CD_ALLOW_NO_MAIL is not 1"
+            return 2
+        fi
     fi
     if ((relay == 1)); then
         if [[ -e "$CD_ALERT_FILE" || -L "$CD_ALERT_FILE" ]]; then
@@ -253,16 +261,23 @@ cd_prepare_precheck() {
         fi
     fi
 
-    if _cd_prep_in_quiet_window; then
+    rc=0
+    _cd_prep_in_quiet_window || rc=$?
+    if ((rc == 0)); then
         _cd_prep_refuse quiet_window "the clock is inside a quiet window"
         return 3
+    elif ((rc != 1)); then
+        _cd_prep_refuse clock "the clock cannot be read"
+        return 2
     fi
 
     cd_prepare_probe_host >/dev/null || { CD_PREPARE_WHY=probe_host; return 2; }
 
+    rc=0
     _cd_prep_lock_free "${CD_RUN}/cd.lock" "${CD_LOCK_PID:-}" || rc=$?
     if ((rc == 2)); then _cd_prep_refuse lock_busy "flock is not installed"; return 2; fi
     if ((rc != 0)); then _cd_prep_refuse lock_busy "another gremion-cd holds the cd lock"; return 3; fi
+    rc=0
     _cd_prep_lock_free "${CD_ROOT}/runtime/hostd.lock" "${CD_HOSTLOCK_PID:-}" || rc=$?
     if ((rc == 2)); then _cd_prep_refuse lock_busy "flock is not installed"; return 2; fi
     if ((rc != 0)); then _cd_prep_refuse lock_busy "the host lock is held"; return 3; fi
@@ -297,10 +312,6 @@ cd_prepare_precheck() {
         if ((free < 10#$min)); then
             docker builder prune -f --keep-storage "$(cd_cfg CD_BUILD_CACHE_KEEP_GB)GB" </dev/null >/dev/null 2>&1 \
                 || _cd_prep_err "precheck: the builder cache prune failed"
-            free="$(_cd_prep_disk_gb)" || { _cd_prep_refuse disk "the free disk space cannot be read"; return 4; }
-        fi
-        if ((free < 10#$min)) && declare -F cd_commit_prune >/dev/null 2>&1; then
-            cd_commit_prune </dev/null >/dev/null 2>&1 || _cd_prep_err "precheck: the image prune failed"
             free="$(_cd_prep_disk_gb)" || { _cd_prep_refuse disk "the free disk space cannot be read"; return 4; }
         fi
         if ((free < 10#$min)); then
@@ -710,6 +721,16 @@ _cd_prep_live_images() {
     done <<<"$cids"
 }
 
+# _cd_prep_remaining DEADLINE -- the whole seconds left until the epoch DEADLINE, printed;
+# 1 when none are left, 2 when the clock cannot be read.
+_cd_prep_remaining() {
+    local now left
+    now="$(cd_now)" || return 2
+    left=$(($1 - now))
+    if ((left <= 0)); then return 1; fi
+    printf '%s\n' "$left"
+}
+
 # cd_prepare_build TREE COLOUR TAG -- build the target colour's images under the NEW tag.
 # `pull --ignore-buildable` and `build` of the target project, both through cd_dc (which
 # adds the profile star: the one-shot images are profile-gated), niced, compose parallelism
@@ -726,7 +747,7 @@ _cd_prep_live_images() {
 cd_prepare_build() {
     local tree="${1:-}" colour="${2:-}" tag="${3:-}" proj envf live_colour live_proj envtag
     local refs ref repo found r missing='' before after line cid img rid brid rc kind
-    local log attempt=0 retries start deadline now remaining secs
+    local log attempt=0 retries start deadline remaining secs outoftime=0
     if ! _cd_prep_colour_ok "$colour" || ! _cd_prep_tag_ok "$tag" || [[ ! -d "$tree" ]]; then
         _cd_prep_err "build: usage: TREE blue|green pilot-<sha12>"
         return 2
@@ -784,9 +805,13 @@ cd_prepare_build() {
     start="$(cd_now)" || return 2
     deadline=$((start + 60 * 10#$(cd_cfg CD_BUILD_TIMEOUT_MIN)))
     while :; do
-        now="$(cd_now)" || return 2
-        remaining=$((deadline - now))
-        if ((remaining <= 0)); then
+        # each compose call gets what is left of the one limit, so pull plus build cannot
+        # run past it
+        rc=0
+        outoftime=0
+        remaining="$(_cd_prep_remaining "$deadline")" || rc=$?
+        if ((rc == 2)); then return 2; fi
+        if ((rc == 1)); then
             _cd_prep_log_keep "$log" || true
             _cd_prep_err "build: the time limit is used up; log kept as ${log##*/}"
             return 3
@@ -794,11 +819,15 @@ cd_prepare_build() {
         rc=0
         _cd_prep_run_dc "$remaining" "$tree" "$proj" pull --ignore-buildable >>"$log" 2>&1 || rc=$?
         if ((rc == 0)); then
-            _cd_prep_run_dc "$remaining" "$tree" "$proj" build >>"$log" 2>&1 || rc=$?
+            remaining="$(_cd_prep_remaining "$deadline")" || outoftime=$?
+            if ((outoftime == 2)); then return 2; fi
+            if ((outoftime == 0)); then
+                _cd_prep_run_dc "$remaining" "$tree" "$proj" build >>"$log" 2>&1 || rc=$?
+            fi
         fi
-        if ((rc == 0)); then break; fi
+        if ((rc == 0 && outoftime == 0)); then break; fi
         _cd_prep_log_keep "$log" || true
-        if ((rc == 124 || rc == 137)); then
+        if ((rc == 124 || rc == 137 || outoftime == 1)); then
             _cd_prep_err "build: the build timed out; log kept as ${log##*/}"
             return 3
         fi
