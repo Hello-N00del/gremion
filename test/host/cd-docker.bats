@@ -44,6 +44,8 @@ teardown() {
 #   image.<ref>         the image id of a reference (/ and : become _)
 #   slow                a compose call sleeps 5 s (timeout test)
 #   ps.fail             `docker ps` exits 1
+#   image.daemon        `docker image inspect` fails as a daemon that does
+#                       not answer (not as a missing image)
 shim_docker() {
     shim docker "$(cat <<'EOF'
 (IFS='|'; printf '%s\n' "$*" >> "$DK/argv.log")
@@ -89,6 +91,7 @@ case "$1" in
     exit 0 ;;
   image)
     ref="${@: -1}"; key=$(printf '%s' "$ref" | tr '/:' '__')
+    [ -f "$DK/image.daemon" ] && { echo "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?" >&2; exit 1; }
     [ -f "$DK/image.$key" ] || { echo "Error: No such image: $ref" >&2; exit 1; }
     cat "$DK/image.$key"
     exit 0 ;;
@@ -237,6 +240,259 @@ load_lib() {
     run cd_dc "$TREE" app-green up
     [ "$status" -eq 2 ]
     [ ! -s "$DK/argv.log" ]
+}
+
+# The compose project name and the compose files come from the env file and
+# from nowhere else: without them compose would fall back to the name of the
+# tree directory and to docker-compose.yml, and could start a third stack
+# beside the live colours. A missing key is a named stop, never a default.
+@test "cd_dc refuses (2) an env file with neither COMPOSE_PROJECT_NAME nor COMPOSE_FILE, naming the key, and never starts compose" {
+    load_lib
+    f="${GREMION_ROOT}/etc/env/app-green.env"
+    sed -i '/^COMPOSE_PROJECT_NAME=/d;/^COMPOSE_FILE=/d' "$f"
+    for verb in up build config ps; do
+        run --separate-stderr cd_dc "$TREE" app-green "$verb"
+        [ "$status" -eq 2 ]
+        [[ "$stderr" == *COMPOSE_PROJECT_NAME* ]]
+        [ "$(printf '%s\n' "$stderr" | wc -l)" -eq 1 ]
+    done
+    [ ! -e "$DK/argv.log" ]
+}
+
+@test "cd_dc refuses (2) an env file that lacks only COMPOSE_FILE, naming it, and never starts compose" {
+    load_lib
+    sed -i '/^COMPOSE_FILE=/d' "${GREMION_ROOT}/etc/env/app-green.env"
+    run --separate-stderr cd_dc "$TREE" app-green up -d
+    [ "$status" -eq 2 ]
+    [[ "$stderr" == *COMPOSE_FILE* ]]
+    [ "$(printf '%s\n' "$stderr" | wc -l)" -eq 1 ]
+    [ ! -e "$DK/argv.log" ]
+}
+
+@test "cd_dc refuses (2) a repeated or empty COMPOSE_FILE, a repeated or foreign COMPOSE_PROJECT_NAME and a STACK that disagrees, and starts compose never" {
+    load_lib
+    f="${GREMION_ROOT}/etc/env/app-green.env"
+    cp "$f" "${BATS_TEST_TMPDIR}/orig.env"
+    for variant in filedup fileempty namedup foreign stack; do
+        cp "${BATS_TEST_TMPDIR}/orig.env" "$f"
+        export STACK=teststack
+        case "$variant" in
+            filedup) echo 'COMPOSE_FILE=other.yml' >> "$f" ;;
+            fileempty) sed -i 's/^COMPOSE_FILE=.*/COMPOSE_FILE=/' "$f" ;;
+            namedup) echo 'COMPOSE_PROJECT_NAME=teststack-app-green' >> "$f" ;;
+            foreign) sed -i 's/^COMPOSE_PROJECT_NAME=.*/COMPOSE_PROJECT_NAME=teststack-app-blue/' "$f" ;;
+            stack) export STACK=otherstack ;;
+        esac
+        run --separate-stderr cd_dc "$TREE" app-green up -d
+        [ "$status" -eq 2 ]
+        [ -n "$stderr" ]
+    done
+    [ ! -e "$DK/argv.log" ]
+}
+
+# Compose's own dotenv reader accepts more spellings of a line than a plain
+# KEY=value: a leading space or tab, an `export` prefix, a space before the
+# `=`, and `KEY: value`; and when a key is declared twice the last one wins.
+# A reader that counts only the plain spelling would approve a file in which
+# compose acts on another project or other files, so any such line next to (or
+# instead of) the plain one is a refusal, for both keys.
+@test "cd_dc refuses (2) every other spelling of COMPOSE_FILE or COMPOSE_PROJECT_NAME that compose would read, and starts compose never" {
+    load_lib
+    f="${GREMION_ROOT}/etc/env/app-green.env"
+    cp "$f" "${BATS_TEST_TMPDIR}/orig.env"
+    for line in \
+        'export COMPOSE_FILE=other.yml' \
+        ' COMPOSE_FILE=other.yml' \
+        $'\tCOMPOSE_FILE=other.yml' \
+        'COMPOSE_FILE: other.yml' \
+        'COMPOSE_FILE =other.yml' \
+        'COMPOSE_FILE : other.yml' \
+        'export COMPOSE_PROJECT_NAME=teststack-app-green' \
+        ' COMPOSE_PROJECT_NAME=teststack-app-green' \
+        $'\tCOMPOSE_PROJECT_NAME=teststack-app-green' \
+        'COMPOSE_PROJECT_NAME: teststack-app-green' \
+        'COMPOSE_PROJECT_NAME =teststack-app-green'; do
+        # after the plain line, and before it (compose lets the last one win)
+        cp "${BATS_TEST_TMPDIR}/orig.env" "$f"
+        printf '%s\n' "$line" >> "$f"
+        run --separate-stderr cd_dc "$TREE" app-green up -d
+        [ "$status" -eq 2 ] || { echo "after: ${line}"; false; }
+        [ -n "$stderr" ]
+        { printf '%s\n' "$line"; cat "${BATS_TEST_TMPDIR}/orig.env"; } > "$f"
+        run --separate-stderr cd_dc "$TREE" app-green up -d
+        [ "$status" -eq 2 ] || { echo "before: ${line}"; false; }
+        [ -n "$stderr" ]
+    done
+    [ ! -e "$DK/argv.log" ]
+}
+
+@test "cd_dc refuses (2) a file whose only COMPOSE_FILE or COMPOSE_PROJECT_NAME line is not the plain spelling" {
+    load_lib
+    f="${GREMION_ROOT}/etc/env/app-green.env"
+    cp "$f" "${BATS_TEST_TMPDIR}/orig.env"
+    for key in COMPOSE_FILE COMPOSE_PROJECT_NAME; do
+        cp "${BATS_TEST_TMPDIR}/orig.env" "$f"
+        sed -i "s/^${key}=/export ${key}=/" "$f"
+        run --separate-stderr cd_dc "$TREE" app-green up -d
+        [ "$status" -eq 2 ]
+        [[ "$stderr" == *"$key"* ]]
+    done
+    [ ! -e "$DK/argv.log" ]
+}
+
+@test "cd_dc does not mistake a comment or another key that starts with the name for a declaration" {
+    load_lib
+    f="${GREMION_ROOT}/etc/env/app-green.env"
+    printf '# COMPOSE_FILE=old.yml\n# export COMPOSE_PROJECT_NAME=old\nCOMPOSE_FILE_EXTRA=x\nCOMPOSE_PROJECT_NAME_X=y\n' >> "$f"
+    run cd_dc "$TREE" app-green up -d
+    [ "$status" -eq 0 ]
+    [ -s "$DK/argv.log" ]
+}
+
+# Compose reads a double or single quoted value across line breaks, so a line
+# that sits INSIDE such a value is no declaration to compose, while a line
+# reader sees it as one. A file with a quoted value that does not close on its
+# own line is refused (the host templates never write one). That is the
+# refusal; it does not model every corner of compose's dotenv reader (see the
+# probes below), it is deliberately stricter.
+@test "cd_dc refuses (2) a COMPOSE key hidden inside a multi-line quoted value, one stderr line, compose never started" {
+    load_lib
+    f="${GREMION_ROOT}/etc/env/app-green.env"
+    cp "$f" "${BATS_TEST_TMPDIR}/orig.env"
+    for variant in dq_name dq_file sq_both export_open colon_open space_open nothing_hidden; do
+        cp "${BATS_TEST_TMPDIR}/orig.env" "$f"
+        case "$variant" in
+            dq_name)
+                sed -i '/^COMPOSE_PROJECT_NAME=/d' "$f"
+                printf 'NOTE="line one\nCOMPOSE_PROJECT_NAME=teststack-app-green\n"\n' >> "$f" ;;
+            dq_file)
+                sed -i '/^COMPOSE_FILE=/d' "$f"
+                printf 'NOTE="line one\nCOMPOSE_FILE=docker-compose.app.yml\n"\n' >> "$f" ;;
+            sq_both)
+                sed -i '/^COMPOSE_FILE=/d;/^COMPOSE_PROJECT_NAME=/d' "$f"
+                printf "NOTE='one\nCOMPOSE_PROJECT_NAME=teststack-app-green\nCOMPOSE_FILE=docker-compose.app.yml\n'\n" >> "$f" ;;
+            export_open) printf 'export NOTE="one\ntwo"\n' >> "$f" ;;
+            colon_open) printf 'NOTE: "one\ntwo"\n' >> "$f" ;;
+            space_open) printf 'NOTE= "one\ntwo"\n' >> "$f" ;;
+            nothing_hidden) printf 'NOTE="one\ntwo"\n' >> "$f" ;;
+        esac
+        run --separate-stderr cd_dc "$TREE" app-green up -d
+        [ "$status" -eq 2 ] || { echo "variant: ${variant}"; false; }
+        [[ "$stderr" == "cd-docker: cd_dc: "* ]] || { echo "variant: ${variant}: ${stderr}"; false; }
+        [ "$(printf '%s\n' "$stderr" | wc -l)" -eq 1 ]
+    done
+    [ ! -e "$DK/argv.log" ]
+}
+
+# Probed against a real compose: it opens a multi-line value behind a key that
+# starts with a digit, one with brackets or a non-ASCII letter, and it reads
+# \' inside single quotes as an escape, so the quote that follows does not
+# close the value. The check must not depend on how the key is spelled.
+@test "cd_dc refuses (2) an unclosed quote however the key is spelled and whatever escape precedes the closing quote" {
+    load_lib
+    f="${GREMION_ROOT}/etc/env/app-green.env"
+    cp "$f" "${BATS_TEST_TMPDIR}/orig.env"
+    for opener in \
+        "NOTE='abc\\'" \
+        'NOTE="abc\"' \
+        '1N="open' \
+        'N[0]="open' \
+        $'\xc3\x84="open' \
+        'N.x-y="open' \
+        'N-x:"open'; do
+        cp "${BATS_TEST_TMPDIR}/orig.env" "$f"
+        sed -i '/^COMPOSE_FILE=/d;/^COMPOSE_PROJECT_NAME=/d' "$f"
+        closer='"'
+        [[ "$opener" == *"'"* ]] && closer="'"
+        printf '%s\nCOMPOSE_PROJECT_NAME=teststack-app-green\nCOMPOSE_FILE=docker-compose.app.yml\n%s\n' \
+            "$opener" "$closer" >> "$f"
+        run --separate-stderr cd_dc "$TREE" app-green up -d
+        [ "$status" -eq 2 ] || { echo "opener: ${opener}"; false; }
+        [[ "$stderr" == *"quoted value"* ]] || { echo "opener: ${opener}: ${stderr}"; false; }
+        [ "$(printf '%s\n' "$stderr" | wc -l)" -eq 1 ]
+    done
+    [ ! -e "$DK/argv.log" ]
+}
+
+@test "the lookups and the wait refuse (2) a file with a multi-line quoted value, one stderr line each, and ask docker never" {
+    load_lib
+    f="${GREMION_ROOT}/etc/env/app-green.env"
+    sed -i '/^COMPOSE_PROJECT_NAME=/d' "$f"
+    printf 'NOTE="line one\nCOMPOSE_PROJECT_NAME=teststack-app-green\n"\n' >> "$f"
+    printf 'gremion-ui\n' > "$DK/services"
+    run --separate-stderr cd_svc_cid app-green gremion-ui
+    [ "$status" -eq 2 ]
+    [ "$(printf '%s\n' "$stderr" | wc -l)" -eq 1 ]
+    run --separate-stderr cd_project_cids app-green
+    [ "$status" -eq 2 ]
+    [ "$(printf '%s\n' "$stderr" | wc -l)" -eq 1 ]
+    run --separate-stderr cd_wait_healthy app-green 0 "$TREE"
+    [ "$status" -eq 2 ]
+    [ "$(printf '%s\n' "$stderr" | wc -l)" -eq 1 ]
+    [ ! -e "$DK/argv.log" ]
+}
+
+@test "cd_dc accepts quoted values that close on their own line, empty values and quotes that are not a value's first character" {
+    load_lib
+    f="${GREMION_ROOT}/etc/env/app-green.env"
+    {
+        printf 'NOTE1="a b"\n'
+        printf "NOTE2='x'  # a comment\n"
+        printf 'NOTE3="say \\"hi\\""\n'
+        printf 'NOTE4=\nNOTE5=""\nNOTE6=it'"'"'s\nNOTE7=say "hi\n'
+        printf '# NOTE8="not a value\n'
+        printf 'export NOTE9="closed" \r\n'
+    } >> "$f"
+    run --separate-stderr cd_dc "$TREE" app-green up -d
+    [ "$status" -eq 0 ] || { echo "$stderr"; false; }
+    [ -s "$DK/argv.log" ]
+}
+
+@test "cd_kv_get refuses (1) a key in any spelling compose would also read, besides the plain one" {
+    load_lib
+    f="${BATS_TEST_TMPDIR}/k.env"
+    for line in 'export A=2' ' A=2' 'A: 2' 'A =2'; do
+        printf 'A=1\n%s\n' "$line" > "$f"
+        run --separate-stderr cd_kv_get "$f" A
+        [ "$status" -eq 1 ] || { echo "$line"; false; }
+        [ "$output" = "" ]
+        [ -n "$stderr" ]
+    done
+    printf 'export A=1\n' > "$f"
+    run cd_kv_get "$f" A
+    [ "$status" -eq 1 ]
+    printf '# A=9\nAB=3\nA=1\n' > "$f"
+    run cd_kv_get "$f" A
+    [ "$status" -eq 0 ]
+    [ "$output" = 1 ]
+}
+
+@test "cd_set_env_key refuses a file that declares the key in another spelling, and changes nothing" {
+    load_lib
+    f="${BATS_TEST_TMPDIR}/s.env"
+    for line in 'export IMAGE_TAG=two' ' IMAGE_TAG=two' 'IMAGE_TAG: two' 'IMAGE_TAG =two'; do
+        printf 'A=1\n%s\n' "$line" > "$f"
+        before="$(cksum < "$f")"
+        run --separate-stderr cd_set_env_key "$f" IMAGE_TAG new
+        [ "$status" -eq 1 ] || { echo "$line"; false; }
+        [ -n "$stderr" ]
+        [ "$(cksum < "$f")" = "$before" ]
+    done
+}
+
+@test "cd_dc runs compose for the state project once its env file declares both keys" {
+    load_lib
+    cd_dc "$TREE" state up -d
+    [ "$(last_argv)" = "compose|--env-file|${GREMION_ROOT}/etc/env/state.env|up|-d" ]
+}
+
+@test "cd_dc says so on stderr when compose hits CD_DC_TIMEOUT" {
+    load_lib
+    touch "$DK/slow"
+    CD_DC_TIMEOUT=1
+    run --separate-stderr cd_dc "$TREE" app-green up
+    [ "$status" -eq 124 ] || [ "$status" -eq 137 ]
+    [[ "$stderr" == *"timed out"* ]]
 }
 
 @test "cd_dc returns the exit status of compose" {
@@ -609,15 +865,23 @@ svc_state() {
 }
 
 @test "cd_wait_healthy: a service that never turns healthy times out at the deadline, not before" {
+    # A fake clock that moves one second per reading, so the test does not
+    # depend on how a real, whole-second clock falls against the window: with
+    # a 3 s window the first reading is 1000, the deadline 1003, and the loop
+    # looks at the service once per reading until a reading reaches 1003.
     load_lib
     printf 'gremion-ui\n' > "$DK/services"
     svc_state gremion-ui 'running starting'
-    CD_WAIT_POLL_S=0.2
-    t0=$SECONDS
-    cd_wait_healthy app-green 1 "$TREE" 2>/dev/null && rc=0 || rc=$?
+    echo 1000 > "${BATS_TEST_TMPDIR}/clock"
+    cd_now() { local t; t=$(cat "${BATS_TEST_TMPDIR}/clock"); echo $((t + 1)) > "${BATS_TEST_TMPDIR}/clock"; echo "$t"; }
+    CD_WAIT_POLL_S=0.05
+    cd_wait_healthy app-green 3 "$TREE" 2>"${BATS_TEST_TMPDIR}/err" && rc=0 || rc=$?
     [ "$rc" -eq 3 ]
-    [ $((SECONDS - t0)) -ge 1 ]
-    [ "$(cat "$DK/n.cid-gremion-ui")" -ge 2 ]
+    # readings: 1000 (deadline), then one after each of the looks at 1001,
+    # 1002 and 1003; the third look is the one that meets the deadline
+    [ "$(cat "$DK/n.cid-gremion-ui")" -eq 3 ]
+    [ "$(cat "${BATS_TEST_TMPDIR}/clock")" -eq 1004 ]
+    grep -q 'not healthy after 3s' "${BATS_TEST_TMPDIR}/err"
 }
 
 @test "cd_wait_healthy reads time through cd_now when core provides it" {
@@ -687,6 +951,76 @@ svc_state() {
     [ "$CD_WAIT_BAD" = " gremion-ui(docker_error)" ]
 }
 
+# The library header promises ONE line on stderr, naming the function, for a
+# failure of the library itself (what compose or docker say on their own is
+# theirs and passes through).
+@test "cd_wait_healthy prints one line when cd_dc refuses, naming cd_wait_healthy and the reason" {
+    load_lib
+    printf 'gremion-ui\n' > "$DK/services"
+    sed -i '/^COMPOSE_FILE=/d' "${GREMION_ROOT}/etc/env/app-green.env"
+    run --separate-stderr cd_wait_healthy app-green 0 "$TREE"
+    [ "$status" -eq 2 ]
+    [ "$(printf '%s\n' "$stderr" | wc -l)" -eq 1 ]
+    [[ "$stderr" == "cd-docker: cd_wait_healthy: "* ]]
+    [[ "$stderr" == *COMPOSE_FILE* ]]
+    # a compose that fails on its own: the library says one line, compose's own
+    # words (none from this shim) are not added to
+    touch "$DK/config.fail"
+    run --separate-stderr cd_wait_healthy app-green 0 "$TREE"
+    [ "$status" -eq 2 ]
+    [ "$(printf '%s\n' "$stderr" | wc -l)" -eq 1 ]
+    [[ "$stderr" == "cd-docker: cd_wait_healthy: "* ]]
+}
+
+@test "the project-name refusals carry the name of the function that was called" {
+    load_lib
+    f="${GREMION_ROOT}/etc/env/app-green.env"
+    sed -i '/^COMPOSE_PROJECT_NAME=/d' "$f"
+    run --separate-stderr cd_dc "$TREE" app-green up -d
+    [ "$status" -eq 2 ]
+    [[ "$stderr" == "cd-docker: cd_dc: "* ]]
+    run --separate-stderr cd_svc_cid app-green gremion-ui
+    [[ "$stderr" == "cd-docker: cd_svc_cid: "* ]]
+    run --separate-stderr cd_project_cids app-green
+    [[ "$stderr" == "cd-docker: cd_project_cids: "* ]]
+    run --separate-stderr cd_wait_healthy app-green 0 "$TREE"
+    [[ "$stderr" == "cd-docker: cd_wait_healthy: "* ]]
+    [ "$(printf '%s\n' "$stderr" | wc -l)" -eq 1 ]
+    # the other refusals of the name: STACK that disagrees, a malformed name
+    cp "${FIX}/app-green.env" "$f"
+    STACK=otherstack run --separate-stderr cd_dc "$TREE" app-green up -d
+    [[ "$stderr" == "cd-docker: cd_dc: "* ]]
+    sed -i 's/^COMPOSE_PROJECT_NAME=.*/COMPOSE_PROJECT_NAME=Bad Name-app-green/' "$f"
+    run --separate-stderr cd_dc "$TREE" app-green up -d
+    [[ "$stderr" == "cd-docker: cd_dc: "* ]]
+    [ ! -e "$DK/argv.log" ]
+}
+
+# A temporary file that cannot be made is one library line, not the tool's own
+# complaint beside it.
+mk_fail() { TMPDIR=/nonexistent/none "$@"; }
+
+@test "a temporary file that cannot be made is one stderr line, the library's" {
+    load_lib
+    run --separate-stderr mk_fail cd_image_id gremion-ui:pilot-aaaaaaaaaaaa
+    [ "$status" -eq 2 ]
+    [ "$(printf '%s\n' "$stderr" | wc -l)" -eq 1 ]
+    [[ "$stderr" == "cd-docker: cd_image_id: "* ]]
+    run --separate-stderr mk_fail cd_traefik_service app@file
+    [ "$status" -eq 2 ]
+    [ "$(printf '%s\n' "$stderr" | wc -l)" -eq 1 ]
+    [[ "$stderr" == "cd-docker: cd_traefik_service: "* ]]
+    # cd_set_env_key makes its copy beside the file as <name>.XXXXXX: a name
+    # that is already at the limit of the file system cannot get that suffix,
+    # which fails for root as well as for anyone else
+    long="${BATS_TEST_TMPDIR}/$(printf 'a%.0s' $(seq 1 250))"
+    printf 'X=1\n' > "$long"
+    run --separate-stderr cd_set_env_key "$long" X 2
+    [ "$status" -eq 1 ]
+    [ "$(printf '%s\n' "$stderr" | wc -l)" -eq 1 ]
+    [[ "$stderr" == "cd-docker: cd_set_env_key: "* ]]
+}
+
 # ------------------------------------------------------------- cd_image_id
 
 @test "cd_wait_healthy refuses (2) a project name that STACK or the env file contradicts, at once and without waiting" {
@@ -729,17 +1063,36 @@ svc_state() {
 
 @test "cd_image_id returns 1 with no output for an unknown image or an answer that is no image id" {
     load_lib
-    run cd_image_id gremion-ui:pilot-none
+    run --separate-stderr cd_image_id gremion-ui:pilot-none
     [ "$status" -eq 1 ]
     [ "$output" = "" ]
+    [[ "$stderr" == *"no such image"* ]]
+    [ "$(printf '%s\n' "$stderr" | wc -l)" -eq 1 ]
     echo "not-an-id" > "$DK/image.gremion-ui_pilot-odd"
-    run cd_image_id gremion-ui:pilot-odd
+    run --separate-stderr cd_image_id gremion-ui:pilot-odd
     [ "$status" -eq 1 ]
     [ "$output" = "" ]
+    [ "$(printf '%s\n' "$stderr" | wc -l)" -eq 1 ]
+    [[ "$stderr" == *"not an image id"* ]]
     run cd_image_id ''
     [ "$status" -eq 2 ]
     run cd_image_id '--all'
     [ "$status" -eq 2 ]
+}
+
+@test "cd_image_id tells a daemon that does not answer (2, with the reason) from a missing image (1)" {
+    load_lib
+    touch "$DK/image.daemon"
+    run --separate-stderr cd_image_id gremion-ui:pilot-aaaaaaaaaaaa
+    [ "$status" -eq 2 ]
+    [ "$output" = "" ]
+    [[ "$stderr" == *"docker did not answer"* ]]
+    [[ "$stderr" == *"Cannot connect"* ]]
+    [ "$(printf '%s\n' "$stderr" | wc -l)" -eq 1 ]
+    # the same ref with a healthy daemon and no such image is still 1
+    rm -f "$DK/image.daemon"
+    run --separate-stderr cd_image_id gremion-ui:pilot-aaaaaaaaaaaa
+    [ "$status" -eq 1 ]
 }
 
 # --------------------------------------------------------- cd_colour_other
@@ -795,13 +1148,25 @@ svc_state() {
 @test "cd_traefik_service returns 1 on a failed call or an answer that is no JSON object" {
     load_lib
     shim curl 'exit 22'
-    run cd_traefik_service app@file
+    run --separate-stderr cd_traefik_service app@file
     [ "$status" -eq 1 ]
     [ "$output" = "" ]
+    [[ "$stderr" == "cd-docker: cd_traefik_service: "* ]]
+    [ "$(printf '%s\n' "$stderr" | wc -l)" -eq 1 ]
+    # curl's own reason is passed on (a 404 is not "no answer"), as one line
+    shim curl 'echo "curl: (22) The requested URL returned error: 404" >&2; exit 22'
+    run --separate-stderr cd_traefik_service app@file
+    [ "$status" -eq 1 ]
+    [ "$output" = "" ]
+    [[ "$stderr" == *"returned error: 404"* ]]
+    [[ "$stderr" != *"did not answer"* ]]
+    [ "$(printf '%s\n' "$stderr" | wc -l)" -eq 1 ]
     shim curl 'printf "<html>edge</html>"'
-    run cd_traefik_service app@file
+    run --separate-stderr cd_traefik_service app@file
     [ "$status" -eq 1 ]
     [ "$output" = "" ]
+    [[ "$stderr" == "cd-docker: cd_traefik_service: "* ]]
+    [ "$(printf '%s\n' "$stderr" | wc -l)" -eq 1 ]
     shim curl 'printf "[]"'
     run cd_traefik_service app@file
     [ "$status" -eq 1 ]
