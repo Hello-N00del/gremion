@@ -29,8 +29,8 @@ const FP = 'ghcr.io/hello-n00del'
 // The app project's service set, EXACTLY: this list also guards against an
 // unplanned app service. control-panel is the planned one (TASK-043 Q12, the
 // ops shell per colour; its image is gremion-control-panel).
-// The pilot adds the three module leaves (profile-gated, built from modules/<id>/Dockerfile).
-const SERVICES = ['gremion-ui', 'gremion-public', 'control-panel', 'migrate', 'tenant-create', 'kernel-api', 'kernel-api-migrate', 'calendar-service', 'content-service', 'newsletter-service']
+// The module leaves (calendar, content, newsletter, board) are profile-gated and built from modules/<id>/Dockerfile.
+const SERVICES = ['gremion-ui', 'gremion-public', 'control-panel', 'migrate', 'tenant-create', 'kernel-api', 'kernel-api-migrate', 'calendar-service', 'content-service', 'newsletter-service', 'board-service']
 const LINES = [
   `gremion-ui=${FP}/gremion-ui@sha256:${D('1')}`,
   `gremion-public=${FP}/gremion-public@sha256:${D('2')}`,
@@ -42,6 +42,7 @@ const LINES = [
   `calendar-service=${FP}/gremion-calendar@sha256:${D('b')}`,
   `content-service=${FP}/gremion-content@sha256:${D('e')}`,
   `newsletter-service=${FP}/gremion-newsletter@sha256:${D('f')}`,
+  `board-service=${FP}/gremion-board@sha256:${D('0')}`,
 ]
 const codes = (ps) => ps.map((p) => p.code).sort()
 

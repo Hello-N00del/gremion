@@ -142,7 +142,7 @@ test('pilot services: the placement rows are the contract (networks per service)
   assert.deepEqual(PLACEMENT.state.livekit.networks, ['edge'])
   assert.deepEqual(PLACEMENT.state['element-call'].networks, ['state'])
   assert.deepEqual(PLACEMENT.state.matrix.networks, ['edge', 'state'])
-  assert.deepEqual(Object.keys(LEAF_PROFILES).sort(), ['calendar-service', 'content-service', 'newsletter-service'])
+  assert.deepEqual(Object.keys(LEAF_PROFILES).sort(), ['board-service', 'calendar-service', 'content-service', 'newsletter-service'])
   for (const leaf of Object.keys(LEAF_PROFILES)) {
     assert.deepEqual(PLACEMENT.app[leaf], { class: 'council-app', networks: ['app', 'state'] }, leaf)
     assert.equal(PLACEMENT.state[leaf], undefined, leaf)

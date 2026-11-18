@@ -34,6 +34,14 @@ test('every :? var of docker-compose.app.yml has a source in the host app.env or
   assert.deepEqual(missing, [])
 })
 
+test('every :? var of docker-compose.app.yml has a value in the release render fixture (a missing one fails the release render of both colours)', () => {
+  // scripts/release/fixtures/render/render.env is the only variable source of `check-image-digests.mjs --render`;
+  // compose interpolates every service, profile-gated or not, so one unset required reference fails the render.
+  // an active, non-empty assignment: a commented-out line or an empty value is still `required` for compose
+  const have = new Set([...read('scripts/release/fixtures/render/render.env').matchAll(/^([A-Z][A-Z0-9_]*)=\S/gm)].map((m) => m[1]))
+  assert.deepEqual(required.filter((v) => !have.has(v)), [])
+})
+
 test('state.env carries the generated DB passwords app.env carries (one sentinel group, one value)', () => {
   const state = defined(read('infra/host/templates/env/state.env.tmpl'))
   for (const v of ['PLATFORM_DB_PASSWORD', 'PANEL_DB_PASSWORD', 'KERNEL_API_DB_PASSWORD']) assert.ok(state.has(v), `${v} missing from state.env.tmpl`)
@@ -119,7 +127,7 @@ const PILOT_UI_ENV = [
   'LIVEKIT_API_KEY', 'LIVEKIT_API_SECRET', 'SYNAPSE_ADMIN_TOKEN', 'SYNAPSE_ADMIN_BOT_USER_ID', 'MATRIX_PUBLIC_URL',
   'PUBLIC_ELEMENT_CALL_URL', 'COLLABORA_URL', 'ELEMENT_CALL_INTERNAL_URL', 'CALENDAR_BACKEND', 'CONTENT_BACKEND', 'NEWSLETTER_BACKEND',
   'CALENDAR_SERVICE_URL', 'CONTENT_SERVICE_URL', 'NEWSLETTER_SERVICE_URL', 'INTERNAL_CALENDAR_SECRET', 'INTERNAL_CONTENT_SECRET',
-  'INTERNAL_NEWSLETTER_SECRET', 'PUBLIC_BASE_URL',
+  'INTERNAL_NEWSLETTER_SECRET', 'PUBLIC_BASE_URL', 'BOARD_BACKEND', 'BOARD_SERVICE_URL', 'INTERNAL_BOARD_SECRET',
 ]
 
 test('pilot env: gremion-ui carries every endpoint name the module code reads, and every secret is a ${VAR}, never a literal', () => {
@@ -198,14 +206,15 @@ test('serve.mjs sets requestTimeout on the adapter-node http server, and the val
   }
 })
 
-test('backend table: exactly the three leaf backends are `service`; no FILES_, VOTES_, MESSAGES_ or BOARD_BACKEND key exists in any app compose', () => {
+test('backend table: calendar, content and newsletter are `service`, board is `auto` (the router); no FILES_, VOTES_ or MESSAGES_ key exists in any app compose, and the dev compose forces no board backend', () => {
+  const code = (file) => read(file).split(/\r?\n/).filter((l) => !/^\s*#/.test(l)).join('\n')
   for (const file of ['docker-compose.app.yml', 'docker-compose.app.dev.yml']) {
-    const text = read(file).split(/\r?\n/).filter((l) => !/^\s*#/.test(l)).join('\n')
-    assert.doesNotMatch(text, /\b(FILES|VOTES|MESSAGES|MESSAGING|BOARD|ELECTIONS|FINANCE|VAULT|HANDOVER)_BACKEND\b/, file)
+    assert.doesNotMatch(code(file), /\b(FILES|VOTES|MESSAGES|MESSAGING|ELECTIONS|FINANCE|VAULT|HANDOVER)_BACKEND\b/, file)
   }
+  assert.doesNotMatch(code('docker-compose.app.dev.yml'), /\bBOARD_BACKEND\b/, 'the dev compose must not force a board backend')
   const env = environmentOf('docker-compose.app.yml', 'gremion-ui')
   const backends = Object.entries(env).filter(([k]) => k.endsWith('_BACKEND'))
-  assert.deepEqual(backends, [['CALENDAR_BACKEND', 'service'], ['CONTENT_BACKEND', 'service'], ['NEWSLETTER_BACKEND', 'service']])
+  assert.deepEqual(backends, [['CALENDAR_BACKEND', 'service'], ['CONTENT_BACKEND', 'service'], ['NEWSLETTER_BACKEND', 'service'], ['BOARD_BACKEND', 'auto']])
 })
 
 test('leaf urls: every <ID>_SERVICE_URL of the rendered gremion-ui resolves to a declared alias of a leaf, on the leaf\'s own port', () => {
@@ -216,14 +225,14 @@ test('leaf urls: every <ID>_SERVICE_URL of the rendered gremion-ui resolves to a
   for (const [name, svc] of Object.entries(r.services)) {
     for (const att of Object.values(svc.networks ?? {})) for (const a of att?.aliases ?? []) aliases.set(a, name)
   }
-  for (const [key, leaf] of [['CALENDAR_SERVICE_URL', 'calendar-service'], ['CONTENT_SERVICE_URL', 'content-service'], ['NEWSLETTER_SERVICE_URL', 'newsletter-service']]) {
+  for (const [key, leaf] of [['CALENDAR_SERVICE_URL', 'calendar-service'], ['CONTENT_SERVICE_URL', 'content-service'], ['NEWSLETTER_SERVICE_URL', 'newsletter-service'], ['BOARD_SERVICE_URL', 'board-service']]) {
     const u = new URL(ui[key])
     assert.equal(u.hostname, `${leaf}-${fx.COLOUR}`, `${key} names this colour's ${leaf}`)
     assert.equal(aliases.get(u.hostname), leaf, `${key}: no service of the render answers to ${u.hostname}`)
     assert.equal(u.port, String(r.services[leaf].environment.PORT), `${key} names the port ${leaf} listens on`)
   }
-  // the three BACKEND values reach the container as rendered
-  assert.deepEqual([ui.CALENDAR_BACKEND, ui.CONTENT_BACKEND, ui.NEWSLETTER_BACKEND], ['service', 'service', 'service'])
+  // the four BACKEND values reach the container as rendered
+  assert.deepEqual([ui.CALENDAR_BACKEND, ui.CONTENT_BACKEND, ui.NEWSLETTER_BACKEND, ui.BOARD_BACKEND], ['service', 'service', 'service', 'auto'])
 })
 
 test('calendar leaf: the rendered environment gives the CalDAV drain a per-tenant target the leaf itself accepts', async () => {
