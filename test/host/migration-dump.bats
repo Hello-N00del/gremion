@@ -89,7 +89,7 @@ case "$1" in
       prev=""; role=""
       for a in "$@"; do [ "$prev" = "-U" ] && role="$a"; prev="$a"; done
       if [ -n "$role" ]; then
-          case "$c" in pgc|pgc2) want=postgres ;; fpgc|fpgc2) want=finance ;; npgc) want=newsletter ;; *) want="" ;; esac
+          case "$c" in pgc|pgc2) want=postgres ;; fpgc|fpgc2) want=finance ;; npgc) want=newsletter ;; *) want="$role" ;; esac
           if [ "$role" != "$want" ]; then
               printf 'psql: error: FATAL:  role "%s" does not exist\n' "$role" >&2
               exit 2
@@ -130,6 +130,8 @@ case "$1" in
         *"DROP DATABASE"*)      rm -f "$ST"; exit 0 ;;
         *"REVOKE "*|*"GRANT "*)
             [ -z "${ACL_REPLAY_NOOP:-}" ] || exit 0
+            if [ -n "${ACL_GRANT_FAIL:-}" ]; then case "$args" in *"GRANT "*) printf "ERROR:  role does not exist
+" >&2; exit 1 ;; esac; fi
             for a in "$@"; do
                 case "$a" in
                   "REVOKE ALL ON DATABASE "*" FROM PUBLIC") materialize; grep -v '^PUBLIC ' "$ST" > "$ST.n" || true; mv "$ST.n" "$ST" ;;
@@ -630,7 +632,7 @@ leak_free() { # <needle> <accumulated output>
     leak_free "$SLUG_DB" "$all"
     [ -n "$(grep '^logger ' "$SHIM_LOG" | grep -F 'svc=finance-postgres' || true)" ]
     # the ledger itself keeps the name (it lives in the 0700 directory)
-    jq -e 'select(.event == "created") | .database == "calendar_some-slug"' "${DUMPS}/ledger.jsonl"
+    jq -e -s 'map(select(.event == "created")) | length == 2 and all(.[]; .database == "calendar_some-slug")' "${DUMPS}/ledger.jsonl"
 }
 
 @test "F48: the refusal messages on stderr may name the database (stderr is not the journal)" {
@@ -751,6 +753,21 @@ leak_free() { # <needle> <accumulated output>
     [ "$status" -eq 1 ]
     [[ "$output" == *"RESTORE_ACL_MISMATCH"* ]]
     [ "$(ledger_events)" = "created " ]
+}
+
+@test "a failing GRANT replay is RESTORE_ACL_FAILED, PUBLIC is closed best-effort and no restored line is written" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    printf 'gremion CONNECT f
+gremion CREATE f
+gremion TEMPORARY f
+m_app CONNECT f
+' > "${SHIM_DIR}/acl.state"
+    ACL_GRANT_FAIL=1 run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"RESTORE_ACL_FAILED"* ]]
+    [ "$(ledger_events)" = "created " ]
+    [ "$(grep -c 'REVOKE ALL ON DATABASE' "$SHIM_LOG")" -eq 2 ]
 }
 
 @test "a grantee name the replay cannot quote safely is refused BEFORE the database is dropped" {

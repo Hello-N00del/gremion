@@ -26,11 +26,20 @@
 #       `docker exec <state postgres> pg_dump -Fc --no-owner` (the server's own
 #       pg_dump). The same tag's live dump is reused (a retry after a failed
 #       step 9, or a --no-switch deploy).
-#   gremion-migration-dump take --release R --db D
+#   gremion-migration-dump take --release R --db D [--pg-service SVC --pg-user ROLE]
 #       Takes ONE checked dump of database D under release label R (TASK-031: the
 #       member import takes it before it writes, and discards it, with a reason,
 #       once the rerun proved the apply). Same series rule as preflight: another
 #       release's live dump refuses; R's own live dump of D is reused.
+#       --pg-service names the compose service of the ${STACK}-state project that
+#       holds D (default `postgres`; a module server is `<id>-postgres`) and
+#       --pg-user the superuser role of THAT server (default POSTGRES_USER, which
+#       exists on the main server only). They are given together or not at all,
+#       and never together with GREMION_MIGRATION_DUMP_PG_CONTAINER (exit 2: that
+#       override would silently win over the service). The pair is written to the
+#       ledger line and `restore` reads it back from there. The name of a
+#       database taken with a pair stays out of the journal, stdout and the dump
+#       file name (it can carry a customer slug): those lines say svc=<service>.
 #   gremion-migration-dump switched --release R
 #       Deletes every live dump of R: unlink, fsync the directory, re-stat, then
 #       one `deleted` line each. No dump of R: exit 0, `no-dump R`. An
@@ -41,6 +50,10 @@
 #   gremion-migration-dump restore --release R --db D --accept-loss-since <time>
 #       Recreates D from R's live dump (everything written since <time> is lost,
 #       which the operator states explicitly). The dump stays live until discard.
+#       Takes no server option: a dump taken with --pg-service/--pg-user is
+#       restored on that server as that role (read from its ledger line), and the
+#       database ACL that a dump does not carry is read before the DROP and put
+#       back (a restored gate database keeps its lock-down).
 #   gremion-migration-dump status [--release R]
 #
 # CONFIGURATION  state.env (load_env) when $GREMION_ROOT/etc/env/state.env
@@ -48,6 +61,14 @@
 #   running uid), STACK, POSTGRES_USER, GREMION_DB_NAME, CONTROL_DB_NAME.
 #   GREMION_MIGRATION_DUMP_PG_CONTAINER names the postgres container directly
 #   (a scratch stack); otherwise it is the ${STACK}-state project's `postgres`.
+#
+# LEDGER FIELDS  1:1 with DB-OPS-MIGRATION-DUMP plus host-only fields that the
+#   node writer does not set: `database`, `file`, and, when --pg-service/--pg-user
+#   were given, `pg_service` and `pg_user`. For a gate-database name
+#   t_<hex32>__<module> (module not kernel) the created line carries scope
+#   `customer`, `customer_id` (uuid form) and `module_id`, as the node writer's
+#   scopeOf answers; every other name keeps scope `platform` and null ids (the
+#   node writer refuses those names, the host program never did).
 #
 # EXIT CODES  0 ok · 1 refused/assertion failed · 2 usage/precondition
 set -euo pipefail
@@ -62,11 +83,20 @@ DUMP_DIR=""
 LEDGER=""
 LOCK=""
 LOCKED=0
+# The server a dump lives on, when it is not the main one: set by `take` from
+# --pg-service/--pg-user and by `restore` from the ledger line, ONLY after
+# load_env (state.env's POSTGRES_USER must never decide a module server's role,
+# and an exported value would be overwritten by it). Plain shell variables,
+# never exported. Both empty = the main `postgres` server and POSTGRES_USER.
+MD_SERVICE=""
+MD_ROLE=""
+# The id of the dump the last take_host_dump created or reused.
+DUMP_ID=""
 
 usage() {
     cat >&2 <<'EOF'
 usage: gremion-migration-dump preflight --release T [--release-dir DIR]
-       gremion-migration-dump take      --release R --db D
+       gremion-migration-dump take      --release R --db D [--pg-service SVC --pg-user ROLE]
        gremion-migration-dump switched  --release R
        gremion-migration-dump discard   --release R --reason <text>
        gremion-migration-dump restore   --release R --db D --accept-loss-since <time>
@@ -86,6 +116,24 @@ on_exit() {
 
 valid_release() { [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ && "$1" != *..* ]]; }
 valid_db()      { [[ "$1" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,62}$ ]]; }
+valid_pg_service() { [[ "$1" == postgres || "$1" =~ ^[a-z][a-z0-9]*-postgres$ ]]; }
+valid_pg_role()    { [[ "$1" =~ ^[a-z_][a-z0-9_]{0,62}$ ]]; }
+
+# scope_of <db> — sets SC_SCOPE, SC_CUST, SC_MOD: a gate database
+# t_<hex32>__<module> (module not kernel) is scope customer with its ids in uuid
+# form, exactly what packages/tenant-store/src/dump/hook.ts scopeOf answers;
+# every other name keeps scope platform and null ids, as this program always
+# wrote them (scopeOf refuses those names, the host program never did).
+SC_SCOPE=platform; SC_CUST=""; SC_MOD=""
+scope_of() {
+    local re='^t_([0-9a-f]{8})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{12})__([a-z][a-z0-9_]*)$'
+    SC_SCOPE=platform; SC_CUST=""; SC_MOD=""
+    if [[ "$1" =~ $re && "${BASH_REMATCH[6]}" != kernel ]]; then
+        SC_SCOPE=customer
+        SC_CUST="${BASH_REMATCH[1]}-${BASH_REMATCH[2]}-${BASH_REMATCH[3]}-${BASH_REMATCH[4]}-${BASH_REMATCH[5]}"
+        SC_MOD="${BASH_REMATCH[6]}"
+    fi
+}
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%S.%3NZ; }
 
@@ -157,7 +205,8 @@ audit() { # <line>
 
 audit_line() { # <event json>
     jq -r --arg tag "$AUDIT_TAG" '
-        [$tag, .event, "id=\(.migration_dump_id)", "release=\(.release)", "db=\(.database)"]
+        [$tag, .event, "id=\(.migration_dump_id)", "release=\(.release)",
+         (if .pg_service then "svc=\(.pg_service)" else "db=\(.database)" end)]
         + (if .sha256 then ["sha256=\(.sha256)"] else [] end)
         + (if .bytes != null then ["bytes=\(.bytes)"] else [] end)
         + (if .reason then ["reason=\(.reason | tojson)"] else [] end)
@@ -165,21 +214,32 @@ audit_line() { # <event json>
 }
 
 pg_container() {
+    local svc="${MD_SERVICE:-postgres}"
     if [[ -n "${GREMION_MIGRATION_DUMP_PG_CONTAINER:-}" ]]; then
+        # The override names ONE container for the whole run: it would win over
+        # a service silently. take refuses the combination in main(); restore of
+        # a line with a service refuses it in cmd_restore; this is the backstop.
+        [[ -z "$MD_SERVICE" ]] \
+            || die "GREMION_MIGRATION_DUMP_PG_CONTAINER is set and would override the server ${MD_SERVICE}: unset it" 2
         printf '%s' "$GREMION_MIGRATION_DUMP_PG_CONTAINER"; return 0
     fi
     local ids n
     ids="$(docker ps -q --filter "label=com.docker.compose.project=${STACK:?STACK required}-state" \
-                       --filter "label=com.docker.compose.service=postgres")"
+                       --filter "label=com.docker.compose.service=${svc}")"
     n="$(printf '%s' "$ids" | grep -c . || true)"
-    [[ "$n" == "1" ]] || die "expected exactly one running postgres in ${STACK}-state, found ${n}" 1
+    [[ "$n" == "1" ]] || die "expected exactly one running ${svc} in ${STACK}-state, found ${n}" 1
     printf '%s' "$ids"
 }
 
-pg_user() { printf '%s' "${POSTGRES_USER:-postgres}"; }
+pg_user() { printf '%s' "${MD_ROLE:-${POSTGRES_USER:-postgres}}"; }
 
 psql_at() { # <container> <db> <sql>
     docker exec "$1" psql -X -U "$(pg_user)" -d "$2" -tAq -v ON_ERROR_STOP=1 -c "$3" </dev/null | tr -d '\r[:space:]'
+}
+
+# Like psql_at, but keeps the spaces of the answer (role names are read with it).
+psql_raw() { # <container> <db> <sql>
+    docker exec "$1" psql -X -U "$(pg_user)" -d "$2" -tAq -v ON_ERROR_STOP=1 -c "$3" </dev/null | tr -d '\r'
 }
 
 # chain database (ranges.json `database`) -> the database name on this host.
@@ -197,6 +257,13 @@ take_host_dump() {
     live="$(live_dumps)"
     mine="$(jq -c --arg r "$rel" --arg d "$db" '[.[] | select(.release == $r and .database == $d)] | .[0] // empty' <<< "$live")"
     if [[ -n "$mine" ]]; then
+        # The ledger keys on release and database name: the same name on another
+        # server (or none) is a different database, never a live dump to reuse.
+        if [[ "$(jq -r '.pg_service // ""' <<< "$mine")" != "$MD_SERVICE" \
+           || "$(jq -r '.pg_user // ""' <<< "$mine")" != "$MD_ROLE" ]]; then
+            die "DUMP_SERVER_MISMATCH: the live dump of ${rel} under that database name was taken on another server — not reused (the ledger keys on release and database name)" 1
+        fi
+        DUMP_ID="$(jq -r '.migration_dump_id' <<< "$mine")"
         path="${DUMP_DIR}/$(jq -r '.file' <<< "$mine")"
         [[ -f "$path" ]] || die "DUMP_UNVERIFIED: the live dump of ${rel} for ${db} is missing on disk (${path})" 1
         [[ "$(sha256sum "$path" | cut -d' ' -f1)" == "$(jq -r '.sha256' <<< "$mine")" ]] \
@@ -206,13 +273,17 @@ take_host_dump() {
     fi
     check_dump_dir_for_take
     c="$(pg_container)"
-    server_major="$(psql_at "$c" "$db" "SELECT current_setting('server_version_num')::int / 10000")"
+    # A failing query (a wrong role or server, the database missing) is an
+    # assertion failure with a named reason, not psql's own exit code.
+    server_major="$(psql_at "$c" "$db" "SELECT current_setting('server_version_num')::int / 10000")" \
+        || die "PG_QUERY_FAILED: psql as ${MD_ROLE:-the default role} on ${MD_SERVICE:-postgres} could not read the server version — nothing was dumped" 1
     dump_major="$(docker exec "$c" pg_dump --version </dev/null | sed -nE 's/.*\(PostgreSQL\) ([0-9]+).*/\1/p')"
     [[ "$server_major" =~ ^[0-9]+$ && "$dump_major" =~ ^[0-9]+$ ]] \
         || die "PG_DUMP_VERSION: cannot read the server (${server_major}) or pg_dump (${dump_major}) major version" 1
     [[ "$dump_major" -ge "$server_major" ]] \
         || die "PG_DUMP_VERSION: pg_dump ${dump_major} is older than the server (${server_major})" 1
-    size="$(psql_at "$c" "$db" "SELECT pg_database_size(current_database())")"
+    size="$(psql_at "$c" "$db" "SELECT pg_database_size(current_database())")" \
+        || die "PG_QUERY_FAILED: psql could not read pg_database_size of ${db} — nothing was dumped" 1
     [[ "$size" =~ ^[0-9]+$ ]] || die "cannot read pg_database_size of ${db}" 1
     free_kb="$(df -Pk "$DUMP_DIR" | awk 'NR==2 {print $4}')"
     [[ "$free_kb" =~ ^[0-9]+$ ]] || die "cannot read free space for ${DUMP_DIR}" 1
@@ -224,7 +295,10 @@ take_host_dump() {
     chmod 700 "${DUMP_DIR}/${rel}"
     at="$(now_iso)"
     id="$(uuidv7)"
-    file="${rel}/${db}.${id}.dump"
+    # A database on a module server can carry a customer slug (F48): its dump
+    # file is named after the service and the id, never after the database.
+    if [[ -n "$MD_SERVICE" ]]; then file="${rel}/${MD_SERVICE}.${id}.dump"; else file="${rel}/${db}.${id}.dump"; fi
+    DUMP_ID="$id"
     path="${DUMP_DIR}/${file}"
     if ! ( set -o noclobber; umask 077; docker exec "$c" pg_dump -Fc --no-owner -U "$(pg_user)" "$db" </dev/null > "$path" ); then
         rm -f -- "$path"
@@ -241,11 +315,15 @@ take_host_dump() {
         rm -f -- "$path"; die "DUMP_UNVERIFIED: pg_restore --list does not describe a dump of ${db}; removed" 1
     fi
     sha="$(sha256sum "$path" | cut -d' ' -f1)"
+    scope_of "$db"
     ev="$(jq -nc --arg at "$at" --arg id "$id" --arg rel "$rel" --arg db "$db" --arg file "$file" \
-               --arg sha "$sha" --argjson bytes "$bytes" '
-        {v:1, event:"created", at:$at, migration_dump_id:$id, release:$rel, scope:"platform",
-         customer_id:null, module_id:null, database:$db, by_kind:"system",
-         file:$file, sha256:$sha, bytes:$bytes, dump_taken_at:$at}')"
+               --arg sha "$sha" --argjson bytes "$bytes" --arg scope "$SC_SCOPE" --arg cust "$SC_CUST" \
+               --arg mod "$SC_MOD" --arg svc "$MD_SERVICE" --arg usr "$MD_ROLE" '
+        {v:1, event:"created", at:$at, migration_dump_id:$id, release:$rel, scope:$scope,
+         customer_id:(if $cust == "" then null else $cust end),
+         module_id:(if $mod == "" then null else $mod end), database:$db, by_kind:"system",
+         file:$file, sha256:$sha, bytes:$bytes, dump_taken_at:$at}
+        + (if $svc != "" then {pg_service:$svc, pg_user:$usr} else {} end)')"
     printf '%s\n' "$ev" >> "$LEDGER" || die "LEDGER_UNWRITABLE: ${LEDGER}" 1
     fsync_paths "$LEDGER" "$DUMP_DIR"
     audit "$(audit_line "$ev")"
@@ -319,7 +397,11 @@ cmd_take() {
     take_lock
     refuse_other_live_dumps "$1"
     take_host_dump "$1" "$2"
-    printf 'TAKE-OK release=%s db=%s\n' "$1" "$2"
+    if [[ -n "$MD_SERVICE" ]]; then
+        printf 'TAKE-OK release=%s svc=%s id=%s\n' "$1" "$MD_SERVICE" "$DUMP_ID"
+    else
+        printf 'TAKE-OK release=%s db=%s\n' "$1" "$2"
+    fi
 }
 
 # delete_release <release> <reason> <by_kind> <verb>
@@ -350,7 +432,8 @@ delete_release() {
         at="$(now_iso)"
         ev="$(jq -c --arg at "$at" --arg reason "$reason" --arg kind "$kind" '
             {v:1, event:"deleted", at:$at, migration_dump_id, release, scope, customer_id, module_id,
-             database, by_kind:$kind, file, deleted_at:$at, reason:$reason}' <<< "$ev")"
+             database, by_kind:$kind, file, deleted_at:$at, reason:$reason}
+            + (if has("pg_service") then {pg_service, pg_user} else {} end)' <<< "$ev")"
         printf '%s\n' "$ev" >&"$fd" || die "LEDGER_UNWRITABLE: the deleted line for ${path} could not be written" 1
         fsync_paths "$LEDGER"
         audit "$(audit_line "$ev")"
@@ -365,8 +448,62 @@ delete_release() {
     printf '%s-OK release=%s deleted=%s\n' "$(printf '%s' "$verb" | tr '[:lower:]' '[:upper:]')" "$rel" "$n"
 }
 
+# acl_statements <db> <acl json> — one SQL statement per line that gives a
+# freshly created database the grants of <acl json> (the rows of aclexplode:
+# g = grantee or null for PUBLIC, p = privilege, o = grantable). Fails, printing
+# nothing, on a grantee name or privilege it cannot put in a statement safely.
+# PUBLIC is left alone when its entries are exactly the default (CONNECT and
+# TEMPORARY, not grantable); otherwise PUBLIC is revoked first and given back
+# exactly what it had.
+acl_statements() {
+    jq -r --arg db "$1" '
+        def q: "\"" + . + "\"";
+        def opt: if .[0].o then " WITH GRANT OPTION" else "" end;
+        if all(.[]; (.p | IN("CONNECT", "CREATE", "TEMPORARY"))
+                    and (.g == null or (.g | type == "string" and test("^[A-Za-z0-9_][A-Za-z0-9_.$-]{0,62}$"))))
+        then . else error("a grantee or privilege that cannot be replayed safely") end
+        | (map(select(.g == null))) as $pub
+        | (map(select(.g != null))) as $named
+        | ( ( ($pub | map(.p) | unique) as $pp
+              | if $pp == ["CONNECT", "TEMPORARY"] and ($pub | all(.o | not)) then []
+                else ["REVOKE ALL ON DATABASE \($db | q) FROM PUBLIC"]
+                     + ($pub | group_by(.o) | map("GRANT \(map(.p) | unique | join(", ")) ON DATABASE \($db | q) TO PUBLIC" + opt))
+                end )
+            + ( $named | group_by([.g, .o]) | map("GRANT \(map(.p) | unique | join(", ")) ON DATABASE \($db | q) TO \(.[0].g | q)" + opt) ) )
+        | .[]' <<< "$2"
+}
+
+# acl_fingerprint <container> <db> <role>... — the effective CONNECT and
+# TEMPORARY answers for PUBLIC and for each role, one line each. The same call
+# before the DROP and after the replay must print the same text.
+acl_fingerprint() {
+    local c="$1" db="$2" arr="" r
+    shift 2
+    for r in "$@"; do arr+="${arr:+,}'${r}'"; done
+    psql_raw "$c" postgres "SELECT line FROM (
+        SELECT 'PUBLIC|' || coalesce((SELECT string_agg(a.privilege_type, ',' ORDER BY a.privilege_type)
+                 FROM pg_catalog.pg_database d
+                 CROSS JOIN LATERAL pg_catalog.aclexplode(coalesce(d.datacl, pg_catalog.acldefault('d', d.datdba))) a
+                 WHERE d.datname = '${db}' AND a.grantee = 0 AND a.privilege_type IN ('CONNECT', 'TEMPORARY')), '') AS line, 0 AS ord
+        UNION ALL
+        SELECT r || '|' || pg_catalog.has_database_privilege(r::name, '${db}', 'CONNECT')
+                 || ',' || pg_catalog.has_database_privilege(r::name, '${db}', 'TEMPORARY'), 1
+          FROM unnest(ARRAY[${arr}]::text[]) AS r) s ORDER BY ord, line"
+}
+
+# acl_read <container> <db> — 'null' for the default ACL, else a JSON array of
+# {g, p, o} (grantee or null for PUBLIC, privilege, grantable).
+acl_read() {
+    psql_raw "$1" postgres "SELECT CASE WHEN d.datacl IS NULL THEN 'null' ELSE coalesce(
+        (SELECT jsonb_agg(jsonb_build_object('g', CASE WHEN a.grantee = 0 THEN NULL ELSE pg_catalog.pg_get_userbyid(a.grantee) END,
+                                             'p', a.privilege_type, 'o', a.is_grantable))
+           FROM pg_catalog.aclexplode(d.datacl) a), '[]'::jsonb)::text END
+        FROM pg_catalog.pg_database d WHERE d.datname = '${2}'"
+}
+
 cmd_restore() {
-    local rel="$1" db="$2" since="$3" live dump path c owner ev at
+    local rel="$1" db="$2" since="$3" live dump path c owner ev at id s
+    local acl_json="null" acl_stmts="" acl_before="" acl_after="" acl_roles=() acl_args=()
     take_lock
     live="$(live_dumps)"
     dump="$(jq -c --arg r "$rel" --arg d "$db" '[.[] | select(.release == $r and .database == $d)]' <<< "$live")"
@@ -377,24 +514,84 @@ cmd_restore() {
     [[ -f "$path" ]] || die "DUMP_UNVERIFIED: ${path} is missing" 1
     [[ "$(sha256sum "$path" | cut -d' ' -f1)" == "$(jq -r '.sha256' <<< "$dump")" ]] \
         || die "DUMP_UNVERIFIED: ${path} no longer matches its ledger sha256 — not restored" 1
+    # The server and the role of a dump come from its ledger line: restore takes
+    # no option (F46). They go into a docker filter and an argv, so a line that
+    # was edited by hand is checked again.
+    MD_SERVICE="$(jq -r '.pg_service // ""' <<< "$dump")"
+    MD_ROLE="$(jq -r '.pg_user // ""' <<< "$dump")"
+    id="$(jq -r '.migration_dump_id' <<< "$dump")"
+    if [[ -n "$MD_SERVICE" || -n "$MD_ROLE" ]]; then
+        { valid_pg_service "$MD_SERVICE" && valid_pg_role "$MD_ROLE"; } \
+            || die "LEDGER_CORRUPT: the ledger line of dump ${id} carries a server or role that is not valid — not restored" 1
+        [[ -z "${GREMION_MIGRATION_DUMP_PG_CONTAINER:-}" ]] \
+            || die "GREMION_MIGRATION_DUMP_PG_CONTAINER is set and would override the server of dump ${id} (${MD_SERVICE}): unset it" 2
+    fi
     c="$(pg_container)"
-    owner="$(psql_at "$c" postgres "SELECT pg_catalog.pg_get_userbyid(datdba) FROM pg_catalog.pg_database WHERE datname = '${db}'")"
+    owner="$(psql_at "$c" postgres "SELECT pg_catalog.pg_get_userbyid(datdba) FROM pg_catalog.pg_database WHERE datname = '${db}'")" \
+        || die "RESTORE_FAILED: could not read the owner of ${db} (wrong server or role?) — nothing was dropped" 1
     [[ -n "$owner" ]] || die "database ${db} does not exist on ${c}" 1
-    info "restoring ${db} from ${path}: everything written since ${since} is lost (accepted by the operator)"
+    # F53: a dump does not carry the database ACL, so a restored database would
+    # come back with the default one (PUBLIC may connect). The grants are read
+    # BEFORE the DROP, and a state that cannot be replayed refuses here, while
+    # nothing has been changed. A module server only: the main server restore
+    # is unchanged.
+    if [[ -n "$MD_SERVICE" ]]; then
+        acl_json="$(acl_read "$c" "$db")" \
+            || die "RESTORE_FAILED: could not read the database ACL of ${db} — nothing was dropped" 1
+        if [[ "$acl_json" != null ]]; then
+            jq -e 'type == "array"' <<< "$acl_json" >/dev/null 2>&1 \
+                || die "RESTORE_FAILED: the database ACL answer is not a JSON array — nothing was dropped" 1
+            acl_stmts="$(acl_statements "$db" "$acl_json")" \
+                || die "RESTORE_ACL_UNSUPPORTED: the ACL of ${db} names a grantee or privilege that cannot be replayed safely — nothing was dropped" 1
+            mapfile -t acl_roles < <(jq -r '[.[] | select(.g != null) | .g] | unique | .[]' <<< "$acl_json")
+            acl_before="$(acl_fingerprint "$c" "$db" ${acl_roles[@]+"${acl_roles[@]}"})" \
+                || die "RESTORE_FAILED: could not read the privileges of ${db} — nothing was dropped" 1
+            [[ "$acl_before" == "PUBLIC|"* ]] \
+                || die "RESTORE_FAILED: the privilege answer for ${db} has an unexpected shape — nothing was dropped" 1
+        fi
+    fi
+    if [[ -n "$MD_SERVICE" ]]; then
+        info "restoring svc=${MD_SERVICE} id=${id} from ${path}: everything written since ${since} is lost (accepted by the operator)"
+    else
+        info "restoring ${db} from ${path}: everything written since ${since} is lost (accepted by the operator)"
+    fi
     docker exec "$c" psql -X -U "$(pg_user)" -d postgres -v ON_ERROR_STOP=1 -q \
         -c "DROP DATABASE \"${db}\" WITH (FORCE)" -c "CREATE DATABASE \"${db}\" OWNER \"${owner}\"" </dev/null \
         || die "RESTORE_FAILED: could not recreate ${db}" 1
     docker exec -i "$c" pg_restore --no-owner --role="$owner" --exit-on-error --single-transaction \
         -U "$(pg_user)" -d "$db" < "$path" \
         || die "RESTORE_FAILED: pg_restore of ${path} into ${db} failed" 1
+    if [[ "$acl_json" != null ]]; then
+        while IFS= read -r s; do
+            if [[ -n "$s" ]]; then acl_args+=(-c "$s"); fi
+        done <<< "$acl_stmts"
+        if [[ ${#acl_args[@]} -gt 0 ]] \
+            && ! docker exec "$c" psql -X -U "$(pg_user)" -d postgres -v ON_ERROR_STOP=1 -q "${acl_args[@]}" </dev/null; then
+            # The data is back but the grants are not: close the door to PUBLIC
+            # (best effort) rather than leave a gate database open. The dump is
+            # still live; running the restore again drops and replays it.
+            docker exec "$c" psql -X -U "$(pg_user)" -d postgres -q \
+                -c "REVOKE ALL ON DATABASE \"${db}\" FROM PUBLIC" </dev/null >/dev/null 2>&1 || true
+            die "RESTORE_ACL_FAILED: the data of ${db} is restored but its grants could not be replayed (PUBLIC was revoked, nothing else was granted) — fix the cause and run the restore again" 1
+        fi
+        acl_after="$(acl_fingerprint "$c" "$db" ${acl_roles[@]+"${acl_roles[@]}"})" \
+            || die "RESTORE_ACL_MISMATCH: the data of ${db} is restored but its privileges could not be read back — run the restore again" 1
+        [[ "$acl_after" == "$acl_before" ]] \
+            || die "RESTORE_ACL_MISMATCH: the data of ${db} is restored but PUBLIC or a grantee has other CONNECT/TEMPORARY rights than before — do not start the app; run the restore again" 1
+    fi
     at="$(now_iso)"
     ev="$(jq -c --arg at "$at" --arg since "$since" '
         {v:1, event:"restored", at:$at, migration_dump_id, release, scope, customer_id, module_id,
-         database, by_kind:"operator", file, restored:true, reason:("accept-loss-since " + $since)}' <<< "$dump")"
+         database, by_kind:"operator", file, restored:true, reason:("accept-loss-since " + $since)}
+        + (if has("pg_service") then {pg_service, pg_user} else {} end)' <<< "$dump")"
     printf '%s\n' "$ev" >> "$LEDGER" || die "LEDGER_UNWRITABLE: ${LEDGER}" 1
     fsync_paths "$LEDGER"
     audit "$(audit_line "$ev")"
-    printf 'RESTORE-OK release=%s db=%s — the dump stays live; when done: gremion-migration-dump discard --release %s --reason <text>\n' "$rel" "$db" "$rel"
+    if [[ -n "$MD_SERVICE" ]]; then
+        printf 'RESTORE-OK release=%s svc=%s id=%s — the dump stays live; when done: gremion-migration-dump discard --release %s --reason <text>\n' "$rel" "$MD_SERVICE" "$id" "$rel"
+    else
+        printf 'RESTORE-OK release=%s db=%s — the dump stays live; when done: gremion-migration-dump discard --release %s --reason <text>\n' "$rel" "$db" "$rel"
+    fi
 }
 
 cmd_status() {
@@ -408,14 +605,15 @@ cmd_status() {
 main() {
     [[ $# -ge 1 ]] || usage
     local cmd="$1"; shift
-    local rel="" rdir="" reason="" db="" since=""
+    local rel="" rdir="" reason="" db="" since="" opt_svc="" opt_role=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --release|--release-dir|--reason|--db|--accept-loss-since)
+            --release|--release-dir|--reason|--db|--accept-loss-since|--pg-service|--pg-user)
                 [[ $# -ge 2 && -n "$2" ]] || die "option $1 needs a value" 2
                 case "$1" in
                     --release) rel="$2" ;; --release-dir) rdir="$2" ;; --reason) reason="$2" ;;
                     --db) db="$2" ;; --accept-loss-since) since="$2" ;;
+                    --pg-service) opt_svc="$2" ;; --pg-user) opt_role="$2" ;;
                 esac
                 shift 2 ;;
             -h|--help) usage ;;
@@ -423,10 +621,27 @@ main() {
         esac
     done
 
+    # The server options (decision 11): take only, both or neither, checked
+    # before anything runs. They are held in locals here and copied into the
+    # (unexported) MD_* variables only AFTER load_env below: state.env carries
+    # POSTGRES_USER, and load_env exports every key over the caller's value.
+    if [[ -n "$opt_svc" || -n "$opt_role" ]]; then
+        [[ "$cmd" == take ]]             || die "--pg-service and --pg-user belong to take only (restore reads them from the ledger line of its dump)" 2
+        [[ -n "$opt_svc" && -n "$opt_role" ]]             || die "--pg-service and --pg-user come together or not at all" 2
+        valid_pg_service "$opt_svc" || die "invalid --pg-service: it must be postgres or <name>-postgres" 2
+        valid_pg_role "$opt_role" || die "invalid --pg-user: it must match ^[a-z_][a-z0-9_]{0,62}\$" 2
+    fi
+
     need_cmd jq logger sha256sum stat df od
     ROOT="$(gremion_root)"
     if [[ -f "${ROOT}/etc/env/state.env" ]]; then load_env "${ROOT}/etc/env/state.env"; fi
     trap on_exit EXIT
+    if [[ -n "$opt_svc" ]]; then
+        # pg_container would honour the override and ignore the service silently.
+        [[ -z "${GREMION_MIGRATION_DUMP_PG_CONTAINER:-}" ]]             || die "GREMION_MIGRATION_DUMP_PG_CONTAINER is set (environment or state.env) and would override --pg-service silently: unset it" 2
+        MD_SERVICE="$opt_svc"
+        MD_ROLE="$opt_role"
+    fi
 
     case "$cmd" in
         preflight|take|switched|discard|restore)
