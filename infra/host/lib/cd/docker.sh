@@ -12,7 +12,8 @@
 # time through it (a fake clock for tests); otherwise it uses date.
 #
 # Every function RETURNS, none exits and none prints a secret: an error is one
-# line on stderr naming the function and the reason. Return codes: 0 ok, 1 the
+# line on stderr naming the function and the reason (what compose or docker say
+# on their own stderr is theirs and passes through). Return codes: 0 ok, 1 the
 # thing asked for is not there or is not as expected, 2 usage or a missing
 # precondition (a file, a key, a tool), 3 timed out waiting, 124 (or 137, see
 # cd_dc) a compose call that hit CD_DC_TIMEOUT. Unknown is never success: a missing key, an unparseable
@@ -39,26 +40,62 @@ _cd_docker_epoch() {
     fi
 }
 
-# The compose project name of a project: the COMPOSE_PROJECT_NAME its env file
-# declares (<stack>-<project>), because that is the name compose itself acts
-# on. A name rebuilt from the shell's STACK could differ and then every lookup
-# would answer "no container" for a project that is running, which a caller
-# reads as safe. So the env file is the one source; it must declare the name
-# exactly once, as a valid project name that ends in -<project>; and when STACK
-# is set it must agree (a disagreement is a refusal, 2, never a guess).
+# _cd_env_quotes_closed FILE - 0 when every quoted value of an env file closes
+# on the line that opens it, 1 when one does not. Compose reads a quoted value
+# across line breaks, and a line inside such a value is no declaration to it,
+# while the line readers of this library would count it as one: a file with an
+# unclosed quote could be read by the library and by compose as two different
+# files. So such a file is refused (the host templates never write one). A value
+# counts as quoted when its first character, after the separator and any blanks,
+# is a quote; it must then be one double-quoted string (\" escapes) or one
+# single-quoted string, followed by nothing or a comment. Comment lines and
+# lines that are no KEY=value in any spelling are not looked at.
+_cd_env_quotes_closed() {
+    local line v
+    local re_key='^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_.-]*[[:space:]]*[=:][[:space:]]*(.*)$'
+    local re_dq='^"([^"\\]|\\.)*"[[:space:]]*(#.*)?$'
+    local re_sq="^'[^']*'[[:space:]]*(#.*)?\$"
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%$'\r'}"
+        [[ "$line" =~ $re_key ]] || continue
+        v="${BASH_REMATCH[2]}"
+        case "$v" in
+            \"*) [[ "$v" =~ $re_dq ]] || return 1 ;;
+            \'*) [[ "$v" =~ $re_sq ]] || return 1 ;;
+            *) ;;
+        esac
+    done <"$1"
+    return 0
+}
+
+# _cd_docker_proj PROJECT [CALLER] - the compose project name of a project: the
+# COMPOSE_PROJECT_NAME its env file declares (<stack>-<project>), because that
+# is the name compose itself acts on. A name rebuilt from the shell's STACK could
+# differ and then every lookup would answer "no container" for a project that is
+# running, which a caller reads as safe. So the env file is the one source; it
+# must declare the name exactly once, as a valid project name that ends in
+# -<project>, with no quoted value that runs over a line break (see
+# _cd_env_quotes_closed); and when STACK is set it must agree (a disagreement is
+# a refusal, 2, never a guess). CALLER (default docker.sh) names the public
+# function in the one stderr line of a refusal.
 _cd_docker_proj() {
-    local proj="$1" f name
+    local proj="$1" who="${2:-docker.sh}" f name
     f="$(cd_envfile "$proj")" || return 2
+    [[ -f "$f" && -r "$f" ]] || { _cd_docker_err "${who}: no readable env file for ${proj}"; return 2; }
+    _cd_env_quotes_closed "$f" || {
+        _cd_docker_err "${who}: the env file of ${proj} has a quoted value that does not close on its own line"
+        return 2
+    }
     name="$(cd_kv_get "$f" COMPOSE_PROJECT_NAME 2>/dev/null)" || {
-        _cd_docker_err "the env file of ${proj} does not declare exactly one COMPOSE_PROJECT_NAME"
+        _cd_docker_err "${who}: the env file of ${proj} does not declare exactly one COMPOSE_PROJECT_NAME"
         return 2
     }
     [[ "$name" =~ ^[a-z0-9][a-z0-9_-]*$ && "$name" == *-"${proj}" ]] || {
-        _cd_docker_err "the COMPOSE_PROJECT_NAME of ${proj} is not <stack>-${proj}"
+        _cd_docker_err "${who}: the COMPOSE_PROJECT_NAME of ${proj} is not <stack>-${proj}"
         return 2
     }
     if [[ -n "${STACK:-}" && "$name" != "${STACK}-${proj}" ]]; then
-        _cd_docker_err "STACK and the COMPOSE_PROJECT_NAME of ${proj} disagree; refusing to look under either"
+        _cd_docker_err "${who}: STACK and the COMPOSE_PROJECT_NAME of ${proj} disagree; refusing to look under either"
         return 2
     fi
     printf '%s' "$name"
@@ -142,7 +179,7 @@ cd_set_env_key() {
         _cd_docker_err "cd_set_env_key: ${k} in $(basename -- "$f") is not a plain ${k}=value line; refusing to guess"
         return 1
     fi
-    tmp="$(mktemp "${f}.XXXXXX")" || { _cd_docker_err "cd_set_env_key: cannot create a temporary copy"; return 1; }
+    tmp="$(mktemp "${f}.XXXXXX" 2>/dev/null)" || { _cd_docker_err "cd_set_env_key: cannot create a temporary copy"; return 1; }
     if ! K="$k" V="$v" awk 'BEGIN { k = ENVIRON["K"]; v = ENVIRON["V"]; n = 0 }
             index($0, k "=") == 1 { print k "=" v; n++; next }
             { print }
@@ -195,7 +232,9 @@ cd_set_env_key() {
 # resolve it, STACK cross-check included) and exactly one non-empty
 # COMPOSE_FILE, each as ONE plain KEY=value line: a second line in any
 # spelling compose reads (export, leading blanks, a blank before the = or a
-# colon) is refused too, because the last one would win there. Without the two
+# colon) is refused too, because the last one would win there, and so is an env
+# file with a quoted value that runs over a line break (compose would not see a
+# line inside it as a declaration; see _cd_env_quotes_closed). Without the two
 # keys compose would fall back to the name of the tree directory and to
 # docker-compose.yml and could start a third stack beside the live colours, so
 # a missing key is a stop (2), never a default. The COMPOSE_PROJECT_NAME,
@@ -229,7 +268,7 @@ cd_dc() {
     [[ -f "$envf" ]] || { _cd_docker_err "cd_dc: no env file for ${proj}"; return 2; }
     # the project name the lookups act on, and the files compose acts on: both
     # must come from this env file, or compose would pick its own defaults
-    _cd_docker_proj "$proj" >/dev/null || return 2
+    _cd_docker_proj "$proj" cd_dc >/dev/null || return 2
     cf="$(cd_kv_get "$envf" COMPOSE_FILE 2>/dev/null)" || cf=''
     [[ -n "$cf" ]] || {
         _cd_docker_err "cd_dc: the env file of ${proj} does not declare exactly one non-empty COMPOSE_FILE"
@@ -281,7 +320,7 @@ cd_svc_cid() {
     local proj="${1:-}" svc="${2:-}" cp out
     [[ "$svc" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || { _cd_docker_err "cd_svc_cid: bad service name"; return 2; }
     cd_envfile "$proj" >/dev/null || return 2
-    cp="$(_cd_docker_proj "$proj")" || return 2
+    cp="$(_cd_docker_proj "$proj" cd_svc_cid)" || return 2
     out="$(docker ps -q --filter "label=com.docker.compose.project=${cp}" \
         --filter "label=com.docker.compose.service=${svc}" \
         --filter "label=com.docker.compose.oneoff=False" </dev/null)" || {
@@ -299,7 +338,7 @@ cd_svc_cid() {
 cd_project_cids() {
     local proj="${1:-}" cp out
     cd_envfile "$proj" >/dev/null || return 2
-    cp="$(_cd_docker_proj "$proj")" || return 2
+    cp="$(_cd_docker_proj "$proj" cd_project_cids)" || return 2
     out="$(docker ps -q --filter "label=com.docker.compose.project=${cp}" \
         --filter "label=com.docker.compose.oneoff=False" </dev/null)" || {
         _cd_docker_err "cd_project_cids: docker did not answer"
@@ -335,12 +374,24 @@ cd_wait_healthy() {
     cd_envfile "$proj" >/dev/null || return 2
     # A project name that cannot be resolved is a precondition, not a colour
     # that is slow to get healthy: say so now, once, with its own message.
-    _cd_docker_proj "$proj" >/dev/null || return 2
-    local listing
-    listing="$(cd_dc "$tree" "$proj" config --services)" || {
-        _cd_docker_err "cd_wait_healthy: the ${proj} project did not render"
+    _cd_docker_proj "$proj" cd_wait_healthy >/dev/null || return 2
+    # cd_dc's own refusal is folded into the one line this function prints; a
+    # compose that fails on its own has already said why, and is passed on
+    local listing errf why
+    errf="$(mktemp 2>/dev/null)" || { _cd_docker_err "cd_wait_healthy: cannot create a temporary file"; return 2; }
+    listing="$(cd_dc "$tree" "$proj" config --services 2>"$errf")" || {
+        why="$(tr -cd '[:print:]\n' <"$errf" 2>/dev/null | head -n 1 | cut -c 1-200)"
+        if [[ "$why" == 'cd-docker: '* ]]; then
+            why="${why#cd-docker: }"
+        else
+            cat -- "$errf" >&2 || true
+            why=''
+        fi
+        rm -f -- "$errf"
+        _cd_docker_err "cd_wait_healthy: the ${proj} project did not render${why:+: ${why}}"
         return 2
     }
+    rm -f -- "$errf"
     mapfile -t svcs < <(printf '%s\n' "$listing" | sed -e '/^[[:space:]]*$/d')
     [[ ${#svcs[@]} -gt 0 ]] || { _cd_docker_err "cd_wait_healthy: the ${proj} project renders no service"; return 2; }
     deadline=$(( $(_cd_docker_epoch) + secs ))
@@ -379,7 +430,7 @@ cd_wait_healthy() {
 cd_image_id() {
     local ref="${1:-}" id errf rc=0 why all
     [[ -n "$ref" && "$ref" != -* ]] || { _cd_docker_err "cd_image_id: usage: REF"; return 2; }
-    errf="$(mktemp)" || { _cd_docker_err "cd_image_id: cannot create a temporary file"; return 2; }
+    errf="$(mktemp 2>/dev/null)" || { _cd_docker_err "cd_image_id: cannot create a temporary file"; return 2; }
     id="$(docker image inspect -f '{{.Id}}' "$ref" 2>"$errf" </dev/null)" || rc=$?
     # the whole answer is searched for the phrase (a warning line may come
     # first); only its first line is ever reported
@@ -433,7 +484,7 @@ cd_traefik_service() {
     local name="${1:-}" api body errf rc=0 why
     [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._@-]*$ ]] || { _cd_docker_err "cd_traefik_service: bad service name"; return 2; }
     api="$(cd_traefik_api)" || return 2
-    errf="$(mktemp)" || { _cd_docker_err "cd_traefik_service: cannot create a temporary file"; return 2; }
+    errf="$(mktemp 2>/dev/null)" || { _cd_docker_err "cd_traefik_service: cannot create a temporary file"; return 2; }
     body="$(curl -fsS --max-time 10 "${api}/api/http/services/${name}" 2>"$errf" </dev/null)" || rc=$?
     # curl's own reason (a refused connection, an HTTP 404) is passed on, first
     # line only: the code cannot tell "not there" from "no answer" by itself

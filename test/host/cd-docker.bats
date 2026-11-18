@@ -349,6 +349,74 @@ load_lib() {
     [ -s "$DK/argv.log" ]
 }
 
+# Compose reads a double or single quoted value across line breaks, so a line
+# that sits INSIDE such a value is no declaration to compose, while a line
+# reader sees it as one. A file with a quoted value that does not close on its
+# own line is refused (the host templates never write one), so the library and
+# compose can never read different files.
+@test "cd_dc refuses (2) a COMPOSE key hidden inside a multi-line quoted value, one stderr line, compose never started" {
+    load_lib
+    f="${GREMION_ROOT}/etc/env/app-green.env"
+    cp "$f" "${BATS_TEST_TMPDIR}/orig.env"
+    for variant in dq_name dq_file sq_both export_open colon_open space_open nothing_hidden; do
+        cp "${BATS_TEST_TMPDIR}/orig.env" "$f"
+        case "$variant" in
+            dq_name)
+                sed -i '/^COMPOSE_PROJECT_NAME=/d' "$f"
+                printf 'NOTE="line one\nCOMPOSE_PROJECT_NAME=teststack-app-green\n"\n' >> "$f" ;;
+            dq_file)
+                sed -i '/^COMPOSE_FILE=/d' "$f"
+                printf 'NOTE="line one\nCOMPOSE_FILE=docker-compose.app.yml\n"\n' >> "$f" ;;
+            sq_both)
+                sed -i '/^COMPOSE_FILE=/d;/^COMPOSE_PROJECT_NAME=/d' "$f"
+                printf "NOTE='one\nCOMPOSE_PROJECT_NAME=teststack-app-green\nCOMPOSE_FILE=docker-compose.app.yml\n'\n" >> "$f" ;;
+            export_open) printf 'export NOTE="one\ntwo"\n' >> "$f" ;;
+            colon_open) printf 'NOTE: "one\ntwo"\n' >> "$f" ;;
+            space_open) printf 'NOTE= "one\ntwo"\n' >> "$f" ;;
+            nothing_hidden) printf 'NOTE="one\ntwo"\n' >> "$f" ;;
+        esac
+        run --separate-stderr cd_dc "$TREE" app-green up -d
+        [ "$status" -eq 2 ] || { echo "variant: ${variant}"; false; }
+        [[ "$stderr" == "cd-docker: cd_dc: "* ]] || { echo "variant: ${variant}: ${stderr}"; false; }
+        [ "$(printf '%s\n' "$stderr" | wc -l)" -eq 1 ]
+    done
+    [ ! -e "$DK/argv.log" ]
+}
+
+@test "the lookups and the wait refuse (2) a file with a multi-line quoted value, one stderr line each, and ask docker never" {
+    load_lib
+    f="${GREMION_ROOT}/etc/env/app-green.env"
+    sed -i '/^COMPOSE_PROJECT_NAME=/d' "$f"
+    printf 'NOTE="line one\nCOMPOSE_PROJECT_NAME=teststack-app-green\n"\n' >> "$f"
+    printf 'gremion-ui\n' > "$DK/services"
+    run --separate-stderr cd_svc_cid app-green gremion-ui
+    [ "$status" -eq 2 ]
+    [ "$(printf '%s\n' "$stderr" | wc -l)" -eq 1 ]
+    run --separate-stderr cd_project_cids app-green
+    [ "$status" -eq 2 ]
+    [ "$(printf '%s\n' "$stderr" | wc -l)" -eq 1 ]
+    run --separate-stderr cd_wait_healthy app-green 0 "$TREE"
+    [ "$status" -eq 2 ]
+    [ "$(printf '%s\n' "$stderr" | wc -l)" -eq 1 ]
+    [ ! -e "$DK/argv.log" ]
+}
+
+@test "cd_dc accepts quoted values that close on their own line, empty values and quotes that are not a value's first character" {
+    load_lib
+    f="${GREMION_ROOT}/etc/env/app-green.env"
+    {
+        printf 'NOTE1="a b"\n'
+        printf "NOTE2='x'  # a comment\n"
+        printf 'NOTE3="say \\"hi\\""\n'
+        printf 'NOTE4=\nNOTE5=""\nNOTE6=it'"'"'s\nNOTE7=say "hi\n'
+        printf '# NOTE8="not a value\n'
+        printf 'export NOTE9="closed" \r\n'
+    } >> "$f"
+    run --separate-stderr cd_dc "$TREE" app-green up -d
+    [ "$status" -eq 0 ] || { echo "$stderr"; false; }
+    [ -s "$DK/argv.log" ]
+}
+
 @test "cd_kv_get refuses (1) a key in any spelling compose would also read, besides the plain one" {
     load_lib
     f="${BATS_TEST_TMPDIR}/k.env"
@@ -850,6 +918,76 @@ svc_state() {
     cd_wait_healthy app-green 0 "$TREE" 2>/dev/null && rc=0 || rc=$?
     [ "$rc" -eq 3 ]
     [ "$CD_WAIT_BAD" = " gremion-ui(docker_error)" ]
+}
+
+# The library header promises ONE line on stderr, naming the function, for a
+# failure of the library itself (what compose or docker say on their own is
+# theirs and passes through).
+@test "cd_wait_healthy prints one line when cd_dc refuses, naming cd_wait_healthy and the reason" {
+    load_lib
+    printf 'gremion-ui\n' > "$DK/services"
+    sed -i '/^COMPOSE_FILE=/d' "${GREMION_ROOT}/etc/env/app-green.env"
+    run --separate-stderr cd_wait_healthy app-green 0 "$TREE"
+    [ "$status" -eq 2 ]
+    [ "$(printf '%s\n' "$stderr" | wc -l)" -eq 1 ]
+    [[ "$stderr" == "cd-docker: cd_wait_healthy: "* ]]
+    [[ "$stderr" == *COMPOSE_FILE* ]]
+    # a compose that fails on its own: the library says one line, compose's own
+    # words (none from this shim) are not added to
+    touch "$DK/config.fail"
+    run --separate-stderr cd_wait_healthy app-green 0 "$TREE"
+    [ "$status" -eq 2 ]
+    [ "$(printf '%s\n' "$stderr" | wc -l)" -eq 1 ]
+    [[ "$stderr" == "cd-docker: cd_wait_healthy: "* ]]
+}
+
+@test "the project-name refusals carry the name of the function that was called" {
+    load_lib
+    f="${GREMION_ROOT}/etc/env/app-green.env"
+    sed -i '/^COMPOSE_PROJECT_NAME=/d' "$f"
+    run --separate-stderr cd_dc "$TREE" app-green up -d
+    [ "$status" -eq 2 ]
+    [[ "$stderr" == "cd-docker: cd_dc: "* ]]
+    run --separate-stderr cd_svc_cid app-green gremion-ui
+    [[ "$stderr" == "cd-docker: cd_svc_cid: "* ]]
+    run --separate-stderr cd_project_cids app-green
+    [[ "$stderr" == "cd-docker: cd_project_cids: "* ]]
+    run --separate-stderr cd_wait_healthy app-green 0 "$TREE"
+    [[ "$stderr" == "cd-docker: cd_wait_healthy: "* ]]
+    [ "$(printf '%s\n' "$stderr" | wc -l)" -eq 1 ]
+    # the other refusals of the name: STACK that disagrees, a malformed name
+    cp "${FIX}/app-green.env" "$f"
+    STACK=otherstack run --separate-stderr cd_dc "$TREE" app-green up -d
+    [[ "$stderr" == "cd-docker: cd_dc: "* ]]
+    sed -i 's/^COMPOSE_PROJECT_NAME=.*/COMPOSE_PROJECT_NAME=Bad Name-app-green/' "$f"
+    run --separate-stderr cd_dc "$TREE" app-green up -d
+    [[ "$stderr" == "cd-docker: cd_dc: "* ]]
+    [ ! -e "$DK/argv.log" ]
+}
+
+# A temporary file that cannot be made is one library line, not the tool's own
+# complaint beside it.
+mk_fail() { TMPDIR=/nonexistent/none "$@"; }
+
+@test "a temporary file that cannot be made is one stderr line, the library's" {
+    load_lib
+    run --separate-stderr mk_fail cd_image_id gremion-ui:pilot-aaaaaaaaaaaa
+    [ "$status" -eq 2 ]
+    [ "$(printf '%s\n' "$stderr" | wc -l)" -eq 1 ]
+    [[ "$stderr" == "cd-docker: cd_image_id: "* ]]
+    run --separate-stderr mk_fail cd_traefik_service app@file
+    [ "$status" -eq 2 ]
+    [ "$(printf '%s\n' "$stderr" | wc -l)" -eq 1 ]
+    [[ "$stderr" == "cd-docker: cd_traefik_service: "* ]]
+    # cd_set_env_key makes its copy beside the file as <name>.XXXXXX: a name
+    # that is already at the limit of the file system cannot get that suffix,
+    # which fails for root as well as for anyone else
+    long="${BATS_TEST_TMPDIR}/$(printf 'a%.0s' $(seq 1 250))"
+    printf 'X=1\n' > "$long"
+    run --separate-stderr cd_set_env_key "$long" X 2
+    [ "$status" -eq 1 ]
+    [ "$(printf '%s\n' "$stderr" | wc -l)" -eq 1 ]
+    [[ "$stderr" == "cd-docker: cd_set_env_key: "* ]]
 }
 
 # ------------------------------------------------------------- cd_image_id
