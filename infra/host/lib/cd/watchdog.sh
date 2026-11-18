@@ -24,8 +24,10 @@
 #                        past stage start + 1.25 x budget + 120 s (the heartbeat stops itself
 #                        at the same limit, core.sh). A 60 minute build with a live beat is
 #                        not stuck; a hung stage whose beat stopped is.
-#   an outbox file older than one hour on the relay transport -> data/cd/ALERT and a logger
-#                        line (cd_alert): the mail path is dead, so no mail can say so.
+#   an outbox file older than one hour (on any transport but a stated Stalwart) -> data/cd/ALERT
+#                        and a logger line (cd_alert): the mail path is dead, so no mail can say
+#                        so. The watchdog sends the queue first and judges the age of what is
+#                        left, so a relay that is back after a long outage writes no ALERT.
 #   the last poll success older than CD_STALL_MINUTES while `git ls-remote` shows a tip that
 #                        neither the poller nor the live release knows -> `stalled`.
 #   main red for six hours -> one `stalled` mail per red episode.
@@ -169,8 +171,12 @@ _cd_wd_outbox() {
     local age
     age="$(cd_notify_outbox_age)"
     (( age > 3600 )) || return 0
-    # on the relay transport only: Stalwart cannot send, which is a stated limit
-    cd_notify_transport_ok || return 0
+    # Stalwart cannot send, which is a stated limit and the only thing that excuses an old
+    # file. A transport that cannot be read (gremion-mail missing, half-installed or failing)
+    # is not that answer: the mail path may be dead, so unknown is never green.
+    if ! cd_notify_transport_ok && [[ "$CD_NOTIFY_TRANSPORT_VALUE" == stalwart ]]; then
+        return 0
+    fi
     cd_alert "the mail outbox has a message older than one hour"
 }
 
@@ -250,10 +256,17 @@ cd_cmd_watchdog() {
     CD_NOTIFY_MARKS="file"
     cd_mkdir "$CD_DATA" || return 2
     now="$(cd_now)" || return 2
+    local flush_rc=0
+    # send first: an outbox that is old only because the watchdog (or the tick) was away
+    # is judged after the send it may now get, not before
+    cd_notify_flush || flush_rc=$?
     _cd_wd_liveness "$now" || cd_hist watchdog_rule_failed rule=liveness || true
     _cd_wd_outbox || cd_hist watchdog_rule_failed rule=outbox || true
     _cd_wd_state_rules "$now" || cd_hist watchdog_rule_failed rule=state || true
     _cd_wd_killswitch || cd_hist watchdog_rule_failed rule=killswitch || true
-    cd_notify_flush || true
+    # the mails this run queued leave now, unless the first pass of this run already failed or
+    # found no usable transport (a relay that just refused is not asked a second time, a
+    # send may take a minute, and the "not supported" line is logged once a run)
+    if (( flush_rc != 1 && flush_rc != 2 )); then cd_notify_flush || true; fi
     return 0
 }

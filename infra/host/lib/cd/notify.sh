@@ -114,6 +114,29 @@ _cd_nf_in_list() {
     [[ "$1" =~ ^[a-z0-9_]{1,40}$ ]] && [[ " $2 " == *" $1 "* ]]
 }
 
+# _cd_nf_cmd_ok VALUE -- 0 when VALUE is `gremion-cd VERB [ARG ...]` made only of the program's
+# own words: a verb of the list, a flag of the list, a short SHA or `main`. A free word (a
+# customer's name, a reason text, a branch) is not a command the mail may carry.
+CD_NOTIFY_VERBS="status hold resume release-now rollback reconcile adopt selftest classify tick poll watchdog"
+CD_NOTIFY_FLAGS="--json --discard-dump --accept-descendants --with-state --force-blocked --accept-range --unverified --re-adopt --post-apply --resume-only"
+_cd_nf_cmd_ok() {
+    local -a w=()
+    local i
+    read -r -a w <<< "${1-}" || return 1
+    (( ${#w[@]} >= 2 && ${#w[@]} <= 7 )) || return 1
+    [[ "${w[0]}" == gremion-cd ]] || return 1
+    [[ " $CD_NOTIFY_VERBS " == *" ${w[1]} "* ]] || return 1
+    for (( i = 2; i < ${#w[@]}; i++ )); do
+        if [[ "${w[i]}" == --* ]]; then
+            [[ " $CD_NOTIFY_FLAGS " == *" ${w[i]} "* ]] || return 1
+        else
+            [[ "${w[i]}" =~ ^([0-9a-f]{12}|main)$ ]] || return 1
+        fi
+    done
+    # single spaces only: what was checked is what is printed
+    [[ "$1" == "${w[*]}" ]]
+}
+
 # _cd_nf_clean TYPE VALUE -- VALUE when it has the shape of its field and passes the
 # scrubber, else <redacted>.
 _cd_nf_clean() {
@@ -124,8 +147,7 @@ _cd_nf_clean() {
     local re_tag='^pilot-[0-9a-f]{12}$'
     local re_code='^[a-z][a-z0-9_]{0,59}$'
     local re_phase='^(idle|releasing|watching|rolling_back|parked|unknown)$'
-    local re_cmd='^gremion-cd [a-z][a-z0-9-]{0,30}( (--)?[A-Za-z0-9_=-]{1,60}){0,6}$'
-    local re_label='^[A-Za-z0-9][A-Za-z0-9_-]{0,59}$'
+    local re_label='^(state-)?pilot-[0-9a-f]{12}$'
     case "$type" in
         num) [[ "$v" =~ $re_num ]] && ok=1 ;;
         sha) [[ "$v" =~ $re_sha ]] && ok=1 ;;
@@ -139,7 +161,7 @@ _cd_nf_clean() {
         detail) _cd_nf_in_list "$v" "$CD_NOTIFY_DETAILS" && ok=1 ;;
         result) [[ "$v" == ok || "$v" == failed ]] && ok=1 ;;
         phase) [[ "$v" =~ $re_phase ]] && ok=1 ;;
-        cmd) [[ "$v" =~ $re_cmd ]] && ok=1 ;;
+        cmd) _cd_nf_cmd_ok "$v" && ok=1 ;;
         label) [[ "$v" =~ $re_label ]] && ok=1 ;;
     esac
     if (( ok == 1 )); then
@@ -176,7 +198,7 @@ _cd_nf_mark_put() {
     if [[ "$CD_NOTIFY_MARKS" != file && "${CD_LOCK_PID:-}" == "$$" && -f "$CD_STATE_FILE" ]]; then
         # a subshell: an unreadable state makes cd_state_load exit, and that must end this
         # attempt only, never the caller (cd_notify cannot take the caller down)
-        # shellcheck disable=SC2034  # read by cd_die -> cd_heartbeat_stop in core.sh
+        # shellcheck disable=SC2016,SC2034  # SC2016: a jq filter, $k $t $c are jq variables; SC2034: CD_HB_PID is read by cd_die -> cd_heartbeat_stop in core.sh
         if ( CD_HB_PID=""; cd_state_set '.notified[$k] = $t | .notified |= with_entries(select(.value > $c))' \
                 --arg k "$key" --arg t "$iso" --arg c "$cut" ) 2>/dev/null; then
             return 0
@@ -188,10 +210,13 @@ _cd_nf_mark_put() {
     printf '%s\n' "$tmp" | sed '/^$/d' | cd_atomic_write "$f" 600
 }
 
-# _cd_nf_epoch ISO -- the epoch of an ISO time, empty when it does not parse.
+# _cd_nf_epoch ISO -- the epoch of an ISO time (the YYYY-MM-DDTHH:MM:SSZ that cd_iso writes),
+# nothing and 1 when it is anything else. GNU date reads "" as today's midnight on the real
+# clock and "today" as now, so the shape is checked before date sees the value.
 _cd_nf_epoch() {
     local v
-    v="$(date -u -d "${1:-}" +%s 2>/dev/null)" || return 1
+    [[ "${1:-}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || return 1
+    v="$(date -u -d "$1" +%s 2>/dev/null)" || return 1
     [[ "$v" =~ ^[0-9]+$ ]] || return 1
     printf '%s\n' "$v"
 }
@@ -199,10 +224,12 @@ _cd_nf_epoch() {
 # -- the cap -----------------------------------------------------------------------------
 _cd_nf_ledger() { printf '%s' "${CD_DATA}/mail-ledger"; }
 
-# _cd_nf_cap_verdict NOW -- prints "ok|summary|drop HOURCOUNT DAYCOUNT" (the counts travel in
-# the output: the function runs inside $( ), so it cannot set a variable for its caller).
-# Twenty mails an hour and sixty a day; the first one over the line becomes one summary
-# mail, the rest are dropped.
+# _cd_nf_cap_verdict NOW -- prints "ok|summary|drop HOURCOUNT DAYCOUNT [hour|day]" (the counts
+# and the summary type travel in the output: the function runs inside $( ), so it cannot set a
+# variable for its caller). Twenty mails an hour and sixty a day; the first one over a line
+# becomes one summary mail of that line's type, the rest are dropped. The ledger keeps the
+# type of a summary (summary-hour, summary-day) and each line counts only its own type: an
+# hourly summary sent earlier in the day must not stop the daily line from speaking.
 _cd_nf_cap_verdict() {
     local now="$1" f e k age nh=0 nd=0 sh=0 sd=0
     f="$(_cd_nf_ledger)"
@@ -213,20 +240,20 @@ _cd_nf_cap_verdict() {
             (( age < 0 )) && age=0
             if (( age < 86400 )); then
                 nd=$(( nd + 1 ))
-                [[ "$k" == summary ]] && sd=$(( sd + 1 ))
+                [[ "$k" == summary-day ]] && sd=$(( sd + 1 ))
                 if (( age < 3600 )); then
                     nh=$(( nh + 1 ))
-                    [[ "$k" == summary ]] && sh=$(( sh + 1 ))
+                    [[ "$k" == summary-hour ]] && sh=$(( sh + 1 ))
                 fi
             fi
         done < "$f"
     fi
     if (( nh >= CD_NOTIFY_HOURLY_CAP )); then
-        if (( sh == 0 )); then printf 'summary %s %s\n' "$nh" "$nd"; else printf 'drop %s %s\n' "$nh" "$nd"; fi
+        if (( sh == 0 )); then printf 'summary %s %s hour\n' "$nh" "$nd"; else printf 'drop %s %s\n' "$nh" "$nd"; fi
         return 0
     fi
     if (( nd >= CD_NOTIFY_DAILY_CAP )); then
-        if (( sd == 0 )); then printf 'summary %s %s\n' "$nh" "$nd"; else printf 'drop %s %s\n' "$nh" "$nd"; fi
+        if (( sd == 0 )); then printf 'summary %s %s day\n' "$nh" "$nd"; else printf 'drop %s %s\n' "$nh" "$nd"; fi
         return 0
     fi
     printf 'ok %s %s\n' "$nh" "$nd"
@@ -265,7 +292,7 @@ _cd_nf_write_file() {
 
 _cd_nf_queue() {
     local kind="${1:-}" arg name val ftype allowed f line to now iso label subject body
-    local dedupe_key="" every="" mark mark_epoch verdict="ok" cap_h=0 cap_d=0 proof sha_s col_s path
+    local dedupe_key="" every="" mark mark_epoch verdict="ok" cap_h=0 cap_d=0 cap_t="" proof sha_s col_s path ledger_kind="$kind"
     local -A vals=()
     local -a dropped=()
     shift || true
@@ -321,7 +348,7 @@ _cd_nf_queue() {
     fi
 
     if [[ "$kind" != summary ]]; then
-        read -r verdict cap_h cap_d <<< "$(_cd_nf_cap_verdict "$now")" || true
+        read -r verdict cap_h cap_d cap_t <<< "$(_cd_nf_cap_verdict "$now")" || true
         case "$verdict" in
             drop)
                 cd_hist mail_dropped kind="$kind" reason=cap || true
@@ -329,6 +356,10 @@ _cd_nf_queue() {
                 ;;
             summary)
                 cd_hist mail_capped hour="$cap_h" day="$cap_d" || true
+                # _cd_nf_summary_type is read by the call below (dynamic scope): the ledger
+                # line of the summary says which line it speaks for
+                # shellcheck disable=SC2034
+                local _cd_nf_summary_type="summary-${cap_t}"
                 _cd_nf_queue summary "mails_hour=${cap_h}" "mails_day=${cap_d}" || true
                 return 0
                 ;;
@@ -361,7 +392,8 @@ _cd_nf_queue() {
         cd_hist mail_queue_failed kind="$kind" || true
         return 0
     }
-    _cd_nf_ledger_add "$now" "$kind" || true
+    [[ "$kind" == summary ]] && ledger_kind="${_cd_nf_summary_type:-summary-hour}"
+    _cd_nf_ledger_add "$now" "$ledger_kind" || true
     if [[ -n "$dedupe_key" ]]; then
         _cd_nf_mark_put "${kind}:${dedupe_key}" "$now" || true
     fi

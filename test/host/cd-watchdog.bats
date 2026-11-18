@@ -266,6 +266,40 @@ wd() { run nlib 'cd_cmd_watchdog'; }
     [ ! -e "${GREMION_ROOT}/data/cd/ALERT" ]
 }
 
+@test "outbox: a transport that cannot be read is NOT the stated Stalwart limit: an old file still writes ALERT (unknown is never green)" {
+    cd_need_flock
+    run nlib 'cd_notify held sha12=aaaaaaaaaaaa hold=blocked'
+    echo broken > "${GREMION_ROOT}/.transport"
+    cd_advance 7200
+    fresh_hb
+    wd
+    [ "$status" -eq 0 ]
+    [ -s "${GREMION_ROOT}/data/cd/ALERT" ]
+    assert_recorded logger "gremion-cd"
+}
+
+@test "outbox: a missing gremion-mail (half-installed host) with an old file still writes ALERT" {
+    cd_need_flock
+    run nlib 'cd_notify held sha12=aaaaaaaaaaaa hold=blocked'
+    rm -f "${GREMION_ROOT}/bin/gremion-mail"
+    cd_advance 7200
+    fresh_hb
+    wd
+    [ -s "${GREMION_ROOT}/data/cd/ALERT" ]
+}
+
+@test "outbox: the watchdog sends first and judges the age after, so a relay that is back after a long outage writes no ALERT" {
+    cd_need_flock
+    run nlib 'cd_notify held sha12=aaaaaaaaaaaa hold=blocked'
+    cd_advance 7200
+    rm -f "${GREMION_ROOT}/.curl-fail"
+    fresh_hb
+    wd
+    [ "$status" -eq 0 ]
+    [ "$(mail_count)" -eq 0 ]
+    [ ! -e "${GREMION_ROOT}/data/cd/ALERT" ]
+}
+
 @test "outbox: the watchdog flushes the queue, so the mail of a parked process still leaves the host" {
     cd_need_flock
     rm -f "${GREMION_ROOT}/.curl-fail"
@@ -337,6 +371,22 @@ state_poll() {
     fresh_hb
     wd
     [ "$(mails_with poll_stale)" -eq 2 ]
+}
+
+@test "poll: a poll that never ran (last_ok true, no time yet) is not aged from today's midnight, whatever the hour" {
+    cd_need_flock
+    # the fake clock is a few days past the REAL today: `date -d ""` reads the real clock,
+    # so only then does a midnight of today look like an old poll success
+    local later=$(( $(date +%s) + 5 * 86400 ))
+    cd_fake_now "$later"
+    state_poll "" true "" ""
+    printf '%s
+' cccccccccccccccccccccccccccccccccccccccc > "${GREMION_ROOT}/.git-tip"
+    fresh_hb
+    wd
+    [ "$status" -eq 0 ]
+    [ "$(mails_with poll_stale)" -eq 0 ]
+    grep -qx "poll_ok_epoch=${later}" "${GREMION_ROOT}/data/cd/watchdog.state"
 }
 
 @test "poll: a failing poll (last_ok false) is aged from the last success the watchdog saw" {

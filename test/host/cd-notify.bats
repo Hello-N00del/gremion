@@ -172,6 +172,41 @@ body_of() { sed -n '/^$/,$p' "$1" | sed '1d'; }
     grep -qx 'rule: build_failed' "$f2"
 }
 
+@test "leak: a dump label is the release tag (or its state- twin) and a command is a program verb with its own flags and a short SHA; a customer-shaped token in either is <redacted>" {
+    run nlib '
+        cd_notify rejected sha12='"$SHA_A"' dump_label=acme-verein command="gremion-cd reconcile acme-verein"
+        printf "%s
+" 1700000100 > "$GREMION_CD_NOW_FILE"
+        cd_notify rejected sha12='"$SHA_A"' dump_label=state-pilot-'"$SHA_A"' command="gremion-cd hold --reason kanzlei"
+        printf "%s
+" 1700000200 > "$GREMION_CD_NOW_FILE"
+        cd_notify rejected sha12='"$SHA_A"' dump_label=pilot-'"$SHA_A"' command="gremion-cd release-now '"$SHA_A"' --accept-range"
+        printf "%s
+" 1700000300 > "$GREMION_CD_NOW_FILE"
+        cd_notify rejected sha12='"$SHA_A"' command="gremion-cd resume --discard-dump"
+        printf "%s
+" 1700000400 > "$GREMION_CD_NOW_FILE"
+        cd_notify rejected sha12='"$SHA_A"' command="gremion-cd status acme"
+        printf "%s
+" 1700000500 > "$GREMION_CD_NOW_FILE"
+        cd_notify rejected sha12='"$SHA_A"' command="gremion-evil status"
+        printf "%s
+" 1700000600 > "$GREMION_CD_NOW_FILE"
+        cd_notify rejected sha12='"$SHA_A"' command="gremion-cd release-now main"'
+    [ "$status" -eq 0 ]
+    local d="${GREMION_ROOT}/data/cd/outbox"
+    grep -qx 'dump_label: <redacted>' "$d/1700000000-rejected.eml"
+    grep -qx 'command: <redacted>' "$d/1700000000-rejected.eml"
+    grep -qx "dump_label: state-pilot-${SHA_A}" "$d/1700000100-rejected.eml"
+    grep -qx 'command: <redacted>' "$d/1700000100-rejected.eml"
+    grep -qx "dump_label: pilot-${SHA_A}" "$d/1700000200-rejected.eml"
+    grep -qx "command: gremion-cd release-now ${SHA_A} --accept-range" "$d/1700000200-rejected.eml"
+    grep -qx 'command: gremion-cd resume --discard-dump' "$d/1700000300-rejected.eml"
+    grep -qx 'command: <redacted>' "$d/1700000400-rejected.eml"
+    grep -qx 'command: <redacted>' "$d/1700000500-rejected.eml"
+    grep -qx 'command: gremion-cd release-now main' "$d/1700000600-rejected.eml"
+}
+
 @test "leak: no address outside the reserved example names is written into any file of this unit" {
     local f hit
     for f in infra/host/lib/cd/notify.sh infra/host/lib/cd/watchdog.sh test/host/cd-notify.bats test/host/cd-watchdog.bats test/host/test_helper/cd-notify.bash; do
@@ -386,6 +421,32 @@ body_of() { sed -n '/^$/,$p' "$1" | sed '1d'; }
     [ "$(mail_count)" -eq 61 ]
     [ "$(mail_files | grep -c -- '-summary')" -eq 1 ]
     grep -qx 'mails_day: 60' "$(mail_files | grep -- '-summary')"
+}
+
+@test "caps: an hourly summary does not use up the daily summary (each type is counted on its own), so the day's cap still speaks once" {
+    run nlib '
+        for i in $(seq 1 25); do cd_notify held sha12='"$SHA_A"' hold=blocked; done
+        for h in 1 2 3; do
+            printf "%s
+" $((1700000000 + h * 3700)) > "$GREMION_CD_NOW_FILE"
+            for i in $(seq 1 15); do cd_notify held sha12='"$SHA_A"' hold=blocked; done
+        done
+        printf "%s
+" $((1700000000 + 4 * 3700)) > "$GREMION_CD_NOW_FILE"
+        for i in $(seq 1 15); do cd_notify held sha12='"$SHA_A"' hold=blocked; done'
+    [ "$status" -eq 0 ]
+    [ "$(mail_files | grep -c -- '-summary')" -eq 2 ]
+    grep -l '^mails_day: ' $(mail_files | grep -- '-summary') | grep -q .
+    # and the day summary is sent once, not on every mail past the line
+    run nlib 'printf "%s
+" $((1700000000 + 4 * 3700 + 10)) > "$GREMION_CD_NOW_FILE"; cd_notify held sha12='"$SHA_A"' hold=blocked'
+    [ "$(mail_files | grep -c -- '-summary')" -eq 2 ]
+}
+
+@test "epoch: an empty or non-ISO time does not parse (it must never become today's midnight)" {
+    run nlib 'for v in "" "today" "garbage" "yesterday" "2023-11-14"; do if _cd_nf_epoch "$v" >/dev/null; then echo "parsed:$v"; fi; done; _cd_nf_epoch 2023-11-14T22:13:20Z'
+    [ "$status" -eq 0 ]
+    [ "$output" = "1700000000" ]
 }
 
 # ---------------------------------------------------------------------------
