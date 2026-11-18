@@ -624,10 +624,36 @@ case "$1 $2" in
      esac ;;
   pull*) [ -f "$GREMION_ROOT/.pull-fails" ] && exit 1 ; exit 0 ;;
   run*)
-     prev=""; tarfile=""
-     for a in "$@"; do [ "$prev" = "-cf" ] && tarfile="$a"; prev="$a"; done
-     mkdir -p "$out"
-     printf "tar-stub" > "${out}/${tarfile#/out/}"
+     case "$*" in
+     *":/out "*)
+        prev=""; tarfile=""
+        for a in "$@"; do [ "$prev" = "-cf" ] && tarfile="$a"; prev="$a"; done
+        mkdir -p "$out"
+        printf "tar-stub" > "${out}/${tarfile#/out/}"
+        ;;
+     *)
+        # A read-only container read of a host directory (the kept exports):
+        # `docker run --rm -v <dir>:/v:ro <image> <command using /v>`. The command
+        # runs here with /v swapped for <dir>; when ROOT_RUN is set it runs
+        # through that prefix, which stands for the container being root.
+        if [ -f "$GREMION_ROOT/.run-copies-nothing" ]; then
+          case "$*" in *"tar -cf - "*) tar -cf - -T /dev/null; exit 0 ;; esac
+        fi
+        shift
+        src=""
+        while [ $# -gt 0 ]; do
+          case "$1" in --rm) shift ;; -v) src="${2%%:/v:ro}"; shift 2 ;; *) break ;; esac
+        done
+        shift
+        args=(); for a in "$@"; do args+=("${a//\/v/$src}"); done
+        if [ -f "$GREMION_ROOT/.run-copies-short" ] && [ "$1" = tar ]; then
+          t="$(mktemp -d)"; tar -cf - -C "$src" . | tar -xf - -C "$t"
+          find "$t" -type f -exec truncate -s 1 {} +
+          tar -cf - -C "$t" .; rm -rf "$t"; exit 0
+        fi
+        exec ${ROOT_RUN:-} "${args[@]}"
+        ;;
+     esac
      ;;
 esac
 exit 0'
@@ -789,7 +815,7 @@ backup_host_data_dirs() {
         || { echo "bind source '${rel}' is not in BACKUP_HOST_DATA_DIRS: $(backup_host_data_dirs | tr '\n' ' ')" >&2; return 1; }
 }
 
-@test "a kept module export is staged into the snapshot tree, byte for byte" {
+@test "a kept module export is staged into the snapshot tree with its content" {
     shim_baseline; shim_docker_full; shim_restic_ok; plant_etc_tree
     shim_rsync_honouring_excludes
     local rel; rel="$(compose_export_dir_rel)"
@@ -814,16 +840,66 @@ backup_host_data_dirs() {
 
 @test "an export file that does not reach the staged tree fails the run (post-condition read from the trees)" {
     shim_baseline; shim_docker_full; shim_restic_ok; plant_etc_tree
-    # etc is copied; every other rsync (the export directory) exits 0 and copies nothing.
-    shim rsync 'src=""; dst=""
-for a in "$@"; do case "$a" in -*|*backup-key) ;; *) if [ -z "$src" ]; then src="$a"; else dst="$a"; fi ;; esac; done
-case "$src" in */etc/) mkdir -p "$dst"; ( cd "${src%/}" && find . -type f ! -name "*.backup-key" -exec cp --parents {} "$dst" \; ) ;; esac'
+    shim_rsync_honouring_excludes
+    # The export copy exits 0 and delivers nothing.
+    touch "${GREMION_ROOT}/.run-copies-nothing"
     local rel; rel="$(compose_export_dir_rel)"
     mkdir -p "${GREMION_ROOT}/${rel}/acme/board"
     printf 'dump-bytes' >"${GREMION_ROOT}/${rel}/acme/board/20261101.dump"
     run "$BACKUP" --label nightly-z
     [ "$status" -eq 1 ]
     [[ "$output" == *"staged ${rel} differs from the host directory"* ]]
+}
+
+@test "a staged export file of the wrong size fails the run (names alone are not the post-condition)" {
+    shim_baseline; shim_docker_full; shim_restic_ok; plant_etc_tree
+    shim_rsync_honouring_excludes
+    local rel; rel="$(compose_export_dir_rel)"
+    mkdir -p "${GREMION_ROOT}/${rel}/acme/board"
+    printf 'dump-bytes' >"${GREMION_ROOT}/${rel}/acme/board/20261101.dump"
+    # The container's tar delivers a truncated file under the right name.
+    touch "${GREMION_ROOT}/.run-copies-short"
+    run "$BACKUP" --label nightly-s
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"staged ${rel} differs from the host directory"* ]]
+}
+
+# BD2b review HIGH: the export tree is written by tenant-create as root (0700 dirs,
+# 0600 files) and the backup runs as the deploy user. Every other test here runs as
+# the test user and so cannot see ownership. This one runs the program as uid 1000
+# against a root-owned 0700 tree, as the host has it after the first module
+# switch-off; the container reads of the shim stand for root through a setuid copy
+# of setpriv.
+@test "a root-owned 0700 export tree is staged by a deploy-user run, and the run reaches restic" {
+    [ "$(id -u)" -eq 0 ] || skip "needs root to plant a root-owned tree and to drop to the deploy uid"
+    command -v setpriv >/dev/null 2>&1 || skip "setpriv (util-linux) is not installed"
+    shim_baseline; shim_docker_full; shim_restic_ok; plant_etc_tree
+    shim_rsync_honouring_excludes
+    local rel tree; rel="$(compose_export_dir_rel)"
+    tree="${GREMION_ROOT}/${rel}/acme/board"
+    mkdir -p "$tree"
+    printf 'dump-bytes' >"${tree}/20261101.dump"
+    printf 'abc  20261101.dump\n' >"${tree}/20261101.dump.sha256"
+    chown -R 1000:1000 "$GREMION_ROOT"
+    # exactly what exportDatabase leaves: root:root, directories 0700, files 0600
+    chown -R root:root "${GREMION_ROOT}/${rel}/acme"
+    find "${GREMION_ROOT}/${rel}/acme" -type d -exec chmod 700 {} +
+    find "${GREMION_ROOT}/${rel}/acme" -type f -exec chmod 600 {} +
+    cp "$(command -v setpriv)" "${SHIM_DIR}/rootpriv"
+    chown root:root "${SHIM_DIR}/rootpriv"
+    chmod 4755 "${SHIM_DIR}/rootpriv"
+    export ROOT_RUN="${SHIM_DIR}/rootpriv --reuid=0 --regid=0 --clear-groups"
+    # the premise: the deploy user really cannot read that tree
+    run setpriv --reuid=1000 --regid=1000 --clear-groups ls "${GREMION_ROOT}/${rel}/acme"
+    [ "$status" -ne 0 ]
+    run setpriv --reuid=1000 --regid=1000 --clear-groups "$BACKUP" --label nightly-u
+    [ "$status" -eq 0 ]
+    local staged="${GREMION_ROOT}/backups/current/${rel}/acme/board"
+    cmp "${tree}/20261101.dump" "${staged}/20261101.dump"
+    [ -s "${staged}/20261101.dump.sha256" ]
+    # the staged copy belongs to the deploy user, so restic (same user) can read it
+    [ "$(stat -c %u "${staged}/20261101.dump")" -eq 1000 ]
+    assert_recorded restic "backup"
 }
 
 # ---------------------------------------------------------------------------
