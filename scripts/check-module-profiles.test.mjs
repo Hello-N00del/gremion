@@ -54,16 +54,21 @@ test('module profiles: every catalogue id is classified and nothing else is; pil
     if (!m.pilot) assert.deepEqual([...m.profiles, ...m.postRealm], [], `${id}: an off module renders no profile`)
     else assert.ok(m.profiles.length + m.postRealm.length > 0, `${id}: a pilot module asks for at least one profile`)
   }
-  // the profile-rendering pilot set: sign-in modules and the six the plan's evidence names; finance, vault, board, elections, handover render no profile (board is selectable at create but needs none)
+  // the profile-rendering pilot set: sign-in modules and the six the plan's evidence names, and board (it has a database of its own on board-postgres); finance, vault, elections, handover render no profile
   const pilot = Object.entries(MAP.modules).filter(([, m]) => m.pilot).map(([id]) => id).sort()
-  assert.deepEqual(pilot, ['calendar', 'content', 'files', 'messaging', 'publishing', 'votes'])
+  assert.deepEqual(pilot, ['board', 'calendar', 'content', 'files', 'messaging', 'publishing', 'votes'])
 })
 
-test('module profiles: board is selectable at create but needs no profile and no leaf (it runs in-process on kernel tables)', () => {
+test('module profiles: board is a pilot module with the profile of its leaf and its own database server (board-postgres and board-service share it)', () => {
   const board = MAP.modules.board
-  assert.deepEqual([board.profiles, board.postRealm], [[], []])
-  assert.match(board.reason, /selectable at create/)
-  assert.doesNotMatch(board.reason, /no isolation gate lift/)
+  assert.equal(board.pilot, true)
+  assert.deepEqual([board.profiles, board.postRealm], [['board'], []])
+  // the profile is the one the compose files give both services, and the module declares that server
+  const declared = JSON.parse(readFileSync(join(ROOT, 'modules/board/module.json'), 'utf8')).runtime.database
+  assert.equal(declared?.postgresService, 'board-postgres')
+  const defined = composeProfiles()
+  assert.ok(defined.has('board'), 'a compose file defines the board profile')
+  assert.doesNotMatch(board.reason, /no compose profile|is not started/)
 })
 
 test('module profiles: every named profile is known and defined by a compose file, and every module profile a compose file defines is known', () => {
@@ -82,12 +87,12 @@ test('module profiles: every named profile is known and defined by a compose fil
 
 test('module profiles: the off modules\' profiles are never rendered, and the post-realm profile is never a pre-realm one', () => {
   const rendered = new Set(Object.values(MAP.modules).filter((m) => m.pilot).flatMap((m) => m.profiles))
-  for (const off of ['board', 'finance', 'vault']) assert.ok(!rendered.has(off), `${off} is rendered`)
+  for (const off of ['finance', 'vault']) assert.ok(!rendered.has(off), `${off} is rendered`)
   assert.ok(!rendered.has('messaging'), 'messaging (messaging-postgres and matrix) is post-realm: only gremion-services wire adds it')
   assert.deepEqual(MAP.modules.messaging.postRealm, ['messaging'])
   assert.deepEqual(MAP.modules.messaging.profiles, ['video'])
-  // finance and vault are the operator's "stay as they are": no profile, whichever way they are asked
-  for (const id of ['finance', 'vault', 'board', 'elections', 'handover']) assert.equal(MAP.modules[id].pilot, false, id)
+  // finance and vault are the operator's "stay as they are": no profile, whichever way they are asked (board has one: it runs on its own database server)
+  for (const id of ['finance', 'vault', 'elections', 'handover']) assert.equal(MAP.modules[id].pilot, false, id)
   // calendar, content and publishing run as leaves: the state server and the app leaf share one profile
   assert.deepEqual([MAP.modules.calendar.profiles, MAP.modules.content.profiles, MAP.modules.publishing.profiles], [['calendar'], ['content'], ['newsletter']])
 })
