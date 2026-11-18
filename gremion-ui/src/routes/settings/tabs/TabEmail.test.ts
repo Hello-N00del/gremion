@@ -51,10 +51,51 @@ describe('TabEmail.svelte — password notice (K2#8)', () => {
     expect(container.textContent).not.toMatch(/EMAIL_HOST_PASSWORD/)
   })
 
-  it('names the real mechanism (registry passwordRef) and the runbook', () => {
+  // Finding 19: the notice named the registry field and a runbook path. A council
+  // admin cannot act on either; the page must say in plain German what is set here
+  // and that the operator sets the login, without internal names.
+  it('shows no developer text (registry field, runbook path, secret plumbing)', () => {
     const { container } = render(TabEmail, { props: { smtp: SMTP } })
-    expect(container.textContent).toMatch(/passwordRef/)
-    expect(container.textContent).toMatch(/email-smtp/)
+    const text = container.textContent ?? ''
+    expect(text).not.toMatch(/passwordRef|domain_profile|runbook|email-smtp|\.md\b|docs\//i)
+    expect(text).not.toMatch(/Registry|Geheimnis|Umgebungsvariable/i)
+    expect(container.querySelector('code')).toBeNull()
+  })
+
+  it('tells the admin plainly that the operator sets the mail login', () => {
+    const { container } = render(TabEmail, { props: { smtp: SMTP } })
+    const text = (container.textContent ?? '').replace(/\s+/g, ' ')
+    expect(text).toMatch(/Betreiber/)
+    expect(text).toMatch(/Benutzername und Passwort/)
+  })
+
+  // tenant-mail.ts: `configured` comes only from the setting saved in this tab, and the
+  // operator's preset is merged PER FIELD (preset ?? saved). So the notice must not claim
+  // that the fields here are ignored when the operator has set things up: saving an empty
+  // server here switches sending off, and a saved sender address still applies when the
+  // operator only preset the server. It must say that a server has to be saved here for
+  // mail to go out, and that single operator presets take precedence for that detail only.
+  // Whitespace-normalised: the sentences wrap in markup.
+  it('does not claim the fields here are ignored, and says a saved server is needed for sending', () => {
+    const { container } = render(TabEmail, { props: { smtp: SMTP } })
+    const text = (container.textContent ?? '').replace(/\s+/g, ' ')
+    expect(text).not.toMatch(/Hier legen Sie fest, über welchen Mailserver/)
+    expect(text).not.toMatch(/Änderungen hier (haben|bleiben)/)
+    expect(text).not.toMatch(/keine Wirkung|ohne Wirkung/)
+    expect(text).not.toMatch(/gelten dessen Angaben/)
+    expect(text).toMatch(/Ohne gespeicherten Mailserver werden keine Benachrichtigungen, Newsletter und ähnliche E-Mails der Anwendung versendet/)
+    expect(text).toMatch(/Betreiber einzelne Angaben.*Vorrang/)
+  })
+
+  // The saved server only drives the application's own mail (notifications, newsletters and
+  // the like). Each customer's sign-in mail has its own sender, set up by the operator, and
+  // does not read this tab. So the notice must not claim that NO e-mail goes out without a
+  // server here, and must say that sign-in mail is set up separately.
+  it('scopes the no-server sentence to application mail and says sign-in mail is separate', () => {
+    const { container } = render(TabEmail, { props: { smtp: SMTP } })
+    const text = (container.textContent ?? '').replace(/\s+/g, ' ')
+    expect(text).not.toMatch(/keine E-Mails versendet/)
+    expect(text).toMatch(/E-Mails rund um die Anmeldung richtet der Betreiber getrennt ein/)
   })
 })
 

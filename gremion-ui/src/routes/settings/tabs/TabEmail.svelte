@@ -101,11 +101,13 @@
   <h2 class="text-lg font-semibold">E-Mail (SMTP)</h2>
 
   <div class="rounded-lg border bg-surface-2/40 px-4 py-3 text-sm text-ink-muted">
-    Benutzer und Passwort für den SMTP-Versand werden nicht in den Einstellungen gespeichert. Sie
-    stehen im Mandanten-Eintrag der Registry als Geheimnis-Referenz
-    (<code class="font-mono">domain_profile.smtp.passwordRef</code>). Einrichtung: Runbook
-    <code class="font-mono">docs/runbooks/email-smtp.md</code>. Eine Umgebungsvariable wird dafür
-    nicht ausgewertet.
+    Hier tragen Sie den Mailserver und die Absender-Adresse ein, über die ausgehende E-Mails
+    verschickt werden. Ohne gespeicherten Mailserver werden keine Benachrichtigungen, Newsletter
+    und ähnliche E-Mails der Anwendung versendet. E-Mails rund um die Anmeldung richtet der
+    Betreiber getrennt ein. Benutzername und Passwort für den Mailserver werden aus
+    Sicherheitsgründen nicht in den Einstellungen gespeichert, sondern vom Betreiber für Sie
+    hinterlegt. Wenden Sie sich dafür an den Betreiber. Hat der Betreiber einzelne Angaben bereits
+    fest vorgegeben, haben diese Vorrang vor den Eingaben hier.
   </div>
 
   <form class="space-y-4 max-w-lg" on:submit|preventDefault={save}>

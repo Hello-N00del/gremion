@@ -253,3 +253,28 @@ realm_effective_name() {
     code=$(curl -s -o /dev/null -w '%{http_code}' "$href")
     [ "$code" -eq 200 ]
 }
+
+# The notices and errors Keycloak renders itself (the re-authentication notice,
+# a failed sign-in, a wrong one-time code, the deny page) are not named by any
+# .ftl, so without an override the base theme answers in the REQUEST language: an
+# Accept-Language: en request saw them in English above a German form. The static
+# hygiene check t3b keeps the bundles complete; this asserts the served page. A
+# nonexistent user keeps it from counting against a real account's lockout.
+@test "a failed sign-in under an English request is answered in German" {
+    local uri page action jar out
+    uri=$(client_redirect_uri) || return 1
+    [ -n "$uri" ]
+    jar=$(mktemp)
+    page=$(authorize "$uri" -sf -c "$jar" -H 'Accept-Language: en')
+    [ -n "$page" ]
+    action=$(printf '%s' "$page" | grep -o 'action="[^"]*"' | head -1 | sed 's/^action="//; s/"$//; s/&amp;/\&/g')
+    [ -n "$action" ]
+    out=$(curl -s -b "$jar" -c "$jar" -H 'Accept-Language: en' \
+        --data-urlencode "username=theme-probe-no-such-user" \
+        --data-urlencode "password=wrong-password" "$action")
+    rm -f "$jar"
+    # An empty body would make both assertions below vacuous.
+    [ -n "$out" ]
+    [[ "$out" == *"Ungültiger Benutzername oder ungültiges Passwort."* ]]
+    [[ "$out" != *"Invalid username or password"* ]]
+}

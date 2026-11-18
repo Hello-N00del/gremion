@@ -406,6 +406,42 @@ describe('dispatch — the mail server refuses the login (EAUTH)', () => {
     expect(dels.map((d) => d.status)).toEqual(['sent', 'sent', 'sent'])
     expect((await getNewsletter(sql, nlId))!.status).toBe('sent')
   })
+
+  it('a failing claim release does not replace the refused login as the cause, and the loop still stops', async () => {
+    const { nlId } = await makeNewsletterWithList(['a@x.com', 'b@x.com', 'c@x.com'])
+    let calls = 0
+    const transport: MailTransport = {
+      async sendMail() {
+        calls += 1
+        throw refusedLogin()
+      },
+    }
+    // The ledger DELETE behind releaseClaim fails, as it would with the DB down.
+    await sql.unsafe(`
+      CREATE FUNCTION test_block_delivery_delete() RETURNS trigger LANGUAGE plpgsql AS
+      $$ BEGIN RAISE EXCEPTION 'delivery delete blocked'; END $$`)
+    await sql.unsafe(
+      'CREATE TRIGGER test_block_delivery_delete BEFORE DELETE ON deliveries FOR EACH ROW EXECUTE FUNCTION test_block_delivery_delete()',
+    )
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      await expect(
+        dispatch(DISPATCH_TENANT, nlId, ACTOR, { sql, kernel: makeFakeKernel(), transport, origin: 'https://o' }),
+      ).rejects.toThrow(/SMTP login refused, send stopped after the first attempt/)
+      // The DB failure is logged (cause fields only), not swallowed silently.
+      expect(spy.mock.calls.some((c) => String(c[0]).includes('release of the claim'))).toBe(true)
+    } finally {
+      spy.mockRestore()
+      await sql.unsafe('DROP TRIGGER IF EXISTS test_block_delivery_delete ON deliveries')
+      await sql.unsafe('DROP FUNCTION IF EXISTS test_block_delivery_delete()')
+    }
+
+    expect(calls).toBe(1)
+    expect((await getNewsletter(sql, nlId))!.status).toBe('failed')
+    const rows = await outboxRows()
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.event_type).toBe('send.failed')
+  })
 })
 
 // ── kernel send-mail unconfigured (Option B2) → failed + send.failed ────────────

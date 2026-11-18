@@ -869,8 +869,14 @@ services:
 
   # Nextcloud (apache image, docker/nextcloud). Its public URL is the in-network
   # one: no router reaches it, so every URL it generates names `nextcloud` over
-  # http. getCollaboraEditorUrl fetches Nextcloud's direct-view page server-side and
-  # dies when overwritehost is unset, which is why the three overwrite keys are set.
+  # http (the request's own Host header, `nextcloud`). overwritehost and
+  # overwriteprotocol are deliberately NOT set: getCollaboraEditorUrl fetches
+  # Nextcloud's direct-view page server-side and sends the customer host as
+  # X-Forwarded-Host / X-Forwarded-Proto, and Nextcloud stores that host as the
+  # origin Collabora posts the editor's messages (save, close) to. A pin would win
+  # over the header and the browser would drop every message. The before-starting
+  # hook pin-editor-origin.sh trusts NEXTCLOUD_PUBLIC_HOSTS and removes a stale pin
+  # on every start. overwrite.cli.url stays: cron and occ have no request.
   # NEXTCLOUD_OIDC_CLIENT_SECRET and KEYCLOAK_OIDC_DISCOVERY_URI stay UNSET at the
   # first install on purpose: the user_oidc hook then skips, and
   # `gremion-services wire <slug>` registers the provider once the customer's realm
@@ -901,12 +907,15 @@ services:
       NEXTCLOUD_ADMIN_USER:     ${NEXTCLOUD_ADMIN_USER:-admin}
       NEXTCLOUD_ADMIN_PASSWORD: ${NEXTCLOUD_ADMIN_PASSWORD}
       NEXTCLOUD_TRUSTED_DOMAINS: nextcloud
-      NEXTCLOUD_OVERWRITEHOST:     nextcloud
-      NEXTCLOUD_OVERWRITEPROTOCOL: http
       NEXTCLOUD_OVERWRITECLIURL:   http://nextcloud
+      # The host the browser reaches the app on: the one editor origin Nextcloud may
+      # take from X-Forwarded-Host (trusted_domains), see pin-editor-origin.sh.
+      NEXTCLOUD_PUBLIC_HOSTS:      ${PILOT_TENANT_HOST:-}
       NEXTCLOUD_OVERWRITEWEBROOT:  ""
-      # The state network's own subnet: the only peers that reach Nextcloud.
-      NEXTCLOUD_TRUSTED_PROXIES: ${STATE_V4_SUBNET:-172.16.0.0/12}
+      # The state network's own subnets (the network is dual-stack): the only peers that
+      # reach Nextcloud. A peer over IPv6 outside the list would have its X-Forwarded-Host
+      # ignored, and the editor would post to the in-network name again.
+      NEXTCLOUD_TRUSTED_PROXIES: ${STATE_V4_SUBNET:-172.16.0.0/12},${STATE_V6_SUBNET:-fd00::/8}
       REDIS_HOST:          nextcloud-redis
       REDIS_HOST_PASSWORD: ${REDIS_PASSWORD}
       # Read by configure-richdocuments.sh at the first install: the browser-facing

@@ -335,6 +335,17 @@
 
     return [...roleRows, ...memberOnlyRows]
   })
+
+  // Why there is no "Amt zuweisen" on the page: no office exists, or every office is taken.
+  const officeAssignHint = $derived.by(() => {
+    if (roles.length === 0) {
+      return 'Für dieses Gremium sind keine Ämter angelegt, deshalb gibt es kein „Amt zuweisen“. Ämter lassen sich auf dieser Seite nicht anlegen.'
+    }
+    if (roles.every((r) => r.currentAssignment)) {
+      return 'Alle Ämter sind besetzt. Ein Amt wird mit „Abberufen“ frei und lässt sich danach neu zuweisen.'
+    }
+    return ''
+  })
 </script>
 
 <PageTitle title={data.committee.name} />
@@ -555,6 +566,13 @@
       </tbody>
     </table>
   </div>
+
+  <!-- "Amt zuweisen" sits on a vacant office row only. When there is no vacant office the member rows
+       show nothing but "Entfernen", so an admin (IT admins included: it-admin contains council-admin)
+       is told which of the two cases this is instead of finding the action missing. -->
+  {#if data.isAdmin && officeAssignHint}
+    <p class="mb-6 -mt-3 text-xs text-ink-muted" data-testid="office-assign-hint">{officeAssignHint}</p>
+  {/if}
 
   <!-- ── Protocol + Resolution quick links ────────────────────────────────── -->
   <div class="flex gap-2 mb-6">

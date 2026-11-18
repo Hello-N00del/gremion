@@ -61,6 +61,14 @@ describe('POST /api/governance/committees/[id]/roles/[roleId]/assign', () => {
     expect(h.createAssignment).toHaveBeenCalledTimes(1)
   })
 
+  // The role ladder puts it-admin above council-admin, so an IT admin who holds no council-admin role of
+  // its own assigns offices too. The committee page's isAdmin reads the same ladder (committee-admin-flag.test.ts).
+  it('lets an ITAdmin assign the office', async () => {
+    const res = await POST(event([Role.ITAdmin]))
+    expect(res.status).toBe(201)
+    expect(h.createAssignment).toHaveBeenCalledTimes(1)
+  })
+
   it('answers 403 to a plain member and writes nothing', async () => {
     const res = await POST(event([Role.Member]))
     expect(res.status).toBe(403)

@@ -59,7 +59,7 @@ export const GET: RequestHandler = async (event) => {
     const fileId = await nc.getFileId(webdavPath, username)
     // getCollaboraEditorUrl resolves the full Collabora URL server-side.
     // Split the embedded token params back out for callers that need them separately.
-    const { editorUrl: fullUrlStr, tokenTtl } = await nc.getCollaboraEditorUrl(fileId, username)
+    const { editorUrl: fullUrlStr, tokenTtl } = await nc.getCollaboraEditorUrl(fileId, username, { publicOrigin: event.url.origin })
     const fullUrl = new URL(fullUrlStr)
     const token = fullUrl.searchParams.get('access_token') ?? ''
     fullUrl.searchParams.delete('access_token')

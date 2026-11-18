@@ -43,6 +43,17 @@ export function mailErrorFields(err: unknown): MailErrorFields {
 }
 
 /**
+ * Whether a mail failure is the mail server refusing the LOGIN (nodemailer's
+ * EAUTH). The login is the same for every recipient of a pass, so the next
+ * recipient would only present it again, and mail servers lock the account after
+ * a few refused logins: a send loop stops at the first one. Same rule as
+ * isLoginRefused in the kernel's smtp-outcome.ts.
+ */
+export function isLoginRefused(err: unknown): boolean {
+  return mailCause(err).code === 'EAUTH'
+}
+
+/**
  * The cause as a short text for an error that is rethrown and then logged: the
  * class name and the same plain-token fields, never the message. Empty parts
  * are left out.

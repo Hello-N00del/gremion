@@ -642,6 +642,7 @@
           </div>
         </div>
 
+        <div class="chat-head-actions">
         {#if isRoomAdmin && !activeRoom.archived}
           <button type="button" class="btn btn-sm" onclick={() => openSettings(activeRoom!)} title="Einstellungen">
             <Icon name="settings" size={14} /> Einstellungen
@@ -664,6 +665,7 @@
             </button>
           {/if}
         {/if}
+        </div>
       </div>
 
       <div class="chat-body">
@@ -866,7 +868,6 @@
     margin-left: -6px;
   }
   .chat-shell.narrow .chat-head {
-    flex-wrap: wrap;
     padding: 10px 12px;
     gap: 8px;
   }
@@ -1048,16 +1049,29 @@
     min-height: 0;
     background: var(--surface);
   }
+  /* The header wraps instead of squeezing: in a narrow column (a small desktop window next to the sidebar
+     and the room list) the title block keeps at least 10rem and the actions drop under it, together. */
   .chat-head {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 12px;
+    gap: 8px 12px;
     padding: 12px 18px;
     border-bottom: 1px solid var(--border);
   }
   .chat-head-text {
-    flex: 1;
+    flex: 1 1 10rem;
     min-width: 0;
+  }
+  .chat-head-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+  }
+  .chat-head-actions:empty {
+    display: none;
   }
   .chat-head-name {
     font-size: 15px;

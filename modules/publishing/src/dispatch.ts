@@ -66,7 +66,7 @@ import {
   type NewsletterRecipient,
 } from './store/index.js'
 import { enqueueOutbox } from './outbox.js'
-import { mailCauseText, mailErrorFields } from './mail-error.js'
+import { isLoginRefused, mailCauseText, mailErrorFields } from './mail-error.js'
 
 // ── injected transport ──────────────────────────────────────────────────────
 
@@ -587,8 +587,19 @@ export async function dispatch(
         // fails before any message is transmitted, so this recipient's claim is
         // released too: a send right after the login is corrected reaches all of
         // them, not only the ones that were never tried.
-        if (mailErrorFields(err).code === 'EAUTH') {
-          await releaseClaim(sql, newsletterId, email)
+        if (isLoginRefused(err)) {
+          // The release is a DB write and can fail too (the DB is often what is
+          // down). It must not replace the refused login as the cause, nor let the
+          // loop go on: log it, keep the claim (it is retried after the 15-min stale
+          // window), and still record the refused login and stop.
+          try {
+            await releaseClaim(sql, newsletterId, email)
+          } catch (releaseErr) {
+            console.error(
+              `[dispatch] release of the claim (newsletter #${newsletterId}) after a refused login failed`,
+              mailErrorFields(releaseErr),
+            )
+          }
           loginRefused = true
           break
         }

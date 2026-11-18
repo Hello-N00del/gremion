@@ -257,6 +257,53 @@ describe('create-event dialog: fits the window', () => {
   })
 })
 
+describe('create-event dialog: start and end are not cut off', () => {
+  // 375 = a phone (one column); 640 = the narrowest desktop width that puts
+  // Beginn and Ende side by side (sm breakpoint); 1280 = a normal desktop.
+  test.each([
+    [375, 800],
+    [640, 800],
+    [1280, 800],
+  ])('%i x %i px: the full "TT.MM.JJJJ HH:MM" is visible in both fields', async (w, h) => {
+    await vpage.viewport(w, h)
+    await mountDialog()
+    const dialog = document.querySelector('[role="dialog"]') as HTMLElement
+    const body = dialog.querySelector('[data-dialog-body]') as HTMLElement
+    for (const id of ['ce-start', 'ce-end']) {
+      const input = field(id)
+      expect(input.value).toMatch(/^\d{2}\.\d{2}\.\d{4} \d{2}:\d{2}$/)
+      // an input whose text is wider than its box scrolls inside it: the end of the time is cut off
+      expect(input.scrollWidth, `${id} scrollWidth`).toBeLessThanOrEqual(input.clientWidth)
+      // the calendar button beside it stays inside the form body
+      const button = input.parentElement?.querySelector('button.cal') as HTMLElement
+      expect(button).not.toBeNull()
+      const br = button.getBoundingClientRect()
+      const bodyRect = body.getBoundingClientRect()
+      expect(br.right, `${id} Kalender button right edge`).toBeLessThanOrEqual(bodyRect.right)
+      expect(br.left).toBeGreaterThanOrEqual(input.getBoundingClientRect().right - 1)
+    }
+    // the date-only (all-day) variant fits as well
+    field('ce-allday').click()
+    await tick()
+    for (const id of ['ce-start', 'ce-end']) {
+      const input = field(id)
+      expect(input.scrollWidth, `${id} all-day scrollWidth`).toBeLessThanOrEqual(input.clientWidth)
+    }
+  })
+
+  test('start and end share one row, and the header/body/footer grid still keeps the dialog inside a short window', async () => {
+    await vpage.viewport(1280, 480)
+    await mountDialog()
+    expect(field('ce-start').getBoundingClientRect().top).toBe(field('ce-end').getBoundingClientRect().top)
+    // the 3-row grid (title / scrolling body / buttons): without it the body is
+    // as tall as the form and pushes the dialog out of the window
+    const dialog = document.querySelector('[role="dialog"]') as HTMLElement
+    const body = dialog.querySelector('[data-dialog-body]') as HTMLElement
+    expect(dialog.getBoundingClientRect().bottom).toBeLessThanOrEqual(window.innerHeight)
+    expect(body.scrollHeight).toBeGreaterThan(body.clientHeight)
+  })
+})
+
 describe('create-event dialog: checkbox names', () => {
   test('each committee checkbox is named after its committee, not announced as "on"', async () => {
     await mountDialog()

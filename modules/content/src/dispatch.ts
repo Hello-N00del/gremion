@@ -46,7 +46,7 @@ import {
 } from './store/index.js'
 import { enqueueOutbox } from './outbox.js'
 import { checkLinkBase } from './link-base.js'
-import { mailCauseText, mailErrorFields } from './mail-error.js'
+import { isLoginRefused, mailCauseText, mailErrorFields } from './mail-error.js'
 
 // ── injected transport ──────────────────────────────────────────────────────
 
@@ -312,7 +312,7 @@ async function dispatchEmail(
       // the account after a few refused logins: stop at the first one. Nobody
       // after this recipient is claimed, so a publish after the login is
       // corrected reaches all of them.
-      if (mailErrorFields(err).code === 'EAUTH') {
+      if (isLoginRefused(err)) {
         loginRefused = true
         break
       }

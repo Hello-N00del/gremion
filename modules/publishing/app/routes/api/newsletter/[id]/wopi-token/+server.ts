@@ -14,7 +14,7 @@ function sysUser(): string {
   return serviceEnv('NEXTCLOUD_ADMIN_USER') ?? 'admin'
 }
 
-export const GET: RequestHandler = async ({ params, locals }) => {
+export const GET: RequestHandler = async ({ params, locals, url }) => {
   if (!locals.user || !hasRole(locals.user.roles, Role.Finance)) {
     return json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
@@ -40,7 +40,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
   // odt_path is already the full dav path (see api/newsletter POST).
   try {
     const fileId = await nc.getFileId(newsletter.odt_path, adminUser)
-    return json(await nc.getCollaboraEditorUrl(fileId, adminUser))
+    return json(await nc.getCollaboraEditorUrl(fileId, adminUser, { publicOrigin: url.origin }))
   } catch (err) {
     // A Nextcloud/Collabora outage (or the ODT having vanished admin-side) must
     // not bubble up as an unhandled 500. Return a structured 502 so the detail

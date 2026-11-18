@@ -207,3 +207,157 @@ describe('NextcloudClient.getDirectEditUrl', () => {
     await expect(nc.getDirectEditUrl(42, 'alice')).rejects.toThrow('createDirect: missing url in response')
   })
 })
+
+// Collabora posts the editor's messages (save, close, UI_Close) to the origin Nextcloud recorded when it minted the
+// WOPI token: the host of the request that opens the direct-view page, which is this server-side fetch. It must
+// carry the origin the person's browser has, or the browser drops every message addressed to `http://nextcloud`.
+describe('NextcloudClient.getCollaboraEditorUrl: editor origin', () => {
+  const b64 = (v: unknown) => Buffer.from(JSON.stringify(v)).toString('base64')
+  const directOk = () => ({
+    ok: true,
+    json: async () => ({ ocs: { data: { url: 'http://nextcloud/apps/richdocuments/direct/tok1' } } })
+  })
+  const page = {
+    ok: true,
+    status: 200,
+    text: async () =>
+      `<input id="initial-state-richdocuments-document" value="${b64({
+        token: 'wopi-token',
+        token_ttl: 1999999999,
+        urlsrc: 'https://rat.example.test/office/browser/abc/cool.html?',
+        fileId: '42_oc'
+      })}"><input id="initial-state-richdocuments-wopi_callback_url" value="${b64('http://nextcloud')}">`
+  }
+  const headersOf = (n: number) =>
+    (mockFetch.mock.calls[n][1] as RequestInit | undefined)?.headers as Record<string, string> | undefined
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('sends the browser origin as X-Forwarded-Host and X-Forwarded-Proto on the direct-view fetch only', async () => {
+    mockFetch.mockResolvedValueOnce(directOk()).mockResolvedValueOnce(page)
+    const { createNextcloudClient } = await import('./nextcloud-client')
+    const out = await createNextcloudClient().getCollaboraEditorUrl(42, 'alice', {
+      publicOrigin: 'https://rat.example.test'
+    })
+
+    expect(mockFetch.mock.calls[1][0]).toBe('http://nextcloud/apps/richdocuments/direct/tok1')
+    expect(headersOf(1)).toEqual({ 'X-Forwarded-Host': 'rat.example.test', 'X-Forwarded-Proto': 'https' })
+    // The createDirect call (the OCS POST) carries no forwarded header: only the page fetch mints the token.
+    expect(headersOf(0)?.['X-Forwarded-Host']).toBeUndefined()
+    // The editor URL itself is unchanged: WOPISrc stays the in-network callback.
+    expect(out.editorUrl).toBe(
+      'https://rat.example.test/office/browser/abc/cool.html?WOPISrc=' +
+        encodeURIComponent('http://nextcloud/index.php/apps/richdocuments/wopi/files/42_oc') +
+        '&access_token=wopi-token&access_token_ttl=1999999999000'
+    )
+  })
+
+  it('keeps the port of the origin', async () => {
+    mockFetch.mockResolvedValueOnce(directOk()).mockResolvedValueOnce(page)
+    const { createNextcloudClient } = await import('./nextcloud-client')
+    await createNextcloudClient().getCollaboraEditorUrl(42, 'alice', { publicOrigin: 'http://localhost:3000' })
+
+    expect(headersOf(1)).toEqual({ 'X-Forwarded-Host': 'localhost:3000', 'X-Forwarded-Proto': 'http' })
+  })
+
+  it('sends no forwarded header without an origin (callers that have none keep the old behaviour)', async () => {
+    mockFetch.mockResolvedValueOnce(directOk()).mockResolvedValueOnce(page)
+    const { createNextcloudClient } = await import('./nextcloud-client')
+    await createNextcloudClient().getCollaboraEditorUrl(42, 'alice')
+
+    expect(mockFetch.mock.calls[1][1]).toBeUndefined()
+  })
+
+  it('opens the editor without the origin when Nextcloud does not accept it, with a fresh direct token', async () => {
+    const refused = { ok: true, status: 200, text: async () => '<html>no editor state</html>' }
+    mockFetch
+      .mockResolvedValueOnce(directOk())
+      .mockResolvedValueOnce(refused)
+      .mockResolvedValueOnce(directOk())
+      .mockResolvedValueOnce(page)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { createNextcloudClient } = await import('./nextcloud-client')
+    const out = await createNextcloudClient().getCollaboraEditorUrl(42, 'alice', {
+      publicOrigin: 'https://other.example.test'
+    })
+
+    expect(out.tokenTtl).toBe(1999999999)
+    expect(mockFetch).toHaveBeenCalledTimes(4)
+    expect(headersOf(1)?.['X-Forwarded-Host']).toBe('other.example.test')
+    expect(mockFetch.mock.calls[3][1]).toBeUndefined()
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('trusted_domains'))
+    warn.mockRestore()
+  })
+})
+
+describe('NextcloudClient.getCollaboraEditorUrl: refused origin', () => {
+  const b64 = (v: unknown) => Buffer.from(JSON.stringify(v)).toString('base64')
+  const directOk = () => ({
+    ok: true,
+    json: async () => ({ ocs: { data: { url: 'http://nextcloud/apps/richdocuments/direct/tok1' } } })
+  })
+  const page = {
+    ok: true,
+    status: 200,
+    text: async () =>
+      `<input id="initial-state-richdocuments-document" value="${b64({
+        token: 'wopi-token',
+        token_ttl: 1999999999,
+        urlsrc: 'https://rat.example.test/office/browser/abc/cool.html?',
+        fileId: '42_oc'
+      })}"><input id="initial-state-richdocuments-wopi_callback_url" value="${b64('http://nextcloud')}">`
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  // Nextcloud (stable33 base.php) answers a forwarded host outside trusted_domains with HTTP 400.
+  it('retries without the origin when Nextcloud answers the forwarded host with HTTP 400', async () => {
+    const badRequest = { ok: false, status: 400, text: async () => 'Trusted domain error.' }
+    mockFetch
+      .mockResolvedValueOnce(directOk())
+      .mockResolvedValueOnce(badRequest)
+      .mockResolvedValueOnce(directOk())
+      .mockResolvedValueOnce(page)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { createNextcloudClient } = await import('./nextcloud-client')
+    const out = await createNextcloudClient().getCollaboraEditorUrl(42, 'alice', {
+      publicOrigin: 'https://other.example.test'
+    })
+
+    expect(out.tokenTtl).toBe(1999999999)
+    expect(mockFetch).toHaveBeenCalledTimes(4)
+    expect(mockFetch.mock.calls[3][1]).toBeUndefined()
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('trusted_domains'))
+    warn.mockRestore()
+  })
+
+  it('does not retry (nor blame the origin) when createDirect itself fails', async () => {
+    mockFetch.mockRejectedValueOnce(new Error('connect ECONNREFUSED'))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { createNextcloudClient } = await import('./nextcloud-client')
+    await expect(
+      createNextcloudClient().getCollaboraEditorUrl(42, 'alice', { publicOrigin: 'https://rat.example.test' })
+    ).rejects.toThrow('ECONNREFUSED')
+
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+    expect(warn).not.toHaveBeenCalled()
+    warn.mockRestore()
+  })
+})
+
+describe('forwardedOriginHeaders', () => {
+  it('accepts an http(s) origin with a plain host and refuses everything else', async () => {
+    const { forwardedOriginHeaders } = await import('./nextcloud-client')
+    expect(forwardedOriginHeaders('https://rat.example.test')).toEqual({
+      'X-Forwarded-Host': 'rat.example.test',
+      'X-Forwarded-Proto': 'https'
+    })
+    for (const bad of [undefined, '', 'not a url', 'javascript:alert(1)', 'ftp://rat.example.test']) {
+      expect(forwardedOriginHeaders(bad), String(bad)).toEqual({})
+    }
+  })
+})

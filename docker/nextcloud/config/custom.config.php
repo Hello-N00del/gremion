@@ -23,11 +23,13 @@ $CONFIG = [
     ],
 
     // No public router reaches Nextcloud: gremion-ui and Collabora call it by its
-    // in-network name, so every URL it generates is that name over http.
-    // 'overwritehost' is what getCollaboraEditorUrl's server-side fetch needs; a
-    // before-starting hook (pin-overwrite-host.sh) re-asserts both host keys on
-    // every start, because this file reaches a persistent volume only on the first
-    // install.
+    // in-network name, so every URL it generates is that name over http. The
+    // compose file leaves overwritehost and overwriteprotocol empty: with one set,
+    // the customer host gremion-ui sends as X-Forwarded-Host on the editor page
+    // fetch (the origin Collabora posts its messages to) would be ignored. A
+    // before-starting hook (pin-editor-origin.sh) trusts that host and removes a
+    // stale pin on every start, because this file reaches a persistent volume only
+    // on the first install; pin-overwrite-host.sh still honours an operator's pin.
     'overwritehost'     => getenv('NEXTCLOUD_OVERWRITEHOST')    ?: '',
     'overwritewebroot'  => getenv('NEXTCLOUD_OVERWRITEWEBROOT')  ?: '',
     'overwriteprotocol' => getenv('NEXTCLOUD_OVERWRITEPROTOCOL') ?: '',
@@ -38,6 +40,12 @@ $CONFIG = [
     'trusted_proxies' => array_filter(
         explode(',', getenv('NEXTCLOUD_TRUSTED_PROXIES') ?: '172.16.0.0/12')
     ),
+
+    // New users start with an empty home: an empty skeleton directory means no
+    // sample files (Readme.md, Nextcloud.png) are copied. A before-starting hook
+    // (empty-skeleton.sh) re-asserts this on every start, because this file reaches
+    // a persistent volume only on the first install. Existing users keep their files.
+    'skeletondirectory' => '',
 
     // Regional defaults.
     'default_phone_region' => 'DE',
