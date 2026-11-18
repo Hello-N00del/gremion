@@ -545,6 +545,7 @@ copy_host_src() {
         for p in messaging finance vault elections handover dev migrate tenant-create kernel-api-migrate; do
             [[ ",$(value_of "${ENV_DIR}/${f}" COMPOSE_PROFILES)," != *",${p},"* ]] || { echo "${f} renders profile ${p}"; return 1; }
         done
+        [[ ",$(value_of "${ENV_DIR}/${f}" COMPOSE_PROFILES)," == *",board,"* ]] || { echo "${f} does not render the board profile"; return 1; }
     done
 }
 
