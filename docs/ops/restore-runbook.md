@@ -114,6 +114,19 @@ and the hash-chained audit log — lives in the `gremion` database. The `control
 holds the tenant registry and fleet-migration ledger; restore it whenever you restore
 `gremion` so the two stay consistent.
 
+### Kept module exports (pooled host stack)
+
+On a host run with `infra/host`, the nightly `gremion-backup` also stages the directory
+that holds the kept module-database exports (`data/module-exports` under the host root,
+the bind source of `TENANT_EXPORT_DIR`) at the same relative path under
+`backups/current`, so every restic snapshot lists
+`backups/current/data/module-exports/<tenant>/<module>/<file>.dump` and its `.sha256`.
+To bring an export back after the disk is lost, restore the snapshot, copy that
+subtree into `<host root>/data/module-exports/`, check each dump against its `.sha256`
+file, and only then restore it into a database. Restic keeps its own copy of an export
+for the retention window of the daily snapshots, so deleting an export from the
+directory does not remove it from older snapshots at once.
+
 ---
 
 ## 5. Restore from Remote Storage
