@@ -37,8 +37,8 @@
 #             on main, one successful "Verify gate" job and a merged pull request for every
 #             first-parent commit of live..sha, with the branch rules still in force
 #   pending   the run of that commit has not finished (younger than CD_PENDING_MAX_MIN)
-#   none      nothing to release: reason up_to_date, tip_unchanged, recheck_wait or
-#             no_green_commit (CD_WALKBACK commits looked at, none green)
+#   none      nothing to release: reason up_to_date, tip_unchanged, unknown_commit, not_on_main
+#             or no_green_commit (CD_WALKBACK commits looked at, none green)
 #   unknown   no verdict (reason names the transport or shape problem; never cached)
 #   hold      a named hold: not_ancestor, batch_too_large, blocked, range_unverified (with
 #             "uncovered": the short SHAs) or ruleset_missing
@@ -47,11 +47,21 @@
 # candidate that contains a block, or a batch above CD_MAX_BATCH). One positional argument
 # names the commit to judge instead of the tip (release-now; 12 to 40 hex).
 #
+# The json line also carries "final" (true or false), and "tip", "walked", "commits" or
+# "uncovered" where they apply. final says whether the answer can change before the tip does.
+# The driver, which owns state.poll, stores for the tip it asked about:
+#   final true  and verdict none or hold   ->  poll.verdict red (or none)
+#   final false and verdict none or hold   ->  poll.verdict pending (so it is asked again)
+#   verdict pending or unknown             ->  that verdict
+# final is false for a tip whose runs do not exist yet or were cut short by their age, for a
+# hold that costs no call to judge again (not_ancestor, batch_too_large, blocked) and for
+# ruleset_missing (the operator may restore the rule without a new commit); it is true for
+# up_to_date, tip_unchanged, range_unverified and a walk that ended on completed red runs.
+#
 # THE STATE THIS FILE READS (the driver writes it, this file never writes poll): poll.tip12,
 # poll.verdict and poll.last_at. A tip that equals the live commit, or equals the tip of a
-# FINAL last verdict (poll.verdict red or none), makes no API call; the driver stores `red`
-# for a hold verdict so that a standing hold does not burn the budget on every tick. A
-# pending or unknown verdict is asked again at most once per five minutes.
+# FINAL last verdict (poll.verdict red or none), makes no API call. A pending or unknown
+# verdict is asked again at most once per five minutes (reason recheck_wait in between).
 #
 # THE REAL-DATA BOUNDARY. A mail carries a reason code and short commit SHAs only.
 
@@ -487,7 +497,7 @@ _cd_gh_rules_body() {
     cd_gh_api "repos/${slug}/rules/branches/main" 'type == "array" and all(.[]; type == "object" and (.type | type == "string"))'
 }
 
-# cd_gh_rules_ok -- the four rules of section 1: pull_request, required_status_checks naming
+# cd_gh_rules_ok -- the four rules the pick-up relies on: pull_request, required_status_checks naming
 # "Verify gate", non_fast_forward and deletion. 0 in force; 1 a rule is missing (the missing
 # types are printed); 3 no verdict (the answer could not be read).
 cd_gh_rules_ok() {
@@ -513,7 +523,7 @@ cd_gh_rules_ok() {
 }
 
 # cd_gh_merge_methods_ok -- the allowed merge methods are exactly `squash` and a
-# linear-history rule is present (decision 1). With CD_ALLOW_ANY_MERGE_METHOD=1 a failure is
+# linear-history rule is present (the repository's merge policy). With CD_ALLOW_ANY_MERGE_METHOD=1 a failure is
 # a warning and the return is 0; the walk itself never depends on this check.
 cd_gh_merge_methods_ok() {
     local body rc=0 ok=""
@@ -541,6 +551,7 @@ cd_gh_merge_methods_ok() {
 # -- the verdict walk ---------------------------------------------------------
 _CD_GH_V=""
 _CD_GH_WHY=""
+_CD_GH_TIMEDEP=0
 
 # _cd_gh_commit_verdict SLUG C -- sets _CD_GH_V (green, pending, red, unknown) and _CD_GH_WHY
 # for the commit C. Only a completed, successful push run of ci.yml on main of this very
@@ -585,7 +596,8 @@ _cd_gh_commit_verdict() {
         return 0
     fi
     if [[ "$status" != completed ]]; then
-        created="$(printf '%s' "$run" | jq -r '(.created_at // "") | try fromdateiso8601 catch ""')"
+        # a re-run keeps created_at and moves run_started_at: the age of the ATTEMPT counts
+        created="$(printf '%s' "$run" | jq -r '(.run_started_at // .created_at // "") | try fromdateiso8601 catch ""')"
         now="$(cd_now)" || return 0
         if [[ ! "$created" =~ ^[0-9]+$ ]]; then
             _CD_GH_WHY="run_time"
@@ -655,11 +667,14 @@ _cd_gh_commit_verdict() {
 
 _CD_GH_UNCOVERED=()
 
-# _cd_gh_range_proof SLUG RANGE_ARRAY_NAME -- every commit of the range must be PR-proven:
-# the merge_commit_sha of a closed, merged pull request into main (F20(c), up to three
-# pages), or else, for a commit still uncovered, a merged pull request into main (F20(d),
-# commits/<sha>/pulls) whose own merge_commit_sha lies in the same range. One rule, no
-# parent-count check: a squash commit and a merge-method merge commit both pass it.
+# _cd_gh_range_proof SLUG RANGE_ARRAY_NAME -- every first-parent commit of the range must
+# have come in through a merged pull request. A commit counts as proven when it is the
+# merge_commit_sha of a closed, merged pull request into main (the listing of closed pull
+# requests, at most three pages of 100), or, when still uncovered, when the pull requests
+# the API associates with it (commits/<sha>/pulls) include one that is merged into main and
+# whose own merge_commit_sha lies in the same range (the earlier commits of a rebase-merged
+# pull request). There is no parent-count check: a squash commit and a merge-method merge
+# commit both pass if a merged pull request claims them; a direct push claims no one.
 # Fills _CD_GH_UNCOVERED. 0 every commit proven, 1 at least one is not, 3 out of budget,
 # 4 no verdict (the API did not give a usable answer).
 _cd_gh_range_proof() {
@@ -731,10 +746,22 @@ _cd_gh_range_proof() {
 
 # _cd_gh_out VERDICT SHA REASON [JQ_EXTRA_OBJECT] -- the one json line.
 _cd_gh_out() {
-    local extra="${4:-}"
+    local extra="${4:-}" final=false
     [[ -n "$extra" ]] || extra='{}'
-    jq -cn --arg v "$1" --arg s "$2" --arg r "$3" --argjson x "$extra" \
-        '{verdict: $v, sha: $s, reason: $r} + $x'
+    # "final": the answer cannot change until the tip does, so the caller may remember it
+    # and stop asking (it stores red or none). A non-final answer must be asked again (the
+    # caller stores pending): a run that has not been created yet, a run that was cut short
+    # by its age, a rule that the operator may restore, a hold that costs no call to re-judge.
+    case "$1:$3" in
+        green:* | none:up_to_date | none:tip_unchanged | none:unknown_commit | none:not_on_main | hold:range_unverified)
+            final=true
+            ;;
+        none:no_green_commit)
+            [[ "$_CD_GH_TIMEDEP" == 0 ]] && final=true
+            ;;
+    esac
+    jq -cn --arg v "$1" --arg s "$2" --arg r "$3" --argjson x "$extra" --argjson f "$final" \
+        '{verdict: $v, sha: $s, reason: $r, final: $f} + $x'
 }
 
 # cd_gh_candidate [FLAGS] [SHA] -- see the header.
@@ -742,6 +769,7 @@ cd_gh_candidate() {
     local dry=0 accept_range="" allow_blocked=0 allow_batch=0 want="" live="" poll_tip="" poll_verdict="" poll_at=""
     local tip="" tip12 slug max_batch walkback now line rc n limit i found="" found_i=0 c
     local -a range=() slice=()
+    _CD_GH_TIMEDEP=0
     while (( $# > 0 )); do
         case "$1" in
             --dry-run) dry=1; shift ;;
@@ -855,7 +883,11 @@ cd_gh_candidate() {
         case "$_CD_GH_V" in
             green) found="$c"; found_i="$i"; break ;;
             pending) _cd_gh_out pending "$c" "$_CD_GH_WHY" "$(jq -cn --arg t "$tip" '{tip: $t}')"; return 0 ;;
-            red) continue ;;
+            red)
+                # a verdict that depends on the clock, not only on the commit
+                case "$_CD_GH_WHY" in no_run | pending_too_long) _CD_GH_TIMEDEP=1 ;; esac
+                continue
+                ;;
             *) _cd_gh_out unknown "$c" "${_CD_GH_WHY:-unknown}" "$(jq -cn --arg t "$tip" '{tip: $t}')"; return 0 ;;
         esac
     done

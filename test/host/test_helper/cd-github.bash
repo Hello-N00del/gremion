@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test/host/test_helper/cd-github.bash -- the test helper of cd-github.bats (U2).
+# test/host/test_helper/cd-github.bash -- the test helper of cd-github.bats.
 #
 # Load it AFTER test_helper/host and test_helper/cd:
 #     load 'test_helper/host'
@@ -11,7 +11,7 @@
 #                            https://github.com/org/repo redirected to a temporary bare repo
 #                            by git's url.<path>.insteadOf (GIT_CONFIG_COUNT env), a
 #                            recording git shim that runs the real git, and a curl shim that
-#                            serves recorded answers
+#                            serves trimmed answers
 #   gh_lib 'snippet' args    a fresh bash with common.sh, core.sh, cmd-state.sh, github.sh
 #                            and then the stubs, with the config loaded (use with `run`)
 #   gh_commit NAME / gh_merge NAME / gh_publish   build the history of the "remote"
@@ -110,7 +110,7 @@ gh_route() {
 
 gh_calls() { wc -l < "${GH}/urls.log" | tr -d ' '; }
 
-# gh_body NAME SHA [JQ_FILTER] -- a recorded answer with the placeholder SHA filled and the
+# gh_body NAME SHA [JQ_FILTER] -- a trimmed answer with the placeholder SHA filled and the
 # filter applied; prints the file.
 gh_body() {
     local name="$1" sha="$2" filter="${3:-.}" out

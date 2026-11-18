@@ -5,7 +5,7 @@
 #
 # git runs against REAL temporary repositories (the URL https://github.com/org/repo is
 # redirected to a bare repo by git's url.<path>.insteadOf); curl is a shim that serves the
-# recorded answers of fixtures/cd/github/ and records the url, the config it was fed on stdin
+# trimmed answers of fixtures/cd/github/ and records the url, the config it was fed on stdin
 # and its environment. Nothing here reaches a network.
 
 bats_require_minimum_version 1.5.0
@@ -240,6 +240,61 @@ gh_refused_run() {
     [ "$S" = "$C_A" ]
 }
 
+@test "refusal: the age of a pending run is the age of the ATTEMPT (a re-run keeps created_at and moves run_started_at)" {
+    gh_scn_green
+    gh_route_ci "$C_B" ".workflow_runs[0].status = \"queued\" | .workflow_runs[0].conclusion = null | .workflow_runs[0].created_at = \"$(gh_iso -$((300 * 60)))\" | .workflow_runs[0].run_started_at = \"$(gh_iso -120)\""
+    gh_verdict
+    gh_expect pending
+    [ "$S" = "$C_B" ]
+}
+
+# "final" tells the driver whether it may remember the answer for this tip
+@test "final: a walk that ended on completed red runs is final, one that depends on the clock is not" {
+    gh_scn_green
+    gh_route_ci "$C_B" '.workflow_runs[0].conclusion = "failure"'
+    gh_route_ci "$C_A" '.workflow_runs[0].conclusion = "failure"'
+    gh_verdict
+    gh_expect none no_green_commit
+    [ "$(jq -r .final <<< "$output")" = true ]
+    # a run that does not exist yet may still be created seconds from now
+    gh_no_run "$C_B"
+    gh_verdict
+    gh_expect none no_green_commit
+    [ "$(jq -r .final <<< "$output")" = false ]
+    # a run cut short by its age
+    gh_route_ci "$C_B" ".workflow_runs[0].status = \"queued\" | .workflow_runs[0].conclusion = null | .workflow_runs[0].created_at = \"$(gh_iso -$((91 * 60)))\""
+    gh_verdict
+    gh_expect none no_green_commit
+    [ "$(jq -r .final <<< "$output")" = false ]
+}
+
+@test "final: pending and unknown are never final; up_to_date and range_unverified are; ruleset_missing is not" {
+    gh_scn_green
+    gh_route_ci "$C_B" ".workflow_runs[0].status = \"in_progress\" | .workflow_runs[0].conclusion = null | .workflow_runs[0].created_at = \"$(gh_iso -60)\""
+    gh_verdict
+    gh_expect pending
+    [ "$(jq -r .final <<< "$output")" = false ]
+    gh_route "*/workflows/ci.yml/runs?*" 500
+    gh_verdict
+    gh_expect unknown
+    [ "$(jq -r .final <<< "$output")" = false ]
+    gh_scn_green
+    gh_route_rules 'map(select(.type != "pull_request"))'
+    gh_verdict
+    gh_expect hold ruleset_missing
+    [ "$(jq -r .final <<< "$output")" = false ]
+    gh_scn_green
+    gh_route_pulls "$C_A"
+    gh_route "*/commits/${C_B}/pulls" 200 "$(gh_prs .)"
+    gh_verdict
+    gh_expect hold range_unverified
+    [ "$(jq -r .final <<< "$output")" = true ]
+    gh_seed_live "$C_B"
+    gh_verdict
+    gh_expect none up_to_date
+    [ "$(jq -r .final <<< "$output")" = true ]
+}
+
 @test "refusal: the job Verify gate absent from a complete list is not green" {
     gh_scn_green
     gh_route_ci "$C_B" . '.jobs |= map(select(.name != "Verify gate")) | .total_count = 3'
@@ -437,7 +492,7 @@ gh_rebase_scn() {
     gh_route_rules
 }
 
-@test "range: a rebase-merged PR of three commits: R3 through F20(c), R1 and R2 through F20(d)" {
+@test "range: a rebase-merged PR of three commits: R3 through the closed-PR listing, R1 and R2 through the commit-to-PR lookup" {
     gh_rebase_scn
     gh_route "*/commits/${C_R1}/pulls" 200 "$(gh_prs . "$C_R3")"
     gh_route "*/commits/${C_R2}/pulls" 200 "$(gh_prs . "$C_R3")"
@@ -446,7 +501,7 @@ gh_rebase_scn() {
     [ "$S" = "$C_R3" ]
 }
 
-@test "range: the intermediate commits are range_unverified when F20(d) returns nothing" {
+@test "range: the intermediate commits are range_unverified when the commit-to-PR lookup returns nothing" {
     gh_rebase_scn
     gh_route "*/commits/${C_R1}/pulls" 200 "$(gh_prs .)"
     gh_route "*/commits/${C_R2}/pulls" 200 "$(gh_prs .)"
@@ -455,7 +510,7 @@ gh_rebase_scn() {
     [ "$(jq -r '.uncovered | sort | join(" ")' <<< "$output")" = "$(printf '%s\n' "${C_R1:0:12}" "${C_R2:0:12}" | sort | tr '\n' ' ' | sed 's/ $//')" ]
 }
 
-@test "range: the intermediate commits are range_unverified when F20(d) returns a PR that is not merged" {
+@test "range: the intermediate commits are range_unverified when the commit-to-PR lookup returns a PR that is not merged" {
     gh_rebase_scn
     gh_route "*/commits/${C_R1}/pulls" 200 "$(gh_prs '.[0].merged_at = null' "$C_R3")"
     gh_route "*/commits/${C_R2}/pulls" 200 "$(gh_prs '.[0].merged_at = null' "$C_R3")"
