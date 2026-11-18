@@ -40,6 +40,7 @@ profiles it needs and why. `gremion-init-secrets` renders
 
 | Module | Profiles | Backend |
 |---|---|---|
+| board | `board` | leaf for a board in its own database `t_<tenant>__board` on `board-postgres` (`BOARD_BACKEND=auto` follows each customer's location flag) |
 | calendar | `calendar` | leaf (`CALENDAR_BACKEND=service`) |
 | content | `content` | leaf (`CONTENT_BACKEND=service`) |
 | publishing | `newsletter` | leaf (`NEWSLETTER_BACKEND=service`, its only backend) |
@@ -47,8 +48,8 @@ profiles it needs and why. `gremion-init-secrets` renders
 | files | `nextcloud`, `collabora` | in-process (WebDAV with the user's own bearer) |
 | messaging | `video`; post-realm `messaging` | in-process |
 
-Board runs in-process on kernel tables and is not started as a service;
-finance, vault, elections and handover render no profile. `messaging`
+Board has a database of its own on `board-postgres`, created and exported by the module lifecycle.
+Finance, vault, elections and handover render no profile. `messaging`
 (`messaging-postgres` and `matrix`) is post-realm: Synapse refuses a blank
 issuer at boot, so `gremion-services wire` adds the profile once the
 customer's realm exists. The messaging module has no database of its own, so a

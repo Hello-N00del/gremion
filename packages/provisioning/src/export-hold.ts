@@ -4,8 +4,8 @@
 // blocked database and, without a hold, deletes the export with it (retention catalogue RC-MOD-EXPORT).
 // A module that is listed here keeps its export until `final_at + <days>`, so a customer's data is not
 // gone with the database; every other module keeps the present behaviour (no entry, no hold).
-// The entry has an effect only for a module that declares a database and an export: board declares neither in this
-// tree, so no board export exists to keep until the release that declares them (the hold is asked per export).
+// The entry has an effect only for a module that declares a database and an export (board does: its own database on
+// board-postgres and an export under rp-brd-module-data); the hold is asked per export.
 //
 // The date is derived from the Karenz row's own final_at, never from the clock of the run, so it is the same on
 // every run: the hourly job that repeats after a crash, and the pass after the date, compute the same date.
