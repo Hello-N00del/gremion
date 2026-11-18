@@ -24,13 +24,13 @@ function fakeSql(m: Model, log: string[]) {
   const run = async (strings: TemplateStringsArray): Promise<unknown[]> => {
     const text = strings.join('?').replace(/\s+/g, ' ').trim()
     log.push(text)
-    if (/^SELECT location FROM board_location/.test(text)) {
+    if (text.startsWith('SELECT location FROM board_location')) {
       // the first read is the caller's own; every later one is a re-read or the read-back
       const seen = reads++ === 0 ? m.location : (m.readBack ?? written ?? m.location)
       return seen === null ? [] : [{ location: seen }]
     }
     if (/count\(\*\)/.test(text)) return [{ board: String(m.counts.board), stack: String(m.counts.stack), card: String(m.counts.card) }]
-    if (/^INSERT INTO board_location/.test(text)) {
+    if (text.startsWith('INSERT INTO board_location')) {
       if (m.upsertMissed) return []
       written = 'module'
       return [{ location: 'module' }]
@@ -67,7 +67,7 @@ describe('setBoardLocationModule', () => {
   it('writes `module` over a kernel row and reads the result back', async () => {
     const log: string[] = []
     expect(await setBoardLocationModule(fakeSql({ location: 'kernel', counts: EMPTY }, log))).toEqual({ changed: true })
-    expect(log.filter((l) => /^SELECT location FROM board_location/.test(l)).length).toBeGreaterThanOrEqual(2) // before and after
+    expect(log.filter((l) => l.startsWith('SELECT location FROM board_location')).length).toBeGreaterThanOrEqual(2) // before and after
   })
 
   it('a flag that already says module is not touched: no transaction, no lock, no write', async () => {
@@ -89,7 +89,7 @@ describe('setBoardLocationModule', () => {
   ])('refuses over %s in the kernel tables: the rows are carried by the move, never hidden behind the flag', async (_n, counts) => {
     const log: string[] = []
     await expect(setBoardLocationModule(fakeSql({ location: 'kernel', counts }, log))).rejects.toMatchObject({ code: 'CUSTOMER_STATE' })
-    expect(log.some((l) => /^INSERT INTO board_location/.test(l))).toBe(false)
+    expect(log.some((l) => l.startsWith('INSERT INTO board_location'))).toBe(false)
     expect(log).not.toContain('COMMIT')
   })
 

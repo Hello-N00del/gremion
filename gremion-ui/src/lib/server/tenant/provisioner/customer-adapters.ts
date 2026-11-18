@@ -14,7 +14,7 @@ import { join } from 'node:path'
 import postgres from 'postgres'
 import { checkTenantHostDns, type EdgeAddresses } from '@gremion/edge-routers'
 import { ensureTenantAccount, withPlatformIdentities } from '@gremion/nats-auth'
-import type { AdminSpec, ControlRow, CustomerRef, GovernancePostCondition, KernelPostCondition, ProvisioningDeps, SmtpReadBack } from '@gremion/provisioning'
+import type { AdminSpec, BoardLocationPort, ControlRow, CustomerRef, GovernancePostCondition, KernelPostCondition, ProvisioningDeps, SmtpReadBack } from '@gremion/provisioning'
 import {
   bindGovernanceDatabase,
   ensureGovernanceDatabase,
@@ -308,7 +308,7 @@ export function firstBodyAdapters(keycloak: ProvisioningSubsystem): Adapters {
   return { keycloak, matrix: notWanted('matrix'), nextcloud: notWanted('nextcloud') }
 }
 
-export function customerAdapters(o: CustomerAdapterOptions): Pick<ProvisioningDeps, 'control' | 'config' | 'realm' | 'kernel' | 'governance' | 'domain' | 'storage' | 'firstBody' | 'broker' | 'boardLocation'> {
+export function customerAdapters(o: CustomerAdapterOptions): Pick<ProvisioningDeps, 'control' | 'config' | 'realm' | 'kernel' | 'governance' | 'domain' | 'storage' | 'firstBody' | 'broker'> & { boardLocation: BoardLocationPort } {
   const log = o.log ?? (() => {})
   const hostPath = (name: string) => `${o.tenantSecretsDir.replace(/\/$/, '')}/${name}`
   const readSecretFile = (name: string): string | null => (existsSync(hostPath(name)) ? readFileSync(hostPath(name), 'utf-8').trim() : null)
