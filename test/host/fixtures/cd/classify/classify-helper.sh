@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# test/host/test_helper/cd-classify.bash -- fixtures for test/host/cd-classify.bats.
+# test/host/fixtures/cd/classify/classify-helper.sh -- fixtures for test/host/cd-classify.bats.
 #
 # Load it AFTER test_helper/host and test_helper/cd:
 #     load 'test_helper/host'
 #     load 'test_helper/cd'
-#     load 'test_helper/cd-classify'
+#     load 'fixtures/cd/classify/classify-helper.sh'
 #
 # WHAT IT GIVES
 #   cls_make_base DIR      a tiny release tree (a committed work tree): the files the
@@ -133,13 +133,25 @@ cls_setup() {
     CLS_NEW="${GREMION_ROOT}/releases/bbbbbbbbbbbb"
     cp -a "${CLS_BASE}" "$CLS_OLD"
     cp -a "${CLS_BASE}" "$CLS_NEW"
+    # The shim is the real compose in the two ways the classifier depends on: a missing
+    # env_file is an error unless --no-env-resolution is given (the rendered env files are
+    # written by gremion-render, after classify), and a tree may ask for a slow answer.
     # shellcheck disable=SC2016  # the shim body is a script, expanded when the shim runs
     shim docker 'case "$1" in
   compose)
     if [ -f "$PWD/.compose.fail" ]; then echo "boom" >&2; exit 1; fi
     f="$PWD/compose.canned.json"
     [ -f "$f" ] || exit 1
-    sed "s#@TREE@#$PWD#g" "$f"
+    out="$(sed "s#@TREE@#$PWD#g" "$f")"
+    case " $* " in
+      *" --no-env-resolution "*) ;;
+      *)
+        for p in $(printf "%s" "$out" | jq -r "[.services[]?.env_file[]?.path] | .[]" 2>/dev/null); do
+          if [ ! -f "$p" ]; then echo "env file $p not found" >&2; exit 1; fi
+        done ;;
+    esac
+    printf "%s\n" "$out"
+    if [ -f "$PWD/.compose.slow" ]; then sleep 8; fi
     exit 0 ;;
 esac
 exit 0'
@@ -194,19 +206,24 @@ cls_compose() {
     mv "$1/.cc.tmp" "$1/compose.canned.json"
 }
 
-# cls_run [ARGS...] -- cd_classify OLD NEW ARGS, against the real library files.
-cls_run() {
-    bash -c 'set -euo pipefail
+# the script of cls_run: one place, so the signal test runs the very same one
+# shellcheck disable=SC2016  # the script is expanded by the bash that runs it
+CLS_SCRIPT='set -euo pipefail
 . "${HOST_SRC}/lib/common.sh"
 . "${HOST_SRC}/lib/cd/core.sh"
 . "${HOST_SRC}/lib/cd/docker.sh"
 . "${HOST_SRC}/lib/cd/classify.sh"
 . "${GREMION_CD_STUBS_DIR}/cd-stubs.sh"
 cd_paths_init
-cd_classify "$@"' cls-run "$CLS_OLD" "$CLS_NEW" "$@"
+cd_classify "$@"'
+
+# cls_run [ARGS...] -- cd_classify OLD NEW ARGS, against the real library files.
+cls_run() {
+    bash -c "$CLS_SCRIPT" cls-run "$CLS_OLD" "$CLS_NEW" "$@"
 }
 
 # cls_is JQ_EXPR -- the last `run` output is exactly one JSON document and satisfies the jq
 # expression (slurped, because jq 1.6 answers 0 for -e on empty input: an empty output
 # would pass every assertion).
+# shellcheck disable=SC2154  # $output is set by bats' `run`
 cls_is() { jq -e -s "length == 1 and (.[0] | ${1})" <<<"$output" >/dev/null; }

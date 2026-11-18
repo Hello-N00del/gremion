@@ -4,14 +4,14 @@
 #
 # Run: MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/repo:ro" -w /repo gremion-bats:local test/host/cd-classify.bats
 #
-# Trees are tiny committed work trees built here (test_helper/cd-classify.bash); `docker
+# Trees are tiny committed work trees built here (fixtures/cd/classify/classify-helper.sh); `docker
 # compose config` is a shim that answers with canned JSON holding the absolute tree path.
 # Every name is a reserved example name; nothing real is read.
 
 bats_require_minimum_version 1.5.0
 load 'test_helper/host'
 load 'test_helper/cd'
-load 'test_helper/cd-classify'
+load 'fixtures/cd/classify/classify-helper.sh'
 
 setup_file() {
     CLS_BASE="${BATS_FILE_TMPDIR}/base"
@@ -314,6 +314,94 @@ teardown() { cls_teardown; }
     ! grep -E 'docker compose .* (-f|-p|--file|--project-name) ' "$SHIM_LOG"
 }
 
+@test "the compose render does not resolve env files: a state service whose env_file a later stage writes is classified" {
+    local t
+    for t in "$CLS_OLD" "$CLS_NEW"; do
+        cls_compose "$t" '.services.legal.env_file = [{"path":"@TREE@/legal/legal.env","required":true}]'
+        cls_commit "$t"
+    done
+    [ ! -e "$CLS_OLD/legal/legal.env" ] && [ ! -e "$CLS_NEW/legal/legal.env" ]
+    run cls_run
+    [ "$status" -eq 0 ]
+    cls_is '.hold == null and .state_tier == [] and .app_only == true'
+    grep -q 'config --format json --no-env-resolution' "$SHIM_LOG"
+}
+
+@test "state tier: a rendered bind source that git does not track is followed to its tracked template" {
+    local t
+    for t in "$CLS_OLD" "$CLS_NEW"; do
+        mkdir -p "$t/docker/livekit"
+        printf 'port: 7880\n' >"$t/docker/livekit/livekit.yaml.tmpl"
+        printf 'other: 1\n' >"$t/docker/livekit/other.yaml.tmpl"
+        cls_compose "$t" '.services.livekit = {image: "livekit:dev", volumes: [{type: "bind", source: "@TREE@/docker/livekit/livekit.yaml", target: "/etc/livekit/livekit.yaml"}]}'
+        cls_commit "$t"
+    done
+    # rendered in the live tree only: that is not a difference, the template is the input
+    printf 'port: 7880\nkey: rendered\n' >"$CLS_OLD/docker/livekit/livekit.yaml"
+    run cls_run
+    [ "$status" -eq 0 ]
+    cls_is '.state_tier == [] and .app_only == true'
+    # the template of ANOTHER file of the directory does not count
+    printf 'other: 2\n' >"$CLS_NEW/docker/livekit/other.yaml.tmpl"
+    cls_commit "$CLS_NEW"
+    run cls_run
+    cls_is '.state_tier == [] and .app_only == true'
+    # the template of the source does
+    printf 'port: 7881\n' >"$CLS_NEW/docker/livekit/livekit.yaml.tmpl"
+    cls_commit "$CLS_NEW"
+    run cls_run
+    cls_is '.state_tier == ["compose_state:livekit"] and .app_only == false'
+}
+
+@test "state tier: the example file of a rendered credential list counts as its template" {
+    local t
+    for t in "$CLS_OLD" "$CLS_NEW"; do
+        mkdir -p "$t/docker/pgbouncer"
+        printf '"u" "x"\n' >"$t/docker/pgbouncer/userlist.txt.example"
+        cls_compose "$t" '.services.pgbouncer = {image: "pgbouncer:dev", volumes: [{type: "bind", source: "@TREE@/docker/pgbouncer/userlist.txt", target: "/etc/pgbouncer/userlist.txt", read_only: true}]}'
+        cls_commit "$t"
+    done
+    run cls_run
+    cls_is '.state_tier == []'
+    printf '"u" "y"\n' >"$CLS_NEW/docker/pgbouncer/userlist.txt.example"
+    cls_commit "$CLS_NEW"
+    run cls_run
+    cls_is '.state_tier == ["compose_state:pgbouncer"]'
+}
+
+@test "a jq failure while diffing the two compose views is classify_failed, not 'no difference'" {
+    local real
+    real="$(command -v jq)"
+    cls_compose "$CLS_NEW" '.services.nats.environment.A = "2"'
+    cls_commit "$CLS_NEW"
+    # shellcheck disable=SC2016  # the shim body is a script, expanded when the shim runs
+    shim jq 'case "$*" in *cmp.old.json*) exit 5 ;; esac
+exec '"$real"' "$@"'
+    run cls_run
+    [ "$status" -eq 0 ]
+    cls_is '.app_only == false and .hold.kind == "classify_failed" and .hold.reason == "classify_failed:compose_diff"'
+}
+
+@test "a classifier that is terminated removes its temporary directory, the rendered config with it" {
+    local canary="CANARY-term-$$" pid i
+    cls_compose "$CLS_OLD" ".services.nats.environment.PASSWORD = \"${canary}\""
+    cls_commit "$CLS_OLD"
+    : >"$CLS_OLD/.compose.slow"
+    ( exec bash -c "$CLS_SCRIPT" cls-run "$CLS_OLD" "$CLS_NEW" ) >"$BATS_TEST_TMPDIR/term.out" 2>&1 3>&- &
+    pid=$!
+    for i in $(seq 1 50); do
+        grep -rqs "$canary" "$TMPDIR" && break
+        sleep 0.2
+    done
+    # the test is real: the rendered config is on disk while the classifier waits for compose
+    grep -rqs "$canary" "$TMPDIR"
+    kill -TERM "$pid"
+    wait "$pid" || true
+    [ -z "$(find "$TMPDIR" -mindepth 1 -maxdepth 1 -name 'cd-classify*' 2>/dev/null)" ]
+    ! grep -rqs "$canary" "$TMPDIR"
+    ! grep -q "$canary" "$BATS_TEST_TMPDIR/term.out"
+}
+
 # ---------------------------------------------------------------------------
 # Migrations
 # ---------------------------------------------------------------------------
@@ -398,6 +486,30 @@ teardown() { cls_teardown; }
     cls_commit "$CLS_NEW"
     run cls_run
     cls_is '.holds | map(.reason) | index("classify_failed:chain_missing:control") != null'
+}
+
+@test "the signal handlers of the caller are back in place after a classification, and none appears that it had not" {
+    run bash -c "${CLS_SCRIPT%cd_classify \"\$@\"}"'trap "echo mine" TERM
+cd_classify "$@" >/dev/null
+trap -p TERM
+echo "int=[$(trap -p INT)]"' cls-run "$CLS_OLD" "$CLS_NEW"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"echo mine"* ]]
+    [[ "$output" == *"int=[]"* ]]
+}
+
+@test "migrations: a chain that is in neither chain-runners.json is classify_failed, not an automatic file" {
+    local t
+    for t in "$CLS_OLD" "$CLS_NEW"; do
+        jq 'del(.chains.control)' "$t/scripts/migrations/runner/chain-runners.json" >"$t/.x"
+        mv "$t/.x" "$t/scripts/migrations/runner/chain-runners.json"
+    done
+    cls_commit "$CLS_OLD"
+    cls_chain_file "$CLS_NEW" control 002_x.sql expand
+    cls_commit "$CLS_NEW"
+    run cls_run
+    [ "$status" -eq 0 ]
+    cls_is '.app_only == false and .hold.kind == "classify_failed" and (.holds | map(.reason) | index("classify_failed:chain_missing:control") != null)'
 }
 
 @test "migrations: a chain and class pair the program cannot apply is classify_failed (allow-list)" {

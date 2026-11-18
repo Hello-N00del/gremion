@@ -55,7 +55,11 @@
 # TREES ARE READ FROM GIT (HEAD of a clean work tree). Hashes of directories, build
 # contexts and bind sources are git entries (mode, type, object id), so a file that is
 # untracked, or that a later stage renders into the tree, never makes a tree "differ". A
-# tree that is not a git work tree, or has a tracked change, is `classify_failed`.
+# bind source that is untracked itself is followed to its tracked template ("<name>.<suffix>"
+# beside it), so a changed template is a difference. A tree that is not a git work tree, or
+# has a tracked change, is `classify_failed`.
+# The compose config is read with --no-env-resolution (classify runs before render, which
+# writes the env files). A TERM, INT or HUP removes the temporary directory.
 #
 # MIGRATIONS. The verdict for a new file comes from the class of its chain in the LIVE
 # tree's chain-runners.json, through an allow-list of chain and class pairs; the
@@ -92,6 +96,38 @@ _cd_cls_entry() {
     fi
     line="${line%%$'\t'*}"
     printf '%s\n' "$line"
+}
+
+# _cd_cls_source_entry TREE REL -- the entry of a path a compose service reads. A path that
+# is not tracked is a file a later stage renders into the tree (the video relay config, the
+# connection pooler's user list): the INPUT of that rendering is its tracked sibling
+# "<name>.<suffix>" (.tmpl, .example, ...), so the answer is `absent` followed by the
+# entries of those siblings. Untracked on both sides with the same siblings is no
+# difference; a changed template is one.
+_cd_cls_source_entry() {
+    local tree="$1" rel="$2" entry dir base rec name sib=''
+    entry="$(_cd_cls_entry "$tree" "$rel")" || return 1
+    if [[ "$entry" != absent ]]; then
+        printf '%s\n' "$entry"
+        return 0
+    fi
+    rel="${rel%/}"
+    base="${rel##*/}"
+    dir="${rel%/*}"
+    [[ "$dir" != "$rel" ]] || dir=''
+    while IFS= read -r -d '' rec; do
+        name="${rec#*$'\t'}"
+        name="${name##*/}"
+        [[ "$name" == "${base}."* ]] || continue
+        sib+=";${name}=${rec%%$'\t'*}"
+    done < <(
+        if [[ -n "$dir" ]]; then
+            _cd_cls_git "$tree" ls-tree -z HEAD -- "${dir}/"
+        else
+            _cd_cls_git "$tree" ls-tree -z HEAD
+        fi
+    )
+    printf 'absent%s\n' "$sib" # a tree is listed in byte order: the siblings come out sorted
 }
 
 # _cd_cls_changed OLD NEW REL... -- 0 when any of the paths differs between the two trees,
@@ -161,8 +197,13 @@ _cd_cls_compose() {
     local -a prefixes=()
     phys="$(cd "$tree" && pwd -P)" || return 1
     prefixes+=("$(cd "$tree" && pwd)" "$phys")
-    # the one compose shape of docker.sh; stdout goes to the file, never to a stream
-    if ! CD_DC_TIMEOUT="${CD_DC_TIMEOUT:-60}" cd_dc "$tree" state config --format json >"$raw" 2>/dev/null; then
+    # The one compose shape of docker.sh; stdout goes to the file, never to a stream.
+    # --no-env-resolution: classify runs BEFORE render, and the env files of a service
+    # (legal/legal.env and the like) are written by render into the new tree. Compose
+    # exits 1 for a missing env_file otherwise, so every candidate would be a failed
+    # classification. The env_file entry stays in the definition, with the tree prefix
+    # normalised; its content is rendered from host state, not from the tree.
+    if ! CD_DC_TIMEOUT="${CD_DC_TIMEOUT:-60}" cd_dc "$tree" state config --format json --no-env-resolution >"$raw" 2>/dev/null; then
         return 1
     fi
     _cd_cls_jq_ok '(.services | type) == "object"' "$raw" || return 1
@@ -190,7 +231,7 @@ _cd_cls_compose() {
     while IFS= read -r rel; do
         [[ -n "$rel" ]] || continue
         [[ "$rel" != *[[:cntrl:]]* ]] || return 1
-        entry="$(_cd_cls_entry "$tree" "$rel")" || return 1
+        entry="$(_cd_cls_source_entry "$tree" "$rel")" || return 1
         printf '%s\t%s\n' "$rel" "$entry" >>"$tmp/paths.tsv"
     done <"$tmp/rels.txt"
     jq -R -s -c 'split("\n") | map(select(length > 0) | split("\t") | {key: .[0], value: .[1]}) | from_entries' \
@@ -354,7 +395,10 @@ _cd_cls_body() {
         for chain in "${!chain_count[@]}"; do
             [[ "$chain" == platform ]] && _cls_state platform_migration
             if [[ -z "${old_class[$chain]+set}" ]]; then
-                continue # only the new file has the chain: chain_class_changed above
+                # only the new file has the chain: chain_class_changed above. A chain that
+                # NEITHER file has is not a verdict the program can give: classify_failed
+                [[ -n "${new_class[$chain]+set}" ]] || _cls_err "chain_missing:${chain}"
+                continue
             fi
             cls="${old_class[$chain]}"
             case "$cls:$chain" in
@@ -468,13 +512,19 @@ _cd_cls_body() {
         compose=skipped
     else
         if _cd_cls_compose "$old" "$tmp/cmp.old.json" "$tmp" && _cd_cls_compose "$new" "$tmp/cmp.new.json" "$tmp"; then
-            while IFS= read -r a; do
-                [[ -n "$a" ]] || continue
-                _cls_state "compose_state:${a}"
-            done < <(jq -r -n --slurpfile o "$tmp/cmp.old.json" --slurpfile n "$tmp/cmp.new.json" '
+            # to a file first: the exit status of jq through a process substitution is
+            # lost, and a failed diff must not read as "no difference"
+            if jq -r -n --slurpfile o "$tmp/cmp.old.json" --slurpfile n "$tmp/cmp.new.json" '
                 ($o[0].services) as $os | ($n[0].services) as $ns
                 | ( (($os | keys) + ($ns | keys)) | unique[] | select($os[.] != $ns[.]) ),
-                  (if $o[0].top != $n[0].top then "_project" else empty end)')
+                  (if $o[0].top != $n[0].top then "_project" else empty end)' >"$tmp/cmpdiff.txt"; then
+                while IFS= read -r a; do
+                    [[ -n "$a" ]] || continue
+                    _cls_state "compose_state:${a}"
+                done <"$tmp/cmpdiff.txt"
+            else
+                _cls_err "compose_diff"
+            fi
         else
             _cls_err "compose_render"
         fi
@@ -529,6 +579,28 @@ _cd_cls_emit() {
            ci_changed: $ci}'
 }
 
+# _cd_cls_untrap -- the traps of the caller back in place (cd_classify set TERM, INT, HUP).
+_cd_cls_untrap() {
+    trap - TERM INT HUP
+    [[ -z "${_CD_CLS_PREV_TRAP:-}" ]] || eval "$_CD_CLS_PREV_TRAP"
+    _CD_CLS_PREV_TRAP=''
+}
+
+# _cd_cls_abort SIGNAL -- the handler of cd_classify: stop the body (and what it started),
+# remove the temporary directory, give the caller its traps back and pass the signal on.
+_cd_cls_abort() {
+    local sig="$1"
+    if [[ -n "${_CD_CLS_PID:-}" ]]; then
+        pkill -TERM -P "$_CD_CLS_PID" 2>/dev/null || true
+        kill -TERM "$_CD_CLS_PID" 2>/dev/null || true
+    fi
+    [[ -z "${_CD_CLS_RUN:-}" ]] || rm -rf -- "$_CD_CLS_RUN"
+    _CD_CLS_RUN=''
+    _CD_CLS_PID=''
+    _cd_cls_untrap
+    kill -s "$sig" "$BASHPID"
+}
+
 # cd_classify OLD_TREE NEW_TREE [--manifest FILE] [--no-compose]
 cd_classify() {
     local old="${1:-}" new="${2:-}" manifest='' skip=0 tmp doc rc=0 root
@@ -556,8 +628,23 @@ cd_classify() {
     [[ -n "$manifest" ]] || manifest="${root}/data/cd/host-manifest.json"
     tmp="$(umask 077 && mktemp -d "${TMPDIR:-/tmp}/cd-classify.XXXXXX")" || { _cd_cls_err "no temporary directory"; return 2; }
     # stderr of the body is dropped: a jq or compose error message can quote a value of the
-    # rendered config, which resolves secrets
-    doc="$(_cd_cls_body "$old" "$new" "$tmp" "$manifest" "$skip" 2>/dev/null)" || rc=$?
+    # rendered config, which resolves secrets.
+    # The body runs in the background and is waited for, so that a TERM, INT or HUP of the
+    # caller is handled HERE (the directory holds the rendered config, which resolves
+    # secrets): a foreground command substitution would run on after its parent died and
+    # leave the directory behind. The traps of the caller are put back afterwards.
+    _CD_CLS_RUN="$tmp"
+    _CD_CLS_PID=''
+    _CD_CLS_PREV_TRAP="$(trap -p TERM INT HUP)"
+    trap '_cd_cls_abort TERM' TERM
+    trap '_cd_cls_abort INT' INT
+    trap '_cd_cls_abort HUP' HUP
+    _cd_cls_body "$old" "$new" "$tmp" "$manifest" "$skip" >"$tmp/doc.json" 2>/dev/null &
+    _CD_CLS_PID=$!
+    wait "$_CD_CLS_PID" || rc=$?
+    _CD_CLS_PID=''
+    _cd_cls_untrap
+    doc="$(cat "$tmp/doc.json" 2>/dev/null)" || doc=''
     if [[ "$rc" -ne 0 || -z "$doc" ]] || ! jq -e '.v == 1' <<<"$doc" >/dev/null 2>&1; then
         # the classifier itself broke: that is a verdict (fail closed), never an empty answer
         doc="$(jq -n -c -S '{v: 1, app_only: false, state_tier: [], holds: [{kind: "classify_failed", reason: "classify_failed:internal"}],
