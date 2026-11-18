@@ -763,6 +763,70 @@ mkdir -p "$dst"
 }
 
 # ---------------------------------------------------------------------------
+# kept module exports are on the backup path (BD2b)
+# ---------------------------------------------------------------------------
+
+# The host path the compose file bind-mounts at TENANT_EXPORT_DIR, relative to
+# the root ("data/module-exports"). Read from the compose file, never typed here.
+compose_export_dir_rel() {
+    local f="${PROJECT_ROOT}/docker-compose.app.yml" cpath
+    cpath="$(sed -n 's/^[[:space:]]*TENANT_EXPORT_DIR:[[:space:]]*//p' "$f" | tr -d '\r' | head -n 1)"
+    [ -n "$cpath" ] || { echo "no TENANT_EXPORT_DIR in docker-compose.app.yml" >&2; return 1; }
+    sed -n "s#^[[:space:]]*-[[:space:]]*\${GREMION_ROOT:-/opt/gremion}/\([^:]*\):${cpath}\$#\1#p" "$f" | tr -d '\r'
+}
+
+# The entries of BACKUP_HOST_DATA_DIRS in gremion-backup, one per line.
+backup_host_data_dirs() {
+    sed -n 's/^BACKUP_HOST_DATA_DIRS=(\(.*\))[[:space:]]*$/\1/p' "$BACKUP" | tr -s ' ' '\n' | grep -v '^$'
+}
+
+@test "TENANT_EXPORT_DIR is bind-mounted from exactly one host path, and that path is on the backup path" {
+    local rel
+    rel="$(compose_export_dir_rel)"
+    [ -n "$rel" ]
+    [ "$(printf '%s\n' "$rel" | wc -l)" -eq 1 ]
+    backup_host_data_dirs | grep -Fxq -- "$rel" \
+        || { echo "bind source '${rel}' is not in BACKUP_HOST_DATA_DIRS: $(backup_host_data_dirs | tr '\n' ' ')" >&2; return 1; }
+}
+
+@test "a kept module export is staged into the snapshot tree, byte for byte" {
+    shim_baseline; shim_docker_full; shim_restic_ok; plant_etc_tree
+    shim_rsync_honouring_excludes
+    local rel; rel="$(compose_export_dir_rel)"
+    mkdir -p "${GREMION_ROOT}/${rel}/acme/board"
+    printf 'dump-bytes' >"${GREMION_ROOT}/${rel}/acme/board/20261101.dump"
+    printf 'abc  20261101.dump\n' >"${GREMION_ROOT}/${rel}/acme/board/20261101.dump.sha256"
+    run "$BACKUP" --label nightly-x
+    [ "$status" -eq 0 ]
+    cmp "${GREMION_ROOT}/${rel}/acme/board/20261101.dump" "${GREMION_ROOT}/backups/current/${rel}/acme/board/20261101.dump"
+    [ -s "${GREMION_ROOT}/backups/current/${rel}/acme/board/20261101.dump.sha256" ]
+    [[ "$output" == *"staged ${rel}: 2 file(s)"* ]]
+}
+
+@test "a host with no export directory yet still backs up, staging the path empty" {
+    shim_baseline; shim_docker_full; shim_restic_ok; plant_etc_tree
+    shim_rsync_honouring_excludes
+    run "$BACKUP" --label nightly-y
+    [ "$status" -eq 0 ]
+    [ -d "${GREMION_ROOT}/backups/current/$(compose_export_dir_rel)" ]
+    [ -z "$(find "${GREMION_ROOT}/backups/current/$(compose_export_dir_rel)" -type f)" ]
+}
+
+@test "an export file that does not reach the staged tree fails the run (post-condition read from the trees)" {
+    shim_baseline; shim_docker_full; shim_restic_ok; plant_etc_tree
+    # etc is copied; every other rsync (the export directory) exits 0 and copies nothing.
+    shim rsync 'src=""; dst=""
+for a in "$@"; do case "$a" in -*|*backup-key) ;; *) if [ -z "$src" ]; then src="$a"; else dst="$a"; fi ;; esac; done
+case "$src" in */etc/) mkdir -p "$dst"; ( cd "${src%/}" && find . -type f ! -name "*.backup-key" -exec cp --parents {} "$dst" \; ) ;; esac'
+    local rel; rel="$(compose_export_dir_rel)"
+    mkdir -p "${GREMION_ROOT}/${rel}/acme/board"
+    printf 'dump-bytes' >"${GREMION_ROOT}/${rel}/acme/board/20261101.dump"
+    run "$BACKUP" --label nightly-z
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"staged ${rel} differs from the host directory"* ]]
+}
+
+# ---------------------------------------------------------------------------
 # restic
 # ---------------------------------------------------------------------------
 
