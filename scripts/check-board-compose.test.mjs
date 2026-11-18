@@ -24,6 +24,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readEnvFile, renderState } from './compose-edge.mjs'
+import { POSTGRES_IMAGE_DIGEST, POSTGRES_IMAGE_TAG } from './check-postgres-major.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const APP_ENV = 'test/host/fixtures/pooled-stack/app-blue.env'
@@ -188,7 +189,7 @@ test('the leaf boots on the rendered environment: /healthz answers 200, the guar
 // /healthz stays green. The scram verifier ensureModuleRoles stores is what `ALTER ROLE ... PASSWORD` stores on a
 // server whose password_encryption is scram-sha-256 (the default); the lifecycle suite of the leaf
 // (modules/board/test/lifecycle.integration.test.ts) proves the real enableModule.
-const PG_IMAGE = 'postgres:18'
+const PG_IMAGE = `${POSTGRES_IMAGE_TAG}@${POSTGRES_IMAGE_DIGEST}`
 const PG_NAME = `bd-board-pw-${randomBytes(4).toString('hex')}`
 let pgStarted = false
 after(() => {
