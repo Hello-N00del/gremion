@@ -68,10 +68,9 @@ describe('planCatalogueRows: provisional retention profiles (R29-I24)', () => {
     expect(provisionalNote(row!)).toBe('votes loaded with provisional retention profile rp-gov-module-data (R29-I24, pending the DPO)')
   })
 
-  it('the shipped table is frozen and holds exactly the six assignments (board among them since the board wave)', () => {
+  it('the shipped table is frozen and holds exactly the five assignments (board declares its own export and is not in it)', () => {
     expect(Object.isFrozen(PROVISIONAL_RETENTION_PROFILES)).toBe(true)
     expect(PROVISIONAL_RETENTION_PROFILES).toEqual({
-      board: 'rp-brd-module-data',
       elections: 'rp-ele-module-data',
       files: 'rp-fil-module-data',
       handover: 'rp-hnd-module-data',
