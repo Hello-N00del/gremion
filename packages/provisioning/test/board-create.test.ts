@@ -21,7 +21,7 @@ const spec = (over: Partial<CreateSpec> = {}): CreateSpec => {
   return { slug: 'musterstadt', host: 'rat.musterstadt.example', enable, operatorId: OPERATOR, admins: ADMINS, dpia: Object.fromEntries(enable.map((m) => [m, DPIA])), ...over }
 }
 
-/** A world whose catalogue entry for board declares a database (the fixture the plan names; the real module.json is pinned below). */
+/** A world whose catalogue entry for board declares a database (the real module.json is pinned below). */
 function boardWorld(): World {
   const w = world()
   w.declared.set('board', SERVICE)
@@ -195,6 +195,20 @@ describe('the location flag', () => {
     delete (d as { boardLocation?: unknown }).boardLocation
     await expect(createPhaseB(spec(), d)).rejects.toMatchObject({ code: 'PRECONDITION' })
     expect(w.control.get('musterstadt')?.status).toBe('provisioning')
+  })
+
+  it('a rerun that adds board to an active customer whose board is in the kernel is refused before anything is written', async () => {
+    const w = boardWorld()
+    const d = deps(w)
+    const first = spec({ enable: ['calendar'] })
+    const a = await phaseA(w, d, first)
+    await createPhaseB(first, d)
+    expect(w.control.get('musterstadt')?.status).toBe('active')
+    const before = [...w.mutations]
+    await expect(createPhaseB(spec({ enable: ['calendar', 'board'] }), d)).rejects.toMatchObject({ code: 'CUSTOMER_STATE' })
+    expect(w.mutations).toEqual(before)
+    expect(w.moduleDbs.size).toBe(0)
+    expect(w.enabled.get(a.customer.id)?.has('board') ?? false).toBe(false)
   })
 
   it('a later enable of board through the panel (enableCustomerModule) writes no flag: that path belongs to the lifecycle guard', async () => {

@@ -383,6 +383,11 @@ export function deps(w: World, catalogue = ['board', 'calendar', 'publishing', '
     gate: fakeGate(w),
     boardLocation: {
       async setModule(c) {
+        // an active customer is only read, never flipped (the real adapter's assertBoardLocationModule)
+        if (w.control.get(c.slug)?.status === 'active') {
+          if (w.boardFlag.get(c.id) === 'module') return { changed: false }
+          throw new ProvisioningError('CUSTOMER_STATE', `the board location of this active customer reads ${w.boardFlag.get(c.id) ?? 'no row'}, not module`)
+        }
         // the flag is only ever written once the board's own database exists
         if (!w.moduleDbs.has(`${c.id}/board`)) throw new Error('the board location flag was written before the board database exists')
         if (w.boardFlag.get(c.id) === 'module') return { changed: false }

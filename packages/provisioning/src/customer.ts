@@ -125,12 +125,13 @@ export async function assertEnableLoaded(enable: readonly string[], deps: Pick<P
 /**
  * The board's database server answers, checked BEFORE the phase writes anything (phase A: no row, no realm
  * exists yet; phase B: no administrator is invited for a create that cannot finish). Only the board is
- * asked: it is the one module whose create path this plan changes, and a pre-check on every module that
- * declares a database would also change the creates with calendar, content, newsletter and finance, whose
- * servers a create has never been refused over. The check can pass and the server can still fail a moment
- * later: the create then stops inside enableModule, whose order (database first, enablement last) leaves no
- * `enabled` row without a database, and a rerun resumes. INERT while the catalogue's board entry declares
- * no database. A declared database with no way to ask fails closed: never a skipped check.
+ * asked: it is the one module whose create path writes a location flag, and a pre-check on every module
+ * that declares a database would also change the creates with calendar, content, newsletter and finance,
+ * whose servers a create has never been refused over. A passing check does not promise the server stays up:
+ * if it fails a moment later, the create stops inside enableModule, whose order (database first,
+ * enablement last) leaves no `enabled` row without a database, and a rerun resumes. Does nothing while the
+ * catalogue's board entry declares no database. A declared database with no way to ask fails closed:
+ * never a skipped check.
  */
 export async function assertBoardServerAnswers(modules: readonly string[], deps: Pick<ProvisioningDeps, 'modules'>): Promise<void> {
   if (!modules.includes(BOARD_MODULE)) return
@@ -319,6 +320,10 @@ export async function createPhaseB(spec: CreateSpec, deps: ProvisioningDeps): Pr
   // only the modules not enabled yet need their server: a finished module is not asked again on a rerun
   const alreadyEnabled = new Set(await deps.modules.enabled(c))
   await assertBoardServerAnswers(v.enable.filter((m) => !alreadyEnabled.has(m)), deps)
+  // an active customer is never flipped, so a board that is not enabled yet on one whose location is not
+  // `module` is refused here, before any module is enabled: otherwise an empty board database would be
+  // created beside the kernel rows and only then would the location step refuse
+  if (c.status === 'active' && v.enable.includes(BOARD_MODULE) && !alreadyEnabled.has(BOARD_MODULE)) await ensureBoardLocation(c, deps)
   const run = await runPhase('b', {
     customerId: c.id,
     operatorId: spec.operatorId,
@@ -349,9 +354,8 @@ export async function createPhaseB(spec: CreateSpec, deps: ProvisioningDeps): Pr
 /**
  * A customer created with board ticked gets the flag `module` for the board, once the board's own database
  * exists, so the board is served from it from the first request and no move ever runs on a new customer.
- * INERT while the catalogue's board entry declares no database (it reads the declaration, as the lifecycle
- * guard does): a customer created before that declaration lands is not flagged `module` with no database
- * behind it. Runs on every pass of phase B, enable no-op or not: a crash between the enable and this call is
+ * Does nothing while the catalogue's board entry declares no database (it reads the declaration, as the
+ * lifecycle guard does), so a customer is never flagged `module` without a database behind it. Runs on every pass of phase B, enable no-op or not: a crash between the enable and this call is
  * repaired by the rerun. Only this create path writes it; a later enable of board is the lifecycle guard's.
  */
 async function ensureBoardLocation(c: CustomerRef, deps: ProvisioningDeps): Promise<void> {
