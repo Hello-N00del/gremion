@@ -968,28 +968,50 @@ cd_block_open_list() {
     printf '%s' "$CD_BLOCKS_DOC" | jq -r '.[] | select(.cleared == null) | .sha + " " + .rule'
 }
 
-# cd_is_blocked SHA -- 0 when SHA (40 or 12 hex) is the commit of an open block.
+# cd_is_blocked SHA -- 0 when SHA (40 or 12 hex, either case) is the commit of an open
+# block. Input it cannot parse (empty, other lengths, non-hex) answers 0 "blocked" with a
+# reason on stderr: unknown is never green, and inside `if` or `&&` a return code of 2
+# would read the same as 1 ("free").
 cd_is_blocked() {
     local sha="${1:-}"
-    [[ "$sha" =~ ^[0-9a-f]{12}([0-9a-f]{28})?$ ]] || return 1
+    sha="${sha,,}"
+    if [[ ! "$sha" =~ ^[0-9a-f]{12}([0-9a-f]{28})?$ ]]; then
+        cd_err "is_blocked: not a 12 or 40 hex sha, treated as blocked"
+        return 0
+    fi
     cd_blocks_load
     printf '%s' "$CD_BLOCKS_DOC" | jq -e --arg s "$sha" 'any(.[]; .cleared == null and (.sha == $s or .sha12 == $s))' >/dev/null
 }
 
 # cd_contains_open_block SHA -- 0 when the candidate is, or descends from, a commit with
 # an open block (so a plain resume cannot let a descendant carry the defect to the
-# customer). The ancestry is read from the mirror. Anything that cannot be proven (no
-# mirror, a block commit the mirror does not know) counts as "contains": unknown is
-# never green.
+# customer). The candidate is 40 or 12 hex, either case; a 12-hex one is resolved to the
+# full commit through the mirror. The ancestry is read from the mirror. Anything that
+# cannot be proven counts as "contains": unparseable input, a short sha the mirror cannot
+# resolve to one commit, no mirror, a block commit the mirror does not know. Unknown is
+# never green, and the answer is only ever 0 or 1 because inside `if` or `&&` a return
+# code of 2 would read the same as 1.
 cd_contains_open_block() {
-    local cand="${1:-}" b rc
+    local cand="${1:-}" b rc full
     local -a open=()
-    if [[ ! "$cand" =~ ^[0-9a-f]{40}$ ]]; then
-        cd_err "contains_open_block: not a full sha"
-        return 2
+    cand="${cand,,}"
+    if [[ ! "$cand" =~ ^[0-9a-f]{12}([0-9a-f]{28})?$ ]]; then
+        cd_err "contains_open_block: not a 12 or 40 hex sha, treated as contained"
+        return 0
     fi
     cd_blocks_load
     mapfile -t open < <(printf '%s' "$CD_BLOCKS_DOC" | jq -r '.[] | select(.cleared == null) | .sha')
+    for b in "${open[@]}"; do
+        [[ "$b" == "$cand" || "${b:0:12}" == "$cand" ]] && return 0
+    done
+    if [[ "${#cand}" == 12 ]]; then
+        full="$(git --git-dir="$CD_MIRROR_DIR" rev-parse --verify --quiet "${cand}^{commit}" </dev/null 2>/dev/null)" || full=""
+        if [[ ! "$full" =~ ^[0-9a-f]{40}$ || "${full:0:12}" != "$cand" ]]; then
+            cd_err "contains_open_block: the mirror cannot resolve that short sha, treated as contained"
+            return 0
+        fi
+        cand="$full"
+    fi
     for b in "${open[@]}"; do
         [[ -n "$b" ]] || continue
         [[ "$b" == "$cand" ]] && return 0
