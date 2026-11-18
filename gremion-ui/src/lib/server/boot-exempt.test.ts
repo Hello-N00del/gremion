@@ -14,8 +14,8 @@ import { BOOT_AND_RESOLVE_EXEMPT_PATHS, isBootAndResolveExempt, isResolveExemptR
  * the addition through review.
  */
 describe('BOOT_AND_RESOLVE_EXEMPT_PATHS', () => {
-  it('is exactly the two B-05 entries, in order', () => {
-    expect([...BOOT_AND_RESOLVE_EXEMPT_PATHS]).toEqual(['/healthz', '/api/internal/'])
+  it('is exactly the three entries (B-05 plus the readiness probe), in order', () => {
+    expect([...BOOT_AND_RESOLVE_EXEMPT_PATHS]).toEqual(['/healthz', '/readyz', '/api/internal/'])
   })
 
   it('is frozen, so no module can widen it at runtime', () => {
@@ -27,6 +27,7 @@ describe('BOOT_AND_RESOLVE_EXEMPT_PATHS', () => {
 describe('isBootAndResolveExempt', () => {
   it('matches an entry without a trailing slash exactly', () => {
     expect(isBootAndResolveExempt('/healthz')).toBe(true)
+    expect(isBootAndResolveExempt('/readyz')).toBe(true)
   })
 
   it('treats an entry ending in / as a prefix', () => {
@@ -36,18 +37,21 @@ describe('isBootAndResolveExempt', () => {
 
   it('does not match a path that merely extends an entry', () => {
     expect(isBootAndResolveExempt('/healthzx')).toBe(false)
+    expect(isBootAndResolveExempt('/readyzx')).toBe(false)
     expect(isBootAndResolveExempt('/api/internalx')).toBe(false)
     expect(isBootAndResolveExempt('/api/internalx/evict')).toBe(false)
   })
 
   it('does not treat an exact entry as a prefix, nor a prefix entry as exact', () => {
     expect(isBootAndResolveExempt('/healthz/')).toBe(false)
+    expect(isBootAndResolveExempt('/readyz/')).toBe(false)
+    expect(isBootAndResolveExempt('/readyz/deep')).toBe(false)
     expect(isBootAndResolveExempt('/healthz/deep')).toBe(false)
     expect(isBootAndResolveExempt('/api/internal')).toBe(false)
   })
 
   it('does not match unrelated or near-miss paths', () => {
-    for (const p of ['/', '', '/api/health', '/api/healthz', '/HEALTHZ', '/x/healthz', '/api/public/internal/']) {
+    for (const p of ['/', '', '/api/health', '/api/healthz', '/HEALTHZ', '/api/readyz', '/READYZ', '/x/readyz', '/x/healthz', '/api/public/internal/']) {
       expect(isBootAndResolveExempt(p), p).toBe(false)
     }
   })
@@ -64,6 +68,12 @@ describe('isResolveExemptRequest', () => {
     expect(isResolveExemptRequest('/healthz', id)).toBe(true)
   })
 
+  it('/readyz is exempt whatever it carries (an exact entry is never resolved)', () => {
+    expect(isResolveExemptRequest('/readyz', none)).toBe(true)
+    expect(isResolveExemptRequest('/readyz', host)).toBe(true)
+    expect(isResolveExemptRequest('/readyz', id)).toBe(true)
+  })
+
   it('an /api/internal/ request that names no tenant is exempt', () => {
     expect(isResolveExemptRequest('/api/internal/evict', none)).toBe(true)
   })
@@ -76,6 +86,7 @@ describe('isResolveExemptRequest', () => {
   it('a path off the list is never exempt', () => {
     expect(isResolveExemptRequest('/api/health', none)).toBe(false)
     expect(isResolveExemptRequest('/healthzx', none)).toBe(false)
+    for (const p of ['/readyzx', '/readyz/', '/api/readyz']) expect(isResolveExemptRequest(p, none), p).toBe(false)
   })
 })
 

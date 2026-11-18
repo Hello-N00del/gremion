@@ -11,6 +11,12 @@
 //                   still-booting process also answers 200 (see
 //                   docs/deployment-architecture.md). /api/health stays the boot
 //                   probe and is NOT exempt.
+//   /readyz         the readiness probe. Anonymous answer is
+//                   exactly {"ready":true} (200) or {"ready":false} (503): it is
+//                   reachable by anyone through any customer host, so it says
+//                   nothing else. Readiness = boot complete AND the control
+//                   database answers (memoised ping). The richer answer needs the
+//                   INTERNAL_PUSH_SECRET bearer, checked by the handler itself.
 //   /api/internal/  server-to-server routes (e.g. the switch's evict fan-out).
 //                   They never traverse the edge, so they carry neither a tenant
 //                   host nor x-proxy-trust. Every handler under
@@ -24,7 +30,7 @@
 // entry is a security decision and must turn that test RED.
 //
 // What "exempt" means per entry shape (isResolveExemptRequest):
-//   * an EXACT entry (/healthz) is one tenant-blind endpoint. It is never
+//   * an EXACT entry (/healthz, /readyz) is one tenant-blind endpoint. It is never
 //     resolved, whatever headers it carries: it reads the host itself and must
 //     answer 200 for an unknown host too.
 //   * a PREFIX entry (/api/internal/) is a route family whose members MAY act
@@ -36,7 +42,7 @@
 //     has no tenant: getDb() fails closed. The edge always stamps
 //     x-forwarded-host, so an edge request never takes the exemption.
 
-export const BOOT_AND_RESOLVE_EXEMPT_PATHS: readonly string[] = Object.freeze(['/healthz', '/api/internal/'])
+export const BOOT_AND_RESOLVE_EXEMPT_PATHS: readonly string[] = Object.freeze(['/healthz', '/readyz', '/api/internal/'])
 
 /** True iff `path` (a URL pathname) is on the closed boot-and-resolve exemption list. */
 export function isBootAndResolveExempt(path: string): boolean {
@@ -53,7 +59,7 @@ const TENANT_SELECTOR_HEADERS: readonly string[] = Object.freeze(['x-forwarded-h
 
 /**
  * Should tenantResolveHandle hand this request on WITHOUT resolving a tenant?
- * True for /healthz always, and for an /api/internal/ request only when it names
+ * True for /healthz and /readyz always, and for an /api/internal/ request only when it names
  * no tenant. Everything else is resolved (fail-closed, as before).
  */
 export function isResolveExemptRequest(path: string, headers: Headers): boolean {
