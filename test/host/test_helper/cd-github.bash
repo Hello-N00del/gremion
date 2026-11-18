@@ -246,6 +246,23 @@ cd_cfg_load
 ${snippet}" gh-lib "$@"
 }
 
+# gh_lib_notify 'snippet' args -- gh_lib with the REAL notifier loaded before the stubs (the
+# stubs step aside for real functions), so what github.sh hands to cd_notify meets the
+# notifier's own allow-list and shape checks.
+gh_lib_notify() {
+    local snippet="$1"
+    shift
+    bash -c "set -euo pipefail
+. \"\${HOST_SRC}/lib/common.sh\"
+. \"\${HOST_SRC}/lib/cd/core.sh\"
+. \"\${HOST_SRC}/lib/cd/cmd-state.sh\"
+. \"\${HOST_SRC}/lib/cd/notify.sh\"
+. \"\${HOST_SRC}/lib/cd/github.sh\"
+. \"\${GREMION_CD_STUBS_DIR}/cd-stubs.sh\"
+cd_cfg_load
+${snippet}" gh-lib-notify "$@"
+}
+
 # gh_verdict [ARGS] -- run cd_gh_candidate; sets V (verdict), R (reason), S (sha), and
 # leaves the json in $output.
 gh_verdict() {

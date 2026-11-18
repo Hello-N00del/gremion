@@ -550,6 +550,49 @@ gh_rebase_scn() {
     [ "$(grep -c '^stub cd_notify' "$SHIM_LOG")" -eq 1 ]
 }
 
+@test "range: the hold mail of a range with several uncovered commits reaches the real notifier as a comma list and is mailed, not redacted" {
+    cd_need_flock
+    gh_rebase_scn
+    gh_route "*/commits/${C_R1}/pulls" 200 "$(gh_prs .)"
+    gh_route "*/commits/${C_R2}/pulls" 200 "$(gh_prs .)"
+    run --separate-stderr gh_lib_notify 'cd_lock_take; cd_gh_candidate'
+    [ "$status" -eq 0 ]
+    local mails=("${GREMION_ROOT}"/data/cd/outbox/*-held.eml)
+    [ "${#mails[@]}" -eq 1 ]
+    [ -f "${mails[0]}" ]
+    grep -q '^reason: range_unverified$' "${mails[0]}"
+    # both uncovered short SHAs, comma separated, whatever order the range gave them
+    local line
+    line="$(grep '^uncovered: ' "${mails[0]}")"
+    [[ "$line" == "uncovered: ${C_R1:0:12},${C_R2:0:12}" || "$line" == "uncovered: ${C_R2:0:12},${C_R1:0:12}" ]]
+    if grep -q 'redacted' "${mails[0]}"; then false; fi
+}
+
+@test "range: more than ten uncovered commits are mailed as the first ten plus a count of the range" {
+    cd_need_flock
+    local i
+    gh_hist_init
+    for i in 1 2 3 4 5 6 7 8 9 10 11 12; do gh_commit "R${i}"; done
+    gh_publish
+    gh_seed_live "$C_L0"
+    gh_route_ci "$C_R12"
+    gh_route_pulls "$C_R12"
+    gh_route_rules
+    for i in 1 2 3 4 5 6 7 8 9 10 11; do
+        local v="C_R${i}"
+        gh_route "*/commits/${!v}/pulls" 200 "$(gh_prs .)"
+    done
+    run --separate-stderr gh_lib_notify 'cd_lock_take; cd_gh_candidate'
+    [ "$status" -eq 0 ]
+    local mails=("${GREMION_ROOT}"/data/cd/outbox/*-held.eml)
+    [ "${#mails[@]}" -eq 1 ]
+    local line
+    line="$(grep '^uncovered: ' "${mails[0]}")"
+    [ "$(printf '%s\n' "${line#uncovered: }" | tr ',' '\n' | wc -l | tr -d ' ')" -eq 10 ]
+    grep -q '^commits: 11$' "${mails[0]}"
+    if grep -q 'redacted' "${mails[0]}"; then false; fi
+}
+
 @test "range: a dry run (the poll verb) neither mails nor writes the state" {
     cd_need_flock
     gh_scn_green

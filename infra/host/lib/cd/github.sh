@@ -951,7 +951,12 @@ cd_gh_candidate() {
             fi
         else
             if (( dry == 0 )) && _cd_gh_once "range_unverified:${found:0:12}"; then
-                _cd_gh_notify held reason=range_unverified sha12="${found:0:12}" uncovered="${short[*]}"
+                # the notifier takes `uncovered` as a COMMA list of at most 10 short SHAs (any
+                # other shape is mailed as <redacted>); a longer list says how many in `commits`
+                local -a notify_extra=()
+                (( ${#short[@]} > 10 )) && notify_extra=(commits="${#short[@]}")
+                _cd_gh_notify held reason=range_unverified sha12="${found:0:12}" \
+                    uncovered="$(IFS=,; printf '%s' "${short[*]:0:10}")" ${notify_extra[@]+"${notify_extra[@]}"}
                 _cd_gh_once_mark "range_unverified:${found:0:12}" || true
             fi
             _cd_gh_out hold "$found" range_unverified \
