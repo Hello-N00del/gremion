@@ -1411,7 +1411,9 @@ EOF
     cd_seed_state
     run env HOST_SRC="$src" "${src}/bin/gremion-cd" watchdog
     [ "$status" -eq 0 ]
-    grep -q '^stub cd_cmd_watchdog' "$SHIM_LOG"
+    # that the watchdog verb itself ran (the real watchdog.sh of cd-notify, no longer a stub)
+    # is asserted by its effect in cd-watchdog.bats ("a half-written library does not stop
+    # the real watchdog")
     [ -s "${GREMION_ROOT}/data/cd/ALERT" ]
     grep -q 'zz-half' "${GREMION_ROOT}/data/cd/ALERT"
     rm -f "${GREMION_ROOT}/data/cd/ALERT"

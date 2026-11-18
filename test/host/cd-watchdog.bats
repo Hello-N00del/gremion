@@ -1,0 +1,490 @@
+#!/usr/bin/env bats
+# test/host/cd-watchdog.bats -- cd-notify: infra/host/lib/cd/watchdog.sh (the gremion-cd
+# dead-man check, verb `watchdog`).
+#
+# Run: MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/repo:ro" -w /repo gremion-bats:local test/host/cd-watchdog.bats
+#
+# The watchdog flushes the outbox at its end; most tests keep the relay failing
+# (.curl-fail) so the mails it queued stay in the outbox where the test can read them.
+# Time is the fake clock of core.sh: NOW is 1700000000.
+
+load 'test_helper/host'
+load 'test_helper/cd'
+load 'test_helper/cd-notify'
+
+NOW=1700000000
+
+setup() {
+    notify_setup
+    touch "${GREMION_ROOT}/.curl-fail"
+    shim logger
+    # git answers `ls-remote ... refs/heads/main` with the SHA in .git-tip, or fails
+    shim git 'if [ -f "$GREMION_ROOT/.git-fail" ]; then exit 128; fi; printf "%s\trefs/heads/main\n" "$(cat "$GREMION_ROOT/.git-tip")"'
+    cd_seed_state
+}
+teardown() { cd_teardown; }
+
+# hb EPOCH [PHASE STAGE START BUDGET PID] -- the heartbeat file
+hb() { printf '%s %s %s %s %s %s\n' "$1" "${2:-idle}" "${3:-tick}" "${4:-$1}" "${5:-60}" "${6:-1234}" > "${GREMION_ROOT}/runtime/cd/heartbeat"; }
+# a fresh idle heartbeat at the fake clock's now
+fresh_hb() { hb "$(cd_clock)"; }
+# the queued mails that carry DETAIL
+mails_with() { grep -l "^detail: ${1}\$" "${GREMION_ROOT}"/data/cd/outbox/*.eml 2>/dev/null | wc -l | tr -d ' '; }
+hold_cd_lock() { cd_need_flock; cd_bg 'cd_lock_take; echo ready; exec sleep 300'; }
+wd() { run nlib 'cd_cmd_watchdog'; }
+
+# ---------------------------------------------------------------------------
+# Liveness: no lock holder
+# ---------------------------------------------------------------------------
+
+@test "liveness: a heartbeat within three timer intervals and no lock is quiet" {
+    cd_need_flock
+    hb $(( NOW - 800 ))
+    wd
+    [ "$status" -eq 0 ]
+    [ "$(mail_count)" -eq 0 ]
+}
+
+@test "liveness: a heartbeat older than three intervals with no cd lock holder gives stalled once, not every run" {
+    cd_need_flock
+    hb $(( NOW - 1000 ))
+    wd
+    [ "$status" -eq 0 ]
+    [ "$(mails_with no_tick)" -eq 1 ]
+    grep -qx 'kind: stalled' "$(mail_files)"
+    grep -qx 'phase: idle' "$(mail_files)"
+    grep -qx 'heartbeat_age_min: 16' "$(mail_files)"
+    wd
+    [ "$status" -eq 0 ]
+    cd_advance 600
+    wd
+    [ "$(mails_with no_tick)" -eq 1 ]
+    # a new stall (a newer heartbeat that goes stale again) is a new mail
+    hb $(( NOW + 600 - 10 ))
+    cd_advance 2000
+    wd
+    [ "$(mails_with no_tick)" -eq 2 ]
+}
+
+@test "liveness: no heartbeat file at all with no lock holder is an alert too" {
+    cd_need_flock
+    wd
+    [ "$status" -eq 0 ]
+    [ "$(mails_with no_heartbeat)" -eq 1 ]
+}
+
+@test "liveness: an unreadable heartbeat is an alert, never a pass" {
+    cd_need_flock
+    printf 'garbage here\n' > "${GREMION_ROOT}/runtime/cd/heartbeat"
+    wd
+    [ "$status" -eq 0 ]
+    [ "$(mails_with heartbeat_unreadable)" -eq 1 ]
+}
+
+@test "liveness: the probe gives the cd lock back at once" {
+    cd_need_flock
+    fresh_hb
+    wd
+    run cd_lib 'cd_lock_take; echo taken'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *taken* ]]
+}
+
+# ---------------------------------------------------------------------------
+# Liveness: the lock is held (release stuck)
+# ---------------------------------------------------------------------------
+
+@test "stuck: a 60 minute build with a live heartbeat is NOT stuck" {
+    hold_cd_lock
+    hb $(( NOW - 10 )) releasing build $(( NOW - 3000 )) 3600 4321
+    wd
+    [ "$status" -eq 0 ]
+    [ "$(mail_count)" -eq 0 ]
+}
+
+@test "stuck: a hung stage whose beat stopped (older than three minutes) IS stuck, once" {
+    hold_cd_lock
+    hb $(( NOW - 400 )) releasing build $(( NOW - 3000 )) 3600 4321
+    wd
+    [ "$status" -eq 0 ]
+    [ "$(mails_with release_stuck)" -eq 1 ]
+    grep -qx 'stage: build' "$(mail_files)"
+    grep -qx 'phase: releasing' "$(mail_files)"
+    wd
+    [ "$(mails_with release_stuck)" -eq 1 ]
+}
+
+@test "stuck: now past stage start + 1.25 x budget + 120 s is stuck even while a beat is fresh" {
+    hold_cd_lock
+    # budget 600 s: the limit is 870 s after the stage started
+    hb $(( NOW - 5 )) releasing snapshot $(( NOW - 1000 )) 600 4321
+    wd
+    [ "$status" -eq 0 ]
+    [ "$(mails_with release_over_budget)" -eq 1 ]
+    [ "$(mails_with release_stuck)" -eq 0 ]
+    # and just inside the limit it is not
+    rm -f "${GREMION_ROOT}"/data/cd/outbox/*.eml "${GREMION_ROOT}/data/cd/notified.marks"
+    hb $(( NOW - 5 )) releasing snapshot $(( NOW - 860 )) 600 4321
+    wd
+    [ "$(mail_count)" -eq 0 ]
+}
+
+@test "stuck: a missing or unreadable heartbeat while the lock is held is stuck (a held lock is not proof of life)" {
+    hold_cd_lock
+    wd
+    [ "$(mails_with no_heartbeat)" -eq 1 ]
+}
+
+# ---------------------------------------------------------------------------
+# Liveness is state-free: the state file is never parsed first
+# ---------------------------------------------------------------------------
+
+@test "state-free: with state.json deleted, truncated or carrying v 99 the liveness rules still run and the watchdog mails stalled with detail state_unreadable and exits 0" {
+    cd_need_flock
+    local variant
+    for variant in deleted truncated v99; do
+        rm -f "${GREMION_ROOT}"/data/cd/outbox/*.eml "${GREMION_ROOT}/data/cd/notified.marks" "${GREMION_ROOT}/data/cd/ALERT"
+        case "$variant" in
+            deleted) rm -f "${GREMION_ROOT}/data/cd/state.json" ;;
+            truncated) printf '{"v":1,"phase":"idle","ho' > "${GREMION_ROOT}/data/cd/state.json" ;;
+            v99) cd_base_state | jq '.v = 99' > "${GREMION_ROOT}/data/cd/state.json" ;;
+        esac
+        # a stale heartbeat as well: the liveness rule must still have run
+        hb $(( NOW - 1000 ))
+        wd
+        [ "$status" -eq 0 ]
+        [ "$(mails_with state_unreadable)" -eq 1 ]
+        [ "$(mails_with no_tick)" -eq 1 ]
+        # and a second run is quiet about both
+        wd
+        [ "$status" -eq 0 ]
+        [ "$(mails_with state_unreadable)" -eq 1 ]
+        [ "$(mails_with no_tick)" -eq 1 ]
+    done
+}
+
+@test "state-free: through the program, a deleted state is exit 0 with the same mails (the dispatcher does not turn it into exit 2)" {
+    cd_need_flock
+    rm -f "${GREMION_ROOT}/data/cd/state.json"
+    hb $(( NOW - 1000 ))
+    run cd_prog watchdog
+    [ "$status" -eq 0 ]
+    [ "$(mails_with state_unreadable)" -eq 1 ]
+    [ "$(mails_with no_tick)" -eq 1 ]
+}
+
+@test "state-free: the watchdog never writes the state file or takes the cd lock for good" {
+    cd_need_flock
+    fresh_hb
+    local before
+    before="$(cat "${GREMION_ROOT}/data/cd/state.json")"
+    cd_write_cfg
+    cd_advance 3
+    wd
+    [ "$status" -eq 0 ]
+    [ "$(cat "${GREMION_ROOT}/data/cd/state.json")" = "$before" ]
+}
+
+# ---------------------------------------------------------------------------
+# The kill switch does not disable the watchdog
+# ---------------------------------------------------------------------------
+
+@test "kill switch: the present file gives one weekly reminder" {
+    cd_need_flock
+    touch "${GREMION_ROOT}/etc/cd.disabled"
+    fresh_hb
+    wd
+    [ "$status" -eq 0 ]
+    [ "$(grep -l '^kind: killswitch$' "${GREMION_ROOT}"/data/cd/outbox/*.eml | wc -l | tr -d ' ')" -eq 1 ]
+    cd_advance 600
+    fresh_hb
+    wd
+    [ "$(mail_count)" -eq 1 ]
+    cd_advance $(( 7 * 86400 ))
+    fresh_hb
+    wd
+    [ "$(mail_count)" -eq 2 ]
+}
+
+@test "kill switch: an idle program with no heartbeat for hours is not an alarm (automation is off on purpose)" {
+    cd_need_flock
+    touch "${GREMION_ROOT}/etc/cd.disabled"
+    hb $(( NOW - 5000 )) idle tick
+    wd
+    [ "$(mails_with no_tick)" -eq 0 ]
+}
+
+@test "kill switch: a heartbeat that names a release in flight with nobody holding the lock is still an alarm" {
+    cd_need_flock
+    touch "${GREMION_ROOT}/etc/cd.disabled"
+    hb $(( NOW - 5000 )) watching watch $(( NOW - 6000 )) 1200 4321
+    wd
+    [ "$(mails_with no_tick)" -eq 1 ]
+}
+
+@test "kill switch: a stuck release is still reported while the switch is present" {
+    hold_cd_lock
+    touch "${GREMION_ROOT}/etc/cd.disabled"
+    hb $(( NOW - 400 )) watching watch $(( NOW - 600 )) 1200 4321
+    wd
+    [ "$(mails_with release_stuck)" -eq 1 ]
+}
+
+# ---------------------------------------------------------------------------
+# The mail path
+# ---------------------------------------------------------------------------
+
+@test "outbox: a file older than one hour on the relay transport writes data/cd/ALERT and a logger line" {
+    cd_need_flock
+    run nlib 'cd_notify held sha12=aaaaaaaaaaaa hold=blocked'
+    cd_advance 3700
+    fresh_hb
+    [ ! -e "${GREMION_ROOT}/data/cd/ALERT" ]
+    wd
+    [ "$status" -eq 0 ]
+    [ -s "${GREMION_ROOT}/data/cd/ALERT" ]
+    assert_recorded logger "gremion-cd"
+}
+
+@test "outbox: a file younger than one hour is no alert" {
+    cd_need_flock
+    run nlib 'cd_notify held sha12=aaaaaaaaaaaa hold=blocked'
+    cd_advance 3500
+    fresh_hb
+    wd
+    [ ! -e "${GREMION_ROOT}/data/cd/ALERT" ]
+}
+
+@test "outbox: on the Stalwart transport an old file is a stated limit, not an alert" {
+    cd_need_flock
+    echo stalwart > "${GREMION_ROOT}/.transport"
+    run nlib 'cd_notify held sha12=aaaaaaaaaaaa hold=blocked'
+    cd_advance 7200
+    fresh_hb
+    wd
+    [ "$status" -eq 0 ]
+    [ ! -e "${GREMION_ROOT}/data/cd/ALERT" ]
+}
+
+@test "outbox: the watchdog flushes the queue, so the mail of a parked process still leaves the host" {
+    cd_need_flock
+    rm -f "${GREMION_ROOT}/.curl-fail"
+    run nlib 'cd_notify parked sha12=aaaaaaaaaaaa colour=blue rule=watch_pause_cap'
+    fresh_hb
+    wd
+    [ "$status" -eq 0 ]
+    [ "$(curl_calls)" -eq 1 ]
+    [ "$(mail_count)" -eq 0 ]
+}
+
+# ---------------------------------------------------------------------------
+# The rules that read the state
+# ---------------------------------------------------------------------------
+
+state_poll() {
+    # state_poll LAST_AT LAST_OK TIP12 VERDICT
+    cd_seed_state '.live = '"$CD_LIVE_JSON"' | .poll.last_at = "'"$1"'" | .poll.last_ok = '"$2"' | .poll.tip12 = "'"$3"'" | .poll.verdict = "'"$4"'"'
+}
+
+@test "poll: a last success older than CD_STALL_MINUTES while ls-remote shows a newer tip gives the stalled mail" {
+    cd_need_flock
+    state_poll "$(date -u -d "@$(( NOW - 7 * 3600 ))" +%Y-%m-%dT%H:%M:%SZ)" true bbbbbbbbbbbb none
+    printf '%s\n' cccccccccccccccccccccccccccccccccccccccc > "${GREMION_ROOT}/.git-tip"
+    fresh_hb
+    wd
+    [ "$status" -eq 0 ]
+    [ "$(mails_with poll_stale)" -eq 1 ]
+    grep -qx 'poll_age_min: 420' "$(mail_files)"
+    assert_recorded git "ls-remote"
+}
+
+@test "poll: no mail when ls-remote shows the tip the poller already has, or the live release, or cannot be read" {
+    cd_need_flock
+    state_poll "$(date -u -d "@$(( NOW - 7 * 3600 ))" +%Y-%m-%dT%H:%M:%SZ)" true bbbbbbbbbbbb none
+    fresh_hb
+    printf '%s\n' bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb > "${GREMION_ROOT}/.git-tip"
+    wd
+    [ "$(mail_count)" -eq 0 ]
+    printf '%s\n' aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa > "${GREMION_ROOT}/.git-tip"
+    wd
+    [ "$(mail_count)" -eq 0 ]
+    touch "${GREMION_ROOT}/.git-fail"
+    wd
+    [ "$(mail_count)" -eq 0 ]
+}
+
+@test "poll: a recent success (inside CD_STALL_MINUTES) does not even ask the repository" {
+    cd_need_flock
+    state_poll "$(date -u -d "@$(( NOW - 5 * 3600 ))" +%Y-%m-%dT%H:%M:%SZ)" true bbbbbbbbbbbb none
+    printf '%s\n' cccccccccccccccccccccccccccccccccccccccc > "${GREMION_ROOT}/.git-tip"
+    fresh_hb
+    wd
+    [ "$(mail_count)" -eq 0 ]
+    refute_recorded git "ls-remote"
+}
+
+@test "poll: a stale poll mails once a day, not every run" {
+    cd_need_flock
+    state_poll "$(date -u -d "@$(( NOW - 7 * 3600 ))" +%Y-%m-%dT%H:%M:%SZ)" true bbbbbbbbbbbb none
+    printf '%s\n' cccccccccccccccccccccccccccccccccccccccc > "${GREMION_ROOT}/.git-tip"
+    fresh_hb
+    wd
+    cd_advance 600
+    fresh_hb
+    wd
+    [ "$(mails_with poll_stale)" -eq 1 ]
+    cd_advance 86400
+    fresh_hb
+    wd
+    [ "$(mails_with poll_stale)" -eq 2 ]
+}
+
+@test "poll: a failing poll (last_ok false) is aged from the last success the watchdog saw" {
+    cd_need_flock
+    printf 'poll_ok_epoch=%s\n' $(( NOW - 7 * 3600 )) > "${GREMION_ROOT}/data/cd/watchdog.state"
+    state_poll "$(date -u -d "@$(( NOW - 30 ))" +%Y-%m-%dT%H:%M:%SZ)" false bbbbbbbbbbbb none
+    printf '%s\n' cccccccccccccccccccccccccccccccccccccccc > "${GREMION_ROOT}/.git-tip"
+    fresh_hb
+    wd
+    [ "$(mails_with poll_stale)" -eq 1 ]
+}
+
+@test "poll: a failing poll the watchdog has no earlier success for starts the clock at its first sight" {
+    cd_need_flock
+    state_poll "$(date -u -d "@$(( NOW - 30 ))" +%Y-%m-%dT%H:%M:%SZ)" false bbbbbbbbbbbb none
+    printf '%s\n' cccccccccccccccccccccccccccccccccccccccc > "${GREMION_ROOT}/.git-tip"
+    fresh_hb
+    wd
+    [ "$(mail_count)" -eq 0 ]
+    grep -qx "poll_ok_epoch=${NOW}" "${GREMION_ROOT}/data/cd/watchdog.state"
+}
+
+@test "main red: six hours of red gives one mail per red episode" {
+    cd_need_flock
+    state_poll "$(date -u -d "@$NOW" +%Y-%m-%dT%H:%M:%SZ)" true bbbbbbbbbbbb red
+    fresh_hb
+    wd
+    [ "$(mail_count)" -eq 0 ]
+    cd_advance $(( 6 * 3600 - 60 ))
+    state_poll "$(date -u -d "@$(cd_clock)" +%Y-%m-%dT%H:%M:%SZ)" true bbbbbbbbbbbb red
+    fresh_hb
+    wd
+    [ "$(mail_count)" -eq 0 ]
+    cd_advance 120
+    state_poll "$(date -u -d "@$(cd_clock)" +%Y-%m-%dT%H:%M:%SZ)" true bbbbbbbbbbbb red
+    fresh_hb
+    wd
+    [ "$(mails_with main_red)" -eq 1 ]
+    cd_advance 600
+    state_poll "$(date -u -d "@$(cd_clock)" +%Y-%m-%dT%H:%M:%SZ)" true bbbbbbbbbbbb red
+    fresh_hb
+    wd
+    [ "$(mails_with main_red)" -eq 1 ]
+    # green again ends the episode; a new red counts from its own start
+    cd_advance 60
+    state_poll "$(date -u -d "@$(cd_clock)" +%Y-%m-%dT%H:%M:%SZ)" true bbbbbbbbbbbb green
+    fresh_hb
+    wd
+    cd_advance 60
+    state_poll "$(date -u -d "@$(cd_clock)" +%Y-%m-%dT%H:%M:%SZ)" true bbbbbbbbbbbb red
+    fresh_hb
+    wd
+    cd_advance $(( 6 * 3600 + 60 ))
+    state_poll "$(date -u -d "@$(cd_clock)" +%Y-%m-%dT%H:%M:%SZ)" true bbbbbbbbbbbb red
+    fresh_hb
+    wd
+    [ "$(mails_with main_red)" -eq 2 ]
+}
+
+@test "main red: an empty poll tip (a poll that never ran) does not shift the verdict: red for six hours still mails" {
+    cd_need_flock
+    state_poll "" true "" red
+    fresh_hb
+    wd
+    [ "$(mail_count)" -eq 0 ]
+    cd_advance $(( 6 * 3600 + 60 ))
+    fresh_hb
+    wd
+    [ "$(mails_with main_red)" -eq 1 ]
+}
+
+@test "kill switch: with the switch on, an old poll with a newer tip and a red verdict are not alarms (nothing polls); the weekly reminder is the one mail" {
+    cd_need_flock
+    touch "${GREMION_ROOT}/etc/cd.disabled"
+    state_poll "$(date -u -d "@$(( NOW - 7 * 3600 ))" +%Y-%m-%dT%H:%M:%SZ)" true bbbbbbbbbbbb red
+    printf '%s\n' cccccccccccccccccccccccccccccccccccccccc > "${GREMION_ROOT}/.git-tip"
+    fresh_hb
+    wd
+    cd_advance $(( 7 * 3600 ))
+    fresh_hb
+    wd
+    [ "$(mails_with poll_stale)" -eq 0 ]
+    [ "$(mails_with main_red)" -eq 0 ]
+    [ "$(grep -l '^kind: killswitch$' "${GREMION_ROOT}"/data/cd/outbox/*.eml | wc -l | tr -d ' ')" -eq 1 ]
+    refute_recorded git "ls-remote"
+}
+
+@test "kill switch: a poll that was off on purpose is not stale the moment the switch is removed" {
+    cd_need_flock
+    touch "${GREMION_ROOT}/etc/cd.disabled"
+    state_poll "$(date -u -d "@$(( NOW - 9 * 3600 ))" +%Y-%m-%dT%H:%M:%SZ)" true bbbbbbbbbbbb none
+    printf '%s\n' cccccccccccccccccccccccccccccccccccccccc > "${GREMION_ROOT}/.git-tip"
+    fresh_hb
+    wd
+    rm -f "${GREMION_ROOT}/etc/cd.disabled"
+    cd_advance 600
+    fresh_hb
+    wd
+    [ "$(mails_with poll_stale)" -eq 0 ]
+}
+
+@test "stalled: the commonest dead-man mail names the heartbeat's stage (tick) instead of redacting it" {
+    cd_need_flock
+    hb $(( NOW - 1000 )) idle tick
+    wd
+    grep -qx 'stage: tick' "$(mail_files)"
+}
+
+# ---------------------------------------------------------------------------
+# The program and the guard
+# ---------------------------------------------------------------------------
+
+@test "program: a half-written library does not stop the real watchdog (exit 0, ALERT written, the check ran)" {
+    cd_need_flock
+    local src="${GREMION_ROOT}/host-copy"
+    cp -r "$HOST_SRC" "$src"
+    printf 'cd_cmd_zz_half() {\n  echo half\n' > "${src}/lib/cd/zz-half.sh"
+    hb $(( NOW - 1000 ))
+    run env HOST_SRC="$src" "${src}/bin/gremion-cd" watchdog
+    [ "$status" -eq 0 ]
+    [ -s "${GREMION_ROOT}/data/cd/ALERT" ]
+    [ "$(mails_with no_tick)" -eq 1 ]
+}
+
+# forbidden_sources FILE -- prints each line of FILE that sources, or names a call of, the
+# poller or the pipeline driver; 0 when there is none to print.
+forbidden_sources() {
+    grep -nE '^[[:space:]]*(\.|source)[[:space:]].*(github|driver)\.sh|(^|[^A-Za-z0-9_])(cd_gh_[a-z_]+|cd_pipeline_[a-z_]+|cd_failure_policy|cd_cmd_(tick|poll|release_now))([^A-Za-z0-9_]|$)' "$1" || true
+}
+
+@test "guard: watchdog.sh does not source github.sh or driver.sh, nor call their functions" {
+    run forbidden_sources "${HOST_SRC}/lib/cd/watchdog.sh"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+@test "guard: the guard sees a source line and a call (watched red on a copy that has them)" {
+    local copy="${GREMION_ROOT}/watchdog-bad.sh"
+    cp "${HOST_SRC}/lib/cd/watchdog.sh" "$copy"
+    printf '. "${CD_LIB_DIR}/github.sh"\n' >> "$copy"
+    run forbidden_sources "$copy"
+    [[ "$output" == *github.sh* ]]
+    cp "${HOST_SRC}/lib/cd/watchdog.sh" "$copy"
+    printf '    cd_gh_tip\n' >> "$copy"
+    run forbidden_sources "$copy"
+    [[ "$output" == *cd_gh_tip* ]]
+    cp "${HOST_SRC}/lib/cd/watchdog.sh" "$copy"
+    printf 'source /x/driver.sh\n' >> "$copy"
+    run forbidden_sources "$copy"
+    [[ "$output" == *driver.sh* ]]
+}
