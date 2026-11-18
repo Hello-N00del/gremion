@@ -1,0 +1,25 @@
+[
+  { "type": "deletion", "ruleset_source_type": "Repository", "ruleset_id": 9001 },
+  { "type": "non_fast_forward", "ruleset_source_type": "Repository", "ruleset_id": 9001 },
+  { "type": "required_linear_history", "ruleset_source_type": "Repository", "ruleset_id": 9001 },
+  {
+    "type": "pull_request",
+    "ruleset_source_type": "Repository",
+    "ruleset_id": 9001,
+    "parameters": {
+      "required_approving_review_count": 0,
+      "dismiss_stale_reviews_on_push": false,
+      "require_code_owner_review": false,
+      "allowed_merge_methods": ["squash"]
+    }
+  },
+  {
+    "type": "required_status_checks",
+    "ruleset_source_type": "Repository",
+    "ruleset_id": 9001,
+    "parameters": {
+      "strict_required_status_checks_policy": false,
+      "required_status_checks": [ { "context": "Verify gate", "integration_id": 15368 } ]
+    }
+  }
+]
