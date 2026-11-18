@@ -221,14 +221,14 @@ test('derive: zero derived services, a missing file or a template without COMPOS
   assert.throws(() => derivedServices('ops', { root: nokey }), /unknown project/)
 })
 
-test('derive: the committed tree gives state {legal, vector, matrix, nextcloud, collabora, element-call, fallback} and app {gremion-ui, gremion-public, control-panel, migrate, tenant-create, kernel-api, kernel-api-migrate, calendar-service, content-service, newsletter-service}', () => {
+test('derive: the committed tree gives state {legal, vector, matrix, nextcloud, collabora, element-call, fallback} and app {gremion-ui, gremion-public, control-panel, migrate, tenant-create, kernel-api, kernel-api-migrate, calendar-service, content-service, newsletter-service, board-service}', () => {
   // TASK-198 adds matrix (Synapse, built from modules/messaging/synapse) to the
   // state set (brief Q1: it joins TASK-048b's state pins). The pilot adds nextcloud,
   // collabora and element-call (docker-compose.yml, built from docker/<name>).
   assert.deepEqual(derivedServices('state'), ['legal', 'vector', 'matrix', 'nextcloud', 'collabora', 'element-call', 'fallback'])
   // TASK-043 adds the control panel to the app tier (docker-compose.app.yml); the pilot adds the
   // three module leaves (built from modules/<id>/Dockerfile, profile-gated).
-  assert.deepEqual(derivedServices('app'), ['gremion-ui', 'gremion-public', 'control-panel', 'migrate', 'tenant-create', 'kernel-api', 'kernel-api-migrate', 'calendar-service', 'content-service', 'newsletter-service'])
+  assert.deepEqual(derivedServices('app'), ['gremion-ui', 'gremion-public', 'control-panel', 'migrate', 'tenant-create', 'kernel-api', 'kernel-api-migrate', 'calendar-service', 'content-service', 'newsletter-service', 'board-service'])
 })
 
 // ── one grep set for both layers (TASK-048b TDD 4) ─────────────────────────
