@@ -3,7 +3,7 @@ import type { RequestHandler } from './$types'
 import { Role, hasRole } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
 import { resolveBoardOrgUnitScope } from '$lib/server/board/scope'
-import { resolveBoardBackendOr503 } from '$lib/server/board/backend/resolve'
+import { mapBoardUnavailable, resolveBoardBackendOr503 } from '$lib/server/board/backend/resolve'
 import { getDb } from '$lib/server/db'
 import { getDisplayNameResolver } from '$lib/server/identity/display-names'
 
@@ -17,7 +17,7 @@ import { getDisplayNameResolver } from '$lib/server/identity/display-names'
 // BOARD_BACKEND=service (the leaf's own DB — #384, board-cutover.md gap #1).
 // The filter runs in code, preserving the former single-query result exactly
 // (same items, same ORDER BY p.meeting_date DESC, ai.created_at order).
-export const GET: RequestHandler = async ({ params, locals }) => {
+export const GET: RequestHandler = mapBoardUnavailable(async ({ params, locals }) => {
   const session = await locals.auth()
   const user = session?.user as SessionUser | undefined
   if (!user || !hasRole(user.roles, Role.Member)) throw error(403, 'Forbidden')
@@ -52,4 +52,4 @@ export const GET: RequestHandler = async ({ params, locals }) => {
       return { ...rest, assignee_name: assignee_keycloak_id ? (names.get(assignee_keycloak_id) ?? null) : null }
     }),
   })
-}
+})

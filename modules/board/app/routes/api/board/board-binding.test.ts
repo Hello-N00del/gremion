@@ -19,7 +19,10 @@ const { mockResolveBackend, mockGetActionItem, mockGetProtocol } = vi.hoisted(()
 }))
 
 vi.mock('$lib/server/board/scope', () => ({ resolveBoardOrgUnitScope: vi.fn(async () => ['ou-x']) }))
-vi.mock('$lib/server/board/backend/resolve', () => ({ resolveBoardBackendOr503: mockResolveBackend }))
+vi.mock('$lib/server/board/backend/resolve', async (orig) => ({
+  ...(await orig<typeof import('$lib/server/board/backend/resolve')>()),
+  resolveBoardBackendOr503: mockResolveBackend,
+}))
 vi.mock('$lib/server/protocols/protocol-db', () => ({ getActionItem: mockGetActionItem, getProtocol: mockGetProtocol }))
 
 import { POST as createCard, PATCH as moveCard } from './[id]/cards/+server'

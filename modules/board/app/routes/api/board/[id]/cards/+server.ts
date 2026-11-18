@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { Role, hasRole } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
 import { resolveBoardOrgUnitScope } from '$lib/server/board/scope'
-import { resolveBoardBackendOr503 } from '$lib/server/board/backend/resolve'
+import { mapBoardUnavailable, resolveBoardBackendOr503 } from '$lib/server/board/backend/resolve'
 import type { BoardBackendPort, UpdateCardPatch } from '$lib/server/board/backend'
 import { isMemberOf } from '$lib/server/governance/org-units-db'
 
@@ -72,7 +72,7 @@ const moveSchema = z.object({ cardId: z.string().min(1), stackId: z.string().min
 // just scoped.
 
 // POST /api/board/[id]/cards — create a card.
-export const POST: RequestHandler = async ({ params, request, locals }) => {
+export const POST: RequestHandler = mapBoardUnavailable(async ({ params, request, locals }) => {
   const resolved = resolveBoardBackendOr503()
   if (resolved instanceof Response) return resolved
   const backend = resolved
@@ -84,12 +84,12 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
   await assertAssignable(deck.board.org_unit_id, parsed.data.assigneeKeycloakId)
   const card = await backend.createCard({ ...parsed.data, createdBy: user.id })
   return json({ data: card }, { status: 201 })
-}
+})
 
 // PATCH /api/board/[id]/cards — two verbs on one gate:
 //   body names a stackId → move/reorder a card (its stack = its status);
 //   otherwise            → edit it (title, description, assignee, due date).
-export const PATCH: RequestHandler = async ({ params, request, locals }) => {
+export const PATCH: RequestHandler = mapBoardUnavailable(async ({ params, request, locals }) => {
   const resolved = resolveBoardBackendOr503()
   if (resolved instanceof Response) return resolved
   const backend = resolved
@@ -105,7 +105,7 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
   const card = await backend.moveCard(parsed.data.cardId, { stackId: parsed.data.stackId, order: parsed.data.order })
   if (!card) throw error(404, 'Karte nicht gefunden')
   return json({ data: card })
-}
+})
 
 // The edit shares the move's gate (member + board in scope) and its BOLA check: the card must be
 // on THIS board. The assignee must be a member of the board's own body (also checked here, never

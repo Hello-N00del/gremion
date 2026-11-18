@@ -1,4 +1,4 @@
-<!-- i18n-sync: source=README.md sha256=495079f70c7090781620554371afbcc8d986a2bfbabe9f14fda4eaadae546235 -->
+<!-- i18n-sync: source=README.md sha256=b3bd451c7aa9fb4b90dcb642e09bcf294ef9fb5dcc2606122594f0a60d2e2084 -->
 [English](./README.md) | **Deutsch**
 
 # board
@@ -76,7 +76,7 @@ Das Aufbewahrungsprofil `rp-brd-module-data` ist ein vorläufiges Profil des Kat
 
 | Variable | Verwendet von | Bedeutung |
 |---|---|---|
-| `BOARD_BACKEND` | Kernel-App | `inprocess` (Standard) oder `service`; jeder andere Wert wird abgelehnt. |
+| `BOARD_BACKEND` | Kernel-App | `auto` (Standard): je Mandant entscheidet das Ortskennzeichen (`board_location`, Migration 0066) zwischen den Kernel-Tabellen und dem Leaf; ein Mandant ohne Zeile wird aus den Kernel-Tabellen bedient. `inprocess` oder `service` erzwingen ein Backend und ignorieren das Kennzeichen. Jeder andere Wert wird abgelehnt. |
 | `BOARD_SERVICE_URL` | Kernel-App | Basis-URL des Leaf, wenn das Backend `service` ist. |
 | `INTERNAL_BOARD_SECRET` | beide | Shared Secret im Header `x-internal-auth`. Nicht gesetzt: Der Leaf startet, und jede geschützte Route antwortet mit 403. |
 | `GREMION_BOARD_PG_URL` | Leaf | PostgreSQL-Server des Moduls; der Datenbankname wird je Mandant ersetzt (`t_<hex32>__board`). Pflicht, es gibt keinen Standardwert; ohne sie verweigert der Leaf den Start. |

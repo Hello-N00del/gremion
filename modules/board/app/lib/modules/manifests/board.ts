@@ -25,9 +25,10 @@ export const boardManifest: ModuleManifest = {
   status: { label: 'Aufgaben', note: 'Aufgabenboards der Gremien.' },
   order: 100,
   toggleable: true,
-  // No notTenantIsolated marker: the default (BOARD_BACKEND unset) serves the board in-process, and
-  // every handle comes from getDb(), i.e. the requesting customer's own kernel database (migration
-  // 0034), so the board is as separated as protocols and members. The module is selectable at
+  // No notTenantIsolated marker: a customer whose location flag says kernel (every customer until a
+  // move, and the default) is served in-process, and every handle comes from getDb(), i.e. the
+  // requesting customer's own kernel database (migration 0034), so the board is as separated as
+  // protocols and members. The module is selectable at
   // customer creation through the isolation gate (board wave, 2026-11-11); module.json declares no
   // database. The board_<slug> leaf catalogue (services/board, BOARD_BACKEND=service) is test
   // environment only and not what a created customer runs.

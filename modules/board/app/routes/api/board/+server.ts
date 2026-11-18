@@ -4,10 +4,10 @@ import type { RequestHandler } from './$types'
 import { Role, hasRole } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
 import { resolveBoardOrgUnitScope } from '$lib/server/board/scope'
-import { resolveBoardBackendOr503 } from '$lib/server/board/backend/resolve'
+import { mapBoardUnavailable, resolveBoardBackendOr503 } from '$lib/server/board/backend/resolve'
 
 // GET /api/board — boards the current user may see (org-unit scoped).
-export const GET: RequestHandler = async ({ locals }) => {
+export const GET: RequestHandler = mapBoardUnavailable(async ({ locals }) => {
   const session = await locals.auth()
   const user = session?.user as SessionUser | undefined
   if (!user || !hasRole(user.roles, Role.Member)) throw error(403, 'Forbidden')
@@ -20,7 +20,7 @@ export const GET: RequestHandler = async ({ locals }) => {
     data: boards.filter((b) => !b.archived),
     archivedCount: boards.filter((b) => b.archived).length,
   })
-}
+})
 
 // Default shape of a body's board: the same three-column flow the seed uses.
 const DEFAULT_BOARD_NAME = 'Aufgaben'
@@ -34,7 +34,7 @@ const createSchema = z.object({ orgUnitId: z.guid() })
 // create a board for a body they are not in (it-admin: all units). 409 carries
 // the existing board id so the client can simply open it. No personal data is
 // logged here.
-export const POST: RequestHandler = async ({ request, locals }) => {
+export const POST: RequestHandler = mapBoardUnavailable(async ({ request, locals }) => {
   const session = await locals.auth()
   const user = session?.user as SessionUser | undefined
   if (!user || !hasRole(user.roles, Role.Member)) throw error(403, 'Forbidden')
@@ -54,4 +54,4 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   }
   const created = await backend.createBoard({ orgUnitId, name: DEFAULT_BOARD_NAME, stacks: DEFAULT_STACKS })
   return json({ data: { id: created.board.id } }, { status: 201 })
-}
+})

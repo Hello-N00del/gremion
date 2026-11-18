@@ -1,6 +1,7 @@
 // gremion-ui/src/lib/server/board/backend/inprocess-client.ts
-// branch-by-abstraction default path; byte-identical to current behaviour until
-// the deliberate (held) cutover to 'service'.
+// branch-by-abstraction in-process path: byte-identical to the monolith. The router
+// (routed-client.ts) uses it for a customer whose board lives in the kernel tables;
+// BOARD_BACKEND=inprocess forces it.
 //
 // Every method is a thin async delegate to the corresponding boardDb export.
 // No logic lives here — callers use BoardBackendPort, not this class directly.

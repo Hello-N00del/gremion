@@ -13,7 +13,8 @@ const { listBoardsForOrgUnits, resolveScope, listOrgUnits, listOrgUnitMembers, d
   resolveMany: vi.fn(),
 }))
 vi.mock('$lib/server/board/scope', () => ({ resolveBoardOrgUnitScope: resolveScope }))
-vi.mock('$lib/server/board/backend/resolve', () => ({
+vi.mock('$lib/server/board/backend/resolve', async (orig) => ({
+  ...(await orig<typeof import('$lib/server/board/backend/resolve')>()),
   resolveBoardBackendForPage: () => ({
     listBoardsForOrgUnits,
     deckFor,

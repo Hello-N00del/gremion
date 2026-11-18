@@ -383,7 +383,7 @@ data-plane file against the control-plane chain, or the reverse.
 
 ## What is here, what is not
 
-**38 data-plane migrations ship in this repository**, and they apply in this
+**39 data-plane migrations ship in this repository**, and they apply in this
 order:
 
 | File | What it does |
@@ -426,6 +426,7 @@ order:
 | `0063_module_switch_request.sql` | Module self-service (Karenz phase 1): `module_switch_request`, the tenant's own record of a council module switch (catalogue module id, action, actor, state from `queued` to `applied`, outcome and config error, claim and notification stamps). Additive, expand-only. Kernel-only (written here, not ported). |
 | `0064_module_karenz.sql` | Module self-service (Karenz phase 2): the tenant tables of the 30-day switch-off: `module_karenz_step` (step ledger), `module_karenz_item` (locked or archived external items), `module_karenz_notice` (who was mailed), `retained_record` (sealed read-only copies; append-only for the app) and `karenz_data_key` (their wrapped keys: a row is never deleted and `wrapped` changes only through `karenz_rewrap_data_key()`, enforced by a row guard trigger), `module_karenz_erasure` (Art. 17 subject ids to replay), `retained_sink_state` (per-tenant sink ids). A failed step or notice must carry its error (CHECK). Additive, expand-only (tables, indexes, and the row guard on the table this file creates). Kernel-only (written here, not ported). |
 | `0065_module_switch_pending.sql` | Module self-service: `module_switch_pending`, a confirmed module switch that waits for the second factor. One short-lived, single-use row per person: the SHA-256 of a random handle (the handle itself lives only in an HttpOnly cookie), the person who confirmed, the second-factor time of the confirming session, the confirmed input, the key the platform request is submitted under, and an expiry on the database clock (at most ten minutes, CHECK). The row is removed by the statement that reads it. Working state, not a record: the switch that is carried out is recorded in `module_switch_request` and in `audit_log`. Additive, expand-only. Kernel-only (written here, not ported). |
+| `0066_board_location.sql` | Board: `board_location`, the one-row flag that says where a customer's board lives (`kernel`, `moving` or `module`), with `changed_at` and the counts and fingerprints of the move as `moved_state`. A missing row means `kernel`; the app only reads it, the board move writes it. Additive, expand-only; kernel-only (written here, not ported). |
 
 Plus **5 control-plane migrations** in
 [`../migrations-control/`](../migrations-control/): `001_tenant_registry.sql`,
@@ -445,7 +446,7 @@ imposes on a pre-existing database are in
 ### Migrations that exist in the product and not here
 
 The reference product chain has **58** data-plane files; 31 of them ship
-here (the 32nd to 38th files here, `0059`, `0060`, `0061`, `0062`, `0063`, `0064` and `0065`, are kernel-only), so **27 are absent**. Every one of them is module-owned or unshipped — finance
+here (the 32nd to 39th files here, `0059`, `0060`, `0061`, `0062`, `0063`, `0064`, `0065` and `0066`, are kernel-only), so **27 are absent**. Every one of them is module-owned or unshipped — finance
 (`013`–`017`, `019`–`023`, `025`–`032`, `035`, `036`) and content (`044`–`047`)
 belong to their modules, which now carry their own chains under
 `modules/finance/migrations` and `modules/content/migrations` (own databases,

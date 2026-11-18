@@ -33,9 +33,13 @@ vi.mock('$lib/server/tenant/context', () => ({
   runWithTenant: (_ctx: unknown, fn: () => unknown) => fn(),
 }))
 
+const readLocation = vi.hoisted(() => vi.fn())
+vi.mock('./location', async (orig) => ({ ...(await orig<typeof import('./location')>()), getBoardLocation: readLocation }))
+
 import { getBoardBackend } from './index'
 import { InprocessBoardClient } from './inprocess-client'
 import { ServiceBoardClient } from './service-client'
+import { RoutedBoardBackend } from './routed-client'
 
 const savedEnv = process.env.BOARD_BACKEND
 
@@ -46,11 +50,49 @@ afterEach(() => {
 })
 
 describe('getBoardBackend() factory', () => {
-  it('returns InprocessBoardClient when BOARD_BACKEND is unset', () => {
+  // guard: watched RED by restoring the old default ('inprocess'), which would ignore the flag
+  it('returns the router when BOARD_BACKEND is unset', () => {
     delete process.env.BOARD_BACKEND
     const backend = getBoardBackend()
-    expect(backend).toBeInstanceOf(InprocessBoardClient)
-    expect(backend.kind).toBe('inprocess')
+    expect(backend).toBeInstanceOf(RoutedBoardBackend)
+    expect(backend.kind).toBe('routed')
+  })
+
+  it('returns the router when BOARD_BACKEND=auto', () => {
+    process.env.BOARD_BACKEND = 'auto'
+    expect(getBoardBackend('corr-1')).toBeInstanceOf(RoutedBoardBackend)
+  })
+
+  it('is synchronous: the result is a port, not a promise', () => {
+    for (const value of [undefined, 'auto', 'inprocess', 'service']) {
+      if (value === undefined) delete process.env.BOARD_BACKEND
+      else process.env.BOARD_BACKEND = value
+      const backend = getBoardBackend()
+      expect(backend).not.toBeInstanceOf(Promise)
+      expect(typeof (backend as unknown as { then?: unknown }).then, String(value)).toBe('undefined')
+    }
+  })
+
+  it('does not read the flag when it builds the router, only when a method runs', async () => {
+    delete process.env.BOARD_BACKEND
+    readLocation.mockClear()
+    const backend = getBoardBackend()
+    expect(readLocation).not.toHaveBeenCalled()
+    readLocation.mockResolvedValue('kernel')
+    await backend.getBoard('b1')
+    expect(readLocation).toHaveBeenCalledTimes(1)
+  })
+
+  it('the forced modes never read the flag', async () => {
+    readLocation.mockClear()
+    process.env.BOARD_BACKEND = 'inprocess'
+    await getBoardBackend().getBoard('b1')
+    expect(readLocation).not.toHaveBeenCalled()
+    // the service client refuses to run without its URL and secret; it must do so without a flag read
+    delete process.env.BOARD_SERVICE_URL
+    process.env.BOARD_BACKEND = 'service'
+    await getBoardBackend().getBoard('b1').catch(() => undefined)
+    expect(readLocation).not.toHaveBeenCalled()
   })
 
   it('returns InprocessBoardClient when BOARD_BACKEND=inprocess', () => {
@@ -78,7 +120,7 @@ describe('getBoardBackend() factory', () => {
   })
 
   it('both backends expose the create path createBoard + createStack (R29-BOARD-STORE-S B5)', () => {
-    for (const value of ['inprocess', 'service']) {
+    for (const value of ['auto', 'inprocess', 'service']) {
       process.env.BOARD_BACKEND = value
       const backend = getBoardBackend()
       expect(typeof backend.createBoard, value).toBe('function')

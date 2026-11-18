@@ -1,8 +1,9 @@
 // TRD-196 / PRD-OPS-005 — DB-backed proof of the board erasure hook against the
 // real kernel schema (migration 0034: board / stack / card).
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { getDb } from '$lib/server/db'
 import { boardErasureHook, BOARD_ERASED_MARKER } from './erasure'
+import { resetBoardLocationCacheForTests } from './backend/location'
 
 const SUBJECT = 'kc-board-subject'
 const OTHER = 'kc-board-other'
@@ -23,6 +24,13 @@ async function seed() {
 
 beforeEach(async () => {
   await getDb()`TRUNCATE org_units CASCADE`
+  await getDb()`DELETE FROM board_location`
+  resetBoardLocationCacheForTests()
+})
+
+afterAll(async () => {
+  await getDb()`DELETE FROM board_location`
+  resetBoardLocationCacheForTests()
 })
 
 describe('boardErasureHook (real schema)', () => {
@@ -50,5 +58,23 @@ describe('boardErasureHook (real schema)', () => {
     await boardErasureHook.erase({ tenantId: 't', subjectId: SUBJECT, db: sql })
     const again = await boardErasureHook.erase({ tenantId: 't', subjectId: SUBJECT, db: sql })
     expect(again).toEqual({ status: 'erased', counts: { card_assignee: 0, card_created_by: 0 } })
+  })
+
+  it('with the location flag at module the hook skips and leaves every kernel card as it was', async () => {
+    await seed()
+    const sql = getDb()
+    await sql`INSERT INTO board_location (id, location) VALUES (true, 'module')`
+    const res = await boardErasureHook.erase({ tenantId: 't', subjectId: SUBJECT, db: sql })
+    expect(res.status).toBe('skipped')
+    expect(await sql`SELECT 1 FROM card WHERE assignee_keycloak_id = ${SUBJECT} OR created_by = ${SUBJECT}`).toHaveLength(3)
+  })
+
+  it('with the flag at moving the kernel copy still serves, so the hook erases', async () => {
+    await seed()
+    const sql = getDb()
+    await sql`INSERT INTO board_location (id, location) VALUES (true, 'moving')`
+    const res = await boardErasureHook.erase({ tenantId: 't', subjectId: SUBJECT, db: sql })
+    expect(res.status).toBe('erased')
+    expect(await sql`SELECT 1 FROM card WHERE assignee_keycloak_id = ${SUBJECT} OR created_by = ${SUBJECT}`).toHaveLength(0)
   })
 })

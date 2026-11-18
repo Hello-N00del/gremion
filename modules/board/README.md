@@ -73,7 +73,7 @@ The retention profile `rp-brd-module-data` is a provisional profile of the catal
 
 | Variable | Used by | Meaning |
 |---|---|---|
-| `BOARD_BACKEND` | kernel app | `inprocess` (default) or `service`; any other value is refused. |
+| `BOARD_BACKEND` | kernel app | `auto` (default): per customer, the location flag (`board_location`, migration 0066) decides between the kernel tables and the leaf; a customer with no flag row is served from the kernel tables. `inprocess` or `service` force one backend and ignore the flag. Any other value is refused. |
 | `BOARD_SERVICE_URL` | kernel app | Base URL of the leaf when the backend is `service`. |
 | `INTERNAL_BOARD_SECRET` | both | Shared secret in the `x-internal-auth` header. Unset: the leaf boots and every guarded route answers 403. |
 | `GREMION_BOARD_PG_URL` | leaf | PostgreSQL server of the module; the database name is replaced per tenant (`t_<hex32>__board`). Required, there is no default; the leaf refuses to start without it. |
