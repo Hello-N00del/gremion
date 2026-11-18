@@ -42,7 +42,8 @@ describe('board leaf erasure routes', () => {
   it('matches POST /api/v1/erase-subject with no params', () => {
     const m = router.match('POST', '/api/v1/erase-subject')
     expect(m.type).toBe('matched')
-    if (m.type === 'matched') expect(m.params).toEqual({})
+    if (m.type !== 'matched') throw new Error('unreachable')
+    expect(m.params).toEqual({})
   })
 
   it('answers method-not-allowed for GET on /api/v1/erase-subject (POST only)', () => {
@@ -53,7 +54,8 @@ describe('board leaf erasure routes', () => {
   it('extracts :id for DELETE /api/v1/org-units/:id/boards', () => {
     const m = router.match('DELETE', '/api/v1/org-units/11111111-1111-1111-1111-111111111111/boards')
     expect(m.type).toBe('matched')
-    if (m.type === 'matched') expect(m.params).toEqual({ id: '11111111-1111-1111-1111-111111111111' })
+    if (m.type !== 'matched') throw new Error('unreachable')
+    expect(m.params).toEqual({ id: '11111111-1111-1111-1111-111111111111' })
   })
 
   it('answers method-not-allowed for GET on /api/v1/org-units/:id/boards (DELETE only)', () => {
