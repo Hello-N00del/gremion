@@ -82,7 +82,7 @@ export function boardSection(runbook) {
 
 /** The board rows of the Karenz table (they start with a backticked `board`). */
 export function karenzBoardRows(runbook) {
-  return runbook.split('\n').filter((l) => /^\| `board`/.test(l))
+  return runbook.split('\n').filter((l) => l.startsWith('| `board`'))
 }
 
 /** Identifier-looking parts of the backticked spans and fenced blocks of a text: keys, snake_case names and kebab-case verbs. */
@@ -92,7 +92,7 @@ export function identifiers(doc) {
   for (const m of doc.replaceAll(/```[\s\S]*?```/g, '').matchAll(/`([^`\n]+)`/g)) spans.push(m[1])
   const found = new Set()
   for (const s of spans) {
-    for (const m of s.matchAll(/(?<![\w$<{./-])[A-Za-z][A-Za-z0-9]*(?:[_-][A-Za-z0-9]+)+(?![\w>}])/g)) {
+    for (const m of s.matchAll(/(?<![\w$<{/-])[A-Za-z][A-Za-z0-9]*(?:[_-][A-Za-z0-9]+)+(?![\w>}])/g)) {
       const t = m[0]
       const key = /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/.test(t)
       const snake = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/.test(t)
@@ -100,7 +100,7 @@ export function identifiers(doc) {
       if (key || snake || kebab) found.add(t)
     }
   }
-  return [...found].sort()
+  return [...found].toSorted((a, b) => a.localeCompare(b))
 }
 
 /** Words that are part of ordinary tooling, not of this repository, and the shell and SQL words that look like identifiers. */
@@ -177,7 +177,7 @@ export function runChecks(root = ROOT, { exists = (t) => repoHasToken(root, t) }
   if (!/export_kept_until/.test(docs[KARENZ_MIGRATION])) failures.push(`(e) ${KARENZ_MIGRATION} has no export_kept_until column: the hand release of a kept export sets it`)
   if (section !== null && !/board_location/.test(section)) failures.push('(e) the board section does not read board_location')
 
-  return { failures, tokens: [...tokens].sort() }
+  return { failures, tokens: [...tokens].toSorted((a, b) => a.localeCompare(b)) }
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

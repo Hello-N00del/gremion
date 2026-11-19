@@ -15,7 +15,7 @@ function fixture() {
     mkdirSync(dirname(join(root, rel)), { recursive: true })
     writeFileSync(join(root, rel), readFileSync(join(ROOT, rel)))
   }
-  const read = (rel) => readFileSync(join(root, rel), 'utf8')
+  const read = (rel) => readFileSync(join(root, rel), 'utf8').replaceAll('\r\n', '\n')
   const write = (rel, body) => writeFileSync(join(root, rel), body)
   const report = (known = null) => runChecks(root, { exists: known ? (t) => known.has(t) : () => true }).failures.join('\n')
   return { root, read, write, report, cleanup: () => rmSync(root, { recursive: true, force: true }) }
@@ -35,7 +35,7 @@ test('the real tree passes, and the scan is not vacuous', () => {
 
 test('identifiers reads backticked spans and fenced blocks, and nothing from prose', () => {
   const doc = ['Plain day-30 and read-only prose, FOO_BAR too.', '', 'See `KARENZ_FINAL_DELETION` and `board_location` and `karenz-status`.', '', '```bash', 'tc karenz-run --env-file x', 'SELECT export_kept_until FROM plt.module_karenz', '```', ''].join('\n')
-  assert.deepEqual(identifiers(doc), ['KARENZ_FINAL_DELETION', 'board_location', 'export_kept_until', 'karenz-run', 'karenz-status', 'module_karenz'])
+  assert.deepEqual(identifiers(doc), ['board_location', 'export_kept_until', 'KARENZ_FINAL_DELETION', 'karenz-run', 'karenz-status', 'module_karenz'])
 })
 
 test('RED (a): each stale statement, in either language, is reported', () => {
@@ -57,7 +57,7 @@ test('RED (b): the board section and its required statements', () => {
   const f = fixture()
   try {
     const runbook = f.read(RUNBOOK)
-    f.write(RUNBOOK, runbook.replace('not available yet', 'available'))
+    f.write(RUNBOOK, runbook.replaceAll('not available yet', 'available'))
     assert.match(f.report(), /\(b\) the board section of .* does not say that moving an existing customer's board/)
     f.write(RUNBOOK, runbook.replace(/\n## Board: where a customer's board lives\n/, '\n## Something else\n'))
     assert.match(f.report(), /\(b\) docs\/runbooks\/tenant-lifecycle\.md has no section/)
