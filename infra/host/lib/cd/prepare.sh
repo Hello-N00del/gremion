@@ -546,8 +546,8 @@ _cd_prep_retag_locked() {
     fi
     # state first (retag_prev, startable), then the env file: a crash in between leaves a
     # restorable record and an unchanged file, never a changed file with no record
-    cd_state_set '(if .release != null then .release.retag_prev = $p else . end)
-                  | (if (.previous != null and .previous.colour == $c) then .previous.startable = false else . end)' \
+    cd_state_set '(if .release != null then .release.retag_prev = $p else (.) end)
+                  | (if (.previous != null and .previous.colour == $c) then .previous.startable = false else (.) end)' \
         --arg p "$prev" --arg c "$colour" || {
         _cd_prep_err "retag: the state could not be written"
         return 2
@@ -605,7 +605,7 @@ _cd_prep_restore_locked() {
     flipped="$(cd_state_get ".previous != null and .previous.colour == \"${colour}\" and .previous.tag == \"${prev}\" and .previous.startable != true")" || return 2
     if [[ "$flipped" == true ]]; then changed=1; fi
     cd_state_set '(if (.previous != null and .previous.colour == $c and .previous.tag == $p)
-                   then .previous.startable = true else . end)' \
+                   then .previous.startable = true else (.) end)' \
         --arg p "$prev" --arg c "$colour" || {
         _cd_prep_err "retag restore: the state could not be written"
         return 1

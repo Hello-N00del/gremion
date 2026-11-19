@@ -471,7 +471,7 @@ acl_statements() {
         def opt: if .[0].o then " WITH GRANT OPTION" else "" end;
         if all(.[]; (.p | IN("CONNECT", "CREATE", "TEMPORARY"))
                     and (.g == null or (.g | type == "string" and test("^[A-Za-z0-9_][A-Za-z0-9_.$-]{0,62}$"))))
-        then . else error("a grantee or privilege that cannot be replayed safely") end
+        then (.) else error("a grantee or privilege that cannot be replayed safely") end
         | (map(select(.g == null))) as $pub
         | (map(select(.g != null))) as $named
         | ( ( ($pub | map(.p) | unique) as $pp
