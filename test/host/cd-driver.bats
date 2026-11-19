@@ -222,6 +222,26 @@ drv_hostlock_free() { ( exec 9>>"${GREMION_ROOT}/runtime/hostd.lock"; flock -n 9
     [ "$a" -lt "$b" ]
 }
 
+@test "tick: every tick that takes the lock rewrites the heartbeat, an idle one included, and the beat is live while the candidate is asked for (the watchdog reads one per run)" {
+    drv_seed
+    cd_stub_set cd_gh_candidate 0 '{"verdict":"none","sha":"","reason":"up_to_date","final":true}'
+    export CD_STUB_HOOK_cd_gh_candidate='printf "hb %s\n" "$(cut -d" " -f2,3 "${CD_HEARTBEAT_FILE}")" >> "$SHIM_LOG"'
+    [ ! -e "${GREMION_ROOT}/runtime/cd/heartbeat" ]
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    [ "$(grep -c '^hb idle tick$' "$SHIM_LOG")" -eq 1 ]
+    [ -s "${GREMION_ROOT}/runtime/cd/heartbeat" ]
+    local epoch
+    epoch="$(cut -d' ' -f1 "${GREMION_ROOT}/runtime/cd/heartbeat")"
+    [[ "$epoch" =~ ^[0-9]+$ ]]
+    # a held host takes the same path
+    drv_seed '.hold = {"kind":"failure","reason":"build_failed","sha12":"bbbbbbbbbbbb","since":"2026-11-17T00:00:00Z"}'
+    rm -f "${GREMION_ROOT}/runtime/cd/heartbeat"
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    [ -s "${GREMION_ROOT}/runtime/cd/heartbeat" ]
+}
+
 @test "tick: a held host does nothing and does not mail" {
     drv_seed '.hold = {"kind":"failure","reason":"build_failed","sha12":"bbbbbbbbbbbb","since":"2026-11-17T00:00:00Z"}'
     run cd_prog tick
@@ -333,6 +353,17 @@ drv_hostlock_free() { ( exec 9>>"${GREMION_ROOT}/runtime/hostd.lock"; flock -n 9
     [ "$status" -eq 0 ]
 }
 
+@test "locks: a committed release whose commit stage ended ok and whose reconcile stage has not begun (a crash between the two) runs the stage with the cd lock only" {
+    cd_need_flock
+    drv_seed_commit commit ok
+    export CD_STUB_HOOK_cd_reconcile_run='drv_probe in_reconcile'
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    grep -q '^probe in_reconcile host=FREE cd=HELD$' "$SHIM_LOG"
+    drv_hostlock_free
+    [ "$(drv_state '.phase')" = idle ]
+}
+
 @test "locks: a crash (kill -9) at snapshot leaves no lock behind, and the next tick can take it" {
     cd_need_flock
     drv_seed
@@ -436,6 +467,23 @@ drv_hostlock_free() { ( exec 9>>"${GREMION_ROOT}/runtime/hostd.lock"; flock -n 9
     [ "$(drv_n '^stub cd_reconcile_run')" -eq 0 ]
     [ "$(drv_hist killswitch_park)" -eq 0 ]
     drv_hostlock_free
+}
+
+@test "reconcile composition: a reconcile stage that is recorded failed (the process died before it ended the release) keeps the reason cd_reconcile_run recorded, and mails nothing a second time" {
+    drv_seed_commit reconcile failed '.hold = {"kind":"reconcile_failed","reason":"customer_failed","sha12":"bbbbbbbbbbbb","since":"2026-11-17T00:00:00Z"}'
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    [ "$(drv_state '.hold.kind')" = reconcile_failed ]
+    [ "$(drv_state '.hold.reason')" = customer_failed ]
+    [ "$(drv_state '.phase')" = idle ]
+    [ "$(drv_state '.release')" = null ]
+    [ "$(drv_mails reconcile_failed)" -eq 0 ]
+    [ "$(drv_n '^stub cd_reconcile_run')" -eq 0 ]
+    [ "$(drv_n '^stub cd_rollback_run')" -eq 0 ]
+    # with no hold standing, the stage that never said why is held as interrupted
+    drv_seed_commit reconcile failed
+    run cd_prog tick
+    [ "$(drv_state '.hold.reason')" = interrupted ]
 }
 
 # ===========================================================================================
@@ -552,6 +600,30 @@ drv_hostlock_free() { ( exec 9>>"${GREMION_ROOT}/runtime/hostd.lock"; flock -n 9
     [ "$(drv_hist resume_refused)" -eq 1 ]
 }
 
+@test "classifier holds: a classifier that crashes holds the candidate as classify_failed (a classifier hold), and a NEW clean candidate ends it by itself" {
+    drv_seed
+    cd_stub_set cd_classify 2
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    [ "$(drv_state '.hold.kind')" = classify_failed ]
+    [ "$(drv_state '.hold.sha12')" = bbbbbbbbbbbb ]
+    [ "$(drv_state '.release')" = null ]
+    [ "$(drv_blocks)" -eq 0 ]
+    [ "$(drv_mails held)" -eq 1 ]
+    [ "$(drv_n '^stub cd_prepare_build')" -eq 0 ]
+    # the same candidate is not judged twice
+    : > "$SHIM_LOG"
+    run cd_prog tick
+    [ "$(drv_n '^stub cd_classify')" -eq 0 ]
+    [ "$(drv_mails held)" -eq 0 ]
+    # a newer, clean candidate is judged and starts
+    cd_stub_set cd_classify 0 "$CLEAN"
+    cd_stub_set cd_gh_candidate 0 "{\"verdict\":\"green\",\"sha\":\"${SHA_C}\",\"reason\":\"\",\"final\":true,\"tip\":\"${SHA_C}\",\"walked\":0}"
+    run cd_prog tick
+    [ "$(drv_state '.hold')" = null ]
+    [ "$(drv_n '^stub cd_commit_promote')" -eq 1 ]
+}
+
 @test "classifier holds: a NEW clean candidate clears the hold by itself and starts" {
     drv_seed '.hold = {"kind":"state_tier","reason":"edge","sha12":"cccccccccccc","since":"2026-11-17T00:00:00Z"}'
     run cd_prog tick
@@ -624,7 +696,29 @@ drv_hostlock_free() { ( exec 9>>"${GREMION_ROOT}/runtime/hostd.lock"; flock -n 9
 # the failure policy, one test per row
 # ===========================================================================================
 
-@test "policy: an infrastructure failure (fetch, disk, build infra, dump) retries with a backoff, mails stopped, writes no block and no hold, and tears the colour down" {
+@test "policy: the other infrastructure rows (build infra, disk, dump) end the same way: a stopped mail, a backoff, no block, no hold, the colour torn down, the host lock free" {
+    cd_need_flock
+    local row fn rc
+    for row in "cd_prepare_build 4" "cd_data_precheck 4" "cd_data_dumpset_take 4"; do
+        read -r fn rc <<<"$row"
+        rm -f "${GREMION_ROOT}/data/cd/retry"
+        drv_seed
+        : > "$SHIM_LOG"
+        cd_stub_set "$fn" "$rc"
+        run cd_prog tick
+        [ "$status" -eq 0 ] || { echo "${fn}: ${output}" >&2; return 1; }
+        [ "$(drv_state '.phase')" = idle ] || { echo "${fn}: phase" >&2; return 1; }
+        [ "$(drv_state '.hold')" = null ] || { echo "${fn}: hold" >&2; return 1; }
+        [ "$(drv_blocks)" -eq 0 ]
+        [ "$(drv_mails stopped)" -eq 1 ] || { echo "${fn}: mails" >&2; return 1; }
+        [ "$(drv_n '^stub cd_colour_down')" -eq 1 ] || { echo "${fn}: teardown" >&2; return 1; }
+        [ "$(grep -c "^[0-9a-f]\{12\} 1 [0-9]*$" "${GREMION_ROOT}/data/cd/retry")" -eq 1 ] || { echo "${fn}: backoff" >&2; return 1; }
+        drv_hostlock_free
+        cd_stub_set "$fn" 0
+    done
+}
+
+@test "policy: an infrastructure failure of the fetch retries with a backoff, mails stopped, writes no block and no hold, and tears the colour down" {
     drv_seed
     cd_stub_set cd_prepare_fetch 4
     run cd_prog tick
@@ -1048,6 +1142,35 @@ drv_final() { jq -S '{phase, hold, live: (.live | {sha12, tag, colour}), previou
     [ "$(drv_state '.release')" = null ]
 }
 
+@test "rollback sequence: every door to cd_rollback_run runs under a live heartbeat of its own (the automatic one, the operator's, the resumed one), stopped afterwards" {
+    export CD_STUB_HOOK_cd_rollback_run='printf "hb %s %s\n" "$1" "$(cut -d" " -f3 "${CD_HEARTBEAT_FILE}")" >> "$SHIM_LOG"'
+    # the automatic one: a failing promote before commit step 5
+    drv_seed_sw watch ok
+    cd_stub_set cd_commit_promote 1
+    export CD_STUB_HOOK_cd_commit_promote=''
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    [ "$(grep -c '^hb commit_stuck rollback$' "$SHIM_LOG")" -eq 1 ]
+    # the operator's
+    drv_seed_sw watch ok
+    : > "$SHIM_LOG"
+    run cd_prog rollback
+    [ "$status" -eq 0 ]
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    [ "$(grep -c '^hb manual_rollback rollback$' "$SHIM_LOG")" -eq 1 ]
+    # the resumed one
+    drv_seed_sw watch failed '.phase = "rolling_back" | .release.failure = {"kind":"commit","stage":"watch","code":"watch_5xx","at":"2026-11-17T00:00:00Z"}'
+    : > "$SHIM_LOG"
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    [ "$(grep -c '^hb watch_5xx rollback$' "$SHIM_LOG")" -eq 1 ]
+    # and the beat is not left running in the shell that ran it
+    drv_seed_sw watch ok
+    run cd_lib '. "${HOST_SRC}/lib/cd/driver.sh"; cd_cfg_load; cd_lock_take; _cd_drv_load; _cd_drv_rollback_call manual_rollback </dev/null; echo "pid=[${CD_HB_PID:-}]"'
+    [[ "$output" == *"pid=[]"* ]]
+}
+
 @test "resume: phase rolling_back resumes the sequence with the rule it recorded, and a committed release only with manual_rollback" {
     drv_seed_sw watch failed '.phase = "rolling_back" | .release.failure = {"kind":"commit","stage":"watch","code":"watch_5xx","at":"2026-11-17T00:00:00Z"}'
     run cd_prog tick
@@ -1079,6 +1202,29 @@ drv_final() { jq -S '{phase, hold, live: (.live | {sha12, tag, colour}), previou
     [ "$(drv_n '^stub cd_commit_promote')" -eq 0 ]
     [ "$(drv_state '.phase')" = parked ]
     [ "$(drv_state '.release.stage')" = watch ]
+}
+
+@test "watch: a release that parked twice in one window is resumed into the watch again, not rolled back as a stuck stage (resume gives a fresh attempt as well as a fresh pause budget)" {
+    cd_need_flock
+    drv_seed_sw watch started '.phase = "parked" | .release.attempt = 2 | .release.watch.paused_s = 900 | .hold = {"kind":"failure","reason":"watch_pause_cap","sha12":"bbbbbbbbbbbb","since":"2026-11-17T00:00:00Z"}'
+    cd_lib 'cd_request_put resume "{\"reason\":\"\"}"'
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    assert_recorded stub "cd_commit_watch_loop"
+    [ "$(drv_n '^stub cd_rollback_run')" -eq 0 ]
+    [ "$(drv_hist stuck_stage)" -eq 0 ]
+    [ "$(drv_state '.live.sha12')" = bbbbbbbbbbbb ]
+}
+
+@test "watch: a tick that resumed a parked release and ended it does one thing: the next candidate waits for the next tick" {
+    cd_need_flock
+    drv_seed_sw watch started '.phase = "parked" | .release.watch.paused_s = 900 | .hold = {"kind":"failure","reason":"watch_pause_cap","sha12":"bbbbbbbbbbbb","since":"2026-11-17T00:00:00Z"}'
+    cd_lib 'cd_request_put resume "{\"reason\":\"\"}"'
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    assert_recorded stub "cd_commit_promote"
+    [ "$(drv_state '.phase')" = idle ]
+    [ "$(drv_n '^stub cd_gh_candidate')" -eq 0 ]
 }
 
 @test "watch: a parked release is resumed by resume, which takes the host lock and re-enters the watch with a fresh pause budget" {

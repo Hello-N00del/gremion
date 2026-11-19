@@ -308,6 +308,18 @@ _cd_drv_retry_gate() {
 }
 
 # -- after the switch: roll back ----------------------------------------------------
+# _cd_drv_rollback_call RULE -- cd_rollback_run under a heartbeat of its own. The sequence
+# ends with a watch of CD_POST_ROLLBACK_S and starts the old colour first, so without a beat
+# the watchdog reads a lock that is held and a beat that is old as a stuck release. Its
+# return code is the sequence's; the beat is stopped on every path.
+_cd_drv_rollback_call() {
+    local rule="$1" rc=0
+    cd_heartbeat_start rollback $(( $(cd_cfg CD_POST_ROLLBACK_S) + 900 )) || cd_err "driver: the heartbeat did not start"
+    cd_rollback_run "$rule" || rc=$?
+    cd_heartbeat_stop
+    return "$rc"
+}
+
 # _cd_drv_rollback_auto RULE STAGE -- the one door to cd_rollback_run for a release that has
 # not committed. A committed release is never sent through here; if a caller does, nothing is
 # touched and the failure becomes the committed side's hold.
@@ -323,7 +335,7 @@ _cd_drv_rollback_auto() {
     CD_DRV_ROLLED=1
     cd_stage_fail "$stage" commit "$rule" || true
     _cd_drv_set '.phase = "rolling_back"'
-    cd_rollback_run "$rule" || rc=$?
+    _cd_drv_rollback_call "$rule" || rc=$?
     _cd_drv_after_rollback "$rc" "$rule"
     return 0
 }
@@ -383,6 +395,13 @@ _cd_drv_end_interrupted() {
     _cd_drv_load
     sha12="$R_SHA12"
     colour="$R_COL"
+    # a stage recorded `failed` whose hold already stands: cd_reconcile_run said why (reason,
+    # counts, one mail) and only the end of the release was missing; its reason is not replaced
+    if [[ "$R_STATUS" == failed && "$D_HOLD" == reconcile_failed ]]; then
+        cd_hist reconcile_interrupted sha12="$sha12" kept=hold || true
+        _cd_drv_end_release
+        return 0
+    fi
     tot="$(printf '%s' "$CD_STATE_DOC" | jq -r '[.live.reconcile.total, .live.reconcile.ok, .live.reconcile.failed, .live.reconcile.skipped] | map(. // "") | map(tostring) | join("|")')" || tot="|||"
     IFS='|' read -r tot ok failed skipped <<<"$tot"
     local -a m=(sha12="$sha12" colour="$colour" reason=interrupted command="gremion-cd reconcile" key="reconcile_failed.${sha12}")
@@ -529,7 +548,17 @@ _cd_drv_st_classify() {
     cls="$(cd_classify "$D_LTREE" "$R_TREE")" || rc=$?
     cd_heartbeat_stop
     if ((rc != 0)) || ! printf '%s' "$cls" | jq -e 'type == "object" and (.holds | type == "array")' >/dev/null 2>&1; then
-        _cd_drv_fail classify 2 classify_failed
+        # a classifier that cannot answer is a verdict on this tree like any other: the hold
+        # classify_failed, ended by a newer clean candidate, not a failure that needs `resume`.
+        # Nothing was built or started at this stage, so the release only goes away.
+        cd_stage_fail classify host classify_failed || true
+        _cd_drv_hold_candidate classify_failed classify_failed "$R_SHA12"
+        cd_hist classify_crashed code="$rc" sha12="$R_SHA12" || true
+        if [[ "$R_MODE" == auto ]]; then
+            _cd_drv_abort_refused held
+        else
+            _cd_drv_abort_refused refused
+        fi
         return 0
     fi
     _cd_drv_set '.release.class = $c' --argjson c "$cls"
@@ -1122,7 +1151,7 @@ _cd_drv_resume_rollback() {
         post_switch_verify | watch_readiness | watch_crash | watch_5xx | watch_pause_cap | manual_rollback | commit_stuck | proof_end) ;;
         *) rule=commit_stuck ;;
     esac
-    cd_rollback_run "$rule" || rc=$?
+    _cd_drv_rollback_call "$rule" || rc=$?
     _cd_drv_after_rollback "$rc" "$rule"
 }
 
@@ -1223,6 +1252,10 @@ _cd_drv_start_gate() {
         rm -f "$f" 2>/dev/null || true
         return 0
     fi
+    # A refusal is not a failed release: nothing was started, so there is nothing to back off
+    # from and no `stopped` mail (a gate that mailed on every tick would mail every five
+    # minutes for as long as the disk stays low). It is said once per change in the history and
+    # in `status`; the infrastructure rows (backoff, `stopped`) belong to the stages.
     why="$(_cd_drv_code "${CD_PREPARE_WHY:-}" unknown)"
     last=""
     if [[ -r "$f" ]]; then
@@ -1360,7 +1393,9 @@ _cd_drv_do_resume() {
             _cd_drv_say "resume refused: the host lock is busy"
             return 0
         fi
-        _cd_drv_set '.phase = "watching" | .release.watch.paused_s = 0'
+        # a fresh pause budget and a fresh attempt: a second park in one window is not a stage
+        # that keeps dying, and the third attempt would roll the release back on its own
+        _cd_drv_set '.phase = "watching" | .release.watch.paused_s = 0 | .release.attempt = 0'
         cd_hold_clear || true
         cd_hist resumed_parked sha12="$R_SHA12" || true
         cd_pipeline_resume
@@ -1471,7 +1506,7 @@ _cd_drv_manual_rollback() {
     local rc=0
     CD_DRV_ROLLED=1
     _cd_drv_set '.phase = "rolling_back"'
-    cd_rollback_run manual_rollback || rc=$?
+    _cd_drv_rollback_call manual_rollback || rc=$?
     _cd_drv_after_rollback "$rc" manual_rollback
 }
 
@@ -1710,11 +1745,17 @@ cd_cmd_reconcile() {
 # -- the tick ---------------------------------------------------------------------------
 # _cd_drv_inflight_locks -- the locks a resumed release needs. The host lock is taken first
 # for a release the boot unit resumes and for every release at or after `snapshot`, waiting
-# up to CD_LOCK_WAIT_S; a committed release in the reconcile stage needs none (it only ends).
+# up to CD_LOCK_WAIT_S; a committed release in the reconcile stage, or one whose commit stage has
+# ended ok, needs none (the host lock went at commit step 10).
 _cd_drv_inflight_locks() {
     local need=0 idx snap rc=0
     _cd_drv_load
     if [[ -n "$R_COMMIT" && "$R_STAGE" == reconcile ]]; then
+        return 0
+    fi
+    # a commit stage that ended ok has let go of the host lock at step 10 (a crash between its
+    # end and the begin of the reconcile stage): the next stage runs under the cd lock only
+    if [[ -n "$R_COMMIT" && "$R_STAGE" == commit && "$R_STATUS" == ok ]]; then
         return 0
     fi
     if [[ "$CD_DRV_RESUME_ONLY" == 1 ]]; then
@@ -1814,12 +1855,18 @@ cd_cmd_tick() {
         cd_die 2 "the cd lock could not be taken"
     fi
     _cd_drv_load
+    # the watchdog expects the tick to rewrite the heartbeat on every run, an idle one too (a
+    # stage or a park replaces this beat with its own); the budget bounds an idle tick's poll
+    cd_heartbeat_start tick 600 || cd_err "driver: the heartbeat did not start"
     case "$D_PHASE" in
         releasing | watching | rolling_back)
             ran=1
             _cd_drv_tick_inflight || rc=$?
             ;;
         parked)
+            # a request that ends the park (resume, rollback) is this tick's one thing, so the
+            # next candidate is not asked for in the same run
+            ran=1
             _cd_drv_drain
             ;;
     esac
