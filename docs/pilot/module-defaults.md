@@ -39,8 +39,9 @@ entries of calendar, files, messaging and content carry their module id and drop
   content, publishing, files, messaging and board and none of elections, finance, vault,
   handover; every named id has a `module.json`.
 - (b) no `COMPOSE_PROFILES` line in `infra/host/templates/env/*.env.tmpl` names finance,
-  board, vault or vaultwarden (board needs no profile: it runs in-process). The profiles of the pilot modules are rendered from
-  `infra/host/module-profiles.json`, not written into a template.
+  board, vault or vaultwarden. The profiles of the pilot modules, the profile `board` among them
+  (`board-postgres` and `board-service`), are rendered from `infra/host/module-profiles.json`, not
+  written into a template.
 - (c) no `modules/*/module.json` carries a default-enable declaration.
 - (d) the panel create form preselects no module checkbox.
 
@@ -81,6 +82,12 @@ customer is refused (nothing is written), because the enable would create an emp
 beside the kernel rows; the step that moves the board into its own database is not part of this
 release. So "Modul aktivieren" is not a way to hide that board either. To hide it, set
 `config.modules.board` to false by hand (see the board README).
+
+The runbook section "Board: where a customer's board lives"
+([tenant-lifecycle](../runbooks/tenant-lifecycle.md)) has the read-only check that shows, per
+customer, whether the board is in its own database or in the kernel tables, and the order for creating
+the real customer: after the release is live, with board ticked, so that its board starts in its own
+database.
 
 ## 4. Hand-offs
 
