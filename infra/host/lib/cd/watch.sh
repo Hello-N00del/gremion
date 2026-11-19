@@ -27,7 +27,10 @@
 #   cd_watch_sample [COLOUR TAG]
 #                                  prints ONE JSON sample of the colour (default: the release
 #                                  of the state). Every call of it is bounded, and the whole
-#                                  sample is bounded by CD_SAMPLE_TIMEOUT_S.
+#                                  sample is bounded by CD_SAMPLE_TIMEOUT_S. The access log is
+#                                  read last and a read that uses the budget up is a null count
+#                                  (blind), never a failed sample; the old colour is asked only
+#                                  when a shared check failed (old_ready is false otherwise).
 #   cd_watch_eval SAMPLE_JSON      updates the watch counters of the state and prints the
 #                                  verdict on line 1: ok, bad, paused, parked or
 #                                  trigger:<rule>. Further lines: `blind` (the access log was
@@ -45,11 +48,14 @@
 # no message carries it). The access log is read as COUNTS: the lines are piped through jq
 # and never stored. Names of components, stages and counts only.
 #
-# THE SIDECAR data/cd/watch-eval.json (0600): {v, release, grace, restarts, last_duration_s}.
-# release.watch is a closed key set (core.sh), so the three facts it cannot hold live here,
-# keyed by the release id and durable: the restart baseline of the new colour's containers,
-# the number of samples after a resume that may not trigger (the reboot rule), and the
-# duration of the previous sample (a slow sample is not a resume).
+# THE SIDECAR data/cd/watch-eval.json (0600): {v, release, grace, restarts, last_duration_s,
+# fivexx_since}. release.watch is a closed key set (core.sh), so the four facts it cannot hold
+# live here, keyed by the release id and durable: the restart baseline of the new colour's
+# containers, the number of samples after a resume that may not trigger (the reboot rule), the
+# duration of the previous sample (a slow sample is not a resume), and the epoch where the
+# 5xx window of the next samples may start at the earliest (the end of the last sample that was
+# paused or inside the grace after a resume: the answers of an outage or of a reboot are not
+# the release's, whatever they are counted on).
 
 # shellcheck disable=SC2016  # the jq programs below are single-quoted on purpose
 
@@ -135,22 +141,31 @@ _cd_watch_edge() {
 
 # -- the public probe -----------------------------------------------------------------
 
-# _cd_watch_http URL RESOLVE BODYFILE - the HTTP status of one request through --resolve, the
-# certificate verified (no -k), bounded, curl's stderr discarded (it names the host). Prints
-# the three digits, or 000 for anything that is not an answer (a timeout included).
+# _cd_watch_http URL RESOLVE body|status - one request through --resolve, the certificate
+# verified (no -k), bounded, curl's stderr discarded (it names the host). Prints the three
+# digits of the HTTP status (000 for anything that is not an answer, a timeout included), a
+# newline and, for "body", the body. No body is ever written to a file: a page of the probe
+# host is held in memory or thrown away ("status" sends it to /dev/null).
 _cd_watch_http() {
-    local url="$1" resolve="$2" bodyf="$3" t code
-    t="$(_cd_watch_ct)" || { printf '000'; return 0; }
-    code="$(curl -sS --max-time "$t" --connect-timeout "$t" --max-filesize 65536 \
-        --resolve "$resolve" -o "$bodyf" -w '%{http_code}' "$url" </dev/null 2>/dev/null)" || true
+    local url="$1" resolve="$2" want="$3" t out code body=''
+    t="$(_cd_watch_ct)" || { printf '000\n'; return 0; }
+    if [[ "$want" == body ]]; then
+        out="$(curl -sS --max-time "$t" --connect-timeout "$t" --max-filesize 65536 \
+            --resolve "$resolve" -w $'\n%{http_code}' "$url" </dev/null 2>/dev/null)" || true
+        code="${out##*$'\n'}"
+        [[ "$out" == *$'\n'* ]] && body="${out%$'\n'*}"
+    else
+        code="$(curl -sS --max-time "$t" --connect-timeout "$t" --max-filesize 65536 \
+            --resolve "$resolve" -o /dev/null -w '%{http_code}' "$url" </dev/null 2>/dev/null)" || true
+    fi
     [[ "$code" =~ ^[0-9]{3}$ ]] || code=000
-    printf '%s' "$code"
+    printf '%s\n%s' "$code" "$body"
 }
 
 # cd_watch_probe_public - see the header. Returns 0 when both are good, 1 when either is not
 # (the statuses are still printed), 2 when the probe host or the edge address is missing.
 cd_watch_probe_public() {
-    local host ip port edge resolve base ready login bodyf rc=0
+    local host ip port edge resolve base ready login resp body rc=0
     host="$(_cd_watch_probe_host)" || { printf '000 000\n'; return 2; }
     edge="$(_cd_watch_edge)" || { printf '000 000\n'; return 2; }
     ip="${edge%% *}"
@@ -158,15 +173,18 @@ cd_watch_probe_public() {
     if [[ "$ip" == *:* ]]; then resolve="${host}:${port}:[${ip}]"; else resolve="${host}:${port}:${ip}"; fi
     base="https://${host}"
     [[ "$port" == 443 ]] || base="${base}:${port}"
-    bodyf="$(mktemp 2>/dev/null)" || { _cd_watch_err "cannot create a temporary file"; printf '000 000\n'; return 2; }
-    ready="$(_cd_watch_http "${base}/readyz" "$resolve" "$bodyf")"
+    resp="$(_cd_watch_http "${base}/readyz" "$resolve" body)"
+    ready="${resp%%$'\n'*}"
+    body=''
+    # (the command substitution stripped the newline of an empty body)
+    if [[ "$resp" == *$'\n'* ]]; then body="${resp#*$'\n'}"; fi
     if [[ "$ready" == 200 ]]; then
-        head -c 4096 -- "$bodyf" 2>/dev/null | jq -e '. == {"ready": true}' >/dev/null 2>&1 || rc=1
+        printf '%s' "${body:0:4096}" | jq -e '. == {"ready": true}' >/dev/null 2>&1 || rc=1
     else
         rc=1
     fi
-    login="$(_cd_watch_http "${base}/auth/login" "$resolve" "$bodyf")"
-    rm -f -- "$bodyf"
+    resp="$(_cd_watch_http "${base}/auth/login" "$resolve" status)"
+    login="${resp%%$'\n'*}"
     [[ "$login" =~ ^[1-4][0-9][0-9]$ ]] || rc=1
     printf '%s %s\n' "$ready" "$login"
     return "$rc"
@@ -312,15 +330,25 @@ _cd_watch_rcb() { if [[ "${1:-1}" -eq 0 ]]; then printf 'true'; else printf 'fal
 # _cd_watch_containers COLOUR - prints "<known> <total> <bad> <restarts>" of every container
 # of the colour's project, every state: bad is a container that is not running and healthy,
 # except a one-shot that exited 0; restarts is the sum of the restart counts. known is 0 when
-# docker did not answer.
+# docker did not answer. A colour whose env file the host refuses cannot be looked up: that is
+# a bad colour (known, one bad), not a silent docker, so a failing sample is bad and not
+# paused by it. A container that docker listed and no longer knows when asked for it (a race
+# with a removal) is a bad container; one that docker cannot be asked about is unknown.
 _cd_watch_containers() {
-    local colour="$1" proj cids cid line st code health rs total=0 bad=0 restarts=0
-    proj="$(_cd_docker_proj "app-${colour}" cd_watch 2>/dev/null)" || { printf '0 0 0 0'; return 0; }
+    local colour="$1" proj cids cid line st code health rs gone total=0 bad=0 restarts=0
+    proj="$(_cd_docker_proj "app-${colour}" cd_watch 2>/dev/null)" || { printf '1 0 1 0'; return 0; }
     cids="$(docker ps -a -q --filter "label=com.docker.compose.project=${proj}" \
         --filter "label=com.docker.compose.oneoff=False" </dev/null 2>/dev/null)" || { printf '0 0 0 0'; return 0; }
     while IFS= read -r cid; do
         [[ -n "$cid" ]] || continue
-        line="$(docker inspect -f '{{.State.Status}} {{.State.ExitCode}} {{if .State.Health}}{{.State.Health.Status}}{{else}}nohealthcheck{{end}} {{.RestartCount}}' "$cid" </dev/null 2>/dev/null)" || { printf '0 0 0 0'; return 0; }
+        if ! line="$(docker inspect -f '{{.State.Status}} {{.State.ExitCode}} {{if .State.Health}}{{.State.Health.Status}}{{else}}nohealthcheck{{end}} {{.RestartCount}}' "$cid" </dev/null 2>/dev/null)"; then
+            # gone, or docker silent? only an answer that does not list it says gone
+            gone="$(docker ps -a -q --filter "id=${cid}" </dev/null 2>/dev/null)" || { printf '0 0 0 0'; return 0; }
+            [[ -z "$gone" ]] || { printf '0 0 0 0'; return 0; }
+            total=$((total + 1))
+            bad=$((bad + 1))
+            continue
+        fi
         read -r st code health rs <<<"$line"
         [[ "$st" =~ ^[a-z]+$ && "$code" =~ ^[0-9]+$ && "$rs" =~ ^[0-9]+$ ]] || { printf '0 0 0 0'; return 0; }
         total=$((total + 1))
@@ -342,7 +370,7 @@ _cd_watch_sample_run() {
     local colour="${1:-}" tag="${2:-}" t start at old sw_epoch live_tree
     local st_ok=false api_ok=false docker_ok=false pub_out pub_rc=0 ready login pub_ok
     local ans portal_rc=0 ident_rc=0 w_new w_old route_ok=false route_known=true r1 r2
-    local cont known total bad restarts since window n req old_ok=false timed_out=false
+    local cont known total bad restarts since window n req old_ok=false timed_out=false fx_since=0 f_rid keep_deadline
     local int_json='{"answered":false,"ready":false,"colour":"","release":"","not_ready":null}'
     local iw f_col f_tag f_sw docker_down=false
     t="$(_cd_watch_int CD_SAMPLE_TIMEOUT_S)" || return 2
@@ -357,9 +385,9 @@ _cd_watch_sample_run() {
         ct="$(_cd_watch_ct)" || return 124
         timeout -k 2 "$ct" "$_CD_WATCH_REAL_DOCKER" "$@"
     }
-    iw="$(cd_state_get '[.release.colour // "", .release.tag // "", .release.switched_at // "", .live.tree // ""] | join("|")')" || return 2
-    # the release fields in one go: colour, tag, switched_at, and the live tree
-    IFS='|' read -r f_col f_tag f_sw live_tree <<<"$iw"
+    iw="$(cd_state_get '[.release.colour // "", .release.tag // "", .release.switched_at // "", .release.id // "", .live.tree // ""] | join("|")')" || return 2
+    # the release fields in one go: colour, tag, switched_at, the release id, and the live tree
+    IFS='|' read -r f_col f_tag f_sw f_rid live_tree <<<"$iw"
     [[ -n "$colour" ]] || colour="$f_col"
     [[ -n "$tag" ]] || tag="$f_tag"
     [[ "$colour" == blue || "$colour" == green ]] || { _cd_watch_err "sample: there is no colour to sample"; return 2; }
@@ -367,10 +395,16 @@ _cd_watch_sample_run() {
     sw_epoch=0
     if [[ -n "$f_sw" ]]; then sw_epoch="$(date -u -d "$f_sw" +%s 2>/dev/null)" || sw_epoch=0; fi
     [[ "$sw_epoch" =~ ^[0-9]{1,12}$ ]] || sw_epoch=0
+    # where the 5xx answers of the window may start at the earliest, besides the switch: the end
+    # of the last sample that was paused or inside the grace after a resume (the sidecar of eval)
+    if [[ -n "$f_rid" && -r "$(_cd_watch_sidecar_file)" ]]; then
+        fx_since="$(jq -r --arg r "$f_rid" 'select(.v == 1 and .release == $r) | (.fivexx_since // 0) | floor | tostring' "$(_cd_watch_sidecar_file)" 2>/dev/null)" || fx_since=0
+    fi
+    [[ "$fx_since" =~ ^[0-9]{1,12}$ ]] || fx_since=0
 
-    # 1. the shared services first, then the old colour: a hung app probe must not starve the
-    # paused-or-bad decision or the evidence of the pause rule (old_ready). The state project's
-    # compose files come from the LIVE release tree, as in the start gate.
+    # 1. the shared services first: a hung app probe must not starve the paused-or-bad
+    # decision. The state project's compose files come from the LIVE release tree, as in the
+    # start gate.
     if [[ -n "$live_tree" && -d "$live_tree" ]] && t="$(_cd_watch_ct)"; then
         if CD_DC_TIMEOUT="$t" cd_wait_healthy state 0 "$live_tree" >/dev/null 2>&1; then st_ok=true; fi
     fi
@@ -381,7 +415,6 @@ _cd_watch_sample_run() {
     elif _cd_watch_api_up; then
         api_ok=true
     fi
-    _cd_watch_old_ready "$old" && old_ok=true
     # 2. the containers of the colour
     docker_down=false
     if _cd_watch_ct >/dev/null; then
@@ -393,6 +426,16 @@ _cd_watch_sample_run() {
         total=0
         bad=0
         restarts=0
+    fi
+    # 2b. the old colour is the evidence of the pause rule only (old_ready is read when a shared
+    # service is down), so it is asked only when a shared check failed, and then within half of
+    # what is left of the budget: a hung old colour carries no evidence against the release and
+    # must not take the probes of the new colour away from a healthy sample.
+    if [[ "$docker_down" == true || "$st_ok" != true || "$api_ok" != true ]] && t="$(_cd_watch_ct)"; then
+        keep_deadline="$CD_WATCH_DEADLINE"
+        CD_WATCH_DEADLINE=$(($(cd_now) + (t + 1) / 2))
+        _cd_watch_old_ready "$old" && old_ok=true
+        CD_WATCH_DEADLINE="$keep_deadline"
     fi
     # 3. the probes: the public one through the edge, the internal one inside the container.
     # A probe that has no budget left is not made: it is no answer.
@@ -433,10 +476,18 @@ _cd_watch_sample_run() {
     [[ "$w_old" == on || "$w_old" == off ]] || w_old=unknown
     # 7. the 5xx count of the window, which never reaches back before the switch: the names
     # app@file and public@file are the same for both colours
+    # nor before the end of the last paused or grace sample: what a shared outage or a reboot
+    # answered with is not the release's
     since=$((at - $(_cd_watch_int CD_5XX_WINDOW_S)))
     ((sw_epoch > since)) && since=$sw_epoch
+    ((fx_since > since)) && since=$fx_since
     window=$((at - since))
     ((window >= 1)) || window=1
+    # A budget that the readiness calls used up makes a timed-out sample (a failed one). The log
+    # read is the last call and runs to the end of the budget when the log is big: that is no
+    # fact about the release, so it is asked AFTER this check and never sets timed_out; a read
+    # that does not finish is a null count (blind).
+    [[ -z "${CD_WATCH_DEADLINE:-}" ]] || { (($(cd_now) < CD_WATCH_DEADLINE)) || timed_out=true; }
     n=null
     req=null
     if cont="$(_cd_watch_scan "$since" 2>/dev/null)"; then
@@ -445,7 +496,6 @@ _cd_watch_sample_run() {
         n=null
         req=null
     fi
-    [[ -z "${CD_WATCH_DEADLINE:-}" ]] || { (($(cd_now) < CD_WATCH_DEADLINE)) || timed_out=true; }
     jq -cn \
         --argjson at "$at" --argjson dur "$(($(cd_now) - start))" --arg colour "$colour" --arg tag "$tag" --arg old "$old" \
         --arg ready "$ready" --arg login "$login" --argjson pub_ok "$pub_ok" --argjson internal "$int_json" \
@@ -485,7 +535,7 @@ cd_watch_eval() {
     local sample="${1:-}" rid f st sc
     local at colour tag old_colour interval failn min5 factor span cap_s
     local observed samples streak paused blind requests last base5 basenr
-    local grace restarts_base last_dur counted gap resume=0 timed_out
+    local grace restarts_base last_dur counted gap resume=0 timed_out fx_since dur
     local pub_ok int_ok route_ok ident_ok portal_ok cont_known cont_bad cont_restarts shared_ok=true
     local ready_fail=false crash=false hit5=false new_not_ready=false old_ready n window w_new w_old
     local verdict extra='' delta mail_blind=false mail_paused=false first_pause=false req failing=false
@@ -537,13 +587,17 @@ cd_watch_eval() {
     grace=0
     restarts_base=''
     last_dur=0
+    fx_since=0
     if [[ -r "$sc" ]]; then
-        f="$(jq -r --arg r "$rid" 'select(.v == 1 and .release == $r) | [(.grace // 0), (.restarts // ""), (.last_duration_s // 0)] | map(tostring) | join("|")' "$sc" 2>/dev/null)" || f=''
-        [[ -z "$f" ]] || IFS='|' read -r grace restarts_base last_dur <<<"$f"
+        f="$(jq -r --arg r "$rid" 'select(.v == 1 and .release == $r) | [(.grace // 0), (.restarts // ""), (.last_duration_s // 0), ((.fivexx_since // 0) | floor)] | map(tostring) | join("|")' "$sc" 2>/dev/null)" || f=''
+        [[ -z "$f" ]] || IFS='|' read -r grace restarts_base last_dur fx_since <<<"$f"
     fi
     [[ "$grace" =~ ^[0-9]+$ ]] || grace=0
     [[ "$last_dur" =~ ^[0-9]+$ ]] || last_dur=0
+    [[ "$fx_since" =~ ^[0-9]{1,12}$ ]] || fx_since=0
     [[ "$restarts_base" =~ ^[0-9]+$ ]] || restarts_base=''
+    dur="$(printf '%s' "$sample" | jq -r '(.duration_s // 0) | if type == "number" then floor else 0 end' 2>/dev/null)" || dur=0
+    [[ "$dur" =~ ^[0-9]{1,9}$ ]] || dur=0
 
     # -- time: the real gap counts when it is at most twice the interval; a timed-out sample
     # adds at most the interval; a gap that is mostly idle time is a resume (the reboot rule)
@@ -581,7 +635,10 @@ cd_watch_eval() {
         ((blind == _CD_WATCH_BLIND_WARN)) && mail_blind=true
     else
         blind=0
-        if ((n >= min5)) && { [[ "$base5" == null ]] || ((n * span >= factor * base5 * window)); }; then hit5=true; fi
+        # a count whose window reaches back before the end of the last paused or grace sample
+        # holds the answers of an outage or of a reboot: it is not judged (the sample starts its
+        # window at that end; this is the second line of the same defence)
+        if ((n >= min5 && at - window >= fx_since)) && { [[ "$base5" == null ]] || ((n * span >= factor * base5 * window)); }; then hit5=true; fi
         requests=0
         [[ "$req" =~ ^[0-9]+$ ]] && requests=$req
     fi
@@ -628,6 +685,9 @@ cd_watch_eval() {
     # restarts that happened while a shared service was down are the outage's, not the
     # release's: re-base on every paused sample so the end of the outage does not blame them
     if [[ "$verdict" == paused && "$cont_known" == true ]]; then restarts_base=$cont_restarts; fi
+    # the same for the 5xx answers: a paused sample, and a sample inside the grace after a
+    # resume, move the earliest start of the next windows to the end of that sample
+    if [[ "$verdict" == paused ]] || ((grace > 0)); then fx_since=$((at + dur)); fi
     ((grace > 0)) && grace=$((grace - 1))
     samples=$((samples + 1))
 
@@ -644,8 +704,8 @@ cd_watch_eval() {
         --argjson o "$observed" --argjson s "$samples" --argjson b "$streak" --argjson p "$paused" --argjson bl "$blind" \
         --argjson rq "$requests" --argjson at "$at" || return 2
     cd_mkdir "$CD_DATA" || return 2
-    jq -cn --arg r "$rid" --argjson g "$grace" --argjson rs "${restarts_base:-null}" --argjson d "$(printf '%s' "$sample" | jq -r '.duration_s // 0 | floor')" \
-        '{v: 1, release: $r, grace: $g, restarts: $rs, last_duration_s: $d}' | cd_atomic_write "$sc" 600 || return 2
+    jq -cn --arg r "$rid" --argjson g "$grace" --argjson rs "${restarts_base:-null}" --argjson d "$dur" --argjson fx "$fx_since" \
+        '{v: 1, release: $r, grace: $g, restarts: $rs, last_duration_s: $d, fivexx_since: $fx}' | cd_atomic_write "$sc" 600 || return 2
 
     case "$verdict" in
         ok | bad) ;;

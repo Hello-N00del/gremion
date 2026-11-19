@@ -81,6 +81,8 @@ cd_colour_workers() {
 }
 cd_wait_healthy() {
     printf 'wait %s %s %s timeout=%s\n' "$1" "$2" "$3" "${CD_DC_TIMEOUT:-unset}" >> "$DK/fake.log"
+    # state.advance: the wait takes that many seconds of the fake clock
+    [[ -f "$DK/state.advance" ]] && echo $(( $(cat "$GREMION_CD_NOW_FILE") + $(cat "$DK/state.advance") )) > "$GREMION_CD_NOW_FILE"
     return "$(_fk_rc state.rc 0)"
 }
 FAKES
@@ -93,6 +95,8 @@ FAKES
 #   cont.<id>                 "<state> <exit code> <health> <restart count>" (inspect)
 #   access.log                what `docker exec <traefik> tail` prints
 #   log.fail                  the exec fails; ps.fail / inspect.fail: those calls fail
+#   log.hang                  the exec is killed by its timeout after N seconds of the fake clock
+#   psid.fail                 the ps that asks for one container by id fails
 # docker.log has one line per call: the args, then bounded=1 when `timeout` wrapped the call.
 shim_docker() {
     shim docker "$(cat <<'EOF'
@@ -107,6 +111,7 @@ case "$1" in
       esac
     done
     [ -f "$DK/ps.fail" ] && exit 1
+    for a in "$@"; do case "$a" in id=*) [ -f "$DK/psid.fail" ] && exit 1 ;; esac; done
     if [ -n "$svc" ]; then [ -f "$DK/cid.$proj.$svc" ] && cat "$DK/cid.$proj.$svc"
     else [ -f "$DK/cids.$proj" ] && cat "$DK/cids.$proj"; fi
     exit 0 ;;
@@ -117,6 +122,7 @@ case "$1" in
   exec)
     [ "$2" = "$(cat "$DK/cid.teststack-state.traefik" 2>/dev/null)" ] || exit 1
     [ -f "$DK/log.fail" ] && exit 1
+    [ -f "$DK/log.hang" ] && { echo $(( $(cat "$GREMION_CD_NOW_FILE") + $(cat "$DK/log.hang") )) > "$GREMION_CD_NOW_FILE"; exit 124; }
     cat "$DK/access.log" 2>/dev/null
     exit 0 ;;
 esac
@@ -132,7 +138,7 @@ EOF
 #   traefik.<name>         the JSON of a service, traefik.down: the API does not answer
 shim_curl() {
     shim curl "$(cat <<'EOF'
-(IFS='|'; printf '%s\n' "$*" >> "$DK/curl.log")
+(IFS='|'; a="$*"; printf '%s\n' "${a//$'\n'/ }" >> "$DK/curl.log")
 url="${@: -1}"; out=''; wfmt=''; prev=''; res=0
 for a in "$@"; do
   case "$prev" in -o) out="$a" ;; -w) wfmt="$a" ;; esac
@@ -498,7 +504,8 @@ BAD='.public.ok = false | .public.readyz = "503"'
     [ "$(jq -r '.fivexx' <<<"$s")" = 0 ]
     [ "$(jq -r '.requests' <<<"$s")" = 5 ]
     [ "$(jq -c '.workers' <<<"$s")" = '{"new":"on","old":"off"}' ]
-    [ "$(jq -r '.old_ready' <<<"$s")" = true ]
+    # the old colour is the evidence of the pause rule: it is asked only when a shared check failed
+    [ "$(jq -r '.old_ready' <<<"$s")" = false ]
     [ "$(jq -c '.shared' <<<"$s")" = '{"state_ok":true,"traefik_ok":true,"docker_ok":true}' ]
     [ "$(jq -r '.timed_out' <<<"$s")" = false ]
     [ "$(jq -r '.colour + " " + .tag + " " + .old_colour' <<<"$s")" = "green pilot-bbbbbbbbbbbb blue" ]
@@ -529,7 +536,7 @@ BAD='.public.ok = false | .public.readyz = "503"'
     # one URL per call; every call names its --max-time, and none is above the key
     calls="$(grep -cE 'https?://' "${DK}/curl.log")"
     bounds="$(grep -oE -- '--max-time\|[0-9]+' "${DK}/curl.log" | wc -l)"
-    [ "$calls" -ge 6 ]
+    [ "$calls" -ge 5 ]
     [ "$calls" = "$bounds" ]
     while IFS= read -r l; do
         [ "${l#*|}" -le 5 ]
@@ -644,7 +651,7 @@ BAD='.public.ok = false | .public.readyz = "503"'
     [ "$output" = 0 ]
 }
 
-@test "sample: a spent budget skips the calls that are left, keeps the shared and old-colour evidence, and the sample is not paused" {
+@test "sample: a spent budget skips the calls that are left, keeps the shared evidence, and the sample is not paused" {
     world_good
     seed
     # the public probe hangs for 20 seconds of a 12 second budget
@@ -655,7 +662,6 @@ BAD='.public.ok = false | .public.readyz = "503"'
     [ "$(jq -r '.timed_out' <<<"$s")" = true ]
     [ "$(jq -r '.shared.state_ok' <<<"$s")" = true ]
     [ "$(jq -r '.shared.traefik_ok' <<<"$s")" = true ]
-    [ "$(jq -r '.old_ready' <<<"$s")" = true ]
     [ "$(jq -r '.public.readyz + " " + .public.login' <<<"$s")" = "200 000" ]
     [ "$(jq -r '.public.ok' <<<"$s")" = false ]
     [ "$(jq -r '.internal.answered' <<<"$s")" = false ]
@@ -706,6 +712,8 @@ BAD='.public.ok = false | .public.readyz = "503"'
 @test "sample: the old colour is probed through app-next@file and counts only when that route names the old colour" {
     world_good
     seed
+    # the old colour is asked when a shared check failed
+    printf '3' > "${DK}/state.rc"
     run --separate-stderr wl 'cd_watch_sample'
     [ "$(jq -r '.old_ready' <<<"$output")" = true ]
     grep -q 'http://127.0.0.1:18081/readyz' "${DK}/curl.log"
@@ -944,7 +952,7 @@ BAD='.public.ok = false | .public.readyz = "503"'
     ev '.shared.state_ok = false | .containers.restarts = 3'
     [ "${lines[0]}" = paused ]
     adv
-    ev '.shared.state_ok = false | .fivexx = 80'
+    ev '.shared.state_ok = false | .fivexx = 80 | .window_s = 13'
     [ "${lines[0]}" = paused ]
 }
 
@@ -1220,10 +1228,10 @@ BAD='.public.ok = false | .public.readyz = "503"'
     ev '.containers.restarts = 5 | .fivexx = 90'
     [ "${lines[0]}" = bad ]
     adv 15
-    ev '.containers.restarts = 5 | .fivexx = 90'
+    ev '.containers.restarts = 5 | .fivexx = 90 | .window_s = 13'
     [ "${lines[0]}" = bad ]
     adv 15
-    ev '.containers.restarts = 7 | .fivexx = 90'
+    ev '.containers.restarts = 7 | .fivexx = 90 | .window_s = 13'
     [ "${lines[0]}" = trigger:watch_crash ]
 }
 
@@ -1234,10 +1242,11 @@ BAD='.public.ok = false | .public.readyz = "503"'
     ev '.fivexx = 90'
     [ "${lines[0]}" = bad ]
     adv 15
-    ev '.fivexx = 90'
+    ev '.fivexx = 90 | .window_s = 13'
     [ "${lines[0]}" = bad ]
+    # the third sample, whose window starts where the second ended, is judged
     adv 15
-    ev '.fivexx = 90'
+    ev '.fivexx = 90 | .window_s = 13'
     [ "${lines[0]}" = trigger:watch_5xx ]
 }
 
@@ -1442,21 +1451,22 @@ BAD='.public.ok = false | .public.readyz = "503"'
     [ "${lines[0]}" = trigger:watch_readiness ]
 }
 
-@test "sample: a hung old-colour probe spends the budget, the sample is bad and docker is not blamed" {
+@test "sample: a hung old-colour probe, asked because a shared check failed, spends the budget and docker is not blamed" {
     world_good
     seed
+    printf '3' > "${DK}/state.rc"
     printf '20' > "${DK}/old.readyz.advance"
     run --separate-stderr wl 'cd_watch_sample'
     [ "$status" -eq 0 ]
     local s="$output"
     [ "$(jq -r '.timed_out' <<<"$s")" = true ]
-    [ "$(jq -r '.containers.known' <<<"$s")" = false ]
+    [ "$(jq -r '.internal.answered' <<<"$s")" = false ]
     [ "$(jq -r '.shared.docker_ok' <<<"$s")" = true ]
     [ "$(jq -r '.shared.traefik_ok' <<<"$s")" = true ]
-    [ "$(jq -r '.shared.state_ok' <<<"$s")" = true ]
+    [ "$(jq -r '.shared.state_ok' <<<"$s")" = false ]
     export S="$s"
     run --separate-stderr wl 'cd_watch_eval "$S"'
-    [ "${lines[0]}" = bad ]
+    [ "${lines[0]}" = paused ]
 }
 
 @test "eval timeout: a hung old-colour probe, repeated, does not pause or park a healthy release" {
@@ -1522,4 +1532,225 @@ BAD='.public.ok = false | .public.readyz = "503"'
     grep -q RouterName "$f"
     grep -q 'tail' "$f"
     bash -n "$f"
+}
+
+# ============================================================ review round 3: the guards
+
+@test "eval 5xx: the 5xx answers of a shared outage are not held against the release when the outage ends" {
+    seed
+    ev '(.)'
+    adv
+    ev "$BAD | .shared.state_ok = false | .fivexx = 80"
+    [ "${lines[0]}" = paused ]
+    # the sidecar remembers where the outage's answers end (the end of that sample)
+    [ "$(jq -r '.fivexx_since' "${GREMION_ROOT}/data/cd/watch-eval.json")" = "$(($(cd_clock) + 2))" ]
+    # the outage is over; a window that still reaches back into it is not judged
+    adv
+    ev '.fivexx = 80'
+    [ "${lines[0]}" = ok ]
+    # a window that starts where the outage ended is judged: 80 answers since then are the release's
+    adv
+    ev '.fivexx = 80 | .window_s = 28'
+    [ "${lines[0]}" = trigger:watch_5xx ]
+}
+
+@test "eval 5xx: a healthy release after an outage is not rolled back by the outage's own answers" {
+    seed
+    ev '(.)'
+    local i
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+        adv
+        ev "$BAD | .shared.state_ok = false | .fivexx = $((i + 5))"
+        [ "${lines[0]}" = paused ]
+    done
+    adv
+    ev '.fivexx = 15'
+    [ "${lines[0]}" = ok ]
+    [ "$(sw bad_streak)" = 0 ]
+}
+
+@test "eval reboot rule: 5xx answers from before the resume are not judged once the grace is over" {
+    seed '{"last_sample_epoch":'"$(cd_clock)"'}'
+    ev '(.)'
+    adv 900
+    ev '.fivexx = 90'
+    [ "${lines[0]}" = bad ]
+    adv 15
+    ev '.fivexx = 90 | .window_s = 13'
+    [ "${lines[0]}" = bad ]
+    # the third sample is past the grace, but its window still reaches back before the resume
+    adv 15
+    ev '.fivexx = 90'
+    [ "${lines[0]}" = ok ]
+}
+
+@test "eval 5xx: the sidecar keeps the cut for the next samples and a good sample does not move it" {
+    seed
+    ev '(.)'
+    adv
+    ev "$BAD | .shared.state_ok = false"
+    local cut
+    cut="$(jq -r '.fivexx_since' "${GREMION_ROOT}/data/cd/watch-eval.json")"
+    [ "$cut" -gt 0 ]
+    adv
+    ev '(.)'
+    [ "$(jq -r '.fivexx_since' "${GREMION_ROOT}/data/cd/watch-eval.json")" = "$cut" ]
+    # a new release has no cut
+    jq '.release.id = "cccccccccccc-1"' "${GREMION_ROOT}/data/cd/state.json" > "${GREMION_ROOT}/data/cd/state.json.new"
+    mv "${GREMION_ROOT}/data/cd/state.json.new" "${GREMION_ROOT}/data/cd/state.json"
+    adv
+    ev '.fivexx = 80'
+    [ "${lines[0]}" = trigger:watch_5xx ]
+    [ "$(jq -r '.fivexx_since' "${GREMION_ROOT}/data/cd/watch-eval.json")" = 0 ]
+}
+
+@test "sample: the 5xx window never reaches back before the end of the last paused or grace sample" {
+    world_good
+    seed
+    logl app@file r@file 502 150 12
+    run --separate-stderr wl 'cd_watch_sample'
+    [ "$(jq -r '.fivexx' <<<"$output")" = 12 ]
+    [ "$(jq -r '.window_s' <<<"$output")" = 300 ]
+    printf '{"v":1,"release":"bbbbbbbbbbbb-1","grace":0,"restarts":0,"last_duration_s":2,"fivexx_since":%s}\n' "$(($(cd_clock) - 100))" > "${GREMION_ROOT}/data/cd/watch-eval.json"
+    run --separate-stderr wl 'cd_watch_sample'
+    [ "$(jq -r '.fivexx' <<<"$output")" = 0 ]
+    [ "$(jq -r '.window_s' <<<"$output")" = 100 ]
+    # the cut of another release is nobody's cut
+    printf '{"v":1,"release":"cccccccccccc-1","grace":0,"restarts":0,"last_duration_s":2,"fivexx_since":%s}\n' "$(($(cd_clock) - 100))" > "${GREMION_ROOT}/data/cd/watch-eval.json"
+    run --separate-stderr wl 'cd_watch_sample'
+    [ "$(jq -r '.fivexx' <<<"$output")" = 12 ]
+    [ "$(jq -r '.window_s' <<<"$output")" = 300 ]
+}
+
+@test "sample then eval: the answers of a shared outage do not roll a healthy release back at the end of it" {
+    world_good
+    seed
+    logl app@file r@file 503 100 12
+    printf '3' > "${DK}/state.rc"
+    printf '503|{"ready":false}' > "${DK}/pub.readyz"
+    run --separate-stderr wl 'cd_watch_sample'
+    export S="$output"
+    run --separate-stderr wl 'cd_watch_eval "$S"'
+    [ "${lines[0]}" = paused ]
+    # the outage is over; the window must start where that sample ended
+    rm "${DK}/state.rc"
+    printf '200|{"ready":true}' > "${DK}/pub.readyz"
+    adv
+    run --separate-stderr wl 'cd_watch_sample'
+    export S="$output"
+    [ "$(jq -r '.fivexx' <<<"$S")" -lt 10 ]
+    run --separate-stderr wl 'cd_watch_eval "$S"'
+    [ "${lines[0]}" = ok ]
+}
+
+@test "sample: a log read that uses the budget up is a blind sample, never a failed one" {
+    world_good
+    seed
+    printf '20' > "${DK}/log.hang"
+    local i
+    for i in 1 2 3; do
+        run --separate-stderr wl 'cd_watch_sample'
+        [ "$(jq -r '.timed_out' <<<"$output")" = false ]
+        [ "$(jq -r '.fivexx' <<<"$output")" = null ]
+        export S="$output"
+        run --separate-stderr wl 'cd_watch_eval "$S"'
+        [ "${lines[0]}" = ok ]
+        [ "${lines[1]}" = blind ]
+        [ "$(sw bad_streak)" = 0 ]
+    done
+}
+
+@test "sample: a budget already spent by the probes is still a timed-out sample" {
+    world_good
+    seed
+    printf '20' > "${DK}/pub.readyz.advance"
+    run --separate-stderr wl 'cd_watch_sample'
+    [ "$(jq -r '.timed_out' <<<"$output")" = true ]
+}
+
+@test "sample: a healthy shared world never asks the old colour, so a hung old colour cannot starve the new one's probes" {
+    world_good
+    seed
+    printf '20' > "${DK}/old.readyz.advance"
+    local i
+    for i in 1 2 3; do
+        run --separate-stderr wl 'cd_watch_sample'
+        [ "$(jq -r '.timed_out' <<<"$output")" = false ]
+        [ "$(jq -r '.public.ok' <<<"$output")" = true ]
+        [ "$(jq -r '.internal.answered' <<<"$output")" = true ]
+        export S="$output"
+        run --separate-stderr wl 'cd_watch_eval "$S"'
+        [ "${lines[0]}" = ok ]
+    done
+    run bash -c 'grep -c 127.0.0.1:18081 "$1" 2>/dev/null || true' _ "${DK}/curl.log"
+    [ -z "$output" ] || [ "$output" = 0 ]
+}
+
+@test "sample: when a shared check failed the old colour is asked, in half of what is left of the budget" {
+    world_good
+    seed
+    printf '3' > "${DK}/state.rc"
+    run --separate-stderr wl 'cd_watch_sample'
+    [ "$(jq -r '.old_ready' <<<"$output")" = true ]
+    grep '127.0.0.1:18081' "${DK}/curl.log" | grep -q -- '--max-time|6|'
+    # a hung old colour then costs the sample its probes, which is a paused sample, not a bad one
+    printf '20' > "${DK}/old.readyz.advance"
+    run --separate-stderr wl 'cd_watch_sample'
+    export S="$output"
+    [ "$(jq -r '.timed_out' <<<"$S")" = true ]
+    run --separate-stderr wl 'cd_watch_eval "$S"'
+    [ "${lines[0]}" = paused ]
+}
+
+@test "sample: a Traefik API check that is not asked because the budget is spent is not an outage" {
+    world_good
+    seed
+    printf '20' > "${DK}/state.advance"
+    run --separate-stderr wl 'cd_watch_sample'
+    [ "$(jq -r '.shared.traefik_ok' <<<"$output")" = true ]
+    [ "$(jq -r '.timed_out' <<<"$output")" = true ]
+    # (no request at all, or none for the API)
+    run bash -c 'grep -c api/version "$1" 2>/dev/null || true' _ "${DK}/curl.log"
+    [ -z "$output" ] || [ "$output" = 0 ]
+}
+
+@test "probe_public: no body of the probe host is written to a file" {
+    world_good
+    export TMPDIR="${BATS_TEST_TMPDIR}/probe-tmp"
+    mkdir -p "$TMPDIR"
+    run --separate-stderr wl 'cd_watch_probe_public'
+    [ "$status" -eq 0 ]
+    [ "$output" = "200 302" ]
+    # no request names an output file at all, and no file was left behind
+    run grep -cE -- '(^|\|)(-o|--output)\|' "${DK}/curl.log"
+    [ "$output" = 1 ]
+    run grep -c -- '-o|/dev/null|' "${DK}/curl.log"
+    [ "$output" = 1 ]
+    run find "$TMPDIR" -type f
+    [ -z "$output" ]
+}
+
+@test "sample: a colour whose env file the host refuses is a bad colour, not a silent docker" {
+    world_good
+    seed
+    sed -i '/^COMPOSE_PROJECT_NAME=/d' "${GREMION_ROOT}/etc/env/app-green.env"
+    run --separate-stderr wl 'cd_watch_sample'
+    [ "$(jq -c '.containers' <<<"$output")" = '{"known":true,"total":0,"bad":1,"restarts":0}' ]
+    [ "$(jq -r '.shared.docker_ok' <<<"$output")" = true ]
+    export S="$output"
+    run --separate-stderr wl 'cd_watch_eval "$S"'
+    [ "${lines[0]}" = bad ]
+}
+
+@test "sample: a container that vanished between the list and the inspect is a bad container, a silent docker is unknown" {
+    world_good
+    seed
+    touch "${DK}/inspect.fail"
+    run --separate-stderr wl 'cd_watch_sample'
+    [ "$(jq -c '.containers' <<<"$output")" = '{"known":true,"total":2,"bad":2,"restarts":0}' ]
+    [ "$(jq -r '.shared.docker_ok' <<<"$output")" = true ]
+    touch "${DK}/psid.fail"
+    run --separate-stderr wl 'cd_watch_sample'
+    [ "$(jq -r '.containers.known' <<<"$output")" = false ]
+    [ "$(jq -r '.shared.docker_ok' <<<"$output")" = false ]
 }
