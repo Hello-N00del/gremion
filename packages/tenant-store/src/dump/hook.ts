@@ -44,6 +44,10 @@ export interface DumpHookOptions {
   exporter: Exporter
   pgDumpMajor(): Promise<number>
   service?: string
+  /** The login role of `service` (written to the ledger line with it, see TakeDumpOptions.pgUser). */
+  pgUser?: string
+  /** See TakeDumpOptions.ownerUid: set only by the one-shot that runs as root. */
+  ownerUid?: number
   fs?: DumpFs
   byKind?: ByKind
   now?: () => Date
@@ -77,6 +81,8 @@ export function dumpHook(o: DumpHookOptions): PreApply {
       exporter: o.exporter,
       probe: { serverMajor: async () => Number(row.major), databaseBytes: async () => Number(row.bytes), pgDumpMajor: () => o.pgDumpMajor() },
       ...(o.service !== undefined ? { service: o.service } : {}),
+      ...(o.pgUser !== undefined ? { pgUser: o.pgUser } : {}),
+      ...(o.ownerUid !== undefined ? { ownerUid: o.ownerUid } : {}),
       ...(o.fs ? { fs: o.fs } : {}),
       ...(o.byKind ? { byKind: o.byKind } : {}),
       ...(o.now ? { now: o.now } : {}),

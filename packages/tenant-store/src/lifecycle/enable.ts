@@ -26,7 +26,7 @@
 import { join } from 'node:path'
 import type { Sql } from '@gremion/db'
 import { tenantModuleDbName } from '../names.js'
-import { hasControlChar, runMigrations } from '../runner.js'
+import { hasControlChar, runMigrations, type RunMigrationsHooks } from '../runner.js'
 import { blockModuleDatabase, lockDownDatabase, unblockModuleDatabase } from './block.js'
 import { execFormatted, sqlState } from './ddl.js'
 import {
@@ -208,6 +208,8 @@ export async function enableModule(tenantId: string, module: LifecycleModule, ac
   }
   let created = false
   let applied: string[] = []
+  // the hooks this enable ran its migrations under (the dump hook); set only for a database that already existed
+  let hooks: RunMigrationsHooks | undefined
   if (database) {
     dbName = assertTenantModuleTarget(tenantModuleDbName(tenantId, moduleId), tenantId, moduleId)
     // 4. visible, resumable state first
@@ -266,7 +268,8 @@ export async function enableModule(tenantId: string, module: LifecycleModule, ac
         // Default: the baseline this package ships (never a kernel checkout's
         // scripts/, which the tenant-create image does not carry).
         const phaseFor = deps.phaseFor ? deps.phaseFor(moduleId) : pinnedPhaseFor(`module-${moduleId}`, PINNED_BASELINE)
-        const hooks = created ? undefined : deps.upgradeHooks
+        // CD stage 1 (U6g): the function form is bound to this module's own server.
+        hooks = created ? undefined : typeof deps.upgradeHooks === 'function' ? deps.upgradeHooks(moduleId, database.postgresService) : deps.upgradeHooks
         const r = await runMigrations({
           sql: owned,
           dir: join(module.dir, database.migrations),
@@ -349,6 +352,17 @@ export async function enableModule(tenantId: string, module: LifecycleModule, ac
     }
   }).catch(failRestore)
   reblock = null // committed: the module is enabled, nothing may block it again
+  // CD stage 1 (U6g): the dump taken for the catch-up was the restore point of a failed enable; the enable has
+  // committed, so it is retired now, because a live dump of this database makes every later release's take (and the
+  // next switch-off and switch-on) refuse. Only after the commit, and never able to re-block. A failure here leaves
+  // the dump live on purpose: it is logged with the way out, never swallowed silently and never turned into a failed enable.
+  if (hooks && dbName !== null && deps.dumpRetire) {
+    try {
+      await deps.dumpRetire.afterEnable(deps.releaseRef as string, dbName)
+    } catch (err) {
+      log(`(${tenantId}, ${moduleId}) is enabled, but the pre-migration dump of ${dbName} could not be retired (${err instanceof Error ? err.message : String(err)}); it stays live and the next release's dump refuses until it is discarded: gremion-migration-dump discard --release ${deps.releaseRef as string} --reason <text>`)
+    }
+  }
   await hook('enabled', dbName)
   log(`enabled (${tenantId}, ${moduleId})${dbName ? ` on ${dbName}${created ? ' (created)' : ''}, ${applied.length} migration(s) applied` : ' (no database)'}${restored ? ', restored inside its Karenz' : ''}`)
   return { tenantId, moduleId, database: dbName, created, applied, noop: false, restored }
