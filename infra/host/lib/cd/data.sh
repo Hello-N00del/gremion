@@ -362,7 +362,7 @@ _cd_data_declared() {
         [[ -f "$f" ]] || continue
         n=$((n + 1))
         line="$(jq -r '
-            . as $m
+            (.) as $m
             | ($m.id // "") as $id
             | (if ($m | has("runtime") | not) then null
                elif ($m.runtime | type) == "object" then ($m.runtime.database // null)
