@@ -18,7 +18,7 @@
 //   - fail-safe per tick: a control-plane listing failure logs and RESOLVES —
 //     a worker tick must never crash/reject on it (unlike the boot fleet in
 //     fleet.ts, where a control-plane failure is a process-wide boot failure).
-//   - worker gate (CD stage 1): a colour whose gate file says `off` runs no tick at all —
+//   - worker gate: a colour whose gate file says `off` runs no tick at all —
 //     read per tick at the very top, see worker-gate.ts.
 //   - D-READY readiness gate (adversarial-review fix, als-worker): workers are
 //     the OTHER traffic source besides HTTP and their ticks WRITE to tenant
@@ -43,7 +43,7 @@ export async function forEachActiveTenant(
   label: string,
   fn: (ctx: TenantContext) => unknown,
 ): Promise<void> {
-  // The worker gate (CD stage 1): the release tooling switches the workers of one colour off by
+  // The worker gate: the release tooling switches the workers of one colour off by
   // writing `off` into a file this colour sees read-only (worker-gate.ts). It is read on EVERY
   // tick, before anything else, so a gated tick costs one tiny file read: it does not list the
   // tenants, resolve them or run `fn`. Only the content `off` stops the tick; an absent,

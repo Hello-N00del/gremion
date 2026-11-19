@@ -13,11 +13,11 @@
 // An install that never ran the release tooling has no file at all and must lose no worker;
 // a gate that failed closed would silently stop every tick of every install.
 //
-// It is a FILE and not an environment value on purpose: a container keeps the environment it
-// was created with, so a value written into an env file would be lost on a restart-policy
-// restart or a host reboot of the serving colour. The file survives both, and it is read on
-// EVERY call, so a change between two ticks takes effect with no restart. Nothing about the
-// decision is kept in the process.
+// The switch is a file rather than an environment variable because a container keeps the
+// environment it was created with: a value changed later would not reach a running container,
+// and one baked in would come back after a restart. The file is read on EVERY call, so a change
+// between two ticks takes effect with no restart, and it is still there after a restart or a
+// reboot. Nothing about the decision is kept in the process.
 //
 // What it does not do: it gates background ticks, not requests, and a tick that is already
 // running when the file turns `off` finishes. Background work that does not go through

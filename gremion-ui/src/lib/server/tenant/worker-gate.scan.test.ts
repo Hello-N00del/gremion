@@ -3,7 +3,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { dirname, join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-// Static scan (CD stage 1, U12b): every background tick of gremion-ui goes through
+// Static scan: every background tick of gremion-ui goes through
 // forEachActiveTenant, the one seam where the worker gate (worker-gate.ts) is read.
 //
 // A tick that does not is invisible to the gate: when a release turns the workers of a colour
@@ -11,7 +11,8 @@ import { fileURLToPath } from 'node:url'
 // `setInterval`, `cron.schedule` and boot-worker starter (`superviseWorker`) in the server
 // code and the module app code, and requires its callback to reach forEachActiveTenant. A
 // call that does not is named in the failure and must either be put behind the gate or be
-// added to NOT_GATED below WITH its reason. That list IS the "not gated" residual of the plan.
+// added to NOT_GATED below WITH its reason. That list is the honest answer to "what does the
+// gate not stop?".
 //
 // Limits, stated so nobody reads this as more than it is: it is a text scan. It sees the call
 // sites above, not a recursive `setTimeout` loop and not a timer created by a dependency.
@@ -32,26 +33,26 @@ interface NotGated {
 
 /**
  * Background starters that deliberately do NOT go through forEachActiveTenant, with the reason.
- * The gate does not stop these. This is Open Decision 3's residual, kept honest by this test.
+ * The gate does not stop these; this test keeps the list complete.
  */
 const NOT_GATED: readonly NotGated[] = [
   {
     file: 'lib/server/calendar/register.server.ts',
     kind: 'superviseWorker',
     count: 1,
-    reason: 'the calendar audit consumer is a durable NATS consumer, not a periodic tick; it has no per-tenant loop',
+    reason: 'the calendar audit consumer is message driven (NATS), not a periodic tick; it has no per-tenant loop',
   },
   {
     file: 'lib/server/content/register.server.ts',
     kind: 'superviseWorker',
     count: 1,
-    reason: 'the content audit consumer is a durable NATS consumer, not a periodic tick; it has no per-tenant loop',
+    reason: 'the content audit consumer is message driven (NATS), not a periodic tick; it has no per-tenant loop',
   },
   {
     file: 'lib/server/newsletter/register.server.ts',
     kind: 'superviseWorker',
     count: 1,
-    reason: 'the newsletter audit consumer is a durable NATS consumer, not a periodic tick; it has no per-tenant loop',
+    reason: 'the newsletter audit consumer is message driven (NATS), not a periodic tick; it has no per-tenant loop',
   },
   {
     file: 'routes/api/messages/sync/+server.ts',
@@ -231,8 +232,15 @@ function sourceFiles(): { path: string; key: string }[] {
   for (const p of walk(join(REPO, 'gremion-ui', 'src'))) {
     files.push({ path: p, key: relative(join(REPO, 'gremion-ui', 'src'), p).split(sep).join('/') })
   }
+  // A tree without the in-tree modules (a kernel-only checkout) has no `modules/`: scan what exists.
   const modulesDir = join(REPO, 'modules')
-  for (const id of readdirSync(modulesDir)) {
+  let ids: string[] = []
+  try {
+    ids = readdirSync(modulesDir)
+  } catch {
+    ids = []
+  }
+  for (const id of ids) {
     const app = join(modulesDir, id, 'app')
     for (const p of walk(app)) {
       files.push({ path: p, key: relative(app, p).split(sep).join('/') })
@@ -306,12 +314,14 @@ describe('every background tick of gremion-ui goes through forEachActiveTenant',
     for (const s of scanSource(readFileSync(path, 'utf8'))) unique.set(`${key}:${s.kind}:${s.line}`, { ...s, key })
   }
   const found = [...unique.values()]
+  // Entries and expectations that name a module file apply only where that module is present.
+  const present = new Set(files.map((f) => f.key))
 
   it('the scan collected the known ticks (a scan that finds nothing proves nothing)', () => {
     const gated = found.filter((s) => s.gated).map((s) => s.key)
     // The provisioning worker and the audit-integrity tick of the kernel, the Karenz and module
     // switch workers, the governance workers, and the module ticks (calendar, content).
-    for (const known of [
+    const knownTicks = [
       'lib/server/governance/provisioning/worker.ts',
       'hooks.server.ts',
       'lib/server/module-karenz/register.server.ts',
@@ -320,10 +330,12 @@ describe('every background tick of gremion-ui goes through forEachActiveTenant',
       'lib/server/calendar/notification-scheduler.ts',
       'lib/server/calendar/caldav-sync.ts',
       'lib/server/content/register.server.ts',
-    ]) {
+    ].filter((k) => present.has(k))
+    expect(knownTicks.length, 'the kernel files of the known ticks were not found').toBeGreaterThanOrEqual(5)
+    for (const known of knownTicks) {
       expect(gated, `the scan did not see the tick in ${known}`).toContain(known)
     }
-    expect(found.length).toBeGreaterThanOrEqual(10)
+    expect(found.length).toBeGreaterThanOrEqual(6)
   })
 
   it('no tick bypasses the gate unless it is on the reviewed list with a reason', () => {
@@ -339,7 +351,7 @@ describe('every background tick of gremion-ui goes through forEachActiveTenant',
         )
       }
     }
-    for (const a of NOT_GATED) {
+    for (const a of NOT_GATED.filter((x) => present.has(x.file))) {
       const n = ungated.filter((s) => s.key === a.file && s.kind === a.kind).length
       if (n > a.count) {
         problems.push(`${a.file} now holds ${n} ungated ${a.kind} call(s), the reviewed list allows ${a.count}.`)

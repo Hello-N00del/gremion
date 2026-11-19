@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { isWorkerGateOff, WORKER_GATE_DIR, _resetWorkerGateForTests } from './worker-gate'
 
-// The worker gate (CD stage 1, U12b): ONE small file per colour, read at the top of
+// The worker gate: ONE small file per colour, read at the top of
 // every background tick. The host writes `off` into runtime/workers/<colour>; the
 // colour sees it read-only at /run/gremion/workers/<colour>. The contract is
 // deliberately lopsided: ONLY the content `off` stops workers. An absent file, an
@@ -42,7 +42,7 @@ describe('worker gate: what the file says', () => {
     expect(await gate()).toBe(true)
   })
 
-  it('an ABSENT file is ON (guard: a flipped default would stop every worker of every install without CD)', async () => {
+  it('an ABSENT file is ON (the default must never flip: it would stop every worker of an install that has no gate file)', async () => {
     mkdirSync(dir, { recursive: true })
     expect(await gate()).toBe(false)
   })
@@ -150,6 +150,19 @@ describe('worker gate: logging', () => {
     for (let i = 0; i < 5; i++) await gate()
     for (let i = 0; i < 5; i++) await isWorkerGateOff({ dir: join(dir, 'nope'), colour: 'green' })
     expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('a change of state is said once, not once per tick (log output only, no decision reads it)', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+    writeFileSync(join(dir, 'green'), 'on')
+    for (let i = 0; i < 5; i++) await gate()
+    expect(info).not.toHaveBeenCalled() // on at start is the normal state: nothing to say
+    writeFileSync(join(dir, 'green'), 'off')
+    for (let i = 0; i < 25; i++) expect(await gate()).toBe(true)
+    expect(info).toHaveBeenCalledTimes(1)
+    writeFileSync(join(dir, 'green'), 'on')
+    for (let i = 0; i < 5; i++) expect(await gate()).toBe(false)
+    expect(info).toHaveBeenCalledTimes(2)
   })
 
   it('the log line carries the error class only, no path', async () => {

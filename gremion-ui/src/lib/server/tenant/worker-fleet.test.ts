@@ -24,7 +24,7 @@ vi.mock('./registry', () => ({
   finishTenantMigrationRun: vi.fn(),
 }))
 
-// The worker gate (CD stage 1, U12b) is mocked here: its own file contract is pinned
+// The worker gate is mocked here: its own file contract is pinned
 // in worker-gate.test.ts. These cases pin WHERE it sits in the tick.
 vi.mock('./worker-gate', () => ({ isWorkerGateOff: vi.fn() }))
 
@@ -276,7 +276,7 @@ describe('forEachActiveTenant — D-READY worker-plane readiness gate', () => {
   })
 })
 
-// CD stage 1 (U12b): the worker gate. forEachActiveTenant is the ONE seam every background
+// The worker gate. forEachActiveTenant is the ONE seam every background
 // tick goes through, so the gate is read at the very top of it, once per tick.
 describe('forEachActiveTenant — the worker gate', () => {
   it('gate OFF: the tick returns at once; it neither lists the tenants nor runs the work', async () => {
