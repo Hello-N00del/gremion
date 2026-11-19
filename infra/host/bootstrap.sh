@@ -1250,6 +1250,8 @@ stage_cd() {
     [[ "$(stat -c '%a' "${root}/bin/gremion-cd")" == 755 ]] || die "${root}/bin/gremion-cd is not mode 755" 1
     for u in "${CD_UNITS[@]}"; do
         [[ -s "${udir}/${u}" ]] || die "${udir}/${u} was not written" 1
+        # the token searched for, not an expansion that failed
+        # shellcheck disable=SC2016
         if grep -qF '${' "${udir}/${u}"; then die "${udir}/${u} still holds a \${...} token" 1; fi
     done
     local out rc=0

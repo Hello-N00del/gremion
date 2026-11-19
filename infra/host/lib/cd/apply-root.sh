@@ -41,7 +41,8 @@ is_unit() { local u; for u in "${UNITS[@]}"; do [[ "$u" == "$1" ]] && return 0; 
 [[ $# -eq 1 && "$1" =~ ^[0-9a-f]{12}$ ]] || fail "the instance must be twelve lower-case hex digits" 2
 SHA="$1"
 [[ -n "${DEPLOY_USER:-}" ]] || fail "DEPLOY_USER is not set" 2
-DU="$(id -u "$DEPLOY_USER")" && DG="$(id -g "$DEPLOY_USER")" || fail "the deploy user does not exist" 2
+DU="$(id -u "$DEPLOY_USER" 2>/dev/null)" || fail "the deploy user does not exist" 2
+DG="$(id -g "$DEPLOY_USER" 2>/dev/null)" || fail "the deploy user does not exist" 2
 export GREMION_ROOT="$ROOT" DEPLOY_USER GREMION_SYSTEMD_DIR="$UDIR"
 
 TREE="${ROOT}/releases/${SHA}"
