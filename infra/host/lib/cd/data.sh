@@ -310,8 +310,13 @@ cd_data_timer_guard() {
     for unit in "$_CD_DATA_BACKUP_TIMER" "$_CD_DATA_PURGE_TIMER"; do
         next="${nexts[$unit]}"
         if [[ "$unit" == "$_CD_DATA_BACKUP_TIMER" ]]; then max=$((10#$bmax)); else max=$((10#$pmax)); fi
+        # a next elapse older than the longest run is a stale answer, not a verdict
+        if ((next < now - max * 60)); then
+            _cd_data_err "timer guard: the next elapse of ${unit} is in the past (unknown is not a pass)"
+            return 2
+        fi
         # a timer that has just elapsed (its run is starting) counts, within its longest run
-        if ((next >= now - max * 60 && next <= now + (span + max) * 60)); then
+        if ((next <= now + (span + max) * 60)); then
             printf 'lock span: overlaps the next elapse of a timer; the hourly karenz run (minute 17) is not guarded (accepted)\n'
             _cd_data_err "timer guard: a span of ${span} minutes overlaps ${unit}"
             return 3
