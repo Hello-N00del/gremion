@@ -27,7 +27,8 @@ setup() {
     export DK FIX
     mkdir -p "$DK" "${GREMION_ROOT}/releases/bbbbbbbbbbbb" "${GREMION_ROOT}/releases/aaaaaaaaaaaa"
     TREE="${GREMION_ROOT}/releases/bbbbbbbbbbbb"
-    export TREE
+    LIVE_TREE="${GREMION_ROOT}/releases/aaaaaaaaaaaa"
+    export TREE LIVE_TREE
     cp "${FIX}/state.env" "${GREMION_ROOT}/etc/env/state.env"
     cp "${FIX}/app-blue.env" "${GREMION_ROOT}/etc/env/app-blue.env"
     cp "${FIX}/app-green.env" "${GREMION_ROOT}/etc/env/app-green.env"
@@ -84,6 +85,7 @@ EOF
 
 # curl. Answers are files in $DK, "<status>|<body>" (the word TIMEOUT: no answer, exit 28):
 #   pub.readyz pub.login   the public probe (the request carries --resolve)
+#   <file>.advance         that call takes N seconds of the fake clock (a hung probe)
 #   old.readyz             the loopback route, the old colour
 #   traefik.<name>         the JSON of a service, traefik.down: the API does not answer
 shim_curl() {
@@ -98,6 +100,8 @@ done
 reply() { # FILE
   local line status body
   [ -f "$1" ] || { echo "curl: (7) Failed to connect" >&2; exit 7; }
+  # FILE.advance: this call takes that many seconds of the fake clock
+  [ -f "$1.advance" ] && echo $(( $(cat "$GREMION_CD_NOW_FILE") + $(cat "$1.advance") )) > "$GREMION_CD_NOW_FILE"
   line="$(cat "$1")"
   if [ "$line" = TIMEOUT ]; then
     case "$wfmt" in *http_code*) printf '000' ;; esac
@@ -164,7 +168,7 @@ seed() {
     local w="${1:-}" sw
     [[ -n "$w" ]] || w='{}'
     sw="$(date -u -d "@$(($(cd_clock) - ${SWITCH_AGO:-600}))" +%Y-%m-%dT%H:%M:%SZ)"
-    cd_seed_state '.phase = "watching" | .live = '"$CD_LIVE_JSON"' | .release = {
+    cd_seed_state '.phase = "watching" | .live = ('"$CD_LIVE_JSON"' + {"tree":"'"$LIVE_TREE"'"}) | .release = {
         "id":"bbbbbbbbbbbb-1","sha":"'"$(printf 'b%.0s' $(seq 1 40))"'","sha12":"bbbbbbbbbbbb","tag":"'"$TAG_NEW"'",
         "colour":"green","tree":"'"$TREE"'","mode":"auto","stage":"watch","stage_status":"started","switched_at":"'"$sw"'",
         "watch":({"observed_s":0,"samples":0,"bad_streak":0,"paused_s":0,"blind":0,"requests":0,"baseline_5xx":0,"baseline_not_ready":0,"last_sample_epoch":0} + '"$w"')}'
@@ -492,12 +496,14 @@ BAD='.public.ok = false | .public.readyz = "503"'
     run grep -c 'bounded=0' "${DK}/docker.log"
     [ "$output" = 0 ]
     run grep -c . "${DK}/docker.log"
-    [ "$output" -ge 3 ]
+    [ "$output" -ge 5 ]
+    local tos
+    tos="$(grep -c '^timeout -k 2 ' "${SHIM_LOG}")"
+    [ "$tos" -ge 5 ]
+    [ "$tos" -ge "$(grep -c . "${DK}/docker.log")" ]
     while IFS= read -r l; do
-        n="${l#* }"
-        n="${n%% *}"
-        [ "$n" -le 5 ]
-    done < <(grep -h -oE '^timeout -k 2 [0-9]+' "${SHIM_LOG}" | sed 's/^timeout -k 2 //; s/^/x /')
+        [ "$l" -le 5 ]
+    done < <(grep -oE '^timeout -k 2 [0-9]+' "${SHIM_LOG}" | awk '{print $4}')
     # the stand-ins of the colour and the compose wait are told the same bound
     grep -q 'probe green timeout=5' "${DK}/fake.log"
     grep -q 'portal green timeout=5' "${DK}/fake.log"
@@ -587,6 +593,42 @@ BAD='.public.ok = false | .public.readyz = "503"'
     [ "$(jq -r '.shared.state_ok' <<<"$output")" = false ]
 }
 
+@test "sample: the state project is judged from the LIVE tree, as the start gate judges it" {
+    world_good
+    seed
+    run --separate-stderr wl 'cd_watch_sample'
+    grep -q "wait state 0 ${LIVE_TREE} " "${DK}/fake.log"
+    run grep -c "wait state 0 ${TREE} " "${DK}/fake.log"
+    [ "$output" = 0 ]
+}
+
+@test "sample: a spent budget skips the calls that are left, keeps the shared and old-colour evidence, and the sample is not paused" {
+    world_good
+    seed
+    # the public probe hangs for 20 seconds of a 12 second budget
+    printf '20' > "${DK}/pub.readyz.advance"
+    run --separate-stderr wl 'cd_watch_sample'
+    [ "$status" -eq 0 ]
+    local s="$output"
+    [ "$(jq -r '.timed_out' <<<"$s")" = true ]
+    [ "$(jq -r '.shared.state_ok' <<<"$s")" = true ]
+    [ "$(jq -r '.shared.traefik_ok' <<<"$s")" = true ]
+    [ "$(jq -r '.old_ready' <<<"$s")" = true ]
+    [ "$(jq -r '.public.readyz + " " + .public.login' <<<"$s")" = "200 000" ]
+    [ "$(jq -r '.public.ok' <<<"$s")" = false ]
+    [ "$(jq -r '.internal.answered' <<<"$s")" = false ]
+    [ "$(jq -r '.portal.ok' <<<"$s")" = false ]
+    [ "$(jq -r '.identity.ok' <<<"$s")" = false ]
+    [ "$(jq -r '.fivexx' <<<"$s")" = null ]
+    # nothing was started after the budget ended
+    run grep -c '^probe green\|^portal green\|^identity green' "${DK}/fake.log"
+    [ "$output" = 0 ]
+    # the shared services are fine, so the failing sample is bad, not paused
+    export S="$s"
+    run --separate-stderr wl 'cd_watch_eval "$S"'
+    [ "${lines[0]}" = bad ]
+}
+
 @test "sample: container facts, restarts summed, an exited one-shot is fine, a failed one is bad, a silent docker is unknown" {
     world_good
     seed
@@ -663,7 +705,7 @@ BAD='.public.ok = false | .public.readyz = "503"'
     [ "$status" -eq 2 ]
     seed
     jq -cn '{ready: true, colour: "blue", release: "pilot-aaaaaaaaaaaa", tenants: {total: 3, notReady: 0}, reasons: []}' > "${DK}/probe.blue"
-    run --separate-stderr wl 'cd_watch_sample blue pilot-aaaaaaaaaaaa "$TREE"'
+    run --separate-stderr wl 'cd_watch_sample blue pilot-aaaaaaaaaaaa'
     [ "$status" -eq 0 ]
     [ "$(jq -r '.colour + " " + .old_colour + " " + .tag' <<<"$output")" = "blue green pilot-aaaaaaaaaaaa" ]
 }

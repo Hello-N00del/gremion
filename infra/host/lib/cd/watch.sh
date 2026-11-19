@@ -24,7 +24,7 @@
 #                                  (an epoch) from the edge access log; prints an integer, and
 #                                  returns non-zero (prints nothing) when the log cannot be
 #                                  read or does not reach back to SINCE: never a low number.
-#   cd_watch_sample [COLOUR TAG TREE]
+#   cd_watch_sample [COLOUR TAG]
 #                                  prints ONE JSON sample of the colour (default: the release
 #                                  of the state). Every call of it is bounded, and the whole
 #                                  sample is bounded by CD_SAMPLE_TIMEOUT_S.
@@ -326,14 +326,14 @@ _cd_watch_containers() {
     printf '1 %s %s %s' "$total" "$bad" "$restarts"
 }
 
-# _cd_watch_sample_run [COLOUR TAG TREE] - the body of cd_watch_sample (runs in a subshell).
+# _cd_watch_sample_run [COLOUR TAG] - the body of cd_watch_sample (runs in a subshell).
 _cd_watch_sample_run() {
-    local colour="${1:-}" tag="${2:-}" tree="${3:-}" t start at old sw_epoch
+    local colour="${1:-}" tag="${2:-}" t start at old sw_epoch live_tree
     local st_ok=false api_ok=false docker_ok=false pub_out pub_rc=0 ready login pub_ok
     local ans portal_rc=0 ident_rc=0 w_new w_old route_ok=false route_known=true r1 r2
     local cont known total bad restarts since window n req old_ok=false timed_out=false
     local int_json='{"answered":false,"ready":false,"colour":"","release":"","not_ready":null}'
-    local iw f_col f_tag f_tree f_sw
+    local iw f_col f_tag f_sw
     t="$(_cd_watch_int CD_SAMPLE_TIMEOUT_S)" || return 2
     start="$(cd_now)" || return 2
     at="$start"
@@ -346,35 +346,38 @@ _cd_watch_sample_run() {
         ct="$(_cd_watch_ct)" || return 124
         timeout -k 2 "$ct" "$_CD_WATCH_REAL_DOCKER" "$@"
     }
-    iw="$(cd_state_get '[.release.id // "", .release.colour // "", .release.tag // "", .release.tree // "", .release.switched_at // ""] | join("|")')" || return 2
-    # the release fields in one go: id, colour, tag, tree, switched_at
-    IFS='|' read -r _ f_col f_tag f_tree f_sw <<<"$iw"
+    iw="$(cd_state_get '[.release.colour // "", .release.tag // "", .release.switched_at // "", .live.tree // ""] | join("|")')" || return 2
+    # the release fields in one go: colour, tag, switched_at, and the live tree
+    IFS='|' read -r f_col f_tag f_sw live_tree <<<"$iw"
     [[ -n "$colour" ]] || colour="$f_col"
     [[ -n "$tag" ]] || tag="$f_tag"
-    [[ -n "$tree" ]] || tree="$f_tree"
     [[ "$colour" == blue || "$colour" == green ]] || { _cd_watch_err "sample: there is no colour to sample"; return 2; }
     old="$(cd_colour_other "$colour")" || return 2
     sw_epoch=0
     if [[ -n "$f_sw" ]]; then sw_epoch="$(date -u -d "$f_sw" +%s 2>/dev/null)" || sw_epoch=0; fi
     [[ "$sw_epoch" =~ ^[0-9]{1,12}$ ]] || sw_epoch=0
 
-    # 1. the shared services first: a hung app probe must not starve the paused-or-bad decision
-    if [[ -n "$tree" && -d "$tree" ]]; then
-        if CD_DC_TIMEOUT="$t" cd_wait_healthy state 0 "$tree" >/dev/null 2>&1; then st_ok=true; fi
+    # 1. the shared services first, then the old colour: a hung app probe must not starve the
+    # paused-or-bad decision or the evidence of the pause rule (old_ready). The state project's
+    # compose files come from the LIVE release tree, as in the start gate.
+    if [[ -n "$live_tree" && -d "$live_tree" ]] && t="$(_cd_watch_ct)"; then
+        if CD_DC_TIMEOUT="$t" cd_wait_healthy state 0 "$live_tree" >/dev/null 2>&1; then st_ok=true; fi
     fi
     if _cd_watch_api_up; then api_ok=true; fi
+    _cd_watch_old_ready "$old" && old_ok=true
     # 2. the containers of the colour
     cont="$(_cd_watch_containers "$colour")"
     read -r known total bad restarts <<<"$cont"
     [[ "$known" == 1 ]] && docker_ok=true
-    # 3. the probes: the public one through the edge, the internal one inside the container
+    # 3. the probes: the public one through the edge, the internal one inside the container.
+    # A probe that has no budget left is not made: it is no answer.
     pub_out="$(cd_watch_probe_public)" || pub_rc=$?
     read -r ready login <<<"${pub_out:-000 000}"
     [[ "$ready" =~ ^[0-9]{3}$ ]] || ready=000
     [[ "$login" =~ ^[0-9]{3}$ ]] || login=000
     pub_ok="$(_cd_watch_rcb "$pub_rc")"
     if [[ "$ready" == 000 || "$login" == 000 ]]; then timed_out=true; fi
-    if ans="$(CD_COLOUR_EXEC_TIMEOUT_S="$(_cd_watch_ct || echo 1)" cd_colour_probe "$colour" 2>/dev/null)"; then
+    if t="$(_cd_watch_ct)" && ans="$(CD_COLOUR_EXEC_TIMEOUT_S="$t" cd_colour_probe "$colour" 2>/dev/null)"; then
         int_json="$(printf '%s' "$ans" | jq -ce '{answered: true, ready: (.ready == true), colour: (.colour | tostring), release: (.release | tostring), not_ready: .tenants.notReady}' 2>/dev/null)" \
             || int_json=''
         # a function that printed nothing (or something that is no answer) is no answer
@@ -388,11 +391,15 @@ _cd_watch_sample_run() {
     [[ "$r1" -eq 4 || "$r2" -eq 4 ]] && route_known=false
     [[ "$r1" -eq 0 && "$r2" -eq 0 ]] && route_ok=true
     # 5. the portal page, the image identity
-    CD_COLOUR_EXEC_TIMEOUT_S="$(_cd_watch_ct || echo 1)" cd_colour_portal_probe "$colour" >/dev/null 2>&1 || portal_rc=$?
-    if [[ -n "$tag" ]]; then
+    portal_rc=1
+    ident_rc=1
+    if t="$(_cd_watch_ct)"; then
+        portal_rc=0
+        CD_COLOUR_EXEC_TIMEOUT_S="$t" cd_colour_portal_probe "$colour" >/dev/null 2>&1 || portal_rc=$?
+    fi
+    if [[ -n "$tag" ]] && _cd_watch_ct >/dev/null; then
+        ident_rc=0
         cd_colour_identity "$colour" "$tag" >/dev/null 2>&1 || ident_rc=$?
-    else
-        ident_rc=2
     fi
     # 6. the worker gate files, as the host holds them
     w_new="$(cd_colour_workers "$colour" get 2>/dev/null)" || w_new=unknown
@@ -413,8 +420,6 @@ _cd_watch_sample_run() {
         n=null
         req=null
     fi
-    # 8. the old colour through the next route: the evidence of the pause rule
-    _cd_watch_old_ready "$old" && old_ok=true
     [[ -z "${CD_WATCH_DEADLINE:-}" ]] || { (($(cd_now) < CD_WATCH_DEADLINE)) || timed_out=true; }
     jq -cn \
         --argjson at "$at" --argjson dur "$(($(cd_now) - start))" --arg colour "$colour" --arg tag "$tag" --arg old "$old" \
@@ -439,7 +444,7 @@ _cd_watch_sample_run() {
          timed_out: $timed_out}'
 }
 
-# cd_watch_sample [COLOUR TAG TREE] - one JSON sample on stdout; 2 when there is no release
+# cd_watch_sample [COLOUR TAG] - one JSON sample on stdout; 2 when there is no release
 # (or no colour) to sample. It never decides anything: cd_watch_eval does.
 cd_watch_sample() {
     ( _cd_watch_sample_run "$@" )
