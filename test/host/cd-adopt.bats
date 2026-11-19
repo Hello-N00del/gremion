@@ -524,10 +524,13 @@ ad_backup_contract() {
     [ -z "$output" ]
 }
 
-@test "apply-host: the manifest is rewritten only after the unit exited 0, and then it is the new tree's" {
+@test "apply-host: the manifest is still the old tree's while the unit runs, and the new tree's once it exited 0" {
     run adlib 'cd_manifest_write "${GREMION_ROOT}/releases/${A12}"'
+    before="$(sha256sum < "${GREMION_ROOT}/data/cd/host-manifest.json" | cut -c1-64)"
     run ad_apply_host
     [[ "$output" == *"rc=0"* ]]
+    # what the unit's call saw: the manifest of the tree that was applied before
+    grep -q "^manifest=${before}$" "${DK}/sudo.seen"
     jq -e --arg b "$B12" '.sha12 == $b' "${GREMION_ROOT}/data/cd/host-manifest.json"
 }
 
@@ -617,7 +620,7 @@ ad_apply_state() {
         cd_prepare_render() { local r=0; _cd_stub_call cd_prepare_render "$@" || r=$?
             printf "render tag=%s prev=%s\n" "$(grep ^IMAGE_TAG= "${GREMION_ROOT}/etc/env/state.env")" "$(cat "${GREMION_ROOT}/data/cd/previous-state-tag" 2>/dev/null)" >> "$AD_SEEN"; return "$r"; }
         cd_lock_take; cd_hostlock_take
-        rc=0; cd_adopt_apply_state "${GREMION_ROOT}/releases/${B12}" || rc=$?; echo "rc=$rc applied=$CD_ADOPT_STATE_APPLIED"'
+        rc=0; cd_adopt_apply_state "${GREMION_ROOT}/releases/${AD_TARGET:-$B12}" || rc=$?; echo "rc=$rc applied=$CD_ADOPT_STATE_APPLIED"'
 }
 
 @test "apply-state: the state dump set first, then the previous tag is recorded, then retag, build, render, up, healthy and the edge, in that order" {
@@ -719,6 +722,49 @@ ad_apply_state() {
     refute_recorded docker " build"
     # a pull failure leaves no log of image names behind on stdout
     [[ "$output" != *"example/image"* ]]
+}
+
+@test "apply-state: a failed apply of one release followed by the apply of a different one keeps the last good tag as the way back (guard: never record a tag that never ran)" {
+    ad_state_setup "$CLASS_STATE"
+    SHA_C="$(ad_make_tree C)"
+    C12="${SHA_C:0:12}"
+    # release B: the pull fails after the retag, so state.env names B's never-started tag
+    printf 'manifest for example/image@sha256:0000 not found: manifest unknown\n' > "${DK}/pull.fail"
+    run ad_apply_state
+    [[ "$output" == *"rc=1 applied=0"* ]]
+    grep -q "^IMAGE_TAG=pilot-${B12}$" "${GREMION_ROOT}/etc/env/state.env"
+    [ "$(cat "${GREMION_ROOT}/data/cd/previous-state-tag")" = "pilot-aaaaaaaaaaaa" ]
+    [ -f "${GREMION_ROOT}/data/cd/state-apply-pending" ]
+    # the operator releases the named fix C: the way back is still the tag that last ran
+    rm -f "${DK}/pull.fail"
+    export AD_TARGET="$C12"
+    run ad_apply_state
+    [[ "$output" == *"rc=0 applied=1"* ]]
+    grep -q "^IMAGE_TAG=pilot-${C12}$" "${GREMION_ROOT}/etc/env/state.env"
+    [ "$(cat "${GREMION_ROOT}/data/cd/previous-state-tag")" = "pilot-aaaaaaaaaaaa" ]
+    run test -e "${GREMION_ROOT}/data/cd/state-apply-pending"
+    [ "$status" -ne 0 ]
+    # a success ends the failed history: the next release records the tag that now runs
+    SHA_D="$(ad_make_tree D)"
+    export AD_TARGET="${SHA_D:0:12}"
+    run ad_apply_state
+    [[ "$output" == *"rc=0 applied=1"* ]]
+    [ "$(cat "${GREMION_ROOT}/data/cd/previous-state-tag")" = "pilot-${C12}" ]
+}
+
+@test "apply-state: a failed apply followed by a different release whose way back was never recorded is a refusal, nothing taken" {
+    ad_state_setup "$CLASS_STATE"
+    SHA_C="$(ad_make_tree C)"
+    printf 'manifest for example/image@sha256:0000 not found: manifest unknown\n' > "${DK}/pull.fail"
+    run ad_apply_state
+    [[ "$output" == *"rc=1 applied=0"* ]]
+    rm -f "${DK}/pull.fail" "${GREMION_ROOT}/data/cd/previous-state-tag"
+    : > "$SHIM_LOG"
+    export AD_TARGET="${SHA_C:0:12}"
+    run ad_apply_state
+    [[ "$output" == *"rc=2"* ]]
+    [[ "$output" == *"no record"* ]]
+    refute_recorded stub "cd_data_dumpset_take state-pilot-${SHA_C:0:12}"
 }
 
 @test "apply-state: state.env already at the target tag and no record of the tag before it is a refusal, nothing taken" {

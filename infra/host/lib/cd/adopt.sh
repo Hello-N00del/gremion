@@ -542,11 +542,15 @@ _cd_ad_log() {
 #      GREMION_HOST_LOCK_HELD=1 (the child would exit 3 on the lock this process holds)
 #   6. `compose up -d --pull never` for the state project, healthy, and the edge answering
 # The state tier is NOT rolled back automatically (the previous tag is kept for a hand
-# restore). Needs the cd lock and the host lock. 0 applied; 1 attributable to the commit;
+# restore). data/cd/state-apply-pending is written with the retag and removed only when the
+# apply reached its end: while it exists state.env names a tag that may never have run, and
+# the next apply of ANY release keeps previous-state-tag instead of recording that tag.
+# A failed apply leaves state.env retagged and no images built until a retry or a hand restore
+# (a compose up of the state project by another tool before then fails on the missing tag). Needs the cd lock and the host lock. 0 applied; 1 attributable to the commit;
 # 2 a refusal or precondition (nothing changed); 4 an infrastructure failure.
 cd_adopt_apply_state() {
     local tree="${1:-}" sha12 tag live_tree live_colour cls kinds envf prev rc=0 log initlog retry=0
-    local step callstart kind livetag active
+    local step callstart kind livetag active pendingf pending=0
     CD_ADOPT_STATE_APPLIED=0
     CD_ADOPT_PREVIOUS_STATE_TAG=''
     [[ -n "$tree" ]] || { _cd_ad_err "apply-state: usage: cd_adopt_apply_state TREE"; return 2; }
@@ -595,17 +599,23 @@ cd_adopt_apply_state() {
     envf="$(cd_envfile state)" || return 2
     prev="$(cd_kv_get "$envf" IMAGE_TAG 2>/dev/null)" || { _cd_ad_err "apply-state: state.env has no single IMAGE_TAG"; return 2; }
     [[ "$prev" =~ ^[A-Za-z0-9._-]{1,128}$ ]] || { _cd_ad_err "apply-state: the IMAGE_TAG of state.env is not usable"; return 2; }
-    if [[ "$prev" == "$tag" ]]; then
-        # a retry after a failed apply: the earlier try already retagged state.env. The tag to
-        # go back to is the one that try recorded; recording the new tag over it would lose the
+    pendingf="${CD_DATA}/state-apply-pending"
+    if [[ -e "$pendingf" || -L "$pendingf" ]]; then
+        pending=1
+    fi
+    if [[ "$prev" == "$tag" || "$pending" == 1 ]]; then
+        # a retry after an apply that did not finish: state.env already names the tag of that
+        # try, which may never have run (a failed pull or build leaves it retagged), so it is
+        # NOT the tag to go back to, whichever release is applied now. The tag to go back to is
+        # the one recorded before that try; recording state.env's tag over it would lose the
         # only way back. Without a record there is nothing to go back to: refuse.
         if [[ -f "${CD_DATA}/previous-state-tag" && ! -L "${CD_DATA}/previous-state-tag" ]]; then
             prev="$(head -n 1 -- "${CD_DATA}/previous-state-tag" 2>/dev/null)" || prev=''
         else
             prev=''
         fi
-        if [[ ! "$prev" =~ ^[A-Za-z0-9._-]{1,128}$ || "$prev" == "$tag" ]]; then
-            _cd_ad_err "apply-state: state.env already carries ${tag} and there is no record of the tag before it; restore state.env by hand first"
+        if [[ ! "$prev" =~ ^[A-Za-z0-9._-]{1,128}$ ]] || [[ "$pending" != 1 && "$prev" == "$tag" ]]; then
+            _cd_ad_err "apply-state: state.env carries a tag that may not have run and there is no record of the tag before it; restore state.env by hand first"
             return 2
         fi
         retry=1
@@ -628,6 +638,10 @@ cd_adopt_apply_state() {
             || { _cd_ad_err "apply-state: the previous state tag could not be recorded; nothing was changed"; return 2; }
     fi
     CD_ADOPT_PREVIOUS_STATE_TAG="$prev"
+    # the apply is open from here until it reaches the end: while this file exists the tag in
+    # state.env is not known to have run, so the record above is never replaced
+    printf '%s\n' "$tag" | cd_atomic_write "$pendingf" 600 \
+        || { _cd_ad_err "apply-state: the open-apply marker could not be written; nothing was changed"; return 2; }
     cd_set_env_key "$envf" IMAGE_TAG "$tag" || { _cd_ad_err "apply-state: state.env could not be retagged"; return 2; }
     cd_hist state_retagged sha12="$sha12" || true
 
@@ -650,7 +664,10 @@ cd_adopt_apply_state() {
             if declare -F cd_prepare_classify_build_failure >/dev/null 2>&1; then
                 kind="$(cd_prepare_classify_build_failure "$log" "$callstart" "${_CD_PREP_CLASSIFY_TAIL:-40}" 2>/dev/null)" || kind=commit
             fi
-            tail -n 500 -- "$log" >"${log}.tmp" 2>/dev/null && mv -f -- "${log}.tmp" "$log" && chmod 600 "$log" || true
+            if tail -n 500 -- "$log" >"${log}.tmp" 2>/dev/null; then
+                mv -f -- "${log}.tmp" "$log" 2>/dev/null || true
+                chmod 600 "$log" 2>/dev/null || true
+            fi
             _cd_ad_err "apply-state: the state image ${step} failed (exit ${rc}); log kept as ${log##*/}"
             ((rc == 124 || rc == 137)) && return 4
             [[ "$kind" == infra ]] && return 4
@@ -699,6 +716,7 @@ cd_adopt_apply_state() {
         return 1
     fi
     CD_ADOPT_STATE_APPLIED=1
+    rm -f -- "$pendingf" 2>/dev/null || _cd_ad_err "apply-state: the open-apply marker could not be removed; remove state-apply-pending by hand"
     cd_hist state_applied sha12="$sha12" || true
     cd_info "state tier applied for ${tag}; it is NOT rolled back automatically (the previous state tag is kept in data/cd/previous-state-tag)"
     return 0
