@@ -32,14 +32,19 @@
 # it is never skipped.
 #
 # THE BACKUP LAYOUT (the contract with apply-root.sh, which restores from it):
-#   data/cd/host-backup/<UTC time>/        a real directory, mode 0700
-#       INDEX                              one line per saved file: "<sha256>  <set path>"
-#       set/bin/<name>                     ${ROOT}/bin/*       (cp -p: mode and times kept)
-#       set/lib/<path>                     ${ROOT}/lib/**
-#       set/units/<name>                   the gremion-* unit files of the systemd directory
+#   data/cd/host-backup/<UTC time>/        a real directory, mode 0700, holding only
+#       bin/<name>                         every regular file of ${ROOT}/bin  (cp -p: mode kept)
+#       lib/common.sh                      ${ROOT}/lib/common.sh
+#       lib/cd/<name>.sh                   every *.sh of ${ROOT}/lib/cd
+#       units/<unit>                       the six gremion-cd unit files of the systemd directory
 #   data/cd/host-backup/pending            a symlink to the directory above (absolute target)
-# A file that the apply adds and that the INDEX does not list is not part of the set: the
-# restore removes it.
+# Nothing else: no index, no other library, no other unit. The restore accepts exactly these
+# paths and refuses a backup that holds any other (a path outside it ends the apply and no
+# host-programs release could ever be applied). It also removes every bin/*, lib/cd/*.sh and
+# gremion-cd unit file of the host that the backup does not list, so the backup takes ALL of
+# those, and it is refused here, before the root unit starts, when a file the restore needs
+# (bin/gremion-cd, lib/common.sh, lib/cd/core.sh, lib/cd/apply-root.sh or one of the six
+# units) is not installed.
 #
 # The jq programs are single-quoted on purpose ($name is jq's own variable syntax).
 # shellcheck disable=SC2016
@@ -390,38 +395,49 @@ _cd_ad_systemd_dir() {
     fi
 }
 
+# the six unit files of the cd program, and the files the root restore needs in any backup
+_CD_AD_UNITS=(gremion-cd.service gremion-cd.timer gremion-cd-watchdog.service gremion-cd-watchdog.timer
+    gremion-cd-resume.service 'gremion-cd-apply@.service')
+_CD_AD_NEEDED=(bin/gremion-cd lib/common.sh lib/cd/core.sh lib/cd/apply-root.sh)
+
 # _cd_ad_backup_set DIR -- copy the installed set into DIR (layout in the header). 1 on any
 # failure: a backup that is not whole is no backup.
 _cd_ad_backup_set() {
-    local dir="$1" sysd f rel n=0
+    local dir="$1" sysd f u rel
     sysd="$(_cd_ad_systemd_dir)"
-    mkdir -p "${dir}/set/bin" "${dir}/set/lib" "${dir}/set/units" || return 1
-    if [[ -d "${CD_ROOT}/bin" ]]; then
-        for f in "${CD_ROOT}/bin"/*; do
-            [[ -f "$f" ]] || continue
-            cp -p -- "$f" "${dir}/set/bin/${f##*/}" || return 1
-            n=$((n + 1))
-        done
+    # the directory tree is made here, once and by name: a path is never derived from a
+    # file name (a file directly under lib/ has no directory part to strip)
+    ( umask 077; mkdir -p -- "${dir}/bin" "${dir}/lib/cd" "${dir}/units" ) || return 1
+    # plain globs, no find: an unreadable directory is a copy failure below, never a
+    # silently partial backup
+    for f in "${CD_ROOT}/bin"/*; do
+        [[ -f "$f" ]] || continue
+        cp -p -- "$f" "${dir}/bin/${f##*/}" || return 1
+    done
+    if [[ -f "${CD_ROOT}/lib/common.sh" ]]; then
+        cp -p -- "${CD_ROOT}/lib/common.sh" "${dir}/lib/common.sh" || return 1
     fi
-    if [[ -d "${CD_ROOT}/lib" ]]; then
-        while IFS= read -r -d '' f; do
-            rel="${f#"${CD_ROOT}/lib/"}"
-            mkdir -p -- "${dir}/set/lib/${rel%/*}" 2>/dev/null || true
-            cp -p -- "$f" "${dir}/set/lib/${rel}" || return 1
-            n=$((n + 1))
-        done < <(find "${CD_ROOT}/lib" -type f -print0 2>/dev/null)
-    fi
-    if [[ -d "$sysd" ]]; then
-        for f in "$sysd"/gremion-*; do
-            [[ -f "$f" ]] || continue
-            cp -p -- "$f" "${dir}/set/units/${f##*/}" || return 1
-            n=$((n + 1))
-        done
-    fi
-    ((n > 0)) || { _cd_ad_err "the installed set is empty (nothing to back up)"; return 1; }
-    ( cd "${dir}/set" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum -- ) \
-        | sed 's# \./# #' >"${dir}/INDEX" || return 1
-    chmod 600 "${dir}/INDEX" || return 1
+    for f in "${CD_ROOT}/lib/cd"/*.sh; do
+        [[ -f "$f" ]] || continue
+        cp -p -- "$f" "${dir}/lib/cd/${f##*/}" || return 1
+    done
+    for u in "${_CD_AD_UNITS[@]}"; do
+        [[ -f "${sysd}/${u}" ]] || continue
+        cp -p -- "${sysd}/${u}" "${dir}/units/${u}" || return 1
+    done
+    # what the root restore cannot do without: a backup without it would empty the host
+    for rel in "${_CD_AD_NEEDED[@]}"; do
+        if [[ ! -f "${dir}/${rel}" ]]; then
+            _cd_ad_err "the installed set has no ${rel} (run: bash infra/host/bootstrap.sh cd); a backup without it cannot restore the host"
+            return 1
+        fi
+    done
+    for u in "${_CD_AD_UNITS[@]}"; do
+        if [[ ! -f "${dir}/units/${u}" ]]; then
+            _cd_ad_err "the installed set has no units/${u} (run: bash infra/host/bootstrap.sh cd); a backup without it cannot restore the host"
+            return 1
+        fi
+    done
     return 0
 }
 
@@ -530,6 +546,7 @@ _cd_ad_log() {
 # 2 a refusal or precondition (nothing changed); 4 an infrastructure failure.
 cd_adopt_apply_state() {
     local tree="${1:-}" sha12 tag live_tree live_colour cls kinds envf prev rc=0 log initlog retry=0
+    local step callstart kind livetag active
     CD_ADOPT_STATE_APPLIED=0
     CD_ADOPT_PREVIOUS_STATE_TAG=''
     [[ -n "$tree" ]] || { _cd_ad_err "apply-state: usage: cd_adopt_apply_state TREE"; return 2; }
@@ -554,6 +571,25 @@ cd_adopt_apply_state() {
     if [[ -n "$kinds" ]]; then
         _cd_ad_err "apply-state: refused: the release carries a hold that stage 1 cannot apply (${kinds}); a hand upgrade, then: gremion-cd adopt --re-adopt --reason TEXT"
         return 2
+    fi
+
+    # the platform step of the state tier is `gremion-tenant init`, which runs the one-shot of
+    # the ACTIVE colour: from the image its env file names. When that image is not this
+    # release's, the step would run the old release's migrations and the apply would report
+    # a success for work that never ran. Refused before anything changes.
+    if printf '%s' "$cls" | jq -e '.state_tier | index("platform_migration") != null' >/dev/null 2>&1; then
+        active=''
+        if [[ -f "${CD_ROOT}/runtime/active-colour" && ! -L "${CD_ROOT}/runtime/active-colour" ]]; then
+            active="$(tr -d '[:space:]' <"${CD_ROOT}/runtime/active-colour" 2>/dev/null)" || active=''
+        fi
+        livetag=''
+        if [[ "$active" == blue || "$active" == green ]]; then
+            livetag="$(cd_kv_get "$(cd_envfile "app-${active}" 2>/dev/null)" IMAGE_TAG 2>/dev/null)" || livetag=''
+        fi
+        if [[ "$livetag" != "$tag" ]]; then
+            _cd_ad_err "apply-state: refused: the release carries a platform migration (platform_migration) and the platform step runs from the image of the active colour (${livetag:-unknown}), not from this release (${tag}); nothing was changed. Apply it by hand, then: gremion-cd adopt --re-adopt --reason TEXT"
+            return 2
+        fi
     fi
 
     envf="$(cd_envfile state)" || return 2
@@ -595,19 +631,32 @@ cd_adopt_apply_state() {
     cd_set_env_key "$envf" IMAGE_TAG "$tag" || { _cd_ad_err "apply-state: state.env could not be retagged"; return 2; }
     cd_hist state_retagged sha12="$sha12" || true
 
-    # 4. build and render
+    # 4. pull, build and render. The pull fetches every image of the state project that has no
+    # build section (database, login server, edge, ...): a digest that moved with the release
+    # is not on the host yet, and `up --pull never` below would stop on it. The build makes
+    # the project's own images. One log, one failing call classified from its own output.
     log="$(_cd_ad_log "cd-state-build-${sha12}")" || { _cd_ad_err "apply-state: cannot create the log file"; return 2; }
-    rc=0
-    CD_DC_TIMEOUT="$(( 10#$(cd_cfg CD_BUILD_TIMEOUT_MIN) * 60 ))" cd_dc "$tree" state build >>"$log" 2>&1 </dev/null || rc=$?
-    if ((rc != 0)); then
-        tail -n 500 -- "$log" >"${log}.tmp" 2>/dev/null && mv -f -- "${log}.tmp" "$log" && chmod 600 "$log" || true
-        _cd_ad_err "apply-state: the state image build failed; log kept as ${log##*/}"
-        if declare -F cd_prepare_classify_build_failure >/dev/null 2>&1 \
-            && [[ "$(cd_prepare_classify_build_failure "$log" 2>/dev/null)" == infra ]]; then
-            return 4
+    for step in pull build; do
+        callstart="$(wc -c <"$log" 2>/dev/null | tr -d ' ')" || callstart=0
+        [[ "$callstart" =~ ^[0-9]+$ ]] || callstart=0
+        rc=0
+        if [[ "$step" == pull ]]; then
+            CD_DC_TIMEOUT="$(( 10#$(cd_cfg CD_BUILD_TIMEOUT_MIN) * 60 ))" cd_dc "$tree" state pull --ignore-buildable >>"$log" 2>&1 </dev/null || rc=$?
+        else
+            CD_DC_TIMEOUT="$(( 10#$(cd_cfg CD_BUILD_TIMEOUT_MIN) * 60 ))" cd_dc "$tree" state build >>"$log" 2>&1 </dev/null || rc=$?
         fi
-        return 1
-    fi
+        if ((rc != 0)); then
+            kind=commit
+            if declare -F cd_prepare_classify_build_failure >/dev/null 2>&1; then
+                kind="$(cd_prepare_classify_build_failure "$log" "$callstart" "${_CD_PREP_CLASSIFY_TAIL:-40}" 2>/dev/null)" || kind=commit
+            fi
+            tail -n 500 -- "$log" >"${log}.tmp" 2>/dev/null && mv -f -- "${log}.tmp" "$log" && chmod 600 "$log" || true
+            _cd_ad_err "apply-state: the state image ${step} failed (exit ${rc}); log kept as ${log##*/}"
+            ((rc == 124 || rc == 137)) && return 4
+            [[ "$kind" == infra ]] && return 4
+            return 1
+        fi
+    done
     rm -f -- "$log"
     declare -F cd_prepare_render >/dev/null 2>&1 || { _cd_ad_err "apply-state: prepare.sh is not installed"; return 2; }
     rc=0
@@ -617,9 +666,8 @@ cd_adopt_apply_state() {
     # 5. the platform migration of the state tier. gremion-tenant is run from the tree being
     # deployed (its ../lib neighbours must match it) and GREMION_RELEASE_DIR names that tree,
     # because stage 1 runs compose from the tree being deployed and never from `current`,
-    # which moves only at the commit point. The tenant-create one-shot still starts from the
-    # active colour's env file (the live image tag): whether a NEW platform migration is
-    # reachable from it at this stage is an owed post-deploy proof, not decided here.
+    # which moves only at the commit point. The one-shot starts from the active colour's env
+    # file, whose image tag was checked to be this release's before anything changed.
     if printf '%s' "$cls" | jq -e '.state_tier | index("platform_migration") != null' >/dev/null 2>&1; then
         initlog="$(_cd_ad_log "cd-state-init-${sha12}")" || { _cd_ad_err "apply-state: cannot create the log file"; return 2; }
         rc=0

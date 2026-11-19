@@ -423,13 +423,105 @@ ad_apply_host() {
     dir="$(readlink "$pend")"
     [ "$(stat -c %a "$dir")" = 700 ]
     [ "$(stat -c %a "${GREMION_ROOT}/data/cd/host-backup")" = 700 ]
-    cmp "${dir}/set/bin/gremion-x" "${GREMION_ROOT}/bin/gremion-x"
-    cmp "${dir}/set/lib/cd/core.sh" "${GREMION_ROOT}/lib/cd/core.sh"
-    cmp "${dir}/set/units/gremion-cd.service" "${GREMION_CD_SYSTEMD_DIR}/gremion-cd.service"
-    run test -e "${dir}/set/units/unrelated.service"
+    cmp "${dir}/bin/gremion-x" "${GREMION_ROOT}/bin/gremion-x"
+    cmp "${dir}/bin/gremion-cd" "${GREMION_ROOT}/bin/gremion-cd"
+    cmp "${dir}/lib/cd/core.sh" "${GREMION_ROOT}/lib/cd/core.sh"
+    cmp "${dir}/lib/cd/apply-root.sh" "${GREMION_ROOT}/lib/cd/apply-root.sh"
+    cmp "${dir}/units/gremion-cd.service" "${GREMION_CD_SYSTEMD_DIR}/gremion-cd.service"
+    cmp "${dir}/units/gremion-cd-apply@.service" "${GREMION_CD_SYSTEMD_DIR}/gremion-cd-apply@.service"
+}
+
+# ad_backup_contract DIR -- the layout the root restore (apply-root.sh) accepts, restated: the
+# directories are exactly bin, lib, lib/cd and units, every file is bin/<file>, lib/common.sh,
+# lib/cd/<name>.sh or one of the six unit files, nothing is a link, and the files the restore
+# needs are all there. A backup outside it is refused by the root side on every apply.
+ad_backup_contract() {
+    local dir="$1" f rel u odd
+    while IFS= read -r -d '' f; do
+        rel="${f#"${dir}"/}"
+        case "$rel" in
+            bin | lib | lib/cd | units) ;;
+            *) echo "contract: directory outside the layout: ${rel}" >&2; return 1 ;;
+        esac
+    done < <(find "$dir" -mindepth 1 -type d -print0)
+    odd="$(find "$dir" -mindepth 1 ! -type f ! -type d)"
+    [ -z "$odd" ] || { echo "contract: a link or special file: ${odd}" >&2; return 1; }
+    while IFS= read -r -d '' f; do
+        rel="${f#"${dir}"/}"
+        [[ "$rel" =~ ^(bin/[^/]+|lib/common\.sh|lib/cd/[^/]+\.sh)$ ]] && continue
+        if [[ "$rel" == units/* ]]; then
+            for u in "${AD_CD_UNITS[@]}"; do [[ "${rel#units/}" == "$u" ]] && continue 2; done
+        fi
+        echo "contract: file outside the layout: ${rel}" >&2
+        return 1
+    done < <(find "$dir" -type f -print0)
+    for rel in bin/gremion-cd lib/common.sh lib/cd/core.sh lib/cd/apply-root.sh; do
+        [ -f "${dir}/${rel}" ] || { echo "contract: missing ${rel}" >&2; return 1; }
+    done
+    for u in "${AD_CD_UNITS[@]}"; do
+        [ -f "${dir}/units/${u}" ] || { echo "contract: missing units/${u}" >&2; return 1; }
+    done
+}
+
+@test "apply-host: a file directly under lib is a FILE of the backup, never a directory of its own name (guard: lib/common.sh)" {
+    run ad_apply_host
+    [[ "$output" == *"rc=0"* ]]
+    dir="$(readlink "${GREMION_ROOT}/data/cd/host-backup/pending")"
+    [ -f "${dir}/lib/common.sh" ]
+    cmp "${dir}/lib/common.sh" "${GREMION_ROOT}/lib/common.sh"
+}
+
+@test "apply-host: the backup holds exactly the layout the root restore accepts and nothing else (no set/, no INDEX, no decoy file)" {
+    run ad_apply_host
+    [[ "$output" == *"rc=0"* ]]
+    dir="$(readlink "${GREMION_ROOT}/data/cd/host-backup/pending")"
+    ad_backup_contract "$dir"
+    # outside the layout: not taken, because the root side refuses a backup that holds them
+    for rel in set INDEX lib/access-log.sh lib/cd/notes.txt units/gremion-backup.service units/unrelated.service; do
+        run test -e "${dir}/${rel}"
+        [ "$status" -ne 0 ] || { echo "taken into the backup: ${rel}" >&2; return 1; }
+    done
+}
+
+@test "apply-host: the contract check itself rejects a backup in the old layout (guard of the guard)" {
+    mkdir -p "${GREMION_ROOT}/.bk/set/lib" "${GREMION_ROOT}/.bk/units"
+    : > "${GREMION_ROOT}/.bk/INDEX"
+    run ad_backup_contract "${GREMION_ROOT}/.bk"
     [ "$status" -ne 0 ]
-    h="$(sha256sum < "${GREMION_ROOT}/bin/gremion-x" | cut -c1-64)"
-    grep -q "^${h}  bin/gremion-x$" "${dir}/INDEX"
+    [[ "$output" == *"outside the layout"* ]]
+}
+
+@test "apply-host: a set that lacks a file the root restore needs is refused before the unit is started, backup removed, no pending link" {
+    for rel in bin/gremion-cd lib/common.sh lib/cd/core.sh lib/cd/apply-root.sh; do
+        mv "${GREMION_ROOT}/${rel}" "${GREMION_ROOT}/${rel}.hold"
+        : > "$SHIM_LOG"
+        run ad_apply_host
+        [[ "$output" == *"rc=1"* ]] || { echo "$rel: $output" >&2; return 1; }
+        [[ "$output" == *"${rel}"* ]]
+        refute_recorded sudo "systemctl"
+        run test -e "${GREMION_ROOT}/data/cd/host-backup/pending"
+        [ "$status" -ne 0 ]
+        run find "${GREMION_ROOT}/data/cd/host-backup" -mindepth 1
+        [ -z "$output" ]
+        mv "${GREMION_ROOT}/${rel}.hold" "${GREMION_ROOT}/${rel}"
+    done
+    rm -f "${GREMION_CD_SYSTEMD_DIR}/gremion-cd.timer"
+    : > "$SHIM_LOG"
+    run ad_apply_host
+    [[ "$output" == *"rc=1"* ]]
+    [[ "$output" == *"gremion-cd.timer"* ]]
+    refute_recorded sudo "systemctl"
+}
+
+@test "apply-host: a file that cannot be copied fails the backup, nothing is started and the half backup is removed" {
+    shim cp 'case "$*" in *core.sh*) echo "cp: simulated failure" >&2; exit 1 ;; esac; exec /bin/cp "$@"'
+    run ad_apply_host
+    [[ "$output" == *"rc=1"* ]]
+    refute_recorded sudo "systemctl"
+    run test -e "${GREMION_ROOT}/data/cd/host-backup/pending"
+    [ "$status" -ne 0 ]
+    run find "${GREMION_ROOT}/data/cd/host-backup" -mindepth 1
+    [ -z "$output" ]
 }
 
 @test "apply-host: the manifest is rewritten only after the unit exited 0, and then it is the new tree's" {
@@ -513,6 +605,12 @@ ad_state_setup() {
     : > "$AD_SEEN"
 }
 
+# ad_platform_ready -- the active colour's env file names this release's image tag, the one
+# case in which the platform step runs this release's migrations.
+ad_platform_ready() {
+    ad_set_env_tag blue "pilot-${B12}"
+}
+
 ad_apply_state() {
     adlib 'cd_data_dumpset_take() { local r=0; _cd_stub_call cd_data_dumpset_take "$@" || r=$?
             printf "dump tag=%s prev=%s\n" "$(grep ^IMAGE_TAG= "${GREMION_ROOT}/etc/env/state.env")" "$([ -e "${GREMION_ROOT}/data/cd/previous-state-tag" ] && echo yes || echo no)" >> "$AD_SEEN"; return "$r"; }
@@ -532,8 +630,10 @@ ad_apply_state() {
     [ "$(cat "${GREMION_ROOT}/data/cd/previous-state-tag")" = "pilot-aaaaaaaaaaaa" ]
     [ "$(stat -c %a "${GREMION_ROOT}/data/cd/previous-state-tag")" = 600 ]
     grep -q "^IMAGE_TAG=pilot-${B12}$" "${GREMION_ROOT}/etc/env/state.env"
+    # `up --pull never` needs every non-buildable image of the state project (database, login
+    # server, edge ...) on the host already: the pull of those comes first, after the retag
     ad_order "stub cd_data_dumpset_take state-pilot-${B12} state" \
-        "build" "stub cd_prepare_render" "up -d --pull never" \
+        "pull --ignore-buildable" " build" "stub cd_prepare_render" "up -d --pull never" \
         "stub cd_wait_healthy state" "stub cd_watch_probe_public"
     # the dump set is the state scope, never an app set, and compose is only ever the state project
     refute_recorded stub "cd_data_dumpset_take state-pilot-${B12} app"
@@ -553,6 +653,7 @@ ad_apply_state() {
     [[ "$output" == *"rc=0"* ]]
     refute_recorded tenant-init "args="
     ad_state_setup "$CLASS_PLATFORM"
+    ad_platform_ready
     run ad_apply_state
     [[ "$output" == *"rc=0"* ]]
     assert_recorded tenant-init "args=init lock_held=1 release_dir=${GREMION_ROOT}/releases/${B12}"
@@ -603,6 +704,23 @@ ad_apply_state() {
     [ "$(cat "${GREMION_ROOT}/data/cd/previous-state-tag")" = "pilot-aaaaaaaaaaaa" ]
 }
 
+@test "apply-state: a failed pull of the state project's own images (registry or network is 4, anything else 1) never reaches the build or up" {
+    ad_state_setup "$CLASS_STATE"
+    printf 'toomanyrequests: rate limit reached\n' > "${DK}/pull.fail"
+    run ad_apply_state
+    [[ "$output" == *"rc=4 applied=0"* ]]
+    refute_recorded docker "up -d"
+    refute_recorded docker " build"
+    [ "$(cat "${GREMION_ROOT}/data/cd/previous-state-tag")" = "pilot-aaaaaaaaaaaa" ]
+    printf 'manifest for example/image@sha256:0000 not found: manifest unknown\n' > "${DK}/pull.fail"
+    run ad_apply_state
+    [[ "$output" == *"rc=1 applied=0"* ]]
+    refute_recorded docker "up -d"
+    refute_recorded docker " build"
+    # a pull failure leaves no log of image names behind on stdout
+    [[ "$output" != *"example/image"* ]]
+}
+
 @test "apply-state: state.env already at the target tag and no record of the tag before it is a refusal, nothing taken" {
     ad_state_setup "$CLASS_STATE"
     sed -i "s#^IMAGE_TAG=.*#IMAGE_TAG=pilot-${B12}#" "${GREMION_ROOT}/etc/env/state.env"
@@ -623,8 +741,35 @@ ad_apply_state() {
     [[ "$output" == *"rc=1 applied=0"* ]]
 }
 
+@test "apply-state: a platform migration whose one-shot would run from another release's image is refused before anything changes (guard: no success for work that never ran)" {
+    ad_state_setup "$CLASS_PLATFORM"
+    # the active colour (blue) still names the live release's image tag, not this release's
+    grep -q "^IMAGE_TAG=pilot-${A12}$" "${GREMION_ROOT}/etc/env/app-blue.env"
+    run ad_apply_state
+    [[ "$output" == *"rc=2 applied=0"* ]]
+    [[ "$output" == *"platform_migration"* ]]
+    [[ "$output" == *"pilot-${A12}"* ]]
+    refute_recorded stub "cd_data_dumpset_take"
+    refute_recorded tenant-init "args="
+    refute_recorded docker "compose"
+    grep -q "^IMAGE_TAG=pilot-aaaaaaaaaaaa$" "${GREMION_ROOT}/etc/env/state.env"
+    run test -e "${GREMION_ROOT}/data/cd/previous-state-tag"
+    [ "$status" -ne 0 ]
+    # an unreadable active colour is no better: refused, not guessed
+    : > "${GREMION_ROOT}/runtime/active-colour"
+    run ad_apply_state
+    [[ "$output" == *"rc=2 applied=0"* ]]
+    refute_recorded tenant-init "args="
+    # a class without the platform step does not look at the tag at all
+    ad_state_setup "$CLASS_STATE"
+    printf 'blue\n' > "${GREMION_ROOT}/runtime/active-colour"
+    run ad_apply_state
+    [[ "$output" == *"rc=0 applied=1"* ]]
+}
+
 @test "apply-state: a failing platform init is a failure and compose up is never reached" {
     ad_state_setup "$CLASS_PLATFORM"
+    ad_platform_ready
     : > "${DK}/tenant.fail"
     run ad_apply_state
     [[ "$output" == *"rc=1"* ]]

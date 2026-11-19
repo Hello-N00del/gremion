@@ -22,6 +22,10 @@
 # Every name is a reserved example name; the "customers" are never named: the one psql the
 # program runs answers a count from a file.
 
+# the six units of the cd program: the only unit files the host backup holds
+AD_CD_UNITS=(gremion-cd.service gremion-cd.timer gremion-cd-watchdog.service gremion-cd-watchdog.timer
+    gremion-cd-resume.service 'gremion-cd-apply@.service')
+
 ad_git() {
     env GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.org GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.org \
         git "$@"
@@ -125,6 +129,9 @@ case "$1" in
     exit 0 ;;
   compose)
     case " $* " in
+      *" pull "*) [ -f "$DK/pull.fail" ] && { cat "$DK/pull.fail" >&2; exit 1; } ;;
+    esac
+    case " $* " in
       *" build"*) [ -f "$DK/build.fail" ] && { cat "$DK/build.fail" >&2; exit 1; } ;;
       *" up "*) [ -f "$DK/up.fail" ] && exit 1 ;;
     esac
@@ -173,8 +180,18 @@ EOF
     chmod 755 "${GREMION_ROOT}/bin/gremion-x"
     printf '# installed common\n' > "${GREMION_ROOT}/lib/common.sh"
     printf '# installed core\n' > "${GREMION_ROOT}/lib/cd/core.sh"
-    printf '[Unit]\nDescription=installed\n' > "${GREMION_CD_SYSTEMD_DIR}/gremion-cd.service"
+    printf '#!/bin/sh\necho installed gremion-cd\n' > "${GREMION_ROOT}/bin/gremion-cd"
+    chmod 755 "${GREMION_ROOT}/bin/gremion-cd"
+    printf '#!/bin/sh\necho installed apply-root\n' > "${GREMION_ROOT}/lib/cd/apply-root.sh"
+    chmod 755 "${GREMION_ROOT}/lib/cd/apply-root.sh"
+    for u in "${AD_CD_UNITS[@]}"; do
+        printf '[Unit]\nDescription=installed %s\n' "$u" > "${GREMION_CD_SYSTEMD_DIR}/${u}"
+    done
+    # files the set must NOT take: they lie outside what the root restore accepts
     printf '[Unit]\nDescription=other\n' > "${GREMION_CD_SYSTEMD_DIR}/unrelated.service"
+    printf '[Unit]\nDescription=backup\n' > "${GREMION_CD_SYSTEMD_DIR}/gremion-backup.service"
+    printf '# access log\n' > "${GREMION_ROOT}/lib/access-log.sh"
+    printf 'notes\n' > "${GREMION_ROOT}/lib/cd/notes.txt"
     ad_write_prelude
     printf '1\n' > "${DK}/psql.count"
     cd_write_cfg CD_MIN_FREE_GB=0
