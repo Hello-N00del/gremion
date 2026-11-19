@@ -39,7 +39,7 @@ PROOF_DATE='1767225600 +0000'
 
 die() { printf 'make-proof-commits: %s\n' "$2" >&2; exit "$1"; }
 
-usage() { sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; }
+usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "${BASH_SOURCE[0]}" >&2; }
 
 # A caller's own git environment must not redirect any call below.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR
@@ -84,11 +84,24 @@ case "$out" in
     *) out="${PWD}/${out}" ;;
 esac
 
+work="$(mktemp -d "${TMPDIR:-/tmp}/cd-proof-work.XXXXXX")"
+made=0
+ok=0
+cleanup() {
+    rm -rf "$work"
+    if [[ "$made" -eq 1 && "$ok" -ne 1 ]]; then
+        rm -rf "$out"
+    fi
+}
+trap cleanup EXIT
+
 # check_patch FILE NAME -- the guards of the plan, read from what `git apply` itself would do.
+# `git apply` runs in the empty work folder, outside every repository, so the answer does
+# not depend on which repository the caller stands in (or whose it is).
 check_patch() {
     local f="$1" name="$2" line path n=0 summary
     [[ -f "$f" ]] || die 2 "the patch ${name}.patch is missing"
-    summary="$(git apply --summary "$f" 2>&1)" || die 2 "${name}.patch is not a patch git can read"
+    summary="$(git -C "$work" apply --summary "$f" 2>&1)" || die 2 "${name}.patch is not a patch git can read"
     while IFS= read -r line; do
         [[ -n "$line" ]] || continue
         case "$line" in
@@ -109,7 +122,7 @@ check_patch() {
         if [[ "$path" == *.sql || "/${path}" == */migrations/* || "/${path}" == */migration/* || "/${path}" == */migrate/* ]]; then
             die 2 "${name}.patch touches a migration: ${path}"
         fi
-    done < <(git apply --numstat "$f")
+    done < <(git -C "$work" apply --numstat "$f")
     [[ "$n" -ge 1 ]] || die 2 "${name}.patch changes no file"
 }
 
@@ -119,17 +132,6 @@ done
 
 objects="$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir)/objects"
 [[ -d "$objects" ]] || die 2 "the repository has no object directory"
-
-work="$(mktemp -d "${TMPDIR:-/tmp}/cd-proof-work.XXXXXX")"
-made=0
-ok=0
-cleanup() {
-    rm -rf "$work"
-    if [[ "$made" -eq 1 && "$ok" -ne 1 ]]; then
-        rm -rf "$out"
-    fi
-}
-trap cleanup EXIT
 
 git init --bare -q "$out"
 made=1
