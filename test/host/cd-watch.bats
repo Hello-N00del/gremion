@@ -951,6 +951,10 @@ BAD='.public.ok = false | .public.readyz = "503"'
     adv
     ev '.shared.state_ok = false | .containers.restarts = 3'
     [ "${lines[0]}" = paused ]
+    # the first sample after a pause is not judged on 5xx (the recovery tail); the next one is
+    adv
+    ev '.shared.state_ok = false | .fivexx = 80 | .window_s = 13'
+    [ "${lines[0]}" = ok ]
     adv
     ev '.shared.state_ok = false | .fivexx = 80 | .window_s = 13'
     [ "${lines[0]}" = paused ]
@@ -1479,8 +1483,7 @@ BAD='.public.ok = false | .public.readyz = "503"'
         run --separate-stderr wl 'cd_watch_sample'
         export S="$output"
         run --separate-stderr wl 'cd_watch_eval "$S"'
-        [ "${lines[0]}" != paused ]
-        [ "${lines[0]}" != parked ]
+        [ "${lines[0]}" = ok ]
     done
 }
 
@@ -1548,9 +1551,33 @@ BAD='.public.ok = false | .public.readyz = "503"'
     adv
     ev '.fivexx = 80'
     [ "${lines[0]}" = ok ]
-    # a window that starts where the outage ended is judged: 80 answers since then are the release's
+    # a window that starts where the healthy sample before it ended is judged: 80 answers since
+    # then are the release's
     adv
-    ev '.fivexx = 80 | .window_s = 28'
+    ev '.fivexx = 80 | .window_s = 13'
+    [ "${lines[0]}" = trigger:watch_5xx ]
+}
+
+@test "eval 5xx: the answers that land between the last paused sample and the first healthy one are not the release's" {
+    seed
+    ev '(.)'
+    adv
+    ev "$BAD | .shared.state_ok = false"
+    [ "${lines[0]}" = paused ]
+    # the window starts exactly where the paused sample ended: the recovery tail is in it
+    adv
+    ev '.fivexx = 40 | .window_s = 13'
+    [ "${lines[0]}" = ok ]
+    [ "$(sw bad_streak)" = 0 ]
+    # a pause that goes on keeps holding the next healthy sample back
+    adv
+    ev "$BAD | .shared.state_ok = false"
+    [ "${lines[0]}" = paused ]
+    adv
+    ev '.fivexx = 40 | .window_s = 13'
+    [ "${lines[0]}" = ok ]
+    adv
+    ev '.fivexx = 40 | .window_s = 13'
     [ "${lines[0]}" = trigger:watch_5xx ]
 }
 
@@ -1589,9 +1616,13 @@ BAD='.public.ok = false | .public.readyz = "503"'
     ev '(.)'
     adv
     ev "$BAD | .shared.state_ok = false"
+    [ "$(jq -r '.fivexx_since' "${GREMION_ROOT}/data/cd/watch-eval.json")" -gt 0 ]
+    # the first healthy sample after the pause moves it to its own end, once
+    adv
+    ev '(.)'
     local cut
     cut="$(jq -r '.fivexx_since' "${GREMION_ROOT}/data/cd/watch-eval.json")"
-    [ "$cut" -gt 0 ]
+    [ "$cut" = "$(($(cd_clock) + 2))" ]
     adv
     ev '(.)'
     [ "$(jq -r '.fivexx_since' "${GREMION_ROOT}/data/cd/watch-eval.json")" = "$cut" ]

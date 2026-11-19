@@ -49,13 +49,14 @@
 # and never stored. Names of components, stages and counts only.
 #
 # THE SIDECAR data/cd/watch-eval.json (0600): {v, release, grace, restarts, last_duration_s,
-# fivexx_since}. release.watch is a closed key set (core.sh), so the four facts it cannot hold
-# live here, keyed by the release id and durable: the restart baseline of the new colour's
-# containers, the number of samples after a resume that may not trigger (the reboot rule), the
-# duration of the previous sample (a slow sample is not a resume), and the epoch where the
-# 5xx window of the next samples may start at the earliest (the end of the last sample that was
-# paused or inside the grace after a resume: the answers of an outage or of a reboot are not
-# the release's, whatever they are counted on).
+# fivexx_since, fivexx_hold}. release.watch is a closed key set (core.sh), so the facts it
+# cannot hold live here, keyed by the release id and durable: the restart baseline of the new
+# colour's containers, the number of samples after a resume that may not trigger (the reboot
+# rule), the duration of the previous sample (a slow sample is not a resume), the epoch where
+# the 5xx window of the next samples may start at the earliest (the end of the last sample that
+# was paused or inside the grace after a resume: the answers of an outage or of a reboot are
+# not the release's, whatever they are counted on), and a flag that the last sample was paused
+# (the first sample after it is not judged on 5xx: its window holds the tail of the recovery).
 
 # shellcheck disable=SC2016  # the jq programs below are single-quoted on purpose
 
@@ -535,7 +536,7 @@ cd_watch_eval() {
     local sample="${1:-}" rid f st sc
     local at colour tag old_colour interval failn min5 factor span cap_s
     local observed samples streak paused blind requests last base5 basenr
-    local grace restarts_base last_dur counted gap resume=0 timed_out fx_since dur
+    local grace restarts_base last_dur counted gap resume=0 timed_out fx_since fx_hold dur
     local pub_ok int_ok route_ok ident_ok portal_ok cont_known cont_bad cont_restarts shared_ok=true
     local ready_fail=false crash=false hit5=false new_not_ready=false old_ready n window w_new w_old
     local verdict extra='' delta mail_blind=false mail_paused=false first_pause=false req failing=false
@@ -588,10 +589,12 @@ cd_watch_eval() {
     restarts_base=''
     last_dur=0
     fx_since=0
+    fx_hold=0
     if [[ -r "$sc" ]]; then
-        f="$(jq -r --arg r "$rid" 'select(.v == 1 and .release == $r) | [(.grace // 0), (.restarts // ""), (.last_duration_s // 0), ((.fivexx_since // 0) | floor)] | map(tostring) | join("|")' "$sc" 2>/dev/null)" || f=''
-        [[ -z "$f" ]] || IFS='|' read -r grace restarts_base last_dur fx_since <<<"$f"
+        f="$(jq -r --arg r "$rid" 'select(.v == 1 and .release == $r) | [(.grace // 0), (.restarts // ""), (.last_duration_s // 0), ((.fivexx_since // 0) | floor), (if .fivexx_hold == true then 1 else 0 end)] | map(tostring) | join("|")' "$sc" 2>/dev/null)" || f=''
+        [[ -z "$f" ]] || IFS='|' read -r grace restarts_base last_dur fx_since fx_hold <<<"$f"
     fi
+    [[ "$fx_hold" == 1 ]] || fx_hold=0
     [[ "$grace" =~ ^[0-9]+$ ]] || grace=0
     [[ "$last_dur" =~ ^[0-9]+$ ]] || last_dur=0
     [[ "$fx_since" =~ ^[0-9]{1,12}$ ]] || fx_since=0
@@ -637,8 +640,10 @@ cd_watch_eval() {
         blind=0
         # a count whose window reaches back before the end of the last paused or grace sample
         # holds the answers of an outage or of a reboot: it is not judged (the sample starts its
-        # window at that end; this is the second line of the same defence)
-        if ((n >= min5 && at - window >= fx_since)) && { [[ "$base5" == null ]] || ((n * span >= factor * base5 * window)); }; then hit5=true; fi
+        # window at that end; this is the second line of the same defence). The first sample after
+        # a pause is not judged either: its window holds the tail of the recovery (answers between
+        # the end of the last paused sample and now), which is the outage's as well.
+        if ((n >= min5 && at - window >= fx_since && fx_hold == 0)) && { [[ "$base5" == null ]] || ((n * span >= factor * base5 * window)); }; then hit5=true; fi
         requests=0
         [[ "$req" =~ ^[0-9]+$ ]] && requests=$req
     fi
@@ -688,6 +693,12 @@ cd_watch_eval() {
     # the same for the 5xx answers: a paused sample, and a sample inside the grace after a
     # resume, move the earliest start of the next windows to the end of that sample
     if [[ "$verdict" == paused ]] || ((grace > 0)); then fx_since=$((at + dur)); fi
+    if [[ "$verdict" == paused ]]; then
+        fx_hold=1
+    elif ((fx_hold == 1)); then
+        fx_since=$((at + dur))
+        fx_hold=0
+    fi
     ((grace > 0)) && grace=$((grace - 1))
     samples=$((samples + 1))
 
@@ -704,8 +715,8 @@ cd_watch_eval() {
         --argjson o "$observed" --argjson s "$samples" --argjson b "$streak" --argjson p "$paused" --argjson bl "$blind" \
         --argjson rq "$requests" --argjson at "$at" || return 2
     cd_mkdir "$CD_DATA" || return 2
-    jq -cn --arg r "$rid" --argjson g "$grace" --argjson rs "${restarts_base:-null}" --argjson d "$dur" --argjson fx "$fx_since" \
-        '{v: 1, release: $r, grace: $g, restarts: $rs, last_duration_s: $d, fivexx_since: $fx}' | cd_atomic_write "$sc" 600 || return 2
+    jq -cn --arg r "$rid" --argjson g "$grace" --argjson rs "${restarts_base:-null}" --argjson d "$dur" --argjson fx "$fx_since" --argjson fh "$fx_hold" \
+        '{v: 1, release: $r, grace: $g, restarts: $rs, last_duration_s: $d, fivexx_since: $fx, fivexx_hold: ($fh == 1)}' | cd_atomic_write "$sc" 600 || return 2
 
     case "$verdict" in
         ok | bad) ;;
