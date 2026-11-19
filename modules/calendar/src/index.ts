@@ -25,6 +25,14 @@ import { runRelayTick } from './relay-tick.js'
 import type { TenantRef } from './tenant-store.js'
 import { makeLogTracer, noopTracer, type TracerPort } from '@gremion/ports/tracer'
 import { STREAMS } from '@gremion/ports/broker'
+import { runMigrateOnlyCli } from './migrate-only.js'
+
+// CD leaf step (`node dist/index.js --migrate-only`): migrate every catalogued customer database and
+// exit. Nothing below runs in this mode (the process exits here, and top-level await holds the rest of
+// the module back): no HTTP server, no scheduler, no NATS client, no outbox relay.
+if (process.argv.slice(2).includes('--migrate-only')) {
+  process.exit(await runMigrateOnlyCli())
+}
 
 const PORT = Number.parseInt(process.env.PORT ?? '8080', 10)
 // 7s by default (compose's stop_grace_period is 10s, so a 10s timer raced the
