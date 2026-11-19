@@ -56,7 +56,10 @@
 #       beside the dump (<dump>.acl.json, 0600) and put back (a restored gate
 #       database keeps its lock-down). A restore that fails after the DROP can
 #       be run again: it replays the saved original, never the damaged live
-#       state; the file goes with the successful run or with discard/switched. A database that was
+#       state. The file records the oid of the database it was read from: one
+#       whose oid is still the live one belongs to a restore that stopped before
+#       its DROP and is removed unread. It goes as soon as the replay read-back
+#       matches (before the ledger append), or with discard/switched. A database that was
 #       closed to PUBLIC is closed again in the call that recreates it, before
 #       pg_restore, so a restore that fails midway does not leave it open; the
 #       replay and its read-back follow the restore, and a failed replay or a
@@ -518,7 +521,7 @@ acl_close_public() {
 cmd_restore() {
     local rel="$1" db="$2" since="$3" live dump path c owner ev at id s
     local create_args=()
-    local acl_json="null" acl_stmts="" acl_before="" acl_after="" acl_roles=() acl_args=() acl_file="" acl_saved=0
+    local acl_json="null" acl_stmts="" acl_before="" acl_after="" acl_roles=() acl_args=() acl_file="" acl_saved=0 db_oid="" acl_oid=""
     take_lock
     live="$(live_dumps)"
     dump="$(jq -c --arg r "$rel" --arg d "$db" '[.[] | select(.release == $r and .database == $d)]' <<< "$live")"
@@ -556,16 +559,33 @@ cmd_restore() {
     # well, and by the discard or switch that deletes the dump.
     if [[ -n "$MD_SERVICE" ]]; then
         acl_file="${path%.dump}.acl.json"
+        # The oid names the database the grants were read from. A DROP gives the
+        # recreated database a new one, so a saved file whose oid is still the
+        # live one belongs to a restore that stopped before its DROP: the live
+        # grants are the original ones and the file is stale.
+        db_oid="$(psql_at "$c" postgres "SELECT d.oid::text FROM pg_catalog.pg_database d WHERE d.datname = '${db}'")" \
+            || die "RESTORE_FAILED: could not read the oid of ${db} — nothing was dropped" 1
+        [[ "$db_oid" =~ ^[0-9]+$ ]] \
+            || die "RESTORE_FAILED: the oid answer for ${db} has an unexpected shape — nothing was dropped" 1
         if [[ -e "$acl_file" ]]; then
-            jq -e 'type == "object" and has("acl") and (.before | type == "string")' "$acl_file" >/dev/null 2>&1 \
+            jq -e 'type == "object" and has("acl") and (.before | type == "string") and (.oid | type == "string")' "$acl_file" >/dev/null 2>&1 \
                 || die "RESTORE_FAILED: the saved database ACL of dump ${id} (${acl_file}) is not what this program wrote — nothing was dropped" 1
-            acl_json="$(jq -c '.acl' "$acl_file")" \
+            acl_oid="$(jq -r '.oid' "$acl_file")" \
                 || die "RESTORE_FAILED: could not read the saved database ACL of dump ${id} — nothing was dropped" 1
-            acl_before="$(jq -r '.before' "$acl_file")" \
-                || die "RESTORE_FAILED: could not read the saved database ACL of dump ${id} — nothing was dropped" 1
-            acl_saved=1
-            info "a former restore of dump ${id} failed after the DROP: its saved original grants are replayed, not the live ones"
-        else
+            if [[ "$acl_oid" == "$db_oid" ]]; then
+                rm -f -- "$acl_file" \
+                    || die "RESTORE_FAILED: could not remove the stale saved database ACL of dump ${id} (${acl_file}) — nothing was dropped" 1
+                info "a saved database ACL of dump ${id} was left by a restore that stopped before its DROP: removed, the live grants are read"
+            else
+                acl_json="$(jq -c '.acl' "$acl_file")" \
+                    || die "RESTORE_FAILED: could not read the saved database ACL of dump ${id} — nothing was dropped" 1
+                acl_before="$(jq -r '.before' "$acl_file")" \
+                    || die "RESTORE_FAILED: could not read the saved database ACL of dump ${id} — nothing was dropped" 1
+                acl_saved=1
+                info "a former restore of dump ${id} recreated ${db} and did not finish: its saved original grants are replayed, not the live ones"
+            fi
+        fi
+        if [[ "$acl_saved" -eq 0 ]]; then
             acl_json="$(acl_read "$c" "$db")" \
                 || die "RESTORE_FAILED: could not read the database ACL of ${db} — nothing was dropped" 1
         fi
@@ -583,7 +603,7 @@ cmd_restore() {
                 || die "RESTORE_FAILED: the privilege answer for ${db} has an unexpected shape — nothing was dropped" 1
         fi
         if [[ "$acl_saved" -eq 0 ]]; then
-            if ! ( umask 077; jq -nc --argjson acl "$acl_json" --arg before "$acl_before" '{v:1, acl:$acl, before:$before}' > "${acl_file}.tmp" ) \
+            if ! ( umask 077; jq -nc --argjson acl "$acl_json" --arg before "$acl_before" --arg oid "$db_oid" '{v:1, acl:$acl, before:$before, oid:$oid}' > "${acl_file}.tmp" ) \
                 || ! chmod 600 "${acl_file}.tmp" || ! mv -f -- "${acl_file}.tmp" "$acl_file"; then
                 rm -f -- "${acl_file}.tmp"
                 die "RESTORE_FAILED: could not save the database ACL of dump ${id} beside the dump — nothing was dropped" 1
@@ -632,6 +652,13 @@ cmd_restore() {
             die "RESTORE_ACL_MISMATCH: the data of ${db} is restored but PUBLIC or a grantee has other CONNECT/TEMPORARY rights than before (PUBLIC was revoked) — do not start the app; run the restore again" 1
         fi
     fi
+    # The data and the grants are back: the saved original has done its job. It
+    # goes before the ledger append, so a failed append cannot leave a file
+    # that a later re-run would replay over grants changed since.
+    if [[ -n "$acl_file" ]]; then
+        rm -f -- "$acl_file" \
+            || die "RESTORE_FAILED: ${db} is restored but the saved database ACL ${acl_file} could not be removed — remove it, then run the restore again" 1
+    fi
     at="$(now_iso)"
     ev="$(jq -c --arg at "$at" --arg since "$since" '
         {v:1, event:"restored", at:$at, migration_dump_id, release, scope, customer_id, module_id,
@@ -639,7 +666,6 @@ cmd_restore() {
         + (if has("pg_service") then {pg_service, pg_user} else {} end)' <<< "$dump")"
     printf '%s\n' "$ev" >> "$LEDGER" || die "LEDGER_UNWRITABLE: ${LEDGER}" 1
     fsync_paths "$LEDGER"
-    if [[ -n "$acl_file" ]]; then rm -f -- "$acl_file"; fi
     audit "$(audit_line "$ev")"
     if [[ -n "$MD_SERVICE" ]]; then
         printf 'RESTORE-OK release=%s svc=%s id=%s — the dump stays live; when done: gremion-migration-dump discard --release %s --reason <text>\n' "$rel" "$MD_SERVICE" "$id" "$rel"

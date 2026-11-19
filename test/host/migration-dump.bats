@@ -124,10 +124,16 @@ case "$1" in
             if [ ! -f "$ST" ]; then printf "null\n"; exit 0; fi
             jq -Rn '[inputs | split(" ") | {g: (if .[0] == "PUBLIC" then null else .[0] end), p: .[1], o: (.[2] == "t")}]' < "$ST"
             exit 0 ;;
+        *"oid::text"*)
+            # the database oid: a DROP gives the recreated database a new one
+            cat "${SHIM_DIR}/db.oid" 2>/dev/null || printf "16384\n"; exit 0 ;;
         *"server_version_num"*) printf "18\n"; exit 0 ;;
         *"pg_database_size"*)   printf "%s\n" "${DB_BYTES:-1000}"; exit 0 ;;
         *"pg_get_userbyid"*)    printf "gremion\n"; exit 0 ;;
         *"DROP DATABASE"*)
+            # the knob fails the call before anything is dropped
+            if [ -n "${DROP_FAIL:-}" ]; then printf "ERROR:  database is being accessed\n" >&2; exit 1; fi
+            n="$(cat "${SHIM_DIR}/db.oid" 2>/dev/null || printf 16384)"; printf "%s\n" "$((n + 1))" > "${SHIM_DIR}/db.oid"
             rm -f "$ST"
             # a REVOKE in the same call (run after the CREATE) closes PUBLIC at once
             for a in "$@"; do
@@ -926,6 +932,106 @@ acl_sidecar() { ls "${DUMPS}"/r-mod/*.acl.json 2>/dev/null | head -n 1 || true; 
     [ "$status" -eq 1 ]
     f="$(acl_sidecar)"
     printf 'not json\n' > "$f"
+    : > "$SHIM_LOG"
+    run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"RESTORE_FAILED"* ]]
+    refute_recorded docker "DROP DATABASE"
+}
+
+@test "a restore whose DROP failed leaves a saved ACL that a later re-run does not replay over the live grants" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    printf 'gremion CONNECT f
+gremion CREATE f
+gremion TEMPORARY f
+m_app CONNECT f
+' > "${SHIM_DIR}/acl.state"
+    DROP_FAIL=1 run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"could not recreate"* ]]
+    assert_present '^m_app CONNECT ' "${SHIM_DIR}/acl.state" "nothing was dropped"
+    # the operator withdraws the app role before the next try
+    printf 'gremion CONNECT f
+gremion CREATE f
+gremion TEMPORARY f
+' > "${SHIM_DIR}/acl.state"
+    run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"RESTORE-OK"* ]]
+    assert_absent '^m_app ' "${SHIM_DIR}/acl.state" "the DROP never happened, so the live grants are the original ones"
+    assert_absent '^PUBLIC ' "${SHIM_DIR}/acl.state" "PUBLIC must stay revoked"
+    [ -z "$(acl_sidecar)" ]
+}
+
+@test "the info line about a former restore appears only when that restore reached the DROP" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    printf 'gremion CONNECT f
+gremion CREATE f
+gremion TEMPORARY f
+m_app CONNECT f
+' > "${SHIM_DIR}/acl.state"
+    DROP_FAIL=1 run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"former restore"* ]]
+    printf 'gremion CONNECT f
+gremion CREATE f
+gremion TEMPORARY f
+m_app CONNECT f
+' > "${SHIM_DIR}/acl.state"
+    RESTORE_EXIT=1 run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"former restore of dump"*"replayed"* ]]
+}
+
+@test "a good restore whose ledger write failed leaves no saved ACL, so a later re-run reads the live grants" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    printf 'gremion CONNECT f
+gremion CREATE f
+gremion TEMPORARY f
+m_app CONNECT f
+' > "${SHIM_DIR}/acl.state"
+    chmod 444 "${DUMPS}/ledger.jsonl"
+    if [[ "$(id -u)" -eq 0 ]]; then
+        # root writes through 0444: run the tool as nobody over a tree nobody can write
+        chmod -R a+rwX "$GREMION_ROOT" "$SHIM_DIR"; chmod 777 "$DUMPS"; chmod 444 "${DUMPS}/ledger.jsonl"
+        run setpriv --reuid=65534 --regid=65534 --clear-groups env PATH="$PATH" GREMION_ROOT="$GREMION_ROOT" SHIM_DIR="$SHIM_DIR" SHIM_LOG=/dev/null "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    else
+        run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    fi
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"LEDGER_UNWRITABLE"* ]]
+    assert_present '^m_app CONNECT ' "${SHIM_DIR}/acl.state" "the grants were replayed"
+    [ -z "$(acl_sidecar)" ]
+    chmod 644 "${DUMPS}/ledger.jsonl"
+    # a later block by the operator must survive the re-run
+    printf 'gremion CONNECT f
+gremion CREATE f
+gremion TEMPORARY f
+' > "${SHIM_DIR}/acl.state"
+    run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 0 ]
+    assert_absent '^m_app ' "${SHIM_DIR}/acl.state" "the re-run must not unblock the database"
+}
+
+@test "a saved ACL without the oid of the database it was read from is refused before anything is dropped" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    printf 'gremion CONNECT f
+gremion CREATE f
+gremion TEMPORARY f
+m_app CONNECT f
+' > "${SHIM_DIR}/acl.state"
+    RESTORE_EXIT=1 run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    f="$(acl_sidecar)"
+    jq -c 'del(.oid)' "$f" > "${f}.n" && mv "${f}.n" "$f"
     : > "$SHIM_LOG"
     run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
     [ "$status" -eq 1 ]
