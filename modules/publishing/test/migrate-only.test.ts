@@ -137,6 +137,19 @@ describe('the entry itself (real module)', () => {
   })
 })
 
+describe('classifyFailure: the phase decides what a dropped connection is', () => {
+  const lost = (code: string): Error => Object.assign(new Error('boom'), { code })
+  it.each(['ECONNRESET', 'CONNECTION_CLOSED', 'CONNECTION_ENDED', '57P01'])(
+    '%s before any DDL is retry-later, inside a migration file it is a defect of the run',
+    async (code) => {
+      const m = await vi.importActual<typeof import('../src/migrate-only.ts')>('../src/migrate-only.ts')
+      expect(m.classifyFailure(lost(code), 'before-ddl')).toBe('unreachable')
+      expect(m.classifyFailure(lost(code), 'in-migration')).toBe('sql')
+      expect(m.classifyFailure(lost(code))).toBe('sql')
+    },
+  )
+})
+
 describe('classifyFailure: which exit code an error earns', () => {
   const pgErr = (code: string, extra: Record<string, unknown> = {}): Error =>
     Object.assign(new Error('boom'), { code, ...extra })
@@ -157,6 +170,10 @@ describe('classifyFailure: which exit code an error earns', () => {
     ['ECONNRESET inside a file', pgErr('ECONNRESET'), 'sql'],
     ['a hash mismatch (a plain Error)', new Error('manifest hash mismatch for 001_init.sql'), 'sql'],
     ['a thrown string', 'boom', 'sql'],
+    ['XX000 tuple concurrently updated (two sessions replacing one function)', pgErr('XX000', { message: 'tuple concurrently updated' }), 'race'],
+    ['XX000 with another message is a defect', pgErr('XX000', { message: 'something else' }), 'sql'],
+    ['a refused login (28P01)', pgErr('28P01'), 'precondition'],
+    ['a role that does not exist (28000)', pgErr('28000'), 'precondition'],
   ] as const)('%s', (_label, err, expected) => {
     // Imported for real: the module under mock above is only the index.ts view of it.
     return vi.importActual<typeof import('../src/migrate-only.ts')>('../src/migrate-only.ts').then((m) => {

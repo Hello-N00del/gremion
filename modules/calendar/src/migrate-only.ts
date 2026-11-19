@@ -30,9 +30,11 @@
 // already applied; the files are idempotent). The old colour's runner takes no lock: its collision with
 // this entry is handled by the retry of the catalogue-race errors below, never by the lock.
 //
-// Exit codes: 0 ok; 1 a migration file raised SQL (or its hash differs from manifest.json); 2 usage
-// or a missing CALENDAR_PG_URL; 3 the server could not be reached before any DDL, or a
-// catalogue-race error that persisted after the retries (retry later, not a defect of the commit).
+// Exit codes: 0 ok; 1 a migration file raised SQL (or its hash differs from manifest.json); 2 usage,
+// a missing CALENDAR_PG_URL, or a refused login (a host configuration fault, not the commit's);
+// 3 a connection that was refused, timed out or dropped before any DDL, or a catalogue-race error
+// that persisted after the retries (retry later, not a defect of the commit). A connection lost INSIDE
+// a migration file is 1.
 
 import postgres from 'postgres'
 import { evictTenantPools, requireRuntimePgUrl, type StoreForOptions, type TenantRef } from './tenant-store.js'
@@ -55,11 +57,13 @@ export interface MigrateOnlyCounts {
   failed: number
 }
 
-export type FailureClass = 'race' | 'unreachable' | 'sql'
+export type FailureClass = 'race' | 'unreachable' | 'precondition' | 'sql'
 
 export interface MigrateOnlyResult {
   code: 0 | 1 | 2 | 3
   counts: MigrateOnlyCounts
+  /** With code 2: what is wrong (fixed words, never a value). */
+  reason?: 'env' | 'login'
 }
 
 /**
@@ -105,6 +109,22 @@ const UNREACHABLE_CODES: ReadonlySet<string> = new Set([
   '08001', // the client could not establish the connection
 ])
 
+/**
+ * A connection that dropped. Before any DDL (the catalogue read, the existence look, the lock) it is
+ * "retry later"; inside a migration file it is a defect of that run and stays 1.
+ */
+const CONNECTION_LOST_CODES: ReadonlySet<string> = new Set([
+  'ECONNRESET',
+  'EPIPE',
+  'CONNECTION_CLOSED',
+  'CONNECTION_ENDED',
+  'CONNECTION_DESTROYED',
+  '57P01', // admin_shutdown
+  '57P02', // crash_shutdown
+  '08006', // connection_failure
+  '08003', // connection_does_not_exist
+])
+
 /** The catalogue races of concurrent IF NOT EXISTS DDL (the old runner takes no lock). */
 const RACE_CODES: ReadonlySet<string> = new Set(['42710', '42P07', '40P01', '40001'])
 
@@ -120,17 +140,25 @@ function codeOf(err: unknown): string | undefined {
  * clear; a connection lost INSIDE a file (ECONNRESET, CONNECTION_CLOSED) and every other error stays a
  * defect of the commit (1).
  */
-export function classifyFailure(err: unknown): FailureClass {
+export function classifyFailure(err: unknown, phase: 'before-ddl' | 'in-migration' = 'in-migration'): FailureClass {
   const nested = typeof err === 'object' && err !== null ? (err as { errors?: unknown }).errors : undefined
   if (Array.isArray(nested) && nested.length > 0) {
     // Node reports a refused localhost connection as an AggregateError over the address families.
-    const classes = nested.map((e) => classifyFailure(e))
+    const classes = nested.map((e) => classifyFailure(e, phase))
     if (classes.every((c) => c === 'unreachable')) return 'unreachable'
   }
   const code = codeOf(err)
   if (code === undefined) return 'sql'
   if (UNREACHABLE_CODES.has(code)) return 'unreachable'
+  // A refused login (class 28) is the host's credentials, not the commit.
+  if (code.startsWith('28')) return 'precondition'
+  if (phase === 'before-ddl' && CONNECTION_LOST_CODES.has(code)) return 'unreachable'
   if (RACE_CODES.has(code)) return 'race'
+  if (code === 'XX000' && err instanceof Error && err.message.includes('tuple concurrently updated')) {
+    // Two sessions replacing the same function (content 002, publishing 001): the loser fails with this
+    // internal-error code and no other. It clears on the next attempt.
+    return 'race'
+  }
   if (code === '23505') {
     // A unique violation of a pg_ catalogue index is two sessions creating the same object; a unique
     // violation of a user table is a real defect.
@@ -213,9 +241,11 @@ async function migrateCustomer(
       }
     }
   } catch (err) {
+    // Only the look, the connect and the lock can throw to here (a failed attempt is returned from the loop
+    // above), and nothing has been written yet: a dropped connection is "retry later".
     // The database was dropped between the look and the connect: nothing to migrate, nothing to create.
     if (codeOf(err) === '3D000') return { kind: 'skipped' }
-    return { kind: 'failed', cls: classifyFailure(err) }
+    return { kind: 'failed', cls: classifyFailure(err, 'before-ddl') }
   } finally {
     // The session lock goes with its connection.
     if (lockConn !== null) await lockConn.end({ timeout: 5 }).catch(() => {})
@@ -235,7 +265,7 @@ export async function runMigrateOnly(
     pgUrl = requireRuntimePgUrl(options.pgUrl, PG_URL_ENV)
     new URL(pgUrl)
   } catch {
-    return { code: 2, counts }
+    return { code: 2, counts, reason: 'env' }
   }
   const dbPrefix = options.dbPrefix ?? DEFAULT_DB_PREFIX
   const run = {
@@ -272,6 +302,7 @@ export async function runMigrateOnly(
 
     // 2. Every catalogued customer, one after the other, inside this process.
     let sawSql = false
+    let sawPrecondition = false
     let sawRetryLater = false
     let unreachable = false
     for (const row of rows) {
@@ -286,14 +317,19 @@ export async function runMigrateOnly(
       else {
         counts.failed++
         if (outcome.cls === 'sql') sawSql = true
+        else if (outcome.cls === 'precondition') sawPrecondition = true
         else sawRetryLater = true
         if (outcome.cls === 'unreachable') unreachable = true
       }
     }
-    return { code: sawSql ? 1 : sawRetryLater ? 3 : 0, counts }
+    if (sawSql) return { code: 1, counts }
+    if (sawPrecondition) return { code: 2, counts, reason: 'login' }
+    return { code: sawRetryLater ? 3 : 0, counts }
   } catch (err) {
     // The catalogue could not be read at all (before any DDL).
-    return { code: classifyFailure(err) === 'sql' ? 1 : 3, counts }
+    const cls = classifyFailure(err, 'before-ddl')
+    if (cls === 'precondition') return { code: 2, counts, reason: 'login' }
+    return { code: cls === 'sql' ? 1 : 3, counts }
   } finally {
     if (control !== null) await control.end({ timeout: 5 }).catch(() => {})
     if (admin !== null) await admin.end({ timeout: 5 }).catch(() => {})
@@ -327,7 +363,11 @@ export async function runMigrateOnlyCli(
   }
   const result = await runMigrateOnly(deps)
   if (result.code === 2) {
-    process.stderr.write(`[${LEAF}] --migrate-only: ${PG_URL_ENV} is not set or not a URL\n`)
+    process.stderr.write(
+      result.reason === 'login'
+        ? `[${LEAF}] --migrate-only: the database refused the login\n`
+        : `[${LEAF}] --migrate-only: ${PG_URL_ENV} is not set or not a URL\n`,
+    )
     return 2
   }
   await writeLine(JSON.stringify(result.counts))

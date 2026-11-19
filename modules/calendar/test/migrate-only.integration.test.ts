@@ -2,11 +2,12 @@
  * `node dist/index.js --migrate-only` (the CD leaf step) against a throwaway Postgres.
  *
  * Runs against CALENDAR_TEST_PG_URL under the same fail-closed guard as the other integration tests
- * (localhost, NOT port 5432, a `calendar_test_` database prefix). Two files only reach beyond that
- * prefix: the real-bundle runs use the production prefix `calendar_` on the SAME throwaway server, and
- * their cleanup drops only `calendar\_%` databases after the guard has passed.
+ * (localhost, NOT port 5432, a `_test_` database prefix). It uses a prefix of its OWN
+ * (`calendar_mo_test_`) so it never touches the databases of the other integration files, and drops only
+ * what it made. The real-bundle runs use the production prefix `calendar_` (the bundle has no other) on
+ * the same throwaway server and drop exactly the three names they create.
  *
- * Coverage (the plan's U6e list):
+ * Coverage:
  *  - the catalogue is read without creating anything (no control database, no catalogue table);
  *  - a catalogued customer with a database is `migrated`, one without is `skipped` and NO database is created;
  *  - a hostile slug in the catalogue is found in no stream;
@@ -28,13 +29,15 @@ import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 import postgres from 'postgres'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { MAX_ATTEMPTS, MIGRATE_LOCK_NAME, runMigrateOnly, type MigrateFn } from '../src/migrate-only.ts'
+import { classifyFailure, MAX_ATTEMPTS, MIGRATE_LOCK_NAME, runMigrateOnly, type MigrateFn } from '../src/migrate-only.ts'
 import { _resetTenantStoreForTests, storeFor } from '../src/tenant-store.ts'
 import { assertSafeTestEnv, requireEphemeralTestPgUrl } from './support/pg-test-guard.ts'
 
 const TEST_PG_URL = requireEphemeralTestPgUrl()
-const PREFIX = 'calendar_test_'
+const PREFIX = 'calendar_mo_test_'
 const PROD_PREFIX = 'calendar_'
+// The databases the real-bundle runs create under the production prefix (a hostile slug never gets one).
+const PROD_DATABASES = ['control', 'alpha', 'beta'].map((n) => PROD_PREFIX + n)
 assertSafeTestEnv(TEST_PG_URL, PREFIX)
 
 const MODULE_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -59,7 +62,8 @@ function connect(db: string): ReturnType<typeof postgres> {
 
 async function dropAll(): Promise<void> {
   const rows = await admin<{ datname: string }[]>`
-    SELECT datname FROM pg_database WHERE datname LIKE 'calendar\_%'
+    SELECT datname FROM pg_database
+     WHERE datname LIKE ${PREFIX.replace(/_/g, '\\_') + '%'} OR datname IN ${admin(PROD_DATABASES)}
   `
   for (const { datname } of rows) {
     await admin.unsafe(
@@ -411,6 +415,74 @@ describe('exit codes: a catalogue race is retried, a defect is not', () => {
     expect(calls).toEqual(['alpha'])
   })
 
+  it('a REAL concurrent CREATE OR REPLACE FUNCTION fails the loser with XX000 "tuple concurrently updated", and that is a race', async () => {
+    await admin.unsafe(`CREATE DATABASE "${PREFIX}tcu"`)
+    const a = connect(PREFIX + 'tcu')
+    const b = connect(PREFIX + 'tcu')
+    const fn = 'CREATE OR REPLACE FUNCTION leaf_probe() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$'
+    try {
+      await a.unsafe(fn)
+      const holding = a.begin(async (tx) => {
+        await tx.unsafe(fn)
+        await new Promise((r) => setTimeout(r, 1500))
+      })
+      await new Promise((r) => setTimeout(r, 300))
+      const loser = await b.unsafe(fn).then(
+        () => null,
+        (e: unknown) => e,
+      )
+      await holding
+      expect(loser, 'the second session should have lost the race').not.toBeNull()
+      expect((loser as { code?: string }).code).toBe('XX000')
+      expect(classifyFailure(loser)).toBe('race')
+    } finally {
+      await a.end()
+      await b.end()
+    }
+  })
+
+  it('a connection lost BEFORE any DDL (while parked on the lock) is exit 3, not 1', async () => {
+    await seedCatalogue(PREFIX, [ALPHA], ['alpha'])
+    const holder = connect(PREFIX + 'alpha')
+    try {
+      await holder`SELECT pg_advisory_lock(hashtextextended(${MIGRATE_LOCK_NAME}, 0))`
+      const pending = runMigrateOnly(deps, { ...opts, migrate: async () => {} })
+      await vi.waitFor(
+        async () => {
+          const waiting = await admin`
+            SELECT l.pid FROM pg_locks l JOIN pg_database d ON d.oid = l.database
+             WHERE l.locktype = 'advisory' AND NOT l.granted AND d.datname = ${PREFIX + 'alpha'}
+          `
+          expect(waiting.length).toBeGreaterThan(0)
+          await admin`SELECT pg_terminate_backend(${waiting[0]!.pid as number})`
+        },
+        { timeout: 10_000, interval: 100 },
+      )
+      const result = await pending
+      expect(result.code).toBe(3)
+      expect(result.counts).toMatchObject({ total: 1, migrated: 0, failed: 1 })
+    } finally {
+      await holder.end()
+    }
+  }, 60_000)
+
+  it('a connection lost INSIDE a migration run (the runner is already past the lock) is exit 1', async () => {
+    await seedCatalogue(PREFIX, [ALPHA], ['alpha'])
+    const f = failing([], pgErr('CONNECTION_CLOSED'))
+    const result = await runMigrateOnly(deps, { ...opts, migrate: f.migrate })
+    expect(result.code).toBe(1)
+    expect(f.calls()).toBe(1)
+  })
+
+  it('a refused login is exit 2 (the host configuration), not a defect of the commit', async () => {
+    await seedCatalogue(PREFIX, [ALPHA], ['alpha'])
+    const u = new URL(TEST_PG_URL)
+    u.username = 'no_such_role'
+    const result = await runMigrateOnly(deps, { ...opts, pgUrl: u.toString() })
+    expect(result.code).toBe(2)
+    expect(result.reason).toBe('login')
+  })
+
   it('one defect among races is still exit 1; the customers after a defect are still migrated', async () => {
     await seedCatalogue(PREFIX, [ALPHA, BETA, GAMMA], ['alpha', 'beta', 'gamma'])
     const calls: string[] = []
@@ -552,7 +624,7 @@ describe('real processes', () => {
 
   async function dropAllExceptRef(): Promise<void> {
     const rows = await admin<{ datname: string }[]>`
-      SELECT datname FROM pg_database WHERE datname LIKE 'calendar\_test\_%' AND datname <> ${PREFIX + 'ref'}
+      SELECT datname FROM pg_database WHERE datname LIKE ${PREFIX.replace(/_/g, '\\_') + '%'} AND datname <> ${PREFIX + 'ref'}
     `
     for (const { datname } of rows) {
       await admin.unsafe(
