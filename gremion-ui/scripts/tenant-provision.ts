@@ -116,6 +116,7 @@ import { EXPORT_USAGE, EXPORT_VERBS, exportVerb } from './tenant-provision-expor
 import { KARENZ_USAGE, KARENZ_VERBS, karenzVerb, liveModuleDatabases, liveModuleDatabasesRefusal } from './tenant-provision-karenz'
 import { IMPORT_USAGE, IMPORT_VERBS, importVerb } from './tenant-provision-import'
 import { PURGE_USAGE, PURGE_VERBS, purgeVerb } from './tenant-provision-purge'
+import { MODULE_USAGE, MODULE_VERBS, moduleVerb } from './tenant-provision-modules'
 import { parseDpiaMap, scratchFixturesAllowed } from './tenant-provision-scratch'
 
 const repoRoot = join(import.meta.dirname, '..', '..')
@@ -1197,7 +1198,8 @@ ${GATE_USAGE}
 ${IMPORT_USAGE}
 ${PURGE_USAGE}
 ${EXPORT_USAGE}
-${KARENZ_USAGE}`
+${KARENZ_USAGE}
+${MODULE_USAGE}`
 
 async function main(): Promise<void> {
   const verb = process.argv[2]
@@ -1312,6 +1314,21 @@ async function main(): Promise<void> {
         moduleUrl: (id) => directPostgresUrl(`MODULE_PG_ADMIN_${envId(id)}_FILE`, reqFileEnv(`MODULE_PG_ADMIN_${envId(id)}_FILE`)),
         reqFlag,
         positional,
+        usage: (m) => new UsageError(m),
+        log,
+      })
+    // CD module step (tenant-provision-modules.ts): one JSON line of counts, its own exit codes 0/1/2/3
+    case 'module-upgrade':
+      if (!MODULE_VERBS.has(verb)) throw new UsageError(`unknown verb ${verb}`)
+      return moduleVerb(verb, {
+        args: process.argv.slice(3),
+        catalogue: loadModules,
+        releaseRef,
+        moduleServer: (service) => {
+          const id = service.replace(/-postgres$/, '')
+          return moduleServerFor(directPostgresUrl(`MODULE_PG_ADMIN_${envId(id)}_FILE`, reqFileEnv(`MODULE_PG_ADMIN_${envId(id)}_FILE`)))
+        },
+        openPlatform: openPlatformPool,
         usage: (m) => new UsageError(m),
         log,
       })
