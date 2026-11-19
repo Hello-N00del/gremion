@@ -384,6 +384,35 @@ describe('commit failure or connection failure (exit 1 or 3 of the verb)', () =>
     expect(r.failure).toMatchObject({ kind: 'commit', code: 'APPLY_FAILED' })
   })
 
+  // The runner wraps some connection errors before any file begins (the ledger read, the unlock of a clean run).
+  // Wrapped or not, no DDL was begun, so the cause decides: infrastructure, exit 3.
+  it.each([
+    ['LEDGER_FORMAT (the ledger read lost its connection)', 'LEDGER_FORMAT', '57P01'],
+    ['LEDGER_FORMAT (reset by the peer)', 'LEDGER_FORMAT', 'ECONNRESET'],
+    ['UNLOCK_FAILED on a run with nothing pending', 'UNLOCK_FAILED', '57P01'],
+    ['UNLOCK_FAILED on a run with nothing pending (reset by the peer)', 'UNLOCK_FAILED', 'ECONNRESET'],
+  ] as const)('%s, wrapped by the runner before any file began, is a connection failure', async (_n, runnerCode, cause) => {
+    runMigrations.mockRejectedValueOnce(new MigrationRunnerError(runnerCode, 'x', [], { cause: sqlErr(cause) }))
+    const r = await upgradeModuleDatabases(fixture([row(C1, 'calendar')]).deps)
+    expect(r).toMatchObject({ failed: 1, files_applied: 0, failure: { kind: 'connection', code: runnerCode } })
+  })
+
+  it('a wrapped LEDGER_FORMAT whose cause is not a connection error stays the commit failure', async () => {
+    runMigrations.mockRejectedValueOnce(new MigrationRunnerError('LEDGER_FORMAT', 'x', [], { cause: sqlErr('42703') }))
+    const r = await upgradeModuleDatabases(fixture([row(C1, 'calendar')]).deps)
+    expect(r.failure).toMatchObject({ kind: 'commit', code: 'LEDGER_FORMAT' })
+  })
+
+  it('an UNLOCK_FAILED after files committed (connection cause) is the commit failure: DDL had begun', async () => {
+    runMigrations.mockImplementationOnce(async (o: { hooks: { preApply: (f: string) => void }; log: (l: string) => void }) => {
+      o.hooks.preApply('0009_x.sql')
+      o.log('applied 0009_x.sql')
+      throw new MigrationRunnerError('UNLOCK_FAILED', 'x', [], { cause: sqlErr('57P01') })
+    })
+    const r = await upgradeModuleDatabases(fixture([row(C1, 'calendar')]).deps)
+    expect(r).toMatchObject({ failed: 1, files_applied: 1, failure: { kind: 'commit', code: 'UNLOCK_FAILED' } })
+  })
+
   it('a connection error during the re-grant is the commit failure (the files are committed)', async () => {
     runMigrations.mockResolvedValueOnce({ applied: ['0009_x.sql'], alreadyApplied: 1 })
     grantAppPrivileges.mockRejectedValueOnce(sqlErr('ECONNREFUSED'))

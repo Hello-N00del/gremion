@@ -359,9 +359,12 @@ export async function upgradeModuleDatabase(row: UpgradeRow, deps: Pick<UpgradeD
       await owned.end({ timeout: 5 }).catch(() => {})
     }
   } catch (err) {
-    // exit-3 class is an allow-list: a connection-level code AND no DDL begun AND not an error the runner
-    // itself built (APPLY_FAILED is the commit's, whatever its cause)
-    const infra = lockContention(err) || (!progress.ddl && !(err instanceof MigrationRunnerError) && connectionLevelCode(err) !== null)
+    // exit-3 class is an allow-list: a lock wait that gave up, or a connection-level code (on the error or on the cause
+    // the runner wrapped it with: LEDGER_FORMAT of the ledger read, UNLOCK_FAILED of a clean run) while NO DDL was begun.
+    // APPLY_FAILED is the commit's whatever its cause (a file's transaction had begun; the runner raises it only after
+    // preApply, which sets progress.ddl, and it is excluded here as well so the rule does not rest on that order).
+    const applyFailed = err instanceof MigrationRunnerError && err.code === 'APPLY_FAILED'
+    const infra = lockContention(err) || (!progress.ddl && !applyFailed && connectionLevelCode(err) !== null)
     throw new ModuleDatabaseFailure(err, infra ? 'connection' : 'commit', filesApplied)
   }
 }
