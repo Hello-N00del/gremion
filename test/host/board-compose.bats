@@ -43,12 +43,6 @@ seed_file() {
     chmod 600 "$(board_file)"
 }
 
-# A private copy of infra/host that a test may mutate.
-copy_host_src() {
-    cp -r "$HOST_SRC" "${GREMION_ROOT}/host-src"
-    COPY_INIT="${GREMION_ROOT}/host-src/bin/gremion-init-secrets"
-}
-
 @test "an existing module_app_password_board file is THE password, in both colours (a generated value would differ)" {
     seed_file
     render
@@ -159,11 +153,8 @@ copy_host_src() {
     [ "$(value_of "${ENV_DIR}/app-blue.env" INTERNAL_BOARD_SECRET)" = "$v" ]
 }
 
-@test "COMPOSE_PROFILES carries board for a pilot with board (the list comes from module-profiles.json; a mutated copy stands in for the declaring unit)" {
-    copy_host_src
-    jq '.modules.board.pilot = true | .modules.board.profiles = ["board"]' "${GREMION_ROOT}/host-src/module-profiles.json" > "${GREMION_ROOT}/mp.json"
-    mv "${GREMION_ROOT}/mp.json" "${GREMION_ROOT}/host-src/module-profiles.json"
-    run "$COPY_INIT" --root "$GREMION_ROOT" --stack gremion
+@test "COMPOSE_PROFILES carries board (the list comes from the shipped module-profiles.json, which names the profile of the module that declares board-postgres)" {
+    render
     [ "$status" -eq 0 ]
     local f
     for f in state.env app-blue.env app-green.env; do

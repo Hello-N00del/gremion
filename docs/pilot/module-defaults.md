@@ -21,7 +21,7 @@ none (`packages/provisioning/test/code-default-off.test.ts`).
 | publishing | enabled | Newsletter |
 | files | enabled | Documents over Nextcloud, editing in Collabora |
 | messaging | enabled | Chat and video |
-| board | enabled | Task board per organisational unit; served in-process from the customer's own database, so enabling it opens no module database and starts no compose profile. It is chosen at creation through the same isolation gate as the other modules (the board isolation case, `scripts/verify/suites/isolation-tenant.mjs`) |
+| board | enabled | Task board per organisational unit; a customer created with board ticked has the board's own module database and the `board` compose profile; one created without it is served in-process from the kernel tables of its own database. It is chosen at creation through the same isolation gate as the other modules (the board isolation case, `scripts/verify/suites/isolation-tenant.mjs`) |
 | elections | not named | Optional, no statutory election ([elections-scope](../compliance/elections-scope.md)); starts off and is held off in the app config (`defaultEnabled: false` on its manifest and a pin on read and write of `config.modules`), so the rail and `/votes` carry no election wording; a permanent notice is mounted on every `/elections` page |
 | finance, vault | not named | Excluded from the default build (`modules/disabled.json`) |
 | handover | not named | Not part of the pilot set |
@@ -68,15 +68,19 @@ gated per request by the same config only; level 1 per request is still TASK-044
 
 **Board is selectable at creation.** The enable gate no longer refuses it by name (only vault
 stays refused); it passes the gate like every other module, on a passed cross-customer
-isolation result for the release in use. It is served in-process on kernel tables of the
-customer's own database, so it has no module database of its own. A council still cannot
+isolation result for the release in use. A customer created with board ticked has the
+board's own module database from the start; a customer created without it keeps the board on the
+kernel tables of its own database. A council still cannot
 switch board in its own settings: it stays held back there. The isolation evidence for board
 on a running host is recorded after deployment; until a host has recorded it for the release in
 use, the gate refuses board like any module without evidence.
 
 A customer created with board left unticked has no platform row for it, so the board is still on
-for that customer; to hide it later, use "Modul aktivieren" and then "Modul deaktivieren" on the
-customer page.
+for that customer, served from the kernel tables. Switching board on later for such an active
+customer is refused (nothing is written), because the enable would create an empty board database
+beside the kernel rows; the step that moves the board into its own database is not part of this
+release. So "Modul aktivieren" is not a way to hide that board either. To hide it, set
+`config.modules.board` to false by hand (see the board README).
 
 ## 4. Hand-offs
 

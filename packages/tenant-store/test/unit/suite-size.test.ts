@@ -36,6 +36,8 @@ export const NAMED: Record<'unit' | 'integration', Record<string, number>> = {
     // TASK-077 (C7): +1 a service:/module: chain is refused by the generic CLI
     'src/dump/dump.test.ts': 21,
     'test/unit/check-tenant-db-access.test.ts': 18,
+    // board's own module database: enable, disable and the day-30 job touch board-postgres (the shipped module.json); a switch-off and day 30 with no module_database row touch none
+    'test/unit/board-lifecycle.test.ts': 7,
     'test/unit/suite-size.test.ts': 4,
   },
   integration: {

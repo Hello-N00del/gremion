@@ -82,16 +82,19 @@ export async function disableModule(tenantId: string, module: LifecycleModule, a
 
   const row = database ? await readModuleDatabase(deps.platform, tenantId, pltModuleId) : null
   if (!database || !row || row.state === 'dropped') {
-    // No database to keep: only the enablement, and for a module that declares none, the Karenz row.
-    // One transaction, so a crash cannot leave the module off with no clock.
+    // No database to keep: only the enablement and the Karenz row, for a module that declares none and for a
+    // module that declares one but has no plt.module_database row for this customer (enabled before the
+    // declaration: its data is not in a module database, there is nothing to export or to drop). Such a
+    // switch-off is on the day-30 list too, never off with no clock. One transaction, so a crash cannot leave
+    // the module off with no clock.
     const out = await deps.platform.begin(async (tx) => {
       const changed = await disableEnablement(tx as unknown as Sql, tenantId, pltModuleId, actor)
-      if (!database && changed > 0) {
+      if (!row && changed > 0) {
         return { changed, karenz: await openKarenz(tx as unknown as Sql, { customerId: tenantId, moduleId: pltModuleId, actor, exportPath: null, exportSha256: null }) }
       }
       return { changed, karenz: null }
     })
-    const karenz = out.karenz ?? (!database ? await readLiveKarenz(deps.platform, tenantId, pltModuleId) : null)
+    const karenz = out.karenz ?? (!row ? await readLiveKarenz(deps.platform, tenantId, pltModuleId) : null)
     return {
       tenantId,
       moduleId,
