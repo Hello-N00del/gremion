@@ -48,7 +48,7 @@ export const CLASSES = ['tenant-store', 'legacy-boot', 'module-upgrade', 'unadop
  * gremion-deploy, upgrade.sh and a hand upgrade after a classifier hold never run that step or take
  * a module dump, so the marker is the runbook step for those paths. CD takes its own dump as well.
  */
-export const MANUAL_DUMP_CLASSES = ['unadopted']
+export const MANUAL_DUMP_CLASSES = ['unadopted', 'module-upgrade']
 
 /**
  * The canaries fixtures/canaries.json must keep (by name). A canary deleted to

@@ -1,9 +1,10 @@
 {
-  "$comment": "TASK-075 (TRD-206, Q7): which runner applies each chain of scripts/migrations/ranges.json, and so who takes the pre-migration dump. Must cover ranges.json exactly (suite.mjs). tenant-store: packages/tenant-store runMigrations with the dump hook (cli.ts migrate). legacy-boot: the kernel's boot/db.ts runners; gremion-migration-dump preflight takes the host-side dump (Q11). unadopted: no runner here dumps yet; a new file needs -- gremion:manual-dump <runbook step>. An adopter flips its chain's class.",
+  "$comment": "TASK-075 (TRD-206, Q7): which runner applies each chain of scripts/migrations/ranges.json, and so who takes the pre-migration dump. Must cover ranges.json exactly (suite.mjs). tenant-store: packages/tenant-store runMigrations with the dump hook (cli.ts migrate). legacy-boot: the kernel's boot/db.ts runners; gremion-migration-dump preflight takes the host-side dump (Q11). module-upgrade: the module-upgrade step of a release. unadopted: no runner here dumps yet; a new file needs -- gremion:manual-dump <runbook step>. An adopter flips its chain's class.",
   "classes": {
     "tenant-store": "packages/tenant-store runMigrations; cli.ts migrate composes TASK-029's chainPreApply and the dump hook",
     "legacy-boot": "gremion-ui db.ts / control-migrations.ts via the migrate service; gremion-migration-dump preflight takes the host-side dump",
-    "unadopted": "no runner in this repo dumps the database yet; module-* databases are migrated by enableModule (fresh-DB enable needs no dump; no caller passes upgradeHooks yet, README)",
+    "module-upgrade": "applied by the module-upgrade --all verb of the tenant-create one-shot (tenant-store upgradeModuleDatabase) to the enable-gate database of every customer that has the module enabled, after a host dump set of the same release and before the new colour starts. A new file still needs -- gremion:manual-dump <runbook step>: gremion-deploy, upgrade.sh and a hand upgrade run no such step and take no module dump. A leaf-backed module's own databases are not in its scope: the leaf migrates them itself",
+    "unadopted": "no runner in this repo dumps the database yet; module-board has no customer database and mail has no chain files, so no step applies them; a new file needs -- gremion:manual-dump <runbook step>",
     "fresh-only": "applied by packages/tenant-store runMigrations through migrateGovernanceDatabase, only on a database created in the same step: nothing to lose, so no dump and no manual-dump marker; flips to tenant-store together with the governance-migrate runner, before any 0002 (TASK-084-a)"
   },
   "chains": {
@@ -11,11 +12,11 @@
     "control": "legacy-boot",
     "platform": "tenant-store",
     "module-board": "unadopted",
-    "module-calendar": "unadopted",
-    "module-content": "unadopted",
-    "module-finance": "unadopted",
-    "module-publishing": "unadopted",
-    "module-vault": "unadopted",
+    "module-calendar": "module-upgrade",
+    "module-content": "module-upgrade",
+    "module-finance": "module-upgrade",
+    "module-publishing": "module-upgrade",
+    "module-vault": "module-upgrade",
     "kernel-api": "tenant-store",
     "governance": "fresh-only",
     "mail": "unadopted"
