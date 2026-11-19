@@ -150,7 +150,7 @@ async function migrate(flags: Map<string, string>, env: NodeJS.ProcessEnv, io: C
   const cls = runners.chains[chainId]
   if (cls === undefined) throw new UsageError(`chain ${chainId} is not in chain-runners.json`)
   if (cls !== 'tenant-store') {
-    io.err(`chain ${chainId} is class ${cls}, not tenant-store: this runner does not apply it (legacy-boot: gremion-migration-dump preflight takes its host dump; unadopted: -- gremion:manual-dump)`)
+    io.err(`chain ${chainId} is class ${cls}, not tenant-store: this runner does not apply it (legacy-boot: gremion-migration-dump preflight takes its host dump; module-upgrade: the module-upgrade --all verb applies it after a host dump set, and a hand upgrade needs -- gremion:manual-dump; unadopted: -- gremion:manual-dump)`)
     return 2
   }
   const register = JSON.parse(readFileSync(join(root, 'scripts', 'migrations', 'ranges.json'), 'utf8')) as { chains: Chain[] }
