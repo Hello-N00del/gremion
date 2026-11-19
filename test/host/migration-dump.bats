@@ -832,6 +832,119 @@ m_app CONNECT f
     assert_absent '^PUBLIC ' "${SHIM_DIR}/acl.state" "PUBLIC must not be left able to connect"
 }
 
+# A failed restore must not lose the original ACL: the grants are saved beside
+# the dump before the DROP, a re-run replays the saved ones (never the damaged
+# live ones), and the file goes away with the successful run or with the dump.
+acl_sidecar() { ls "${DUMPS}"/r-mod/*.acl.json 2>/dev/null | head -n 1 || true; }
+
+@test "a restore re-run after a failed pg_restore puts the original grants back (app role CONNECT) and says RESTORE-OK" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    printf 'gremion CONNECT f\ngremion CREATE f\ngremion TEMPORARY f\nm_app CONNECT f\n' > "${SHIM_DIR}/acl.state"
+    RESTORE_EXIT=1 run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    assert_absent '^m_app ' "${SHIM_DIR}/acl.state" "the failed run left the recreated database without the app grant"
+    run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"RESTORE-OK"* ]]
+    assert_present '^m_app CONNECT ' "${SHIM_DIR}/acl.state" "the re-run must restore the original grant"
+    assert_absent '^PUBLIC ' "${SHIM_DIR}/acl.state" "PUBLIC must stay revoked"
+    [ "$(ledger_events)" = "created restored " ]
+}
+
+@test "a restore re-run after a failed grant replay puts the original grants back" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    printf 'gremion CONNECT f\ngremion CREATE f\ngremion TEMPORARY f\nm_app CONNECT f\n' > "${SHIM_DIR}/acl.state"
+    ACL_GRANT_FAIL=1 run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"RESTORE_ACL_FAILED"* ]]
+    run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 0 ]
+    assert_present '^m_app CONNECT ' "${SHIM_DIR}/acl.state" "the re-run must restore the original grant"
+    assert_absent '^PUBLIC ' "${SHIM_DIR}/acl.state" "PUBLIC must stay revoked"
+}
+
+@test "a restore re-run after a failed grant replay keeps PUBLIC open on a database that was open to it" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    printf 'PUBLIC CONNECT f\nPUBLIC TEMPORARY f\ngremion CONNECT f\ngremion CREATE f\ngremion TEMPORARY f\nm_app CONNECT f\n' > "${SHIM_DIR}/acl.state"
+    ACL_GRANT_FAIL=1 run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    assert_absent '^PUBLIC ' "${SHIM_DIR}/acl.state" "the failed run closed PUBLIC best-effort"
+    run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 0 ]
+    assert_present '^PUBLIC CONNECT ' "${SHIM_DIR}/acl.state" "the original ACL had PUBLIC open"
+    assert_present '^m_app CONNECT ' "${SHIM_DIR}/acl.state" "the re-run must restore the original grant"
+}
+
+@test "a restore re-run after a replay mismatch puts the original grants back" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    printf 'gremion CONNECT f\ngremion CREATE f\ngremion TEMPORARY f\nm_app CONNECT f\n' > "${SHIM_DIR}/acl.state"
+    ACL_REPLAY_NOOP=1 run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"RESTORE_ACL_MISMATCH"* ]]
+    run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 0 ]
+    assert_present '^m_app CONNECT ' "${SHIM_DIR}/acl.state" "the re-run must restore the original grant"
+}
+
+@test "the saved ACL is 0600 beside the dump, never named after the database, and removed by the successful run" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    printf 'gremion CONNECT f\ngremion CREATE f\ngremion TEMPORARY f\nm_app CONNECT f\n' > "${SHIM_DIR}/acl.state"
+    RESTORE_EXIT=1 run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    f="$(acl_sidecar)"
+    [ -n "$f" ]
+    [ "$(stat -c '%a' "$f")" = "600" ]
+    [[ "$f" != *"$GATE_DB"* ]]
+    run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 0 ]
+    [ -z "$(acl_sidecar)" ]
+}
+
+@test "a second restore after a good one reads the live ACL again, not a stale saved one" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    printf 'gremion CONNECT f\ngremion CREATE f\ngremion TEMPORARY f\nm_app CONNECT f\n' > "${SHIM_DIR}/acl.state"
+    run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 0 ]
+    [ -z "$(acl_sidecar)" ]
+    printf 'gremion CONNECT f\ngremion CREATE f\ngremion TEMPORARY f\n' > "${SHIM_DIR}/acl.state"
+    run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 0 ]
+    assert_absent '^m_app ' "${SHIM_DIR}/acl.state" "the operator revoked the app role in between"
+}
+
+@test "a saved ACL that is not what the program wrote refuses before anything is dropped" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    printf 'gremion CONNECT f\ngremion CREATE f\ngremion TEMPORARY f\nm_app CONNECT f\n' > "${SHIM_DIR}/acl.state"
+    RESTORE_EXIT=1 run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    f="$(acl_sidecar)"
+    printf 'not json\n' > "$f"
+    : > "$SHIM_LOG"
+    run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"RESTORE_FAILED"* ]]
+    refute_recorded docker "DROP DATABASE"
+}
+
+@test "discard removes a saved ACL with the dump, so the release directory goes away" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    printf 'gremion CONNECT f\ngremion CREATE f\ngremion TEMPORARY f\nm_app CONNECT f\n' > "${SHIM_DIR}/acl.state"
+    RESTORE_EXIT=1 run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    [ -n "$(acl_sidecar)" ]
+    run "$TOOL" discard --release r-mod --reason "restore abandoned"
+    [ "$status" -eq 0 ]
+    [ ! -e "${DUMPS}/r-mod" ]
+}
+
 @test "restore refuses a ledger line whose pg_service was edited by hand, before anything is dropped" {
     make_dump_dir
     run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]

@@ -52,8 +52,11 @@
 #       which the operator states explicitly). The dump stays live until discard.
 #       Takes no server option: a dump taken with --pg-service/--pg-user is
 #       restored on that server as that role (read from its ledger line), and the
-#       database ACL that a dump does not carry is read before the DROP and put
-#       back (a restored gate database keeps its lock-down). A database that was
+#       database ACL that a dump does not carry is read before the DROP, saved
+#       beside the dump (<dump>.acl.json, 0600) and put back (a restored gate
+#       database keeps its lock-down). A restore that fails after the DROP can
+#       be run again: it replays the saved original, never the damaged live
+#       state; the file goes with the successful run or with discard/switched. A database that was
 #       closed to PUBLIC is closed again in the call that recreates it, before
 #       pg_restore, so a restore that fails midway does not leave it open; the
 #       replay and its read-back follow the restore, and a failed replay or a
@@ -430,7 +433,7 @@ delete_release() {
     for (( i = 0; i < n; i++ )); do
         ev="$(jq -c --argjson i "$i" '.[$i]' <<< "$mine")"
         path="${DUMP_DIR}/$(jq -r '.file' <<< "$ev")"
-        rm -f -- "$path"
+        rm -f -- "$path" "${path%.dump}.acl.json" "${path%.dump}.acl.json.tmp"
         fsync_paths "$(dirname "$path")" "$DUMP_DIR"
         [[ ! -e "$path" ]] || die "the dump ${path} still exists after unlink" 1
         at="$(now_iso)"
@@ -515,7 +518,7 @@ acl_close_public() {
 cmd_restore() {
     local rel="$1" db="$2" since="$3" live dump path c owner ev at id s
     local create_args=()
-    local acl_json="null" acl_stmts="" acl_before="" acl_after="" acl_roles=() acl_args=()
+    local acl_json="null" acl_stmts="" acl_before="" acl_after="" acl_roles=() acl_args=() acl_file="" acl_saved=0
     take_lock
     live="$(live_dumps)"
     dump="$(jq -c --arg r "$rel" --arg d "$db" '[.[] | select(.release == $r and .database == $d)]' <<< "$live")"
@@ -546,20 +549,46 @@ cmd_restore() {
     # come back with the default one (PUBLIC may connect). The grants are read
     # BEFORE the DROP, and a state that cannot be replayed refuses here, while
     # nothing has been changed. A module server only: the main server restore
-    # is unchanged.
+    # is unchanged. The grants are also saved beside the dump before the DROP:
+    # a restore that fails afterwards leaves the recreated database with other
+    # grants than the original, and the re-run must replay the saved original,
+    # never that damaged live state. The file is removed by the run that ends
+    # well, and by the discard or switch that deletes the dump.
     if [[ -n "$MD_SERVICE" ]]; then
-        acl_json="$(acl_read "$c" "$db")" \
-            || die "RESTORE_FAILED: could not read the database ACL of ${db} — nothing was dropped" 1
+        acl_file="${path%.dump}.acl.json"
+        if [[ -e "$acl_file" ]]; then
+            jq -e 'type == "object" and has("acl") and (.before | type == "string")' "$acl_file" >/dev/null 2>&1 \
+                || die "RESTORE_FAILED: the saved database ACL of dump ${id} (${acl_file}) is not what this program wrote — nothing was dropped" 1
+            acl_json="$(jq -c '.acl' "$acl_file")" \
+                || die "RESTORE_FAILED: could not read the saved database ACL of dump ${id} — nothing was dropped" 1
+            acl_before="$(jq -r '.before' "$acl_file")" \
+                || die "RESTORE_FAILED: could not read the saved database ACL of dump ${id} — nothing was dropped" 1
+            acl_saved=1
+            info "a former restore of dump ${id} failed after the DROP: its saved original grants are replayed, not the live ones"
+        else
+            acl_json="$(acl_read "$c" "$db")" \
+                || die "RESTORE_FAILED: could not read the database ACL of ${db} — nothing was dropped" 1
+        fi
         if [[ "$acl_json" != null ]]; then
             jq -e 'type == "array"' <<< "$acl_json" >/dev/null 2>&1 \
                 || die "RESTORE_FAILED: the database ACL answer is not a JSON array — nothing was dropped" 1
             acl_stmts="$(acl_statements "$db" "$acl_json")" \
                 || die "RESTORE_ACL_UNSUPPORTED: the ACL of ${db} names a grantee or privilege that cannot be replayed safely — nothing was dropped" 1
             mapfile -t acl_roles < <(jq -r '[.[] | select(.g != null) | .g] | unique | .[]' <<< "$acl_json")
-            acl_before="$(acl_fingerprint "$c" "$db" ${acl_roles[@]+"${acl_roles[@]}"})" \
-                || die "RESTORE_FAILED: could not read the privileges of ${db} — nothing was dropped" 1
+            if [[ "$acl_saved" -eq 0 ]]; then
+                acl_before="$(acl_fingerprint "$c" "$db" ${acl_roles[@]+"${acl_roles[@]}"})" \
+                    || die "RESTORE_FAILED: could not read the privileges of ${db} — nothing was dropped" 1
+            fi
             [[ "$acl_before" == "PUBLIC|"* ]] \
                 || die "RESTORE_FAILED: the privilege answer for ${db} has an unexpected shape — nothing was dropped" 1
+        fi
+        if [[ "$acl_saved" -eq 0 ]]; then
+            if ! ( umask 077; jq -nc --argjson acl "$acl_json" --arg before "$acl_before" '{v:1, acl:$acl, before:$before}' > "${acl_file}.tmp" ) \
+                || ! chmod 600 "${acl_file}.tmp" || ! mv -f -- "${acl_file}.tmp" "$acl_file"; then
+                rm -f -- "${acl_file}.tmp"
+                die "RESTORE_FAILED: could not save the database ACL of dump ${id} beside the dump — nothing was dropped" 1
+            fi
+            fsync_paths "$acl_file" "$(dirname "$acl_file")"
         fi
     fi
     if [[ -n "$MD_SERVICE" ]]; then
@@ -610,6 +639,7 @@ cmd_restore() {
         + (if has("pg_service") then {pg_service, pg_user} else {} end)' <<< "$dump")"
     printf '%s\n' "$ev" >> "$LEDGER" || die "LEDGER_UNWRITABLE: ${LEDGER}" 1
     fsync_paths "$LEDGER"
+    if [[ -n "$acl_file" ]]; then rm -f -- "$acl_file"; fi
     audit "$(audit_line "$ev")"
     if [[ -n "$MD_SERVICE" ]]; then
         printf 'RESTORE-OK release=%s svc=%s id=%s — the dump stays live; when done: gremion-migration-dump discard --release %s --reason <text>\n' "$rel" "$MD_SERVICE" "$id" "$rel"
