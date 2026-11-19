@@ -853,7 +853,7 @@ leaf_drift() {
     [ "$(calls run)" -eq 0 ]
 }
 
-# ------------------------------------------------------------------------ the timeout (F50)
+# ------------------------------------------------------------------------ the timeout
 
 @test "GUARD: on a timeout the container outlives the killed client; it is killed and removed by its label and the step returns only when two polls of docker ps -a in a row are empty" {
     touch "$DK/run.calendar-service.hang" "$DK/run.calendar-service.creates"

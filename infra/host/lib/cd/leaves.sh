@@ -228,7 +228,7 @@ _cd_leaf_owned_dir() {
     [[ -z "$want" || "$mode" == "$want" ]]
 }
 
-# _cd_leaf_precheck_dirs ENVFILE - the two secrets directories of the module step (section 7a):
+# _cd_leaf_precheck_dirs ENVFILE - the two secrets directories the module step also needs:
 # etc/secrets/governance and TENANT_SECRETS_DIR (from the target env file) must exist as 0700
 # directories of the deploy user, else code 2 and no container starts. A TENANT_SECRETS_DIR in
 # the process environment that differs from the env file is refused: compose prefers the
@@ -514,7 +514,7 @@ _cd_leaf_run_one() {
         CD_DC_TIMEOUT="$tmo" cd_dc "$tree" "app-${colour}" run --rm --no-deps -T --label "gremion.cd=${rid}" "$svc" node dist/index.js --migrate-only
     ) >"$outf" 2>"$runerr" </dev/null || rc=$?
 
-    # a timeout ends the docker client, not the container (F50): kill by the label, remove by
+    # a timeout ends the docker client, not the container: kill by the label, remove by
     # the label, and return only when `docker ps -a` has twice answered empty
     if [[ "$rc" -eq 124 || "$rc" -eq 137 ]]; then
         cd_hist leaves_timeout "seconds=$(($(_cd_leaf_now) - start))" >/dev/null 2>&1 || true
