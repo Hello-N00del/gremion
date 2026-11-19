@@ -26,10 +26,10 @@ pnpm -C gremion-ui exec tsx scripts/tenant-provision.ts <subcommand> …
 `<subcommand>` is one of `init | phase-a | record-step | phase-b | activate |
 render-router | suspend | resume | status | operator-add | reconcile | delete |
 bootstrap-provisioner | materialize-config | request-verify`, plus the module-gate,
-import, purge, Karenz and export verbs (`enable-module`, `disable-module`,
+import, purge, Karenz, export and CD module-step verbs (`enable-module`, `disable-module`,
 `dpia-record`, `isolation-record`, `gate-status`, `regate`, `import-validate`,
 `import-apply`, `seed-vertical`, `purge-run`, `karenz-run`, `karenz-status`,
-`export`, `export-verify`); `--help` lists them. `provision` is retired and
+`export`, `export-verify`, `module-upgrade --all`); `--help` lists them. `provision` is retired and
 exits with a usage error.
 
 <!-- gremion-tenant decommission note (R31-I4) -->
