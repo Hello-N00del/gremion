@@ -727,7 +727,7 @@ describe('customerAdapters.boardLocation: the flag is written in the own kernel 
     const conn = connectionReading('kernel')
     vi.mocked(getDb).mockReturnValue(conn as never)
     const { a } = adapters(kcFake(true))
-    await expect(a.boardLocation.setModule(C)).rejects.toMatchObject({ code: 'CUSTOMER_STATE', message: expect.stringContaining('board-move') })
+    await expect(a.boardLocation.setModule(C)).rejects.toMatchObject({ code: 'CUSTOMER_STATE', message: expect.stringContaining('not part of this release') })
     expect(conn.begin).not.toHaveBeenCalled()
   })
 

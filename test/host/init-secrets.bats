@@ -523,7 +523,7 @@ copy_host_src() {
 @test "profiles: COMPOSE_PROFILES is rendered from module-profiles.json into state.env and both colours, and nowhere else" {
     render
     [ "$status" -eq 0 ]
-    local want="production,calendar,collabora,content,newsletter,nextcloud,video" f
+    local want="production,board,calendar,collabora,content,newsletter,nextcloud,video" f
     for f in state.env app-blue.env app-green.env; do
         [ "$(value_of "${ENV_DIR}/${f}" COMPOSE_PROFILES)" = "$want" ] \
             || { echo "${f}: COMPOSE_PROFILES is $(value_of "${ENV_DIR}/${f}" COMPOSE_PROFILES), want ${want}"; return 1; }
@@ -537,14 +537,15 @@ copy_host_src() {
     grep -q '^COMPOSE_PROFILES=production$' "${HOST_SRC}/templates/env/app.env.tmpl"
 }
 
-@test "profiles: no off-module profile is rendered and the post-realm one (messaging) is not, finance and vault stay off" {
+@test "profiles: no off-module profile is rendered and the post-realm one (messaging) is not, finance and vault stay off, board is rendered" {
     render
     [ "$status" -eq 0 ]
     local f p
     for f in state.env app-blue.env app-green.env; do
-        for p in messaging board finance vault elections handover dev migrate tenant-create kernel-api-migrate; do
+        for p in messaging finance vault elections handover dev migrate tenant-create kernel-api-migrate; do
             [[ ",$(value_of "${ENV_DIR}/${f}" COMPOSE_PROFILES)," != *",${p},"* ]] || { echo "${f} renders profile ${p}"; return 1; }
         done
+        [[ ",$(value_of "${ENV_DIR}/${f}" COMPOSE_PROFILES)," == *",board,"* ]] || { echo "${f} does not render the board profile"; return 1; }
     done
 }
 
@@ -571,5 +572,5 @@ copy_host_src() {
         [ "$(value_of "${ENV_DIR}/${f}" COMPOSE_FILE)" = "docker-compose.app.yml" ] || { echo "${f}: $(value_of "${ENV_DIR}/${f}" COMPOSE_FILE)"; return 1; }
     done
     # the profiles are rendered the same way in a host build
-    [ "$(value_of "${ENV_DIR}/state.env" COMPOSE_PROFILES)" = "production,calendar,collabora,content,newsletter,nextcloud,video" ]
+    [ "$(value_of "${ENV_DIR}/state.env" COMPOSE_PROFILES)" = "production,board,calendar,collabora,content,newsletter,nextcloud,video" ]
 }

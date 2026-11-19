@@ -26,14 +26,11 @@ import type { UnprovenEnablement } from '@gremion/tenant-store/lifecycle'
 import { assertUuid, ProvisioningError } from './errors.ts'
 import { doneKinds, latestStatus } from './ledger.ts'
 import { openLedger, runPhase, type RunPhaseResult } from './machine.ts'
-import { enableOne, preflightGate } from './module-gate.ts'
+import { BOARD_MODULE, enableOne, ensureBoardLocation, preflightGate } from './module-gate.ts'
 import { assertEnableList } from './operator-gate.ts'
 import type { AdminSpec, ControlRow, CustomerRef, DpiaSpec, GovernancePostCondition, ProvisioningDeps } from './ports.ts'
 import { assertCustomerSlug, principalFor, tokenFor } from './slug.ts'
 import { EXECUTION_ORDER, isComplete, type StepKind, type StepStatus } from './steps.ts'
-
-/** The module whose customer data lives in the kernel database until its location flag says `module`. */
-const BOARD_MODULE = 'board'
 
 const HOST = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/
 const EMAIL = /^[^\s@<>()[\]\\,;:"]{1,64}@(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/
@@ -350,21 +347,6 @@ export async function createPhaseB(spec: CreateSpec, deps: ProvisioningDeps): Pr
   const activated = spec.deferActivation ? false : (await activateCustomer(c, deps)).activated
   if (!(await deps.config.setupComplete(c))) await deps.config.markSetupComplete(c)
   return { customer: c, run, enabled, reloaded: broker.reloaded, activated }
-}
-
-/**
- * A customer created with board ticked gets the flag `module` for the board, once the board's own database
- * exists, so the board is served from it from the first request and no move ever runs on a new customer.
- * Does nothing while the catalogue's board entry declares no database (it reads the declaration, as the
- * lifecycle guard does), so a customer is never flagged `module` without a database behind it. Runs on every pass of phase B, enable no-op or not: a crash between the enable and this call is
- * repaired by the rerun. Only this create path writes it; a later enable of board is the lifecycle guard's.
- */
-async function ensureBoardLocation(c: CustomerRef, deps: ProvisioningDeps): Promise<void> {
-  if (!deps.modules.databaseService?.(BOARD_MODULE)) return
-  if (!deps.boardLocation) {
-    throw new ProvisioningError('PRECONDITION', `the board declares a database but this port set has no way to write its location for ${c.slug}; the customer is left provisioning`)
-  }
-  await deps.boardLocation.setModule(c)
 }
 
 /**

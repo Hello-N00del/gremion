@@ -139,6 +139,9 @@ describe('assertBoardLocationModule (the read-only form for an active customer)'
     const err = await assertBoardLocationModule(fakeSql({ location, counts: EMPTY }, log)).then(() => null, (e: Error & { code?: string }) => e)
     expect(err).toMatchObject({ code: 'CUSTOMER_STATE' })
     expect(err?.message).toContain('board-move')
+    // the remedy must not be offered as a command that can be run: the move is not part of this release
+    expect(err?.message).toContain('not part of this release')
+    expect(err?.message).not.toMatch(/run board-move/)
     expect(log.some((l) => /BEGIN|LOCK|INSERT|UPDATE/.test(l))).toBe(false)
   })
 })
