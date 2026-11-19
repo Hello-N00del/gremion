@@ -23,7 +23,8 @@
 //                        failure is not reached and not counted, so the four counts below
 //                        always add up to total
 //         upgraded       databases on which at least one file was applied
-//         unchanged      databases opened with nothing pending (no DDL ran)
+//         unchanged      databases opened with no file pending (no migration file ran; the only DDL
+//                        possible is the repair re-grant described below, which is not counted here)
 //         skipped        rows not opened: blocked, enabling, disabling, dropped, an
 //                        enablement that is not enabled, a module with no database
 //         failed         0 or 1 (the loop stops)
