@@ -170,6 +170,13 @@ describe('the re-grant converges: an interrupted grant is repaired by a later ru
     expect(again).toMatchObject({ failed: 0, regranted: 1, failure: null })
   })
 
+  it('a repair whose re-grant fails on a CONNECTION-level code is still a commit failure: the grant is DDL that may have begun', async () => {
+    grantAppPrivileges.mockRejectedValueOnce(sqlErr('ECONNRESET'))
+    const r = await upgradeModuleDatabases(fixture({ missing: true }).deps)
+    expect(grantAppPrivileges).toHaveBeenCalledTimes(1)
+    expect(r).toMatchObject({ failed: 1, failure: { kind: 'commit', code: 'connection_ECONNRESET' } })
+  })
+
   it('files committed and then the runner throws (a later file failed): the re-grant is attempted before the failure is reported, and the failure stays the runner\'s', async () => {
     runMigrations.mockImplementationOnce(async (o: { log: (l: string) => void }) => {
       o.log('applied 0009_a.sql')
