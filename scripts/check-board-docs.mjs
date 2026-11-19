@@ -44,7 +44,7 @@ export const STALE = [
   [RUNBOOK, /hidden through `config\.modules\.board`; no export is taken/, 'the Karenz row that says no export is taken'],
   [README_EN, /declares\s+no\s+`runtime\.database`/, 'the README says board declares no database'],
   [README_EN, /test environment only/, 'the README says the leaf is for a test environment only'],
-  [README_EN, /never\s+reaches the leaf/, 'the README says a created customer never reaches the leaf'],
+  [README_EN, /served in-process and never\s+reaches the leaf/, 'the README says a created customer never reaches the leaf'],
   [README_EN, /provisional profile of the catalogue loader/, 'the README says the retention profile is provisional'],
   [README_EN, /default\s+in-process mode needs neither/, 'the README says the default mode needs no board-postgres'],
   [README_EN, /needs a platform enablement to disable/, 'the README offers a platform enablement as the way to hide a kernel board'],

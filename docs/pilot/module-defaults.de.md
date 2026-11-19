@@ -1,4 +1,4 @@
-<!-- i18n-sync: source=module-defaults.md sha256=bc77885045da947a03fd502d8376a91c26ba2b50da2b1c86cacfedd52310f576 -->
+<!-- i18n-sync: source=module-defaults.md sha256=9373ca9e91496986ba4d249ceb0f709ff652fdcabcbf622431f83d53aaea2ea2 -->
 [English](./module-defaults.md) | **Deutsch**
 
 # Modul-Standards im Pilot: was das Repository festhält, was gemessen ist, was übergeben wird
@@ -41,8 +41,9 @@ entfallen).
   content, publishing, files, messaging und board und keines von elections, finance, vault,
   handover; jede genannte ID hat eine `module.json`.
 - (b) keine `COMPOSE_PROFILES`-Zeile in `infra/host/templates/env/*.env.tmpl` nennt finance,
-  board, vault oder vaultwarden (board braucht keines: es läuft im Prozess). Die Profile der Pilotmodule werden aus
-  `infra/host/module-profiles.json` gerendert, nicht in eine Vorlage geschrieben.
+  board, vault oder vaultwarden. Die Profile der Pilotmodule, darunter das Profil `board`
+  (`board-postgres` und `board-service`), werden aus `infra/host/module-profiles.json` gerendert, nicht in
+  eine Vorlage geschrieben.
 - (c) keine `modules/*/module.json` enthält eine Deklaration zur Standardaktivierung.
 - (d) das Create-Formular des Panels wählt kein Modul-Kontrollkästchen vor.
 
@@ -85,6 +86,12 @@ weil die Aktivierung eine leere board-Datenbank neben den Kernel-Zeilen anlegen 
 der das board in die eigene Datenbank verschiebt, gehört nicht zu diesem Release. „Modul
 aktivieren“ ist daher auch kein Weg, dieses board auszublenden. Zum Ausblenden `config.modules.board`
 von Hand auf false setzen (siehe die board-README).
+
+Der Runbook-Abschnitt „Board: where a customer's board lives“
+([tenant-lifecycle](../runbooks/tenant-lifecycle.md), englisch) enthält die schreibgeschützte Prüfung,
+die je Kunde zeigt, ob das Board in der eigenen Datenbank oder in den Kernel-Tabellen liegt, und die
+Reihenfolge für die Anlage des echten Kunden: nachdem der Release läuft, mit angekreuztem board, damit
+sein Board in der eigenen Datenbank beginnt.
 
 ## 4. Übergaben
 
