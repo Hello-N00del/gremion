@@ -59,33 +59,111 @@ make_dump_dir() {
     chmod 700 "$DUMPS"
 }
 
-# docker: `ps` answers the state postgres, `exec … psql` the version/size/owner,
-# `exec … pg_dump` writes a fake archive naming its database, and
-# `exec -i … pg_restore --list` reads it back.
+# docker: `ps` answers the state postgres (and, by service label, the module
+# servers), `exec … psql` the version/size/owner/ACL, `exec … pg_dump` writes a
+# fake archive naming its database, and `exec -i … pg_restore --list` reads it
+# back. The shim enforces the roles as the real servers do: the main
+# server `pgc` has the superuser `postgres` only, the module server `fpgc` has
+# `finance` only and `npgc` has `newsletter` only, so `-U postgres` against a
+# module server fails with `role "postgres" does not exist`.
+# A tiny ACL model lives in $SHIM_DIR/acl.state ("<grantee> <PRIV> <t|f>" per
+# line, absent = the default ACL of a fresh database): DROP DATABASE resets it,
+# REVOKE and GRANT edit it, and the privilege query reads it.
 stub_docker() {
-    shim docker '
+    shim docker "$(cat <<'SHIM'
+ST="${SHIM_DIR}/acl.state"
+materialize() {
+    [ -f "$ST" ] || printf 'PUBLIC CONNECT f\nPUBLIC TEMPORARY f\ngremion CONNECT f\ngremion CREATE f\ngremion TEMPORARY f\n' > "$ST"
+}
 case "$1" in
-  ps) printf "pgc\n"; exit 0 ;;
+  ps)
+      case "$*" in
+        *"service=finance-postgres"*)    printf "fpgc\n"; [ -z "${PS_MULTI:-}" ] || printf "fpgc2\n" ;;
+        *"service=newsletter-postgres"*) printf "npgc\n" ;;
+        *"service=postgres"*)            printf "pgc\n"; [ -z "${PS_MULTI:-}" ] || printf "pgc2\n" ;;
+      esac
+      exit 0 ;;
   exec)
       args="$*"
+      if [ "$2" = "-i" ]; then c="$3"; else c="$2"; fi
+      prev=""; role=""
+      for a in "$@"; do [ "$prev" = "-U" ] && role="$a"; prev="$a"; done
+      if [ -n "$role" ]; then
+          case "$c" in pgc|pgc2) want=postgres ;; fpgc|fpgc2) want=finance ;; npgc) want=newsletter ;; *) want="$role" ;; esac
+          if [ "$role" != "$want" ]; then
+              printf 'psql: error: FATAL:  role "%s" does not exist\n' "$role" >&2
+              exit 2
+          fi
+      fi
       case "$args" in
         *"pg_dump --version"*) printf "pg_dump (PostgreSQL) %s.1\n" "${PGDUMP_MAJOR:-18}"; exit 0 ;;
         *" pg_dump -Fc"*)
             [ "${PGDUMP_EXIT:-0}" = "0" ] || { printf "partial"; exit "$PGDUMP_EXIT"; }
             printf "PGDMP fake archive dbname=%s\n" "${*: -1}"; exit 0 ;;
         *"pg_restore --list"*)
-            db="$(sed -nE "s/.*dbname=([A-Za-z0-9_]+).*/\1/p")"
+            db="$(sed -nE "s/.*dbname=([A-Za-z0-9_.-]+).*/\1/p")"
             printf ";\n; Archive created at 2026-09-29 03:00:00 UTC\n;     dbname: %s\n" "$db"; exit 0 ;;
         *" pg_restore "*) cat >/dev/null; exit "${RESTORE_EXIT:-0}" ;;
+        *"has_database_privilege"*)
+            # the effective answers for PUBLIC and each role named in ARRAY[...]
+            pub="CONNECT,TEMPORARY"; pc=true; pt=true
+            if [ -f "$ST" ]; then
+                pc=false; pt=false; pub=""
+                grep -q '^PUBLIC CONNECT ' "$ST" && { pc=true; pub="CONNECT"; }
+                if grep -q '^PUBLIC TEMPORARY ' "$ST"; then pt=true; pub="${pub:+$pub,}TEMPORARY"; fi
+            fi
+            printf "PUBLIC|%s\n" "$pub"
+            for r in $(printf "%s" "$args" | grep -o "ARRAY\[[^]]*\]" | tr -d "ARRAY[]'" | tr "," " "); do
+                rc=$pc; rt=$pt
+                [ -f "$ST" ] && grep -q "^$r CONNECT " "$ST" && rc=true
+                [ -f "$ST" ] && grep -q "^$r TEMPORARY " "$ST" && rt=true
+                printf "%s|%s,%s\n" "$r" "$rc" "$rt"
+            done
+            exit 0 ;;
+        *"datacl IS NULL"*)
+            if [ ! -f "$ST" ]; then printf "null\n"; exit 0; fi
+            jq -Rn '[inputs | split(" ") | {g: (if .[0] == "PUBLIC" then null else .[0] end), p: .[1], o: (.[2] == "t")}]' < "$ST"
+            exit 0 ;;
+        *"oid::text"*)
+            # the database oid: a DROP gives the recreated database a new one
+            cat "${SHIM_DIR}/db.oid" 2>/dev/null || printf "16384\n"; exit 0 ;;
         *"server_version_num"*) printf "18\n"; exit 0 ;;
         *"pg_database_size"*)   printf "%s\n" "${DB_BYTES:-1000}"; exit 0 ;;
         *"pg_get_userbyid"*)    printf "gremion\n"; exit 0 ;;
-        *"DROP DATABASE"*)      exit 0 ;;
+        *"DROP DATABASE"*)
+            # the knob fails the call before anything is dropped
+            if [ -n "${DROP_FAIL:-}" ]; then printf "ERROR:  database is being accessed\n" >&2; exit 1; fi
+            n="$(cat "${SHIM_DIR}/db.oid" 2>/dev/null || printf 16384)"; printf "%s\n" "$((n + 1))" > "${SHIM_DIR}/db.oid"
+            rm -f "$ST"
+            # a REVOKE in the same call (run after the CREATE) closes PUBLIC at once
+            for a in "$@"; do
+                case "$a" in
+                  "REVOKE ALL ON DATABASE "*" FROM PUBLIC") materialize; grep -v '^PUBLIC ' "$ST" > "$ST.n" || true; mv "$ST.n" "$ST" ;;
+                esac
+            done
+            exit 0 ;;
+        *"REVOKE "*|*"GRANT "*)
+            # the knob drops a replay that carries a GRANT; a bare REVOKE still takes
+            if [ -n "${ACL_REPLAY_NOOP:-}" ]; then case "$args" in *"GRANT "*) exit 0 ;; esac; fi
+            if [ -n "${ACL_GRANT_FAIL:-}" ]; then case "$args" in *"GRANT "*) printf "ERROR:  role does not exist
+" >&2; exit 1 ;; esac; fi
+            for a in "$@"; do
+                case "$a" in
+                  "REVOKE ALL ON DATABASE "*" FROM PUBLIC") materialize; grep -v '^PUBLIC ' "$ST" > "$ST.n" || true; mv "$ST.n" "$ST" ;;
+                  "GRANT "*)
+                      materialize
+                      privs="${a#GRANT }"; privs="${privs%% ON DATABASE*}"
+                      who="${a##* TO }"; who="${who% WITH GRANT OPTION}"; who="${who//\"/}"
+                      for p in ${privs//,/ }; do printf "%s %s f\n" "$who" "$p" >> "$ST"; done ;;
+                esac
+            done
+            exit 0 ;;
       esac
       exit 0 ;;
 esac
 exit 0
-'
+SHIM
+)"
 }
 
 ledger_events() { jq -r '.event' "${DUMPS}/ledger.jsonl" | tr '\n' ' '; }
@@ -392,4 +470,658 @@ seed_live_dump() { # <tag>
     [ "$status" -eq 0 ]
     [ "$(ledger_events)" = "created deleted " ]
     [ "$(jq -rs '.[1].reason' "${DUMPS}/ledger.jsonl")" = "member import verified" ]
+}
+
+# ---------------------------------------------------------------------------
+# take --pg-service / --pg-user (module servers), the leak rule (a module
+# database name can carry a customer slug), the gate-database scope and the ACL
+# that survives a restore
+# ---------------------------------------------------------------------------
+
+SCOPE_FIXTURE="${PROJECT_ROOT}/test/host/fixtures/cd/dump-options/scope-names.json"
+SLUG_DB="calendar_some-slug"
+GATE_DB="t_0123456789abcdef0123456789abcdef__finance"
+
+# no docker call at all was made (the shim logs every `docker ...` line)
+no_docker_calls() {
+    [ -z "$(grep '^docker ' "$SHIM_LOG" || true)" ]
+}
+
+take_module() { # <release> <db> [service] [role]
+    "$TOOL" take --release "$1" --db "$2" --pg-service "${3:-finance-postgres}" --pg-user "${4:-finance}"
+}
+
+@test "take --pg-service/--pg-user: psql and pg_dump run in the labelled module container as the given role" {
+    make_dump_dir
+    run take_module r-mod "$SLUG_DB"
+    [ "$status" -eq 0 ]
+    assert_recorded docker "ps -q --filter label=com.docker.compose.project=teststack-state --filter label=com.docker.compose.service=finance-postgres"
+    assert_recorded docker "exec fpgc psql -X -U finance -d ${SLUG_DB} -tAq -v ON_ERROR_STOP=1 -c"
+    assert_recorded docker "exec fpgc pg_dump -Fc --no-owner -U finance ${SLUG_DB}"
+    refute_recorded docker "-U postgres"
+    run take_module r-news news_db newsletter-postgres newsletter
+    [ "$status" -eq 1 ]   # another release's live dump is live: never a series
+    [[ "$output" == *"DUMP_SERIES"* ]]
+}
+
+@test "the role is its own variable parsed AFTER load_env: state.env's POSTGRES_USER never wins" {
+    make_dump_dir
+    grep -q '^POSTGRES_USER=postgres$' "${GREMION_ROOT}/etc/env/state.env"
+    run take_module r-mod "$SLUG_DB"
+    [ "$status" -eq 0 ]
+    refute_recorded docker "exec fpgc pg_dump -Fc --no-owner -U postgres"
+    assert_recorded docker "exec fpgc pg_dump -Fc --no-owner -U finance"
+}
+
+@test "without the options nothing changes: the postgres service and POSTGRES_USER" {
+    make_dump_dir
+    run "$TOOL" take --release r-main --db gremion
+    [ "$status" -eq 0 ]
+    assert_recorded docker "service=postgres"
+    assert_recorded docker "exec pgc pg_dump -Fc --no-owner -U postgres gremion"
+    [ "$(jq -r 'has("pg_service") or has("pg_user")' "${DUMPS}/ledger.jsonl")" = "false" ]
+    [[ "$output" == *"db=gremion"* ]]
+    [[ "$output" == *"TAKE-OK release=r-main db=gremion"* ]]
+}
+
+@test "the two options come together or not at all, and only take accepts them (exit 2, nothing runs)" {
+    make_dump_dir
+    run "$TOOL" take --release r-mod --db "$SLUG_DB" --pg-service finance-postgres
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"come together or not at all"* ]]
+    run "$TOOL" take --release r-mod --db "$SLUG_DB" --pg-user finance
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"come together or not at all"* ]]
+    run "$TOOL" restore --release r-mod --db "$SLUG_DB" --accept-loss-since t --pg-service finance-postgres --pg-user finance
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"belong to take only"* ]]
+    run "$TOOL" switched --release r-mod --pg-service finance-postgres --pg-user finance
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"belong to take only"* ]]
+    no_docker_calls
+    [ ! -e "${DUMPS}/ledger.jsonl" ]
+}
+
+@test "--pg-service must be postgres or <name>-postgres, --pg-user a lower-case role name (exit 2, nothing runs)" {
+    make_dump_dir
+    local svc usr
+    for svc in Postgres finance_postgres 'fin;ance-postgres' '-postgres' 'a-b-postgres' 'finance-postgres-x' 'finance' '1x-postgres'; do
+        run "$TOOL" take --release r-mod --db "$SLUG_DB" --pg-service "$svc" --pg-user finance
+        [ "$status" -eq 2 ]
+    done
+    for usr in Finance 1abc a-b 'a;b' 'a b' "$(printf 'a%.0s' $(seq 1 64))"; do
+        run "$TOOL" take --release r-mod --db "$SLUG_DB" --pg-service finance-postgres --pg-user "$usr"
+        [ "$status" -eq 2 ]
+    done
+    no_docker_calls
+    # 63 characters is the longest role name that is accepted; it fails at the
+    # server (the shim knows no such role), not in the option check
+    run "$TOOL" take --release r-mod --db "$SLUG_DB" --pg-service postgres --pg-user "$(printf 'a%.0s' $(seq 1 63))"
+    [ "$status" -eq 1 ]
+    assert_recorded docker "service=postgres"
+}
+
+@test "exactly one running container must match the service, else exit 1 and no file" {
+    make_dump_dir
+    PS_MULTI=1 run take_module r-mod "$SLUG_DB"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"expected exactly one running finance-postgres"* ]]
+    run take_module r-mod "$SLUG_DB" ghost-postgres finance
+    [ "$status" -eq 1 ]
+    refute_recorded docker "pg_dump -Fc"
+    [ -z "$(find "$DUMPS" -name '*.dump')" ]
+}
+
+@test "GREMION_MIGRATION_DUMP_PG_CONTAINER with either option is exit 2 and nothing runs (env or state.env)" {
+    make_dump_dir
+    GREMION_MIGRATION_DUMP_PG_CONTAINER=scratch run take_module r-mod "$SLUG_DB"
+    [ "$status" -eq 2 ]
+    # the take-time check in main() words it by the option; the backstop in
+    # pg_container words it by the server, so this pins the first
+    [[ "$output" == *"GREMION_MIGRATION_DUMP_PG_CONTAINER"*"override --pg-service silently"* ]]
+    printf 'GREMION_MIGRATION_DUMP_PG_CONTAINER=scratch\n' >> "${GREMION_ROOT}/etc/env/state.env"
+    run take_module r-mod "$SLUG_DB"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"override --pg-service silently"* ]]
+    no_docker_calls
+    # without the options the override still names the container, as before
+    run "$TOOL" take --release r-main --db gremion
+    [ "$status" -eq 0 ]
+    assert_recorded docker "exec scratch pg_dump -Fc"
+}
+
+@test "the shim enforces roles: a wrong service/role pair fails, leaves no file and no ledger line" {
+    make_dump_dir
+    run take_module r-mod "$SLUG_DB" finance-postgres postgres
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"role \"postgres\" does not exist"* ]]
+    run take_module r-mod "$SLUG_DB" postgres finance
+    [ "$status" -eq 1 ]
+    refute_recorded docker "pg_dump -Fc"
+    [ -z "$(find "$DUMPS" -name '*.dump')" ]
+    [ ! -s "${DUMPS}/ledger.jsonl" ]
+}
+
+@test "the created line carries pg_service and pg_user, stays one JSON object, and reuse needs the same server" {
+    make_dump_dir
+    run take_module r-mod "$SLUG_DB"
+    [ "$status" -eq 0 ]
+    jq -e '.event == "created" and .pg_service == "finance-postgres" and .pg_user == "finance" and .database == "calendar_some-slug"' "${DUMPS}/ledger.jsonl"
+    [ "$(wc -l < "${DUMPS}/ledger.jsonl")" -eq 1 ]
+    : > "$SHIM_LOG"
+    run take_module r-mod "$SLUG_DB"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"premigration-dump reused id="* ]]
+    refute_recorded docker "pg_dump -Fc"
+    [ "$(ledger_events)" = "created " ]
+    # the same name on another server (or none) is a refusal, never a reuse of the wrong dump
+    run "$TOOL" take --release r-mod --db "$SLUG_DB"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"DUMP_SERVER_MISMATCH"* ]]
+    run take_module r-mod "$SLUG_DB" finance-postgres other
+    [ "$status" -eq 1 ]
+    refute_recorded docker "pg_dump -Fc"
+    run "$TOOL" status --release r-mod
+    [[ "$output" == *"db=calendar_some-slug"* ]]
+}
+
+# every line the program let out: stdout, the audited commands' output, the
+# logger shim, and the names of the files on disk
+leak_free() { # <needle> <accumulated output>
+    local needle="$1" out="$2"
+    [[ "$out" != *"$needle"* ]] || { echo "LEAK in output: $needle" >&2; return 1; }
+    [ -z "$(grep '^logger ' "$SHIM_LOG" | grep -F -- "$needle" || true)" ] || { echo "LEAK in logger" >&2; return 1; }
+    [ -z "$(find "$DUMPS" -name "*${needle}*")" ] || { echo "LEAK in file name" >&2; return 1; }
+}
+
+@test "leak rule: a module database name reaches no journal line, no stdout line and no dump file name, through take, reuse, restore, switched and discard" {
+    make_dump_dir
+    local all="" id
+    run take_module r-leak "$SLUG_DB"; [ "$status" -eq 0 ]; all+="$output"
+    leak_free "$SLUG_DB" "$all"
+    [[ "$output" == *"premigration-dump created id="*"release=r-leak svc=finance-postgres"* ]]
+    [[ "$output" == *"TAKE-OK release=r-leak svc=finance-postgres id="* ]]
+    id="$(jq -r '.migration_dump_id' "${DUMPS}/ledger.jsonl")"
+    [ -f "${DUMPS}/r-leak/finance-postgres.${id}.dump" ]
+    run take_module r-leak "$SLUG_DB"; [ "$status" -eq 0 ]; all+="$output"
+    [[ "$output" == *"premigration-dump reused id=${id} release=r-leak svc=finance-postgres"* ]]
+    run "$TOOL" restore --release r-leak --db "$SLUG_DB" --accept-loss-since t0; [ "$status" -eq 0 ]; all+="$output"
+    [[ "$output" == *"RESTORE-OK release=r-leak svc=finance-postgres id=${id}"* ]]
+    [[ "$output" == *"restoring svc=finance-postgres id=${id}"* ]]
+    # a restore that stopped after its DROP, then its re-run (which says so on
+    # stdout): the lines the program prints, stdout only. Its refusal messages
+    # on stderr may name the database, that is not the journal.
+    RESTORE_EXIT=1 run bash -c '"$@" 2>/dev/null' _ "$TOOL" restore --release r-leak --db "$SLUG_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]; all+="$output"
+    run bash -c '"$@" 2>/dev/null' _ "$TOOL" restore --release r-leak --db "$SLUG_DB" --accept-loss-since t0
+    [ "$status" -eq 0 ]; all+="$output"
+    [[ "$output" == *"former restore of dump ${id}"* ]]
+    [[ "$output" == *"RESTORE-OK release=r-leak svc=finance-postgres id=${id}"* ]]
+    leak_free "$SLUG_DB" "$all"
+    run "$TOOL" switched --release r-leak; [ "$status" -eq 0 ]; all+="$output"
+    [[ "$output" == *"premigration-dump deleted id=${id} release=r-leak svc=finance-postgres"* ]]
+    run take_module r-leak2 "$SLUG_DB"; [ "$status" -eq 0 ]; all+="$output"
+    run "$TOOL" discard --release r-leak2 --reason "checked"; [ "$status" -eq 0 ]; all+="$output"
+    leak_free "$SLUG_DB" "$all"
+    [ -n "$(grep '^logger ' "$SHIM_LOG" | grep -F 'svc=finance-postgres' || true)" ]
+    # the ledger itself keeps the name (it lives in the 0700 directory)
+    jq -e -s 'map(select(.event == "created")) | length == 2 and all(.[]; .database == "calendar_some-slug")' "${DUMPS}/ledger.jsonl"
+}
+
+@test "status prints no new field: a module line has the same shape as a main-server line" {
+    make_dump_dir
+    run take_module r-mod "$SLUG_DB"; [ "$status" -eq 0 ]
+    run "$TOOL" status --release r-mod
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ LIVE\ [^\ ]+\ release=r-mod\ db=calendar_some-slug\ taken=[^\ ]+\ bytes=[0-9]+\ file=[^\ ]+ ]]
+    [[ "$output" != *"svc="* ]]
+    [[ "$output" != *"pg_service"* ]]
+    [[ "$output" != *"pg_user"* ]]
+}
+
+@test "leak rule: the refusal messages on stderr may name the database (stderr is not the journal)" {
+    make_dump_dir
+    run take_module r-a "$SLUG_DB"; [ "$status" -eq 0 ]
+    run take_module r-b "$SLUG_DB"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"DUMP_SERIES"*"$SLUG_DB"* ]]
+}
+
+@test "a main-server database prints db= in every line as before" {
+    make_dump_dir
+    run "$TOOL" take --release r-main --db gremion; [ "$status" -eq 0 ]
+    [[ "$output" == *"release=r-main db=gremion"* ]]
+    local id; id="$(jq -r '.migration_dump_id' "${DUMPS}/ledger.jsonl")"
+    [ -f "${DUMPS}/r-main/gremion.${id}.dump" ]
+    run "$TOOL" switched --release r-main; [ "$status" -eq 0 ]
+    [[ "$output" == *"deleted id=${id} release=r-main db=gremion"* ]]
+}
+
+@test "scope: a gate database gets customer scope and both ids, as scopeOf answers; every other name keeps platform" {
+    make_dump_dir
+    local n i db
+    n="$(jq '.cases | length' "$SCOPE_FIXTURE")"
+    [ "$n" -ge 8 ]
+    for (( i = 0; i < n; i++ )); do
+        db="$(jq -r --argjson i "$i" '.cases[$i].database' "$SCOPE_FIXTURE")"
+        : > "${DUMPS}/ledger.jsonl"
+        rm -rf "${DUMPS}/r-scope"
+        run take_module r-scope "$db"
+        [ "$status" -eq 0 ]
+        jq -e --slurpfile f "$SCOPE_FIXTURE" --argjson i "$i" '
+            ($f[0].cases[$i]) as $c
+            | .database == $c.database and .scope == $c.scope
+              and .customer_id == $c.customer_id and .module_id == $c.module_id' "${DUMPS}/ledger.jsonl"
+    done
+}
+
+@test "scope: the deleted and restored lines copy scope, ids and the server fields" {
+    make_dump_dir
+    run take_module r-scope "$GATE_DB"; [ "$status" -eq 0 ]
+    run "$TOOL" restore --release r-scope --db "$GATE_DB" --accept-loss-since t0; [ "$status" -eq 0 ]
+    run "$TOOL" switched --release r-scope; [ "$status" -eq 0 ]
+    [ "$(ledger_events)" = "created restored deleted " ]
+    jq -e -s 'all(.[]; .scope == "customer" and .module_id == "finance"
+                      and .customer_id == "01234567-89ab-cdef-0123-456789abcdef"
+                      and .pg_service == "finance-postgres" and .pg_user == "finance")' "${DUMPS}/ledger.jsonl"
+}
+
+# ---------------------------------------------------------------------------
+# restore: server and role from the ledger line, ACL put back
+# ---------------------------------------------------------------------------
+
+@test "restore of a module line uses its container and role for owner, ACL read, DROP, CREATE and pg_restore" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    : > "$SHIM_LOG"
+    run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 0 ]
+    assert_recorded docker "service=finance-postgres"
+    assert_recorded docker "exec fpgc psql -X -U finance -d postgres -tAq -v ON_ERROR_STOP=1 -c SELECT pg_catalog.pg_get_userbyid(datdba)"
+    assert_recorded docker "exec fpgc psql -X -U finance -d postgres -v ON_ERROR_STOP=1 -q -c DROP DATABASE \"${GATE_DB}\" WITH (FORCE) -c CREATE DATABASE \"${GATE_DB}\" OWNER \"gremion\""
+    assert_recorded docker "exec -i fpgc pg_restore --no-owner --role=gremion --exit-on-error --single-transaction -U finance -d ${GATE_DB}"
+    refute_recorded docker "-U postgres"
+    jq -e -s 'map(select(.event == "restored")) | length == 1 and .[0].pg_service == "finance-postgres" and .[0].pg_user == "finance"' "${DUMPS}/ledger.jsonl"
+    [[ "$output" != *"$GATE_DB"* ]]
+}
+
+@test "restore on a line with a pg_service and the container override set is exit 2 and nothing is dropped" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    : > "$SHIM_LOG"
+    GREMION_MIGRATION_DUMP_PG_CONTAINER=scratch run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 2 ]
+    no_docker_calls
+}
+
+@test "restore replays a database whose PUBLIC was revoked and whose app role was granted, and it ends as it was" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    printf 'gremion CONNECT f\ngremion CREATE f\ngremion TEMPORARY f\nm_app CONNECT f\n' > "${SHIM_DIR}/acl.state"
+    run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 0 ]
+    assert_recorded docker "REVOKE ALL ON DATABASE \"${GATE_DB}\" FROM PUBLIC"
+    assert_recorded docker "GRANT CONNECT ON DATABASE \"${GATE_DB}\" TO \"m_app\""
+    assert_present '^m_app CONNECT ' "${SHIM_DIR}/acl.state"
+    assert_absent '^PUBLIC ' "${SHIM_DIR}/acl.state" "PUBLIC must stay revoked"
+    [ "$(ledger_events)" = "created restored " ]
+}
+
+@test "restore of a blocked database (app role has no CONNECT) leaves it blocked" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    printf 'gremion CONNECT f\ngremion CREATE f\ngremion TEMPORARY f\n' > "${SHIM_DIR}/acl.state"
+    run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 0 ]
+    refute_recorded docker "TO \"m_app\""
+    assert_absent '^m_app ' "${SHIM_DIR}/acl.state" "the app role must not regain CONNECT"
+    assert_absent '^PUBLIC ' "${SHIM_DIR}/acl.state" "PUBLIC must stay revoked"
+}
+
+@test "restore of a database with the default ACL runs no GRANT, REVOKE or privilege query" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    rm -f "${SHIM_DIR}/acl.state"
+    run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 0 ]
+    refute_recorded docker "GRANT "
+    refute_recorded docker "REVOKE "
+    refute_recorded docker "has_database_privilege"
+}
+
+@test "a replay that does not take is RESTORE_ACL_MISMATCH and no restored line is written" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    printf 'gremion CONNECT f\ngremion CREATE f\ngremion TEMPORARY f\nm_app CONNECT f\n' > "${SHIM_DIR}/acl.state"
+    ACL_REPLAY_NOOP=1 run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"RESTORE_ACL_MISMATCH"* ]]
+    [ "$(ledger_events)" = "created " ]
+}
+
+@test "a failing GRANT replay is RESTORE_ACL_FAILED, PUBLIC is closed best-effort and no restored line is written" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    printf 'gremion CONNECT f
+gremion CREATE f
+gremion TEMPORARY f
+m_app CONNECT f
+' > "${SHIM_DIR}/acl.state"
+    ACL_GRANT_FAIL=1 run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"RESTORE_ACL_FAILED"* ]]
+    [ "$(ledger_events)" = "created " ]
+    # the call that recreates the database, the replay, and the best-effort close
+    [ "$(grep -c 'REVOKE ALL ON DATABASE' "$SHIM_LOG")" -eq 3 ]
+    assert_absent '^PUBLIC ' "${SHIM_DIR}/acl.state" "PUBLIC must stay closed"
+}
+
+@test "a pg_restore that fails after the DROP leaves a blocked gate database closed, not open" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    printf 'gremion CONNECT f\ngremion CREATE f\ngremion TEMPORARY f\n' > "${SHIM_DIR}/acl.state"
+    RESTORE_EXIT=1 run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"RESTORE_FAILED"* ]]
+    [ "$(ledger_events)" = "created " ]
+    assert_present '^gremion CONNECT ' "${SHIM_DIR}/acl.state" "the recreated database was given an ACL"
+    assert_absent '^PUBLIC ' "${SHIM_DIR}/acl.state" "PUBLIC must not be left able to connect"
+    assert_absent '^m_app ' "${SHIM_DIR}/acl.state" "the app role must not regain CONNECT"
+}
+
+@test "a pg_restore that fails after the DROP leaves a database whose app role was granted closed to PUBLIC" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    printf 'gremion CONNECT f\ngremion CREATE f\ngremion TEMPORARY f\nm_app CONNECT f\n' > "${SHIM_DIR}/acl.state"
+    RESTORE_EXIT=1 run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    assert_present '^gremion CONNECT ' "${SHIM_DIR}/acl.state" "the recreated database was given an ACL"
+    assert_absent '^PUBLIC ' "${SHIM_DIR}/acl.state" "PUBLIC must not be left able to connect"
+}
+
+@test "a pg_restore that fails on a database that PUBLIC could always reach adds no REVOKE" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    printf 'PUBLIC CONNECT f\nPUBLIC TEMPORARY f\ngremion CONNECT f\ngremion CREATE f\ngremion TEMPORARY f\n' > "${SHIM_DIR}/acl.state"
+    : > "$SHIM_LOG"
+    RESTORE_EXIT=1 run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    refute_recorded docker "REVOKE "
+}
+
+@test "a replay that does not take also closes PUBLIC best-effort before the mismatch is reported" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    printf 'gremion CONNECT f\ngremion CREATE f\ngremion TEMPORARY f\nm_app CONNECT f\n' > "${SHIM_DIR}/acl.state"
+    ACL_REPLAY_NOOP=1 run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"RESTORE_ACL_MISMATCH"* ]]
+    # one call that is a bare REVOKE: neither the DROP/CREATE call nor the replay
+    n="$(grep '^docker ' "$SHIM_LOG" | grep -F 'REVOKE ALL ON DATABASE' | grep -vF 'DROP DATABASE' | grep -vFc 'GRANT ' || true)"
+    [ "$n" -eq 1 ]
+    assert_absent '^PUBLIC ' "${SHIM_DIR}/acl.state" "PUBLIC must not be left able to connect"
+}
+
+# A failed restore must not lose the original ACL: the grants are saved beside
+# the dump before the DROP, a re-run replays the saved ones (never the damaged
+# live ones), and the file goes away with the successful run or with the dump.
+acl_sidecar() { ls "${DUMPS}"/r-mod/*.acl.json 2>/dev/null | head -n 1 || true; }
+
+@test "a restore re-run after a failed pg_restore puts the original grants back (app role CONNECT) and says RESTORE-OK" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    printf 'gremion CONNECT f\ngremion CREATE f\ngremion TEMPORARY f\nm_app CONNECT f\n' > "${SHIM_DIR}/acl.state"
+    RESTORE_EXIT=1 run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    assert_absent '^m_app ' "${SHIM_DIR}/acl.state" "the failed run left the recreated database without the app grant"
+    run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"RESTORE-OK"* ]]
+    assert_present '^m_app CONNECT ' "${SHIM_DIR}/acl.state" "the re-run must restore the original grant"
+    assert_absent '^PUBLIC ' "${SHIM_DIR}/acl.state" "PUBLIC must stay revoked"
+    [ "$(ledger_events)" = "created restored " ]
+}
+
+@test "a restore re-run after a failed grant replay puts the original grants back" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    printf 'gremion CONNECT f\ngremion CREATE f\ngremion TEMPORARY f\nm_app CONNECT f\n' > "${SHIM_DIR}/acl.state"
+    ACL_GRANT_FAIL=1 run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"RESTORE_ACL_FAILED"* ]]
+    run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 0 ]
+    assert_present '^m_app CONNECT ' "${SHIM_DIR}/acl.state" "the re-run must restore the original grant"
+    assert_absent '^PUBLIC ' "${SHIM_DIR}/acl.state" "PUBLIC must stay revoked"
+}
+
+@test "a restore re-run after a failed grant replay keeps PUBLIC open on a database that was open to it" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    printf 'PUBLIC CONNECT f\nPUBLIC TEMPORARY f\ngremion CONNECT f\ngremion CREATE f\ngremion TEMPORARY f\nm_app CONNECT f\n' > "${SHIM_DIR}/acl.state"
+    ACL_GRANT_FAIL=1 run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    assert_absent '^PUBLIC ' "${SHIM_DIR}/acl.state" "the failed run closed PUBLIC best-effort"
+    run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 0 ]
+    assert_present '^PUBLIC CONNECT ' "${SHIM_DIR}/acl.state" "the original ACL had PUBLIC open"
+    assert_present '^m_app CONNECT ' "${SHIM_DIR}/acl.state" "the re-run must restore the original grant"
+}
+
+@test "a restore re-run after a replay mismatch puts the original grants back" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    printf 'gremion CONNECT f\ngremion CREATE f\ngremion TEMPORARY f\nm_app CONNECT f\n' > "${SHIM_DIR}/acl.state"
+    ACL_REPLAY_NOOP=1 run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"RESTORE_ACL_MISMATCH"* ]]
+    run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 0 ]
+    assert_present '^m_app CONNECT ' "${SHIM_DIR}/acl.state" "the re-run must restore the original grant"
+}
+
+@test "the saved ACL is 0600 beside the dump, never named after the database, and removed by the successful run" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    printf 'gremion CONNECT f\ngremion CREATE f\ngremion TEMPORARY f\nm_app CONNECT f\n' > "${SHIM_DIR}/acl.state"
+    RESTORE_EXIT=1 run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    f="$(acl_sidecar)"
+    [ -n "$f" ]
+    [ "$(stat -c '%a' "$f")" = "600" ]
+    [[ "$f" != *"$GATE_DB"* ]]
+    run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 0 ]
+    [ -z "$(acl_sidecar)" ]
+}
+
+@test "a second restore after a good one reads the live ACL again, not a stale saved one" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    printf 'gremion CONNECT f\ngremion CREATE f\ngremion TEMPORARY f\nm_app CONNECT f\n' > "${SHIM_DIR}/acl.state"
+    run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 0 ]
+    [ -z "$(acl_sidecar)" ]
+    printf 'gremion CONNECT f\ngremion CREATE f\ngremion TEMPORARY f\n' > "${SHIM_DIR}/acl.state"
+    run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 0 ]
+    assert_absent '^m_app ' "${SHIM_DIR}/acl.state" "the operator revoked the app role in between"
+}
+
+@test "a saved ACL that is not what the program wrote refuses before anything is dropped" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    printf 'gremion CONNECT f\ngremion CREATE f\ngremion TEMPORARY f\nm_app CONNECT f\n' > "${SHIM_DIR}/acl.state"
+    RESTORE_EXIT=1 run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    f="$(acl_sidecar)"
+    printf 'not json\n' > "$f"
+    : > "$SHIM_LOG"
+    run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"RESTORE_FAILED"* ]]
+    refute_recorded docker "DROP DATABASE"
+}
+
+@test "a restore whose DROP failed leaves a saved ACL that a later re-run does not replay over the live grants" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    printf 'gremion CONNECT f
+gremion CREATE f
+gremion TEMPORARY f
+m_app CONNECT f
+' > "${SHIM_DIR}/acl.state"
+    DROP_FAIL=1 run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"could not recreate"* ]]
+    assert_present '^m_app CONNECT ' "${SHIM_DIR}/acl.state" "nothing was dropped"
+    # the operator withdraws the app role before the next try
+    printf 'gremion CONNECT f
+gremion CREATE f
+gremion TEMPORARY f
+' > "${SHIM_DIR}/acl.state"
+    run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"RESTORE-OK"* ]]
+    assert_absent '^m_app ' "${SHIM_DIR}/acl.state" "the DROP never happened, so the live grants are the original ones"
+    assert_absent '^PUBLIC ' "${SHIM_DIR}/acl.state" "PUBLIC must stay revoked"
+    [ -z "$(acl_sidecar)" ]
+}
+
+@test "the info line about a former restore appears only when that restore reached the DROP" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    printf 'gremion CONNECT f
+gremion CREATE f
+gremion TEMPORARY f
+m_app CONNECT f
+' > "${SHIM_DIR}/acl.state"
+    DROP_FAIL=1 run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"former restore"* ]]
+    printf 'gremion CONNECT f
+gremion CREATE f
+gremion TEMPORARY f
+m_app CONNECT f
+' > "${SHIM_DIR}/acl.state"
+    RESTORE_EXIT=1 run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"former restore of dump"*"replayed"* ]]
+}
+
+@test "a good restore whose ledger write failed leaves no saved ACL, so a later re-run reads the live grants" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    printf 'gremion CONNECT f
+gremion CREATE f
+gremion TEMPORARY f
+m_app CONNECT f
+' > "${SHIM_DIR}/acl.state"
+    chmod 444 "${DUMPS}/ledger.jsonl"
+    if [[ "$(id -u)" -eq 0 ]]; then
+        # root writes through 0444: run the tool as nobody over a tree nobody can write
+        chmod -R a+rwX "$GREMION_ROOT" "$SHIM_DIR"; chmod 777 "$DUMPS"; chmod 444 "${DUMPS}/ledger.jsonl"
+        run setpriv --reuid=65534 --regid=65534 --clear-groups env PATH="$PATH" GREMION_ROOT="$GREMION_ROOT" SHIM_DIR="$SHIM_DIR" SHIM_LOG=/dev/null "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    else
+        run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    fi
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"LEDGER_UNWRITABLE"* ]]
+    assert_present '^m_app CONNECT ' "${SHIM_DIR}/acl.state" "the grants were replayed"
+    [ -z "$(acl_sidecar)" ]
+    chmod 644 "${DUMPS}/ledger.jsonl"
+    # a later block by the operator must survive the re-run
+    printf 'gremion CONNECT f
+gremion CREATE f
+gremion TEMPORARY f
+' > "${SHIM_DIR}/acl.state"
+    run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 0 ]
+    assert_absent '^m_app ' "${SHIM_DIR}/acl.state" "the re-run must not unblock the database"
+}
+
+@test "a saved ACL without the oid of the database it was read from is refused before anything is dropped" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    printf 'gremion CONNECT f
+gremion CREATE f
+gremion TEMPORARY f
+m_app CONNECT f
+' > "${SHIM_DIR}/acl.state"
+    RESTORE_EXIT=1 run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    f="$(acl_sidecar)"
+    jq -c 'del(.oid)' "$f" > "${f}.n" && mv "${f}.n" "$f"
+    : > "$SHIM_LOG"
+    run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"RESTORE_FAILED"* ]]
+    refute_recorded docker "DROP DATABASE"
+}
+
+@test "discard removes a saved ACL with the dump, so the release directory goes away" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    printf 'gremion CONNECT f\ngremion CREATE f\ngremion TEMPORARY f\nm_app CONNECT f\n' > "${SHIM_DIR}/acl.state"
+    RESTORE_EXIT=1 run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    [ -n "$(acl_sidecar)" ]
+    run "$TOOL" discard --release r-mod --reason "restore abandoned"
+    [ "$status" -eq 0 ]
+    [ ! -e "${DUMPS}/r-mod" ]
+}
+
+@test "restore refuses a ledger line whose pg_service was edited by hand, before anything is dropped" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    jq -c '.pg_service = "evil service"' "${DUMPS}/ledger.jsonl" > "${DUMPS}/ledger.new"
+    mv "${DUMPS}/ledger.new" "${DUMPS}/ledger.jsonl"
+    : > "$SHIM_LOG"
+    run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"LEDGER_CORRUPT"* ]]
+    refute_recorded docker "DROP DATABASE"
+}
+
+@test "restore refuses a ledger line whose pg_user was edited by hand, before anything is dropped" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    jq -c '.pg_user = "Fin;ance"' "${DUMPS}/ledger.jsonl" > "${DUMPS}/ledger.new"
+    mv "${DUMPS}/ledger.new" "${DUMPS}/ledger.jsonl"
+    : > "$SHIM_LOG"
+    run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"LEDGER_CORRUPT"* ]]
+    refute_recorded docker "DROP DATABASE"
+}
+
+@test "a grantee name the replay cannot quote safely is refused BEFORE the database is dropped" {
+    make_dump_dir
+    run take_module r-mod "$GATE_DB"; [ "$status" -eq 0 ]
+    printf 'evil;role CONNECT f\n' > "${SHIM_DIR}/acl.state"
+    : > "$SHIM_LOG"
+    run "$TOOL" restore --release r-mod --db "$GATE_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]
+    refute_recorded docker "DROP DATABASE"
+}
+
+@test "the main-server restore is unchanged: no ACL query, no GRANT, defaults for container and role" {
+    make_dump_dir
+    run "$TOOL" take --release r-main --db gremion; [ "$status" -eq 0 ]
+    : > "$SHIM_LOG"
+    run "$TOOL" restore --release r-main --db gremion --accept-loss-since t0
+    [ "$status" -eq 0 ]
+    refute_recorded docker "datacl"
+    refute_recorded docker "GRANT "
+    assert_recorded docker "exec -i pgc pg_restore --no-owner --role=gremion --exit-on-error --single-transaction -U postgres -d gremion"
+}
+
+@test "the usage text names the two options and is exit 2" {
+    run "$TOOL" --help
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"take      --release R --db D [--pg-service SVC --pg-user ROLE]"* ]]
 }
