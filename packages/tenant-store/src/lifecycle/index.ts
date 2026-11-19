@@ -3,6 +3,9 @@
 // its own: the package root exports no create/drop helper (index.test.ts).
 export { blockModuleDatabase, disableModule, dropTenantModuleDatabase } from './disable.js'
 export { enableModule, ensureModuleRoles, lockDownDatabase, unblockModuleDatabase } from './enable.js'
+// CD stage 1 (module step): the pending files of every enabled gate database, applied by the release.
+export { connectionLevelCode, ModuleDatabaseFailure, ModuleUpgradeError, upgradeModuleDatabase, upgradeModuleDatabases } from './upgrade.js'
+export type { UpgradeCounts, UpgradeDeps, UpgradeFailure, UpgradeFailureKind, UpgradeOneResult, UpgradeRow, UpgradeSummary } from './upgrade.js'
 // Module Karenz (2026-10-30): the 30-day clock, the deletion switch and the day-30 job.
 export { assertKarenzExportPath, finalDeletionEnabled, finalizeDueKarenz, KARENZ_DAYS } from './karenz.js'
 export type { ExportHoldContext, FinalizeDeps, FinalizeResult, FinalizeStep, KarenzState } from './karenz.js'
