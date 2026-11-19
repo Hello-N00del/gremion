@@ -105,7 +105,3 @@ test/host/fixtures/release/*/docs/ops/*.md text eol=lf
 # TOM annex (TRD-141): the generator emits LF; golden fixtures and the committed annex must match byte for byte on Windows checkouts too.
 scripts/fixtures/tom-annex/** text eol=lf
 docs/compliance/tom-annex.md text eol=lf
-
-# CD proof tooling (U15): the patches are applied by git apply on Linux; a CRLF copy fails the context
-# match, and the run sheet is read in a terminal. LF everywhere under the folder.
-scripts/cd-proof/** text eol=lf

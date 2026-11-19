@@ -554,7 +554,7 @@ sheet_section() {
     for want in \
         'access.log' 'gremion-verify' 'proof-measure' 'proof-restore' 'pg_database' \
         'build --no-cache' 'list-timers' '/protokolle' '/readyz' 'host_reconcile' \
-        'module-upgrade' '--pg-service' '--pg-user' 'gremion.request' '--entrypoint true calendar-service' \
+        'module-upgrade' '--pg-service' '--pg-user' 'gremion.request' '--entrypoint true "$SVC"' \
         'docker kill' 'datacl' 'premigration-dump' \
         'runtime/workers' 'docker restart' 'systemctl reboot' 'CD_PAUSE_MAX_MIN' 'parked' \
         'leaf_migrate' 'live.leaves' 'live.modules' 'live.reconcile' 'canary' 'reconcile_failed' \
@@ -614,8 +614,8 @@ sheet_section() {
 }
 
 @test "run sheet: no fact number, unit id, plan section, private path, real host, address or IP of a host" {
-    files=("$SHEET" "$SPIKE" "$MAKE" "${PATCHES}"/*.patch)
-    [ "${#files[@]}" -eq 6 ]
+    files=("$SHEET" "$SPIKE" "$MAKE" "${PATCHES}"/*.patch "${CP_DIR}/.gitattributes")
+    [ "${#files[@]}" -eq 7 ]
     run grep -nE '\bF[0-9]{1,3}\b|\bU[0-9]{1,2}[a-g]?\b|\.claude|PLAN-|[Pp]lan section|HANDOVER|E2E-FINDINGS' "${files[@]}"
     [ "$status" -eq 1 ] || { echo "$output"; return 1; }
     # every URL names a reserved example host
@@ -743,4 +743,135 @@ sheet_section() {
 @test "run sheet: the burst size is not demanded exactly (a slow host cuts the burst at the time limit)" {
     run grep -nF 'sent=40' "$SHEET"
     [ "$status" -eq 1 ] || { echo "$output"; return 1; }
+}
+
+# ---------------------------------------------------------------------------
+# review round: guards for the gaps found in the run sheet
+# ---------------------------------------------------------------------------
+
+@test "run sheet: the user-id fact is read as the tenant-create service really runs, never off the gremion-ui image" {
+    local body line
+    body="$(sheet_section 11)"
+    grep -qE 'run --rm --no-deps -T --entrypoint id tenant-create' <<<"$body" || { echo "scenario 7 does not run id as tenant-create"; return 1; }
+    run grep -nE 'entrypoint id' "$SHEET"
+    [ "$status" -eq 0 ]
+    while IFS= read -r line; do
+        [[ "$line" == *tenant-create* ]] || { echo "an id that is not the tenant-create service: $line"; return 1; }
+    done <<<"$output"
+    # why: the service runs the builder-stage image, and that stage never sets a user
+    run grep -nE 'image: .*gremion-migrate:' "${KERNEL_ROOT}/docker-compose.app.yml"
+    [ "$status" -eq 0 ]
+    run awk '/^FROM .* AS builder/ { on = 1; next } /^FROM / { on = 0 } on && /^USER / { print }' "${KERNEL_ROOT}/gremion-ui/Dockerfile"
+    [ -z "$output" ] || { echo "the builder stage sets a user now: $output"; return 1; }
+}
+
+@test "run sheet: scenario 1 tries a second release-now of the same sha before any resume, and reads four post-conditions" {
+    local body first_second first_resume
+    body="$(sheet_section 2)"
+    [ "$(grep -c 'gremion-cd release-now' <<<"$body")" -eq 2 ]
+    first_second="$(grep -n 'gremion-cd release-now' <<<"$body" | sed -n 2p | cut -d: -f1)"
+    first_resume="$(grep -n 'gremion-cd resume' <<<"$body" | head -1 | cut -d: -f1)"
+    [ -n "$first_second" ]
+    [ -n "$first_resume" ]
+    [ "$first_second" -lt "$first_resume" ]
+    grep -qF '.event == "stage_begin"' <<<"$body"
+    grep -qF 'select(.sha == $s and .cleared == null)' <<<"$body"
+    grep -qF 'second-exit=' <<<"$body"
+}
+
+@test "run sheet: the known gap of the proof repository type is named, with the way back, while the program still types it as an https address" {
+    if grep -qF '[CD_PROOF_REPO]=url' "${KERNEL_ROOT}/infra/host/lib/cd/core.sh"; then
+        assert_present 'known gap' "$SHEET"
+        assert_present 'remove (those|the) (two )?lines again' "$SHEET"
+    fi
+    # the repository value is a plain absolute path
+    assert_present '^CD_PROOF_REPO=/' "$SHEET"
+}
+
+@test "run sheet: every resume that discards a dump also accepts the descendants, in every scenario" {
+    run grep -nE 'gremion-cd resume' "$SHEET"
+    [ "$status" -eq 0 ]
+    while IFS= read -r line; do
+        if [[ "$line" == *--discard-dump* ]]; then
+            [[ "$line" == *--accept-descendants* ]] || { echo "discard without accept: $line"; return 1; }
+        fi
+    done <<<"$output"
+    # scenario 7's third pass is one of them
+    run grep -cE 'gremion-cd resume --discard-dump --accept-descendants --reason "proof scenario 7"' "$SHEET"
+    [ "$output" -eq 1 ]
+}
+
+@test "run sheet: the closing section counts the open blocks and never edits the block list by hand" {
+    local body
+    body="$(sheet_section 16)"
+    grep -qF "jq 'map(select(.cleared == null)) | length' \"\$BL\"" <<<"$body" || { echo "no open-block count"; return 1; }
+    grep -qiE 'nothing to resume' <<<"$body" || { echo "it does not say that resume is a no-op without a hold"; return 1; }
+    grep -qiE 'do not (edit|touch)' <<<"$body" || { echo "it does not forbid a hand edit"; return 1; }
+}
+
+@test "the LF rule of the proof folder lives in the folder, carries no unit id, and the root rules do not mention it" {
+    [ -f "${CP_DIR}/.gitattributes" ]
+    assert_present '^\* text eol=lf$' "${CP_DIR}/.gitattributes"
+    assert_absent '(^|[^A-Za-z0-9])U[0-9]{1,2}[a-g]?([^A-Za-z0-9]|$)' "${CP_DIR}/.gitattributes" "a plan unit id in the rule file"
+    assert_absent 'cd-proof' "${KERNEL_ROOT}/.gitattributes" "the folder keeps its own rule"
+}
+
+@test "run sheet: every leaf service is run without --profile, once with the true entrypoint and once with --migrate-only, and each name is a service of the compose file" {
+    local s
+    for s in calendar-service content-service newsletter-service; do
+        grep -qE "^  ${s}:\$" "${KERNEL_ROOT}/docker-compose.app.yml" || { echo "not a service: $s"; return 1; }
+        grep -qF "$s" "$SHEET" || { echo "the sheet never names $s"; return 1; }
+    done
+    run grep -nE '^for SVC in calendar-service content-service newsletter-service; do$' "$SHEET"
+    [ "$status" -eq 0 ]
+    [ "$(wc -l <<<"$output")" -eq 2 ]
+    assert_present 'run --rm --no-deps --entrypoint true "\$SVC"' "$SHEET"
+    assert_present 'run --rm --no-deps -T --label "gremion\.proof=\$U" "\$SVC" node dist/index\.js --migrate-only' "$SHEET"
+    # a docker compose command line never carries --profile
+    run grep -nE '^\s*(docker compose|timeout .*docker compose).*--profile' "$SHEET"
+    [ "$status" -eq 1 ] || { echo "$output"; return 1; }
+    # the scenario reads the one JSON line and kills a container that never exits (an image without the entry)
+    run sheet_section 10
+    grep -qF 'migrate-only' <<<"$output"
+    grep -qE 'docker kill' <<<"$output"
+}
+
+@test "run sheet: the module step is timed with the verb's own command, and a take is made of every database of every module server" {
+    assert_present 'run --rm --no-deps -T tenant-create module-upgrade --all' "$SHEET"
+    assert_present "jq -e '\.failed == 0 and \.files_applied == 0'" "$SHEET"
+    assert_present '^for DB in \$\(docker exec "\$MS" psql' "$SHEET"
+    assert_present 'take --release proof-measure --db "\$DB" --pg-service "<module>-postgres" --pg-user <module>' "$SHEET"
+    # the verb has no server selector: the sheet says so instead of naming an override that does not exist
+    assert_present 'no server (selector|option)' "$SHEET"
+}
+
+@test "run sheet: scenario 2a names the three app services of the old colour, and each is a service of the compose file" {
+    local body s
+    body="$(sheet_section 3)"
+    grep -qxF 'for S in gremion-ui gremion-public control-panel; do docker inspect --format '"'"'{{.State.Running}}'"'"' "$(cid "app-${FROM_COLOUR}" "$S")"; done' <<<"$body" || { echo "the three-service loop is missing"; return 1; }
+    for s in gremion-ui gremion-public control-panel; do
+        grep -qE "^  ${s}:\$" "${KERNEL_ROOT}/docker-compose.app.yml" || { echo "not a service: $s"; return 1; }
+    done
+}
+
+@test "run sheet: the checks that were weaker than the plan are commands now" {
+    local body mk cp
+    # scenario 2a: current never moved is read off the link, before and after
+    body="$(sheet_section 3)"
+    grep -qF 'BEFORE_CUR="$(readlink "$ROOT/current")"' <<<"$body" || { echo "no link before"; return 1; }
+    grep -qF '[ "$BEFORE_CUR" = "$(readlink "$ROOT/current")" ] && echo current-unmoved' <<<"$body" || { echo "no link after"; return 1; }
+    # scenario 3: the serving colour is recorded before the merge and its project must be down after the commit
+    body="$(sheet_section 5)"
+    grep -qF 'FROM_COLOUR="$(active)"' <<<"$body" || { echo "no old colour recorded"; return 1; }
+    grep -qF 'app-${FROM_COLOUR}" | wc -l' <<<"$body" || { echo "no old colour stop check"; return 1; }
+    # the portal probe: counters of the two tables the page reads, an idle window of equal length first
+    assert_present 'pg_stat_user_tables' "$SHEET"
+    assert_present 'relname IN \(\$\$protocols\$\$, \$\$org_units\$\$\)' "$SHEET"
+    assert_absent 'xact_commit' "$SHEET" "a database-wide counter other traffic can raise"
+    # the copy target's parent exists before rsync runs
+    mk="$(grep -nF 'mkdir -p "$ROOT/data/cd-proof"' "$SHEET" | head -1 | cut -d: -f1)"
+    cp="$(grep -n 'rsync -a ./proof.git/' "$SHEET" | head -1 | cut -d: -f1)"
+    [ -n "$mk" ]
+    [ -n "$cp" ]
+    [ "$mk" -lt "$cp" ]
 }

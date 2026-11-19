@@ -73,6 +73,13 @@ Passed when: it prints three `proof-...` lines and `CD_PROOF_REPO=<path>`, exits
 `proof-5xx`, `proof-readiness-fail`, `proof-window-fail`. (If it says a patch does not apply to
 the commit, the live commit is not the one the patches were made for: stop and report.)
 
+Make the parent folder of the copy on the HOST terminal first (rsync creates the last folder of
+a target, never its parents):
+
+```
+mkdir -p "$ROOT/data/cd-proof"
+```
+
 Copy the bare repository to the host (WORKSTATION terminal; any copy that keeps the files as
 they are will do, for example `rsync -a ./proof.git/ <deploy user>@<host>:/opt/gremion/data/cd-proof/proof.git/`
 with the host name written out by hand), then check it on the HOST terminal:
@@ -96,9 +103,13 @@ CD_WATCH_MINUTES=6
 ```
 
 Passed when: `gremion-cd status` exits 0 (known gap: the program reads the type of
-`CD_PROOF_REPO` as an https address; an exit 2 that names `CD_PROOF_REPO` means it still does
-not accept a local path there: stop, the proof cannot start until the program takes one, and
-you report that), its FIRST line
+`CD_PROOF_REPO` as an https address; a refusal that names the config, or an exit 2 that names
+`CD_PROOF_REPO`, means it still does not accept a local path there. Stop, and FIRST
+remove those lines again from `etc/cd.env` (`CD_PROOF_MODE`, `CD_PROOF_REPO` and
+`CD_WATCH_MINUTES`): while they stay, every verb of the program refuses the whole config, the
+tick included, and CD is down. Then report that the proof cannot start until the program takes
+a path there),
+its FIRST line
 is the PROOF MODE banner, and it lists `CD_PROOF_MODE`, `CD_PROOF_REPO` and `CD_WATCH_MINUTES`
 by name as non-default keys (the value of `CD_PROOF_REPO` is shown as `set`).
 
@@ -144,6 +155,24 @@ gremion-migration-dump discard --release proof-measure --reason "proof measureme
 Passed when: every `take` exits 0, `stat` shows a non-zero size, the dump is gone after the
 `discard`, and the journal lines of `journalctl -t premigration-dump --since "-10 min"` for the
 module server say `svc=` and no database name. Note bytes, seconds and `uptime` load for each.
+
+The module part of the dump set is every database of every running module server, so take
+EVERY one of them once, timed, one `take` and one `discard` each (repeat the block for each
+running module server; `<module>` is its role name):
+
+```
+MS="$(cid state <module>-postgres)"
+for DB in $(docker exec "$MS" psql -U <module> -Atc 'SELECT datname FROM pg_database WHERE NOT datistemplate'); do
+    time gremion-migration-dump take --release proof-measure --db "$DB" --pg-service "<module>-postgres" --pg-user <module>
+    echo "take-exit=$?"
+    stat -c '%s' "$DUMPDIR"/proof-measure/*
+    gremion-migration-dump discard --release proof-measure --reason "proof measurement, nothing to keep"
+done
+```
+
+Passed when: every `take-exit` is `0`, every `stat` shows a non-zero size, no dump is left under
+`$DUMPDIR/proof-measure` afterwards, and the number of `take-exit` lines equals the number of
+database names the `psql` printed. Note bytes and seconds per database and the `uptime` load.
 
 One dump restored into a SCRATCH database (never over the live one), timed (the `file` of a
 ledger line is relative to the dump folder, hence `"${DUMPDIR}/..."` below):
@@ -221,20 +250,25 @@ from INSIDE the containers (the secret is read there and never typed):
 
 ```
 COLOUR="$(active)"
-XACT='SELECT xact_commit FROM pg_stat_database WHERE datname = $$gremion$$'
-docker exec "$PG" psql -U "$PGU" -Atc "$XACT"
+SCANS='SELECT coalesce(sum(seq_scan + coalesce(idx_scan, 0)), 0) FROM pg_stat_user_tables WHERE relname IN ($$protocols$$, $$org_units$$)'
+scans() { docker exec "$PG" psql -U "$PGU" -d gremion -Atc "$SCANS"; }
+A="$(scans)"; sleep 10; B="$(scans)"
 docker exec "$(cid "app-$COLOUR" gremion-public)" node -e \
- 'require("http").get({host:"127.0.0.1",port:3000,path:process.argv[1]},r=>{console.log(r.statusCode);r.resume()})' \
+ 'const h=require("http");let n=0;(function go(){h.get({host:"127.0.0.1",port:3000,path:process.argv[1]},r=>{console.log(r.statusCode);r.resume();r.on("end",()=>{if(++n<20)go()})})})()' \
  "$(sed -n 's/^PUBLIC_BASE_PATH=//p' "$ROOT/etc/env/state.env")/protokolle"
-sleep 2
-docker exec "$PG" psql -U "$PGU" -Atc "$XACT"
+sleep 5
+C="$(scans)"
+echo "idle=$((B-A)) with-requests=$((C-B))"
 docker exec "$(cid "app-$COLOUR" gremion-ui)" node -e \
  'const s=process.env.INTERNAL_PUSH_SECRET||"";require("http").get({host:"127.0.0.1",port:3000,path:"/readyz",headers:{authorization:"Bearer "+s}},r=>{let b="";r.on("data",d=>b+=d);r.on("end",()=>console.log(r.statusCode,b))})'
 ```
 
-Passed when: the portal request prints a status below 500 and the transaction count of the
-main `gremion` database is higher after it than before (the page really reads that
-database); the readiness request prints `200` and a JSON body with `ready`
+Passed when: all twenty portal requests print a status below 500 and the scan counters of the
+two tables the page reads (`protocols` and `org_units` in the main `gremion` database, counters
+that an idle host barely moves) rise by at least 10 more in the window with the requests than
+in the idle window before it (`with-requests` minus `idle`; the idle window is the longer one,
+so other traffic cannot make a page that reads nothing look as if it read the database; run it
+on a quiet host and repeat it when `idle` is not near 0); the readiness request prints `200` and a JSON body with `ready`
 `true`, `colour` equal to `$COLOUR`, a `release` and `tenants` counts. It is also expected that
 `curl -s "https://${CUSTOMER_HOST}/readyz"` prints exactly `{"ready":true}` and nothing else.
 
@@ -266,10 +300,24 @@ gremion-migration-dump discard --release proof-restore --reason "proof measureme
 Passed when: every command exits 0 and the scratch database is gone afterwards (the same
 `pg_database` count as above, run in `"$MS"` as `<module>`, prints `0`). Note seconds.
 
-One module step against a scratch module server, timed: run the `module-upgrade --all` verb
-of the tenant-create one-shot of the live colour only against a scratch module server (never
-against the placeholder's own). Passed when: the verb's one JSON line shows `failed` equal to
-`0`; note seconds.
+One module step, timed. The verb takes no server selector or option (it upgrades every
+enabled module database of the catalogue and finds each server through the secrets the
+service already mounts), so there is no way to point it at a scratch server: the exact command
+is the one the program itself uses, run at the live release, where every pending file has
+already been applied and the run executes nothing. Before the real customer exists the
+catalogue holds the placeholder's databases only:
+
+```
+cd "$ROOT/current"
+ENVF="$ROOT/etc/env/app-$(active).env"
+time docker compose --env-file "$ENVF" run --rm --no-deps -T tenant-create module-upgrade --all </dev/null 2>/dev/null | tail -n 1 | tee /dev/stderr | jq -e '.failed == 0 and .files_applied == 0'
+echo "verb-exit=${PIPESTATUS[0]} check-exit=${PIPESTATUS[3]}"
+```
+
+Passed when: the verb's one JSON line shows `failed` equal to `0` and `files_applied` equal to
+`0` (`check-exit` is `0`); note seconds. A `files_applied` above `0` means a file was pending
+and this run applied it with no dump set behind it: write it down, do not repeat the run, and
+tell the owner of the program.
 
 That kill by label ends a container a killed client left behind, and that a profile-gated leaf
 service can be run without `--profile`:
@@ -277,7 +325,9 @@ service can be run without `--profile`:
 ```
 cd "$ROOT/current"
 ENVF="$ROOT/etc/env/app-$(active).env"
-docker compose --env-file "$ENVF" run --rm --no-deps --entrypoint true calendar-service; echo "run-exit=$?"
+for SVC in calendar-service content-service newsletter-service; do
+    docker compose --env-file "$ENVF" run --rm --no-deps --entrypoint true "$SVC"; echo "$SVC run-exit=$?"
+done
 for L in gremion.request gremion.cd; do
     U="$(cat /proc/sys/kernel/random/uuid)"
     timeout -s KILL 8 docker compose --env-file "$ENVF" run --rm --no-deps --label "$L=$U" \
@@ -289,7 +339,9 @@ for L in gremion.request gremion.cd; do
 done
 ```
 
-Passed when: the first run exits 0 (the profile is on without `--profile`); and for EACH of
+Passed when: all three runs print `run-exit=0` (each leaf service is gated by its own profile,
+and `run` of it works without `--profile`; the real `--migrate-only` run of each is scenario
+6); and for EACH of
 the two labels (`gremion.request` is the executor's, `gremion.cd` is the one the CD module
 step and data one-shots put on their containers) `client-exit` is non-zero (the client was
 killed), the first count is `1` (the container outlived its client), and after the kill both
@@ -385,7 +437,28 @@ jq -r '.live.colour, .live.sha12' "$ST"
 The `created` time is earlier than the `start` stage time; the stage `build` ended `stage_ok`;
 the rule is `readiness_failed`; `hold.kind` is `blocked`; `identical` is printed; the access
 count is `0`; the second last count is `0`; the serving container's `Running` is `true`; the
-live colour and SHA are unchanged. Also:
+live colour and SHA are unchanged.
+
+A second `release-now` of the same commit is refused while its block is open. Try it once,
+before any `resume`, and write the exit down:
+
+```
+T2="$(date -u +%FT%TZ)"
+gremion-cd release-now "$SHA" --ref proof-readiness-fail --unverified
+echo "second-exit=$?"
+sleep 60
+jq -r --arg t "$T2" 'select(.at >= $t and .event == "stage_begin") | .stage' "$HIST" | wc -l
+jq -r '.phase' "$ST"
+jq -r --arg s "$SHA" '[.[] | select(.sha == $s and .cleared == null)] | length' "$BL"
+docker ps -q --filter "label=com.docker.compose.project=${STACK}-app-${TO_COLOUR}" | wc -l
+```
+
+Passed when: after the minute the stage count is `0` (nothing started), the phase is `idle`,
+the block count is `1` (the one open entry of this commit, not a second one) and the new
+colour's project count is `0`. The refusal is expected to show as a non-zero `second-exit`
+and a message that names the block; write both down, the four numbers decide.
+
+Also:
 
 - The `rejected` mail arrives at the operator address, and no personal data is in it. The
   copies on the host hold none either: `grep -rlF -e "$SLUG" -e "$CUSTOMER_HOST" "$ROOT/data/cd" "$ROOT/runtime/cd"`
@@ -412,6 +485,7 @@ The proof commit makes `/readyz` flip to 503 when `/tmp/cd-proof-fail` exists in
 
 ```
 FROM_COLOUR="$(active)"; TO_COLOUR="$(other "$FROM_COLOUR")"
+BEFORE_CUR="$(readlink "$ROOT/current")"
 SHA="$(git -C "$PROOF" rev-parse proof-window-fail)"
 gremion-cd release-now "$SHA" --ref proof-window-fail --unverified
 ```
@@ -438,9 +512,11 @@ docker ps -q --filter "label=com.docker.compose.project=${STACK}-app-${TO_COLOUR
 # blocked with watch_readiness, and the live release never moved
 jq -r --arg s "$SHA" '.[] | select(.sha == $s) | .rule' "$BL"
 jq -r '.live.sha12' "$ST"
+# current never moved
+[ "$BEFORE_CUR" = "$(readlink "$ROOT/current")" ] && echo current-unmoved
 ```
 
-`old-colour-serves` is printed; the first rollback line in the history is at most 60 seconds
+`old-colour-serves` and `current-unmoved` are printed; the first rollback line in the history is at most 60 seconds
 after `$T1` (`secs`: the watch takes a sample every 15 seconds by default and needs three bad
 ones in a row, about 45 seconds, and the 60 leaves 15 for the sample's own time and the
 switch back); `healthz` names `$FROM_COLOUR`; all three print `true`; the new project
@@ -492,7 +568,13 @@ Then clear the block.
 
 Not proof mode: proof mode is off for this one (`CD_PROOF_MODE=0`, status shows no banner).
 It needs the next real merged pull request that adds a file to a chain that CD applies
-(`control`, `kernel-data` or `kernel-api`). Wait for it; do not invent one.
+(`control`, `kernel-data` or `kernel-api`). Wait for it; do not invent one. Before it merges,
+record what serves now (HOST terminal):
+
+```
+FROM_COLOUR="$(active)"
+BEFORE_CUR="$(readlink "$ROOT/current")"
+```
 
 Passed when:
 
@@ -504,13 +586,17 @@ jq -r '.at' "$DUMPDIR/ledger.jsonl" | tail -3
 jq -r 'select(.event == "stage_begin" and .stage == "migrate") | .at' "$HIST" | tail -1
 # at the commit point current, current-tag and previous-tag move; the old colour stops
 readlink "$ROOT/current"; cat "$ROOT/runtime/current-tag" "$ROOT/runtime/previous-tag"
+[ "$BEFORE_CUR" != "$(readlink "$ROOT/current")" ] && echo current-moved
+[ "$(active)" != "$FROM_COLOUR" ] && echo colour-changed
+docker ps -q --filter "label=com.docker.compose.project=${STACK}-app-${FROM_COLOUR}" | wc -l
 # the dump set is deleted, with a ledger line
 jq -r 'select(.event == "deleted") | [.at, .reason] | @tsv' "$DUMPDIR/ledger.jsonl" | tail -3
 ```
 
 The dump `created` time is before the `migrate` stage time of the same release; `current`
-names the new tree and the two tag files are the new and the old tag; the `deleted` line is
-after the commit; the `released` mail arrives. A change that is only a stored-row fix still
+names the new tree (`current-moved` is printed) and the two tag files are the new and the old
+tag; the serving colour changed (`colour-changed` is printed) and the old colour's project has
+no container left (the count is `0`); the `deleted` line is after the commit; the `released` mail arrives. A change that is only a stored-row fix still
 proves the automatic path; the first additive file proves the additive case.
 
 ## 6. Scenario 4 - the module step
@@ -588,6 +674,27 @@ same tree as before). Put the setting back afterwards.
 On a host with the calendar, content and newsletter services running and one placeholder
 customer with data in each.
 
+First the owed check that `run` of EACH leaf service with `--migrate-only` works without
+`--profile`, at the live release (every leaf database is already current, so it changes
+nothing). An image that does not carry the entry would start its server instead and never
+exit, so each run is bounded and its container is removed by its own label afterwards:
+
+```
+cd "$ROOT/current"
+ENVF="$ROOT/etc/env/app-$(active).env"
+for SVC in calendar-service content-service newsletter-service; do
+    U="$(cat /proc/sys/kernel/random/uuid)"
+    timeout -s KILL 180 docker compose --env-file "$ENVF" run --rm --no-deps -T --label "gremion.proof=$U" "$SVC" node dist/index.js --migrate-only </dev/null 2>/dev/null | tail -n 1 | tee /dev/stderr | jq -e '.failed == 0'
+    echo "$SVC exit=${PIPESTATUS[0]} check=${PIPESTATUS[3]}"
+    docker ps -q --filter "label=gremion.proof=$U" | xargs -r docker kill
+    docker ps -aq --filter "label=gremion.proof=$U" | xargs -r docker rm -f
+done
+```
+
+Passed when: for each of the three services `exit` and `check` are both `0` and the printed
+JSON line carries the counts only (no customer name in it). A line that is not JSON, or an
+`exit` of 137, means the image has no `--migrate-only` entry: stop and report it.
+
 Before the release, take the leaf databases' schema fingerprints (as in section 1). Run a
 release with a trivial change through the normal path, then:
 
@@ -609,13 +716,23 @@ container still `Running`), and the dump set is live (`gremion-migration-dump st
 
 ## 11. Scenario 7 - the enable catch-up
 
-First the user-id facts, recorded:
+First the user-id facts, recorded. The `id` is read as the one-shot that writes the enable-path
+dump really runs (the tenant-create service, which runs the builder-stage image, not the
+runtime image of the serving containers: the two can run as different users, and the
+difference is the thing this step must show):
 
 ```
-docker run --rm --entrypoint id "$(docker inspect --format '{{.Config.Image}}' "$(cid "app-$(active)" gremion-ui)")"
+cd "$ROOT/current"
+ENVF="$ROOT/etc/env/app-$(active).env"
+docker compose --env-file "$ENVF" run --rm --no-deps -T --entrypoint id tenant-create </dev/null
 stat -c '%u %g %a' "$DUMPDIR"
 id -u
 ```
+
+Write the three answers side by side: the user id the one-shot runs as, the owner and mode of
+the dump folder, and the deploy user's id. A one-shot that runs as `uid=0` writes root-owned
+dump files that the deploy user cannot verify; that is the case the next paragraph's
+`sha256sum` as the deploy user exists to catch.
 
 On the placeholder customer: switch a gate-database module off, build a release with a
 scratch chain file (scratch tree only), run it (the module step skips the blocked database,
@@ -638,7 +755,10 @@ you moved by hand, with the Karenz final-deletion switch on) the dump is gone fr
 
 A third pass: stop a scratch release after its `snapshot` (a failed release), switch the
 placeholder's gate module off and on, and see the dump-series refusal; then
-`gremion-cd resume --discard-dump --reason "proof scenario 7"` clears it.
+`gremion-cd resume --discard-dump --accept-descendants --reason "proof scenario 7"` clears it
+(the stopped scratch release opened a block, and a block needs `--accept-descendants`; without
+it the resume is refused and nothing is discarded). Passed when it exits 0, the dump set is no
+longer listed, and `jq 'map(select(.cleared == null)) | length' "$BL"` prints `0`.
 
 ## 12. Also: a held release, a dump failure, the kill switch, the dead-man, a manual rollback
 
@@ -722,12 +842,18 @@ login server back and `gremion-cd resume`.
 rm -rf "$PROOF"
 gremion-cd resume --accept-descendants --reason "proof-over"
 gremion-cd status | head -5
+jq 'map(select(.cleared == null)) | length' "$BL"
 ```
 
 Passed when: `status` exits 0 and mentions neither proof mode nor a proof value (the first
 line is not a banner, `status | grep -ci proof` prints `0`), `jq -r '.live.proof // false' "$ST"`
-prints `false`, `stat -c %a "$ST"` prints `600`, and `[ ! -e "$PROOF" ]`. Only then is the
-real customer created.
+prints `false`, `stat -c %a "$ST"` prints `600`, `[ ! -e "$PROOF" ]`, and the last `jq` prints
+`0` (no block of a proof commit is still open). Only then is the real customer created.
+
+The `resume` is a safety net and closes the proof blocks only while a hold is set: with no hold
+it answers "nothing to resume" and does nothing, so each scenario above has to have cleared its
+own block already. When the last `jq` prints a number above `0`: stop and report it. Do not edit
+`blocked.json` by hand and do not go on to the real customer.
 
 ## 17. What this proof does not show
 
