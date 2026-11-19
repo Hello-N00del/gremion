@@ -456,6 +456,36 @@ drv_hostlock_free() { ( exec 9>>"${GREMION_ROOT}/runtime/hostd.lock"; flock -n 9
     [ "$(drv_state '.phase')" = idle ]
 }
 
+@test "locks: a committed release whose commit stage ended ok is not parked under the kill switch (a park holds the host lock, and this one has let it go): it goes on forward, with no rollback-off mail" {
+    cd_need_flock
+    drv_seed_commit commit ok
+    : > "${GREMION_ROOT}/etc/cd.disabled"
+    export CD_STUB_HOOK_cd_reconcile_run='drv_probe in_reconcile'
+    drv_bg_tick
+    drv_wait "! kill -0 ${DRV_BG_PID} 2>/dev/null"
+    [ "$(drv_hist killswitch_park)" -eq 0 ]
+    [ "$(drv_n 'rollback_off_lock_held')" -eq 0 ]
+    grep -q '^probe in_reconcile host=FREE cd=HELD$' "$SHIM_LOG"
+    [ "$(drv_n '^stub cd_rollback_run')" -eq 0 ]
+    [ "$(drv_state '.phase')" = idle ]
+    drv_hostlock_free
+}
+
+@test "locks: a half-run manual rollback of a committed release is parked under the kill switch holding the host lock, and is resumed when the file is gone" {
+    cd_need_flock
+    drv_seed_commit commit ok '.phase = "rolling_back"'
+    : > "${GREMION_ROOT}/etc/cd.disabled"
+    drv_bg_tick
+    drv_wait "[ \"\$(grep -c killswitch_park '${GREMION_ROOT}/data/cd/history.jsonl')\" -ge 1 ]"
+    run cd_lib 'cd_hostlock_take 0'
+    [ "$status" -eq 3 ]
+    [ "$(drv_n '^stub cd_rollback_run')" -eq 0 ]
+    rm -f "${GREMION_ROOT}/etc/cd.disabled"
+    drv_wait "! kill -0 ${DRV_BG_PID} 2>/dev/null"
+    assert_recorded stub "cd_rollback_run manual_rollback"
+    drv_hostlock_free
+}
+
 @test "reconcile composition: a committed release in its reconcile stage is ended under the kill switch too, never parked" {
     cd_need_flock
     drv_seed_commit reconcile started
@@ -622,6 +652,22 @@ drv_hostlock_free() { ( exec 9>>"${GREMION_ROOT}/runtime/hostd.lock"; flock -n 9
     run cd_prog tick
     [ "$(drv_state '.hold')" = null ]
     [ "$(drv_n '^stub cd_commit_promote')" -eq 1 ]
+}
+
+@test "classifier holds: a classifier that crashes on a release-now leaves a standing blocked hold as it is (the verb is refused, no hold of its own)" {
+    drv_seed '.hold = {"kind":"blocked","reason":"watch_5xx","sha12":"cccccccccccc","since":"2026-11-17T00:00:00Z"}'
+    cd_stub_set cd_classify 2
+    run cd_prog release-now bbbbbbbbbbbb
+    [ "$status" -eq 0 ]
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    [ "$(drv_n '^stub cd_classify')" -eq 1 ]
+    [ "$(drv_state '.hold.kind')" = blocked ]
+    [ "$(drv_state '.hold.sha12')" = cccccccccccc ]
+    [ "$(drv_state '.release')" = null ]
+    [ "$(drv_state '.live.sha12')" = aaaaaaaaaaaa ]
+    [ "$(drv_hist release_now_refused)" -eq 1 ]
+    [ "$(drv_n '^stub cd_prepare_build')" -eq 0 ]
 }
 
 @test "classifier holds: a NEW clean candidate clears the hold by itself and starts" {
@@ -1183,6 +1229,26 @@ drv_final() { jq -S '{phase, hold, live: (.live | {sha12, tag, colour}), previou
     assert_recorded stub "cd_rollback_run manual_rollback"
 }
 
+@test "locks: a half-run manual rollback of a committed release (phase rolling_back, commit stage ended ok) is resumed under the host lock, by tick and by tick --resume-only" {
+    cd_need_flock
+    export CD_STUB_HOOK_cd_rollback_run='drv_probe at_rollback'
+    drv_seed_commit commit ok '.phase = "rolling_back"'
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    assert_recorded stub "cd_rollback_run manual_rollback"
+    grep -q '^probe at_rollback host=HELD cd=HELD$' "$SHIM_LOG"
+    [ "$(drv_n '^probe at_rollback host=FREE')" -eq 0 ]
+    drv_hostlock_free
+    drv_seed_commit commit ok '.phase = "rolling_back"'
+    : > "$SHIM_LOG"
+    run cd_prog tick --resume-only
+    [ "$status" -eq 0 ]
+    assert_recorded stub "cd_rollback_run manual_rollback"
+    grep -q '^probe at_rollback host=HELD cd=HELD$' "$SHIM_LOG"
+    [ "$(drv_n '^probe at_rollback host=FREE')" -eq 0 ]
+    drv_hostlock_free
+}
+
 # ===========================================================================================
 # the watch
 # ===========================================================================================
@@ -1225,6 +1291,22 @@ drv_final() { jq -S '{phase, hold, live: (.live | {sha12, tag, colour}), previou
     assert_recorded stub "cd_commit_promote"
     [ "$(drv_state '.phase')" = idle ]
     [ "$(drv_n '^stub cd_gh_candidate')" -eq 0 ]
+}
+
+@test "tick: an idle tick that drained a release-now request which started a release does one thing: the next candidate waits for the next tick" {
+    drv_seed
+    run cd_prog release-now bbbbbbbbbbbb
+    [ "$status" -eq 0 ]
+    : > "$SHIM_LOG"
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    [ "$(drv_state '.live.sha12')" = bbbbbbbbbbbb ]
+    assert_recorded stub "cd_commit_promote"
+    # the one candidate call is the verb's own judgement of the named sha
+    [ "$(drv_n '^stub cd_gh_candidate')" -eq 1 ]
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    [ "$(drv_n '^stub cd_gh_candidate')" -eq 2 ]
 }
 
 @test "watch: a parked release is resumed by resume, which takes the host lock and re-enters the watch with a fresh pause budget" {
@@ -1465,6 +1547,23 @@ drv_rn() { # drv_rn ARGS... -- the verb, then a tick
     [ "$(drv_n '^stub cd_commit_promote')" -eq 0 ]
     [ "$(drv_state '.live.sha12')" = aaaaaaaaaaaa ]
     [ "$(readlink "${GREMION_ROOT}/current")" = releases/aaaaaaaaaaaa ]
+}
+
+@test "release-now: a proof release whose class has no migration count is refused too (a missing key never reads as none)" {
+    local ans
+    cd_write_cfg CD_PROOF_MODE=1 CD_PROOF_REPO=https://example.org/org/proof
+    cd_stub_set cd_gh_candidate 0 '{"verdict":"none","sha":"","reason":"up_to_date","final":true}'
+    for ans in '{"v":1,"holds":[],"hold":null}' '{"v":1,"holds":[],"hold":null,"migrations":{}}' '{"v":1,"holds":[],"hold":null,"migrations":{"total":"0"}}'; do
+        cd_stub_set cd_classify 0 "$ans"
+        drv_seed
+        : > "$SHIM_LOG"
+        run cd_prog release-now "$SHA_B" --ref proof/x --unverified
+        [ "$status" -eq 0 ]
+        run cd_prog tick
+        [ "$status" -eq 0 ]
+        [ "$(drv_n '^stub cd_prepare_build')" -eq 0 ] || { echo "built on ${ans}" >&2; return 1; }
+        [ "$(drv_state '.release')" = null ]
+    done
 }
 
 @test "release-now: the normal checks still run: a candidate with no verdict (unknown) does not start" {

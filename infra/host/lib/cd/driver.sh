@@ -552,11 +552,15 @@ _cd_drv_st_classify() {
         # classify_failed, ended by a newer clean candidate, not a failure that needs `resume`.
         # Nothing was built or started at this stage, so the release only goes away.
         cd_stage_fail classify host classify_failed || true
-        _cd_drv_hold_candidate classify_failed classify_failed "$R_SHA12"
         cd_hist classify_crashed code="$rc" sha12="$R_SHA12" || true
         if [[ "$R_MODE" == auto ]]; then
+            _cd_drv_hold_candidate classify_failed classify_failed "$R_SHA12"
             _cd_drv_abort_refused held
         else
+            # the operator's request is refused; a hold that already stands (a blocked
+            # candidate) is the candidate walk's verdict and stays as it is
+            cd_hist release_now_refused why=classify_failed sha12="$R_SHA12" || true
+            _cd_drv_say "release-now refused: the classifier could not judge the candidate"
             _cd_drv_abort_refused refused
         fi
         return 0
@@ -565,10 +569,11 @@ _cd_drv_st_classify() {
     holds="$(printf '%s' "$cls" | jq -c '.holds')"
     # a proof release may not carry a new migration file (the proof proves nothing about one)
     if [[ "$R_MODE" == proof ]]; then
-        migs="$(printf '%s' "$cls" | jq -r '.migrations.total // 0')"
+        # a count that is missing or not a number is no answer: it never reads as none
+        migs="$(printf '%s' "$cls" | jq -r '.migrations.total | if type == "number" then tostring else "unknown" end' 2>/dev/null)" || migs=unknown
         if [[ "$migs" != 0 ]]; then
             cd_hist release_refused reason=proof_migration sha12="$R_SHA12" || true
-            _cd_drv_say "refused: a proof release may not add a migration file"
+            _cd_drv_say "refused: a proof release may not add a migration file, and its migration count must be known"
             cd_stage_ok classify || true
             _cd_drv_abort_refused proof_migration
             return 0
@@ -1743,6 +1748,14 @@ cd_cmd_reconcile() {
 }
 
 # -- the tick ---------------------------------------------------------------------------
+# _cd_drv_host_lock_gone -- a committed release whose commit stage ended ok has let go of the
+# host lock at step 10 (a crash between its end and the begin of the reconcile stage): the next
+# stage runs under the cd lock only, and a park would hold nothing worth the name. Not so for a
+# manual rollback of that release (phase rolling_back): a rollback runs under the host lock.
+_cd_drv_host_lock_gone() {
+    [[ -n "$R_COMMIT" && "$R_STAGE" == commit && "$R_STATUS" == ok && "$D_PHASE" != rolling_back ]]
+}
+
 # _cd_drv_inflight_locks -- the locks a resumed release needs. The host lock is taken first
 # for a release the boot unit resumes and for every release at or after `snapshot`, waiting
 # up to CD_LOCK_WAIT_S; a committed release in the reconcile stage, or one whose commit stage has
@@ -1753,9 +1766,7 @@ _cd_drv_inflight_locks() {
     if [[ -n "$R_COMMIT" && "$R_STAGE" == reconcile ]]; then
         return 0
     fi
-    # a commit stage that ended ok has let go of the host lock at step 10 (a crash between its
-    # end and the begin of the reconcile stage): the next stage runs under the cd lock only
-    if [[ -n "$R_COMMIT" && "$R_STAGE" == commit && "$R_STATUS" == ok ]]; then
+    if _cd_drv_host_lock_gone; then
         return 0
     fi
     if [[ "$CD_DRV_RESUME_ONLY" == 1 ]]; then
@@ -1795,7 +1806,9 @@ _cd_drv_tick_inflight() {
             _cd_drv_abort killswitch
             return 0
         fi
-        if [[ -z "$R_COMMIT" || "$R_STAGE" != reconcile ]]; then
+        # a park holds the host lock and says so in its mail: one that has let the lock go
+        # (a committed release whose commit stage ended) goes on forward, as in the process
+        if [[ -z "$R_COMMIT" || "$R_STAGE" != reconcile ]] && ! _cd_drv_host_lock_gone; then
             _cd_drv_park || return 0
         fi
     fi
