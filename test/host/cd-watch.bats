@@ -8,7 +8,7 @@
 # Nothing here touches a real docker, curl, Traefik or network: docker, curl and timeout are
 # recording shims whose answers are files under $DK, the host layout is a temp $GREMION_ROOT,
 # the clock is the fake clock of test_helper/cd. The real watch.sh runs on the real core.sh and
-# docker.sh; the functions of colour.sh are stand-ins (fixtures/cd/watch/fakes.bash) that read
+# docker.sh; the functions of colour.sh are stand-ins (write_fakes below) that read
 # files, so each test decides what the colour answers. Every name is a reserved example name.
 
 bats_require_minimum_version 1.5.0
@@ -34,6 +34,7 @@ setup() {
     cp "${FIX}/app-green.env" "${GREMION_ROOT}/etc/env/app-green.env"
     REAL_TIMEOUT="$(type -P timeout)"
     export REAL_TIMEOUT
+    write_fakes
     shim_docker
     shim_curl
     shim timeout 'export CD_TEST_VIA_TIMEOUT=1; exec "$REAL_TIMEOUT" "$@"'
@@ -44,6 +45,47 @@ teardown() {
 }
 
 # ------------------------------------------------------------------ the shims
+
+# write_fakes -- the file-driven stand-ins for the functions that other units own (colour.sh, and
+# the compose wait of docker.sh), written to $DK/fakes.sh and sourced by wl AFTER the real
+# watch.sh. $DK is the answers directory. Each call is logged to $DK/fake.log with the timeout
+# it was given. (Written from here, not kept as a fixture file: a .bash fixture would not be
+# checked out with LF on Windows.)
+write_fakes() {
+    cat > "${DK}/fakes.sh" <<'FAKES'
+_fk_rc() { local f="$DK/$1"; if [[ -f "$f" ]]; then cat "$f"; else printf '%s' "${2:-0}"; fi; }
+cd_colour_probe() {
+    printf 'probe %s timeout=%s\n' "$1" "${CD_COLOUR_EXEC_TIMEOUT_S:-unset}" >> "$DK/fake.log"
+    [[ -f "$DK/probe.$1" ]] || return 1
+    local rc
+    rc="$(_fk_rc "probe.$1.rc" 0)"
+    [[ "$rc" -eq 0 ]] || return "$rc"
+    cat "$DK/probe.$1"
+}
+cd_colour_portal_probe() {
+    printf 'portal %s timeout=%s\n' "$1" "${CD_COLOUR_EXEC_TIMEOUT_S:-unset}" >> "$DK/fake.log"
+    return "$(_fk_rc "portal.$1.rc" 0)"
+}
+cd_colour_identity() {
+    printf 'identity %s %s\n' "$1" "$2" >> "$DK/fake.log"
+    return "$(_fk_rc "identity.$1.rc" 0)"
+}
+cd_colour_workers() {
+    printf 'workers %s %s\n' "$1" "$2" >> "$DK/fake.log"
+    if [[ "$2" == get ]]; then
+        _fk_rc "workers.$1" on
+        echo
+        return 0
+    fi
+    return 0
+}
+cd_wait_healthy() {
+    printf 'wait %s %s %s timeout=%s\n' "$1" "$2" "$3" "${CD_DC_TIMEOUT:-unset}" >> "$DK/fake.log"
+    return "$(_fk_rc state.rc 0)"
+}
+FAKES
+}
+
 
 # docker. Answers are files in $DK:
 #   cid.<project>.<service>   the id of a service's container (ps --filter service)
@@ -196,7 +238,7 @@ wl() {
 . \"\${HOST_SRC}/lib/cd/docker.sh\"
 . \"\${HOST_SRC}/lib/cd/watch.sh\"
 . \"\${GREMION_CD_STUBS_DIR}/cd-stubs.sh\"
-. \"\${FIX}/fakes.bash\"
+. \"\${DK}/fakes.sh\"
 CD_LOCK_PID=\$\$
 cd_cfg_load
 ${1}" wl
