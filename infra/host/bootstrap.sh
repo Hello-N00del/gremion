@@ -1106,7 +1106,7 @@ stage_timers() {
 #
 # Installs from THIS source tree (a release checkout) as real files: every program of bin/,
 # lib/common.sh and lib/cd/*.sh (lib/cd/apply-root.sh, the one script that runs as root, is
-# root-owned in a root-owned directory), renders the six gremion-cd units, makes the data and
+# root-owned in a root-owned directory; see the note at the directories on what that is worth), renders the six gremion-cd units, makes the data and
 # runtime directories and writes etc/cd.env from the template when it is absent. It ENABLES and
 # STARTS nothing: that is the operator's step (docs/ops/continuous-deployment.md).
 #
@@ -1179,7 +1179,10 @@ stage_cd() {
     me="$(id -u):$(id -g)"
 
     # The directories. bin/ and lib/ are the deploy user's like every other stage makes them;
-    # lib/cd is only root's to write, so the apply script cannot be swapped by the deploy user.
+    # lib/cd and the apply script are root's, so no process of the deploy user without sudo edits
+    # the one script that runs as root in place. That is all this buys: the deploy user owns lib/
+    # (it can rename lib/cd) and holds sudo NOPASSWD:ALL (stage user) and the docker group, so it
+    # is root-equivalent on this host and the apply script is no barrier against it.
     ensure_cd_dir 755 "$dep" "${root}/bin"
     ensure_cd_dir 755 "$dep" "${root}/lib"
     ensure_cd_dir 755 "$me" "${root}/lib/cd"

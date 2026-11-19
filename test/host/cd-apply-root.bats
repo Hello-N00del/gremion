@@ -371,9 +371,14 @@ assert_set_is_backup() {
     make_backup
     echo term > "${GREMION_ROOT}/.boot-mode"
     apply
-    [ "$status" -ne 0 ]
+    # the exit code of the TERM trap, not whatever the bootstrap ended with (it ended with 0)
+    [ "$status" -eq 143 ] || { echo "status ${status}: ${output}"; return 1; }
     assert_recorded bootstrap "mode=term"
+    # the bootstrap kept writing for a second after the TERM: the restore must wait for it (the
+    # `trap 'exit 143' TERM` is what defers the signal until the child is done), or this tail
+    # lands on top of the restored set
     assert_set_is_backup
+    [ ! -e "${GREMION_ROOT}/lib/cd/zz-late.sh" ]
 }
 
 @test "the restore puts back modes and owners: programs 0755, libraries 0644, units 0644, the deploy user's files in the deploy user's name" {
@@ -381,8 +386,18 @@ assert_set_is_backup() {
     echo fail-midway > "${GREMION_ROOT}/.boot-mode"
     chmod 600 "${GREMION_ROOT}/lib/common.sh"
     chmod 700 "${GREMION_ROOT}/bin/gremion-other"
+    # a recording chown (it really chowns): as a plain-uid runner root's and the deploy user's
+    # files have one owner, so the calls are what tells "handed to the deploy user" from "left root's"
+    local real_chown; real_chown="$(command -v chown)"
+    shim chown "exec ${real_chown} \"\$@\""
+    hash -r
     apply
     [ "$status" -ne 0 ]
+    assert_recorded chown "gremion-other.restore"
+    assert_recorded chown "lib/cd/core.sh.restore"
+    # the apply script and the units are root's: the restore must not hand them to the deploy user
+    refute_recorded chown "apply-root.sh"
+    refute_recorded chown "gremion-cd.service"
     [ "$(stat -c %a "${GREMION_ROOT}/bin/gremion-other")" = 755 ]
     [ "$(stat -c %a "${GREMION_ROOT}/lib/common.sh")" = 644 ]
     [ "$(stat -c %a "${GREMION_ROOT}/lib/cd/core.sh")" = 644 ]
@@ -423,5 +438,61 @@ assert_set_is_backup() {
     echo fail-midway > "${GREMION_ROOT}/.boot-mode"
     apply
     [ "$status" -ne 0 ]
+    # the backup was accepted: the bootstrap ran and failed (a refusal would leave the set alone
+    # and the comparison below trivially true), and the restore ran
+    assert_recorded bootstrap "mode=fail-midway"
+    [[ "$output" == *"restoring the backup"* ]] || { echo "$output"; return 1; }
     BACKUP_NAME=pending assert_set_is_backup
+    [ ! -e "${GREMION_ROOT}/bin/gremion-added" ]
+}
+
+@test "a pending backup that is not the installed set (a stale one) is refused before anything is touched" {
+    make_backup
+    local before r="$GREMION_ROOT"
+    before="$(set_digest)"
+    # a program installed after the backup: a restore would delete it
+    printf '#!/bin/sh\necho later\n' > "$r/bin/gremion-later"
+    chmod 755 "$r/bin/gremion-later"
+    before="$(set_digest)"
+    apply
+    [ "$status" -eq 2 ] || { echo "later program: ${status}: ${output}"; return 1; }
+    [[ "$output" == *"bin/gremion-later"* ]] || { echo "$output"; return 1; }
+    refute_recorded bootstrap "cd"
+    [ "$(set_digest)" = "$before" ]
+    rm -f "$r/bin/gremion-later"
+    # a library changed after the backup: a restore would revert it
+    printf '# core, newer than the backup\n' > "$r/lib/cd/core.sh"
+    before="$(set_digest)"
+    apply
+    [ "$status" -eq 2 ] || { echo "changed library: ${status}: ${output}"; return 1; }
+    [[ "$output" == *"lib/cd/core.sh"* ]] || { echo "$output"; return 1; }
+    refute_recorded bootstrap "cd"
+    [ "$(set_digest)" = "$before" ]
+    cp -p "${GREMION_ROOT}/data/cd/host-backup/${BACKUP_NAME}/lib/cd/core.sh" "$r/lib/cd/core.sh"
+    # a unit installed after the backup
+    printf '[Unit]\nDescription=later\n' > "${GREMION_SYSTEMD_DIR}/gremion-cd-later.service"
+    before="$(set_digest)"
+    apply
+    [ "$status" -eq 2 ] || { echo "later unit: ${status}: ${output}"; return 1; }
+    refute_recorded bootstrap "cd"
+    [ "$(set_digest)" = "$before" ]
+    rm -f "${GREMION_SYSTEMD_DIR}/gremion-cd-later.service"
+    # the installed set is the backup again: the apply goes ahead
+    apply
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    assert_recorded bootstrap "cd mode=ok"
+}
+
+@test "an installed file that is a symlink is refused: it is not the backup's bytes, whatever it points at" {
+    make_backup
+    local r="$GREMION_ROOT" before
+    # same bytes as the backup, so only the link itself can make this refuse
+    cp "$r/bin/gremion-other" "${BATS_TEST_TMPDIR}/other.real"
+    rm -f "$r/bin/gremion-other"
+    ln -s "${BATS_TEST_TMPDIR}/other.real" "$r/bin/gremion-other"
+    before="$(set_digest)"
+    apply
+    [ "$status" -eq 2 ] || { echo "${status}: ${output}"; return 1; }
+    refute_recorded bootstrap "cd"
+    [ "$(set_digest)" = "$before" ]
 }

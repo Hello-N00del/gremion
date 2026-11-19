@@ -33,6 +33,8 @@ setup() {
         DEPLOY_IDS="$(id -u) $(id -g)"
     fi
     REAL_ID="$(command -v id)"
+    REAL_CHOWN="$(command -v chown)"
+    REAL_STAT="$(command -v stat)"
     set -- ${DEPLOY_IDS}
     shim id "if [ \"\${2-}\" = gremion ]; then case \"\$1\" in -u) echo $1; exit 0 ;; -g) echo $2; exit 0 ;; esac; fi; exec ${REAL_ID} \"\$@\""
     # runuser -u USER -- CMD...: run CMD as ourselves
@@ -58,6 +60,35 @@ run_stage() {
         stage_cd
     ' stage "$src"
 }
+
+# fake_root -- make a plain-uid runner stand in for root, so that "root's" ownership and the deploy
+# user's ownership are two DIFFERENT values and a test can tell them apart (as the runner both are
+# the same uid and a stage that handed everything to the deploy user would pass):
+#   `id -u` and `id -g` (no user) answer 0, `id -u gremion` the runner's ids as before;
+#   chown records "<destination> <owner>" in $GREMION_ROOT/.owners (a temp name of the stage's
+#   replace-by-rename is recorded under the destination it becomes) and really chowns unless the
+#   owner is 0:0; stat of a recorded path answers that owner for %u and %g.
+# owner_of <path> reads the answer back.
+fake_root() {
+    set -- ${DEPLOY_IDS}
+    shim id "if [ \"\${2-}\" = gremion ]; then case \"\$1\" in -u) echo $1; exit 0 ;; -g) echo $2; exit 0 ;; esac; fi
+case \"\$*\" in -u | -g) echo 0; exit 0 ;; esac
+exec ${REAL_ID} \"\$@\""
+    shim chown "owner=\"\$1\"; shift; [ \"\${1-}\" = -- ] && shift
+for p in \"\$@\"; do
+    key=\"\${p%.cd-new.*}\"
+    printf '%s %s\n' \"\$key\" \"\$owner\" >> \"\${GREMION_ROOT}/.owners\"
+    if [ \"\$owner\" != 0:0 ]; then ${REAL_CHOWN} \"\$owner\" -- \"\$p\" || exit 1; fi
+done"
+    shim stat "fmt=\"\$2\"; path=\"\$3\"
+own=\"\$(awk -v k=\"\$path\" '\$1 == k { o = \$2 } END { print o }' \"\${GREMION_ROOT}/.owners\" 2>/dev/null)\"
+if [ \"\$1\" = -c ] && [ -n \"\$own\" ]; then fmt=\"\${fmt//%u/\${own%%:*}}\"; fmt=\"\${fmt//%g/\${own##*:}}\"; fi
+exec ${REAL_STAT} \"\$1\" \"\$fmt\" \"\$path\""
+    hash -r
+}
+
+# owner_of <path> -- "uid:gid" as the stage left it (the recorded owner when fake_root is on)
+owner_of() { stat -c %u:%g "$1"; }
 
 # a writable copy of infra/host to mutate
 scratch_host() {
@@ -308,7 +339,7 @@ template_keys() {
     [ -x "${GREMION_ROOT}/lib/cd/apply-root.sh" ]
 }
 
-@test "stage cd modes: programs 0755, libraries 0644, apply-root.sh 0755 in a directory only root writes" {
+@test "stage cd modes: programs 0755, libraries 0644, apply-root.sh 0755" {
     run_stage
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     [ "$(stat -c %a "${GREMION_ROOT}/bin/gremion-cd")" = 755 ]
@@ -316,13 +347,27 @@ template_keys() {
     [ "$(stat -c %a "${GREMION_ROOT}/lib/cd/core.sh")" = 644 ]
     [ "$(stat -c %a "${GREMION_ROOT}/lib/cd/apply-root.sh")" = 755 ]
     [ "$(stat -c %a "${GREMION_ROOT}/lib/cd")" = 755 ]
-    # the apply script and its directory belong to whoever ran the stage (root on a host)
-    [ "$(stat -c %u "${GREMION_ROOT}/lib/cd/apply-root.sh")" = "$(id -u)" ]
-    [ "$(stat -c %u "${GREMION_ROOT}/lib/cd")" = "$(id -u)" ]
-    # the programs and libraries belong to the deploy user
+}
+
+# What this proves and what it does not. The apply script and lib/cd are root's, so a process of
+# the deploy user that holds no sudo cannot edit the script in place. It is NOT a barrier against
+# the deploy user itself: that user holds sudo NOPASSWD:ALL (stage user) and owns lib/, so it can
+# rename lib/cd whatever the owner of the directory is. The owner is still checked, because a
+# deploy-owned apply script would also be edited in place by every compromised tick.
+@test "stage cd owners: apply-root.sh and lib/cd belong to root, everything else of the set to the deploy user" {
+    fake_root
+    run_stage
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     set -- ${DEPLOY_IDS}
-    [ "$(stat -c %u:%g "${GREMION_ROOT}/bin/gremion-cd")" = "$1:$2" ]
-    [ "$(stat -c %u:%g "${GREMION_ROOT}/lib/cd/core.sh")" = "$1:$2" ]
+    local dep="$1:$2" f
+    [ "$(owner_of "${GREMION_ROOT}/lib/cd/apply-root.sh")" = 0:0 ] || { echo "apply-root.sh: $(owner_of "${GREMION_ROOT}/lib/cd/apply-root.sh")"; return 1; }
+    [ "$(owner_of "${GREMION_ROOT}/lib/cd")" = 0:0 ] || { echo "lib/cd: $(owner_of "${GREMION_ROOT}/lib/cd")"; return 1; }
+    for f in bin/gremion-cd lib/common.sh lib/cd/core.sh bin lib; do
+        [ "$(owner_of "${GREMION_ROOT}/${f}")" = "$dep" ] || { echo "${f}: $(owner_of "${GREMION_ROOT}/${f}")"; return 1; }
+    done
+    # the guard has teeth: the two owners are really different values here
+    [ "$dep" != 0:0 ]
+    [ -s "${GREMION_ROOT}/.owners" ]
 }
 
 @test "stage cd replaces a file by a NEW inode, so a script bash is running is never changed in place" {

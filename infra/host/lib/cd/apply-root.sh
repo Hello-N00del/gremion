@@ -3,13 +3,15 @@ set -euo pipefail
 #
 # apply-root.sh <sha12> -- the ROOT side of applying new host programs (gremion-cd). THE ONLY
 # script of the program that runs as root, and only from gremion-cd-apply@<sha12>.service, which
-# only `sudo -n systemctl start --wait` of the deploy user's release-now starts. No network. It is
+# only `sudo -n systemctl start --wait` of the deploy user's release-now starts. It opens no
+# connection itself (the self-test it runs as the deploy user does: a git ls-remote). It is
 # never sourced by the dispatcher (gremion-cd skips this file name) and never run from a tick.
 #
 #   1. refuse unless root, the instance is ^[0-9a-f]{12}$, releases/<sha12> is a real work tree
 #      whose HEAD is that commit and which is clean (read as the deploy user: root must not run
-#      git over a tree the deploy user controls), and the pending backup is sound. Nothing is touched before all of
-#      that holds.
+#      git over a tree the deploy user controls), and the pending backup is sound AND is the
+#      installed set (every installed file of the set is in it with the same bytes). Nothing is
+#      touched before all of that holds.
 #   2. run `bootstrap.sh cd` of THAT tree, `systemctl daemon-reload` if a unit file changed, then
 #      the self-test of the NEW installed program as the deploy user (--post-apply: the caller
 #      holds the locks, so the check asserts they are held and no test mail is sent).
@@ -119,6 +121,18 @@ restore_set() {
     systemctl daemon-reload || { printf 'apply-root: restore: systemctl daemon-reload failed\n' >&2; rc=1; }
     return "$rc"
 }
+
+# The backup must BE the installed set: a restore deletes every program, library and unit file the
+# backup does not have and puts every other one back, so a backup older than the host (a program
+# installed since, a library changed since) would make a failed apply destroy that work. Nothing
+# is touched before this holds: every installed file of the set is a real file with the backup's
+# bytes (a link is not: its target is not what a restore would put back).
+for f in "${ROOT}"/bin/* "${ROOT}/lib/common.sh" "${ROOT}"/lib/cd/*.sh "${UDIR}"/gremion-cd*.service "${UDIR}"/gremion-cd*.timer; do
+    [[ -e "$f" || -L "$f" ]] || continue
+    case "$f" in "${UDIR}"/*) rel="units/${f##*/}" ;; *) rel="${f#"${ROOT}"/}" ;; esac
+    { [[ -f "$f" && ! -L "$f" && -f "${BK}/${rel}" ]] && cmp -s -- "$f" "${BK}/${rel}"; } \
+        || fail "the installed ${rel} is not what the pending backup holds: the backup is stale, nothing was touched" 2
+done
 
 unit_sums() { local u; for u in "${UNITS[@]}"; do sha256sum -- "${UDIR}/${u}" 2>/dev/null || echo "absent ${u}"; done; }
 
