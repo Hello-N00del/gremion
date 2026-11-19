@@ -238,8 +238,10 @@ export const GRANT_LOCK_NAME = 'gremion.module-upgrade.grant'
  * lock its privilege check would see the winner's half-done grant as an interrupted one and grant at the same time
  * (concurrent GRANTs on one object collide). With it, the second run waits here and, with `onlyIfMissing`, checks AGAIN
  * under the lock. Returns whether a grant ran. A wait past `waitMs` raises 55P03 before any DDL of this run's own.
+ * `onDdl` is called once the lock is held and the grant is about to run (after the re-check said it is still missing),
+ * so a connection error while the connection is reserved or the lock is awaited is reported before any DDL began.
  */
-async function grantLocked(owned: Sql, owner: string, app: string, waitMs: number, onlyIfMissing: boolean): Promise<boolean> {
+async function grantLocked(owned: Sql, owner: string, app: string, waitMs: number, onlyIfMissing: boolean, onDdl?: () => void): Promise<boolean> {
   const conn = await owned.reserve()
   let locked = false
   try {
@@ -250,6 +252,8 @@ async function grantLocked(owned: Sql, owner: string, app: string, waitMs: numbe
     await conn`SELECT set_config('lock_timeout', '0', false)`
     const handle = conn as unknown as Sql
     if (onlyIfMissing && !(await appPrivilegesMissing(handle, owner, app))) return false
+    // from here the grant's statements may run: a connection error after this point is the commit's, not the infrastructure's
+    onDdl?.()
     await grantAppPrivileges(handle, owner, app)
     return true
   } finally {
@@ -294,7 +298,7 @@ export class ModuleDatabaseFailure extends Error {
  */
 export async function upgradeModuleDatabase(row: UpgradeRow, deps: Pick<UpgradeDeps, 'server' | 'catalogue' | 'releaseRef' | 'phaseFor' | 'log' | 'lockWaitTimeoutMs' | 'ddlLockTimeoutMs'>): Promise<UpgradeOneResult> {
   // progress.ddl is false while nothing on this database has been written or can have been (a connection-level
-  // failure then is the infrastructure's); true once the runner is about to begin a file's transaction, or the re-grant runs.
+  // failure then is the infrastructure's); true once the runner is about to begin a file's transaction, or the re-grant holds its lock and is about to grant.
   const progress = { ddl: false }
   let filesApplied = 0
   try {
@@ -351,8 +355,8 @@ export async function upgradeModuleDatabase(row: UpgradeRow, deps: Pick<UpgradeD
       } else if (await appPrivilegesMissing(owned, owner, app)) {
         // Nothing pending, but an earlier run committed files and never finished the grant (it failed, a later file
         // failed, or the one-shot was killed): repair it now. A database that is complete runs no DDL at all.
-        progress.ddl = true
-        regranted = await grantLocked(owned, owner, app, grantWaitMs, true)
+        // progress.ddl is set by grantLocked only once the lock is held and the re-check still says missing
+        regranted = await grantLocked(owned, owner, app, grantWaitMs, true, () => void (progress.ddl = true))
       }
       return { applied: r.applied.length, regranted }
     } finally {

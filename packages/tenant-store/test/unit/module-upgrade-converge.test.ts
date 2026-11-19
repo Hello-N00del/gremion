@@ -139,6 +139,20 @@ describe('the re-grant converges: an interrupted grant is repaired by a later ru
     expect(grantAppPrivileges).not.toHaveBeenCalled()
   })
 
+  it('a connection error while waiting for the re-grant lock, nothing pending: connection class (no DDL began), no grant', async () => {
+    const f = fixture({ missing: true }, sqlErr('57P01'))
+    const r = await upgradeModuleDatabases(f.deps)
+    expect(r).toMatchObject({ failed: 1, files_applied: 0, failure: { kind: 'connection', code: 'connection_57P01' } })
+    expect(grantAppPrivileges).not.toHaveBeenCalled()
+  })
+
+  it('a connection error on the re-grant lock wait AFTER this run committed files stays a commit failure', async () => {
+    runMigrations.mockResolvedValueOnce({ applied: ['0009_x.sql'], alreadyApplied: 1 })
+    const r = await upgradeModuleDatabases(fixture({ missing: false }, sqlErr('57P01')).deps)
+    expect(r).toMatchObject({ failed: 1, failure: { kind: 'commit', code: 'connection_57P01' } })
+    expect(grantAppPrivileges).not.toHaveBeenCalled()
+  })
+
   it('the check is read-only SQL', async () => {
     const f = fixture()
     await upgradeModuleDatabases(f.deps)
