@@ -64,7 +64,7 @@ case "$1" in
       run)
         last=''
         for a in "$@"; do last="$a"; done
-        printf 'run %s svc=%s args=%s\n' "$col" "$last" "$*" >>"$DK/run.log"
+        printf 'run %s svc=%s cwd=%s args=%s\n' "$col" "$last" "$PWD" "$*" >>"$DK/run.log"
         [ -f "$DK/run.$last.out" ] && cat "$DK/run.$last.out"
         rc="$(cat "$DK/run.$last.rc" 2>/dev/null || echo 0)"
         if [ "$rc" = 124 ] && [ -f "$DK/run.$last.leave" ]; then echo c-leftover >"$DK/labelled"; fi
@@ -1105,6 +1105,7 @@ cd_data_migrate ${TREE} green; echo rc=\$?"
     # from the NEW tree with the TARGET colour's env, no --profile, never the live colour's file
     [ "$(grep -c '^run app-green ' "$DK/run.log")" -eq 2 ]
     [ "$(grep -c '^run app-blue ' "$DK/run.log")" -eq 0 ]
+    [ "$(grep -c " cwd=${TREE} " "$DK/run.log")" -eq 2 ]
     grep -q -- "--no-deps" "$DK/run.log"
     grep -q -- "-T" "$DK/run.log"
     [ "$(grep -c -- '--profile' "$DK/run.log")" -eq 0 ]
