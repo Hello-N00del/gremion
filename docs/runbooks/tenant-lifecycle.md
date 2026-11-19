@@ -550,7 +550,8 @@ in the same transaction that turns the enablement off. That row is the only cloc
 | Where | At switch-off | Switch-on inside the 30 days | Day 30 |
 |---|---|---|---|
 | Module database (calendar, content, finance, publishing, vault) | exported and verified, then BLOCKED: the app role loses CONNECT, the database stays alive | unblocked, the data is back | dropped, and the row's own export is deleted with it |
-| `board` (no module database) | hidden through `config.modules.board`; no export is taken | shown again | nothing is deleted (`registerNoRetention`); the rows stay in the customer's kernel database, and how long they may be kept is decided under the module's processing record (`rp-brd-module-data`) |
+| `board` in its own module database (a customer created with board ticked) | exported and verified, then BLOCKED like the rows above; the board is hidden through `config.modules.board` | unblocked, the same boards are back | the database is dropped and the export is KEPT: it stays 365 days after day 30 (provisional until the DPO confirms the length: `EXPORT_KEEP_DAYS` in `packages/provisioning/src/export-hold.ts`, retention catalogue rows RC-BRD and RC-MOD-EXPORT), the date is written to `export_kept_until`, and the day-30 job deletes the dump only after that date; every other module in this table keeps the 30-day rule |
+| `board` still in the kernel tables (a customer created without board ticked, or before board had its own database) | where the customer had a board enablement: hidden by the module-switch reconciler through `config.modules.board`, and the 30-day clock opens; no export is taken, because there is no database to export | refused by the same gate as a later enable of board (it would create an empty database beside the kernel rows), and while the platform row is disabled the reconciler puts a hand-set `config.modules.board` back to false: a platform switch-off of a kernel board is one-way in this release, so hide such a board with `config.modules.board = false` and do not switch it off | nothing is deleted (`registerNoRetention`); the rows stay in the customer's kernel database, and how long they may be kept is decided under the module's processing record (`rp-brd-module-data`) |
 | `votes` (Nextcloud Polls) | every open poll is locked by moving its deadline into the past, the remaining time is stored | the deadline becomes "now plus the stored remaining time"; a poll without a deadline gets none again; a poll that had already expired or been closed is never reopened | polls are deleted unless a protocol references them; a poll without a sealed line is kept and reported |
 | `elections` (Helios) | open elections are paused through the pause port | unpaused with the stored remaining time | nothing is deleted in Helios; an election with a sealed result is archived in the tenant table |
 | `messaging` (Matrix) | every org unit's room is archived (read-only) | unarchived | rooms the Karenz archived are deleted, except meeting-linked rooms (RC-MSG-LINK) |
@@ -689,6 +690,116 @@ timer and the platform table on the running host, a real-browser switch-off and 
 `votes`, the delivered mail, the day-30 simulation, the forced failure and its alert, the Polls
 lock, the Helios pause probe and the Nextcloud read-only group folder, the two-tenant folder
 separation, and the retained list after a fresh start.
+
+## Board: where a customer's board lives
+
+A customer's board is in one of two places: its own database `t_<hex32>__board` on `board-postgres`
+(the flag `module`), or the tables `board`, `stack` and `card` of its kernel database `t_<hex32>__kernel`
+(the flag `kernel`, which is also what a customer with no flag row reads). The flag is the one row of
+the table `board_location` in the customer's kernel database; the board README
+([modules/board](../../modules/board/README.md)) has the table of readings. The Karenz table above says
+what a switch-off does in each case.
+
+**What this release does.** A customer created with board ticked gets its own board database in the
+create flow and the flag `module` at once, so its board never lives in the kernel. A customer created
+without board ticked keeps its board in the kernel tables, and board cannot be ticked for it later:
+the enable is refused before anything is written, because it would create an empty database beside the
+kernel rows. Board has to be ticked when the customer is created.
+
+**What is not available yet.** Moving an existing customer's board from the kernel tables into its own
+database is not available yet. There is no verb for it in this release, and nothing here may be
+followed as a move procedure. Do not copy the rows by hand: nothing would stop a writer during the copy,
+and the flag is written by the create flow alone. A customer that already holds its board in the kernel
+keeps it there until the move exists.
+
+### Check where every customer's board lives (read-only)
+
+This reads one row and three counts per customer database, in a read-only session, and prints counts
+only: no database name, no slug, no board or card text.
+
+```bash
+cd /opt/gremion/current
+pg() {
+  docker compose --env-file /opt/gremion/etc/env/state.env exec -T \
+    -e PGOPTIONS='-c default_transaction_read_only=on' postgres \
+    psql -U postgres -tA -v ON_ERROR_STOP=1 "$@" </dev/null
+}
+dbs=$(pg -c "SELECT datname FROM pg_database WHERE datname ~ '^t_[0-9a-f]{32}__kernel\$' ORDER BY datname") || echo "listing failed: stop"
+echo "customer databases found: $(printf '%s\n' "$dbs" | grep -c .)"
+for db in $dbs; do
+  pg -d "$db" -c "SELECT coalesce((SELECT location FROM board_location WHERE id), 'kernel') || ' ' || CASE WHEN (SELECT count(*) FROM board) + (SELECT count(*) FROM stack) + (SELECT count(*) FROM card) > 0 THEN 'rows' ELSE 'empty' END" 2>/dev/null || echo unreadable
+done | sort | uniq -c
+# first line: how many customer databases exist; then one line per distinct answer with the number of
+# customers that gave it, for example:
+# customer databases found: 2
+#       2 module empty
+```
+
+The number on the first line must not be 0, and the numbers in front of the answers must add up to it.
+A 0, or a sum that differs, means the listing or a read failed: stop, and do not take the rest as an
+all-clear.
+
+How to read each line:
+
+| Line | Meaning | What to do |
+|---|---|---|
+| `module empty` | the board is in the customer's own database and the kernel tables are empty | nothing: this is the answer for every customer created on this release with board ticked |
+| `module rows` | the flag says `module` but the kernel tables hold rows | stop: those rows are not served; do not touch them and raise it |
+| `kernel empty` | the board is in the kernel and there is no board data yet | a customer created without board ticked, or one that never used it; it cannot be given a board database in this release |
+| `kernel rows` | the board data is in the kernel tables | expected only for a customer created before board had its own database; it stays there until the move exists |
+| `moving ...` | a move marked the customer | no step of this release writes this value: stop and raise it |
+| `unreadable` | the table `board_location` does not exist in that database (the kernel migration 0066 is not applied to it) or the database could not be read | apply the release's migrations for that customer, then run the check again |
+
+"No customer has its board located in the kernel" is the case in which the first line is not 0, the
+numbers in front of the answers add up to it, no answer starts with `kernel` or `moving`, and none
+reads `unreadable`.
+
+### Order for the real customer
+
+1. Deploy the release and confirm the check above has no `unreadable` line.
+2. Create the real customer, with board ticked, from the panel's create form or the create request.
+3. Run the check again. The number in front of `module empty` is one higher than before, the first
+   line is one higher too, and no `kernel` or `moving` answer appeared or changed.
+4. Enter the real data only after that. A customer created before this release stays in the kernel and
+   is not the real customer; a placeholder customer that should have its own board database is created
+   again (staging only), never moved.
+
+### Releasing or re-dating a kept board export by hand
+
+The day-30 job keeps the board export until the date in `export_kept_until` of the Karenz row, and a
+later change of the period does not re-date an export that is already kept. Releasing an export early,
+or moving its date once the DPO has set the final period, is a hand statement on the platform database.
+It is irreversible once the job has run: after day 30 the dump is the only copy of that customer's
+board, so do it only on a recorded decision.
+
+```bash
+source infra/host/lib/customer-ops.sh
+tc karenz-status <slug>
+# find the row with moduleKey board; note its karenzId. exportKeptUntil must be set and exportDeletedAt empty.
+cd /opt/gremion/current
+docker compose --env-file /opt/gremion/etc/env/state.env exec -T postgres \
+  psql -U postgres -d gremion_platform -v ON_ERROR_STOP=1 -tA \
+  -c "UPDATE plt.module_karenz SET export_kept_until = now() - interval '1 second' WHERE karenz_id = '<karenzId>' AND export_deleted_at IS NULL AND export_kept_until IS NOT NULL" </dev/null
+# UPDATE 1 took effect; UPDATE 0 means the id is wrong or the row is not a kept export
+```
+
+To move the date instead of releasing the export, set `export_kept_until` to the new timestamp in the
+same statement. A release takes effect on the next hourly `karenz-run` with `KARENZ_FINAL_DELETION` set
+to `on`; with it `off` the run is a dry run and the dump stays. The run then deletes the dump and its
+`.sha256` sidecar and sets `export_deleted_at`; read it back with `tc karenz-status <slug>`. The dumps
+are under `TENANT_EXPORT_DIR/<customer id>/board/`, on the host in `data/module-exports`, which the
+nightly `gremion-backup` stages.
+
+### Lifecycle verbs and a release in progress
+
+A deploy, a switch, a rollback, a snapshot and a backup each hold the host lock `runtime/hostd.lock`
+(`gremion-hostd`). The executor, `karenz.sh`, `purge.sh` and `gremion-tenant` take that lock too and
+skip, wait or answer busy (exit 3). The raw one-shot `tc <verb>` of `infra/host/lib/customer-ops.sh`
+takes no lock. So while a release is being deployed, run only read-only verbs through it
+(`karenz-status`, `status`) and no raw verb that writes (`enable-module`, `disable-module`,
+`karenz-run`, `purge-run`, `import-apply`, `delete`): such a write races the
+migrations and the colour switch of the release. Wait for the deploy to end, or go through the
+executor or `gremion-tenant`, which respect the lock.
 
 ## Reconcile (drift guard)
 

@@ -70,25 +70,12 @@ function scratchContainer(): string {
 }
 
 /**
- * The leaf's own lifecycle: module.json declares NO runtime.database or runtime.export since the board wave of
- * 2026-11-11 (the default in-process board lives in the kernel tenant database, so enabling it opens no module
- * database). This suite proves the leaf (BOARD_BACKEND=service, test environment), so it declares the leaf's
- * database and export itself on top of the real module.json: the declaration enableModule/disableModule need to
- * create, migrate, export and block t_<tenant>__board. Nothing else is overridden.
+ * The lifecycle runs against the shipped module.json as it is: it declares the database on board-postgres and the
+ * export under rp-brd-module-data, so a drift between that file and what enableModule and disableModule need to
+ * create, migrate, export and block t_<tenant>__board is red here. Nothing is overridden.
  */
-const declared = JSON.parse(readFileSync(new URL('../module.json', import.meta.url), 'utf8')) as LifecycleModule['moduleJson']
-const boardModule: LifecycleModule = {
-  id: 'board',
-  dir: BOARD_DIR,
-  moduleJson: {
-    ...declared,
-    runtime: {
-      ...declared.runtime,
-      database: { postgresService: 'board-postgres', migrations: 'migrations' },
-      export: { kind: 'pg_dump', retentionProfile: 'rp-brd-module-data' },
-    },
-  } as LifecycleModule['moduleJson'],
-}
+const moduleJson = JSON.parse(readFileSync(new URL('../module.json', import.meta.url), 'utf8')) as LifecycleModule['moduleJson']
+const boardModule: LifecycleModule = { id: 'board', dir: BOARD_DIR, moduleJson }
 
 /** Test-only allow fixture for the level-1 gate (TASK-044 implements the real one). */
 const allowGate: EnableGate = async (_tenantId, moduleKey) => {

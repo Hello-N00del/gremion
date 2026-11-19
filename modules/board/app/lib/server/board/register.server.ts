@@ -27,7 +27,11 @@ registerDataProvider('board:delete-org-unit-boards', deleteBoardsOfOrgUnit)
 // modules/board/README.md); there a platform disable does NOT hide the board. A customer created
 // with board unticked has no platform row, so nothing follows and the board stays on by default.
 // A switch-off HIDES the board and deletes nothing: the rows stay where they are (kernel tables or the
-// blocked module database), and a later enable shows the same boards again. The board retains no K-class
+// blocked module database). A later enable shows the same boards again for a board in its module
+// database (it restores the blocked database); for an active customer whose board is still in the kernel
+// tables a later enable is refused by the module gate, because it would create an empty module database
+// beside the kernel rows, and the move that carries them is not part of this release. Such a board
+// is hidden by setting config.modules.board to false by hand (modules/board/README.md). The board retains no K-class
 // record, so no participant is registered here and the Karenz final step seals no copy of it. Without the
 // declaration below the retained step fails closed on every pass.
 registerNoRetention('board')

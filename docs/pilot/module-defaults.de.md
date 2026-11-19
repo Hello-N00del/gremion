@@ -1,4 +1,4 @@
-<!-- i18n-sync: source=module-defaults.md sha256=df1352825e06500008e2334dfeda5618a142f5be9d9e855541a6e01aa5ea7cbb -->
+<!-- i18n-sync: source=module-defaults.md sha256=9373ca9e91496986ba4d249ceb0f709ff652fdcabcbf622431f83d53aaea2ea2 -->
 [English](./module-defaults.md) | **Deutsch**
 
 # Modul-Standards im Pilot: was das Repository festhält, was gemessen ist, was übergeben wird
@@ -22,7 +22,7 @@ keines (`packages/provisioning/test/code-default-off.test.ts`).
 | publishing | aktiviert | Newsletter |
 | files | aktiviert | Dokumente über Nextcloud, Bearbeitung in Collabora |
 | messaging | aktiviert | Chat und Video |
-| board | aktiviert | Aufgabenboard je Organisationseinheit; wird im Prozess aus der eigenen Datenbank des Kunden ausgeliefert, die Aktivierung öffnet also keine Moduldatenbank und startet kein Compose-Profil. Es wird bei der Anlage über dasselbe Isolations-Gate gewählt wie die anderen Module (der Board-Isolationsfall, `scripts/verify/suites/isolation-tenant.mjs`) |
+| board | aktiviert | Aufgabenboard je Organisationseinheit; ein Kunde, der mit angekreuztem board angelegt wird, hat die eigene Moduldatenbank des board und das Compose-Profil `board`; ein Kunde ohne board wird im Prozess aus den Kernel-Tabellen seiner eigenen Datenbank bedient. Es wird bei der Anlage über dasselbe Isolations-Gate gewählt wie die anderen Module (der Board-Isolationsfall, `scripts/verify/suites/isolation-tenant.mjs`) |
 | elections | nicht genannt | Optional, keine satzungsgemäße Wahl ([elections-scope](../compliance/elections-scope.de.md)); startet aus und wird in der App-Konfiguration ausgeschaltet gehalten (`defaultEnabled: false` im Manifest und eine Festschreibung beim Lesen und Schreiben von `config.modules`), sodass weder die Navigation noch `/votes` Wahl-Wortlaut tragen; auf jeder Seite unter `/elections` ist ein dauerhafter Hinweis eingebunden |
 | finance, vault | nicht genannt | Vom Standard-Build ausgeschlossen (`modules/disabled.json`) |
 | handover | nicht genannt | Nicht Teil des Pilotsatzes |
@@ -41,8 +41,9 @@ entfallen).
   content, publishing, files, messaging und board und keines von elections, finance, vault,
   handover; jede genannte ID hat eine `module.json`.
 - (b) keine `COMPOSE_PROFILES`-Zeile in `infra/host/templates/env/*.env.tmpl` nennt finance,
-  board, vault oder vaultwarden (board braucht keines: es läuft im Prozess). Die Profile der Pilotmodule werden aus
-  `infra/host/module-profiles.json` gerendert, nicht in eine Vorlage geschrieben.
+  board, vault oder vaultwarden. Die Profile der Pilotmodule, darunter das Profil `board`
+  (`board-postgres` und `board-service`), werden aus `infra/host/module-profiles.json` gerendert, nicht in
+  eine Vorlage geschrieben.
 - (c) keine `modules/*/module.json` enthält eine Deklaration zur Standardaktivierung.
 - (d) das Create-Formular des Panels wählt kein Modul-Kontrollkästchen vor.
 
@@ -71,16 +72,26 @@ dieselbe Konfiguration gesperrt; Stufe 1 je Anfrage ist weiterhin TASK-044-b.
 
 **Board ist bei der Anlage wählbar.** Das Aktivierungs-Gate lehnt es nicht mehr namentlich ab
 (nur vault bleibt abgelehnt); es durchläuft das Gate wie jedes andere Modul, auf ein bestandenes
-kundenübergreifendes Isolationsergebnis für den eingesetzten Release. Es wird im Prozess auf
-Kernel-Tabellen der eigenen Datenbank des Kunden ausgeliefert und hat daher keine eigene
-Moduldatenbank. Ein Gremium kann board in den eigenen Einstellungen weiterhin nicht schalten: Dort
+kundenübergreifendes Isolationsergebnis für den eingesetzten Release. Ein Kunde, der mit
+angekreuztem board angelegt wird, hat von Anfang an die eigene Moduldatenbank des board; ein Kunde
+ohne board behält es auf den Kernel-Tabellen seiner eigenen Datenbank. Ein Gremium kann board in den eigenen Einstellungen weiterhin nicht schalten: Dort
 bleibt es zurückgehalten. Der Isolationsnachweis für board auf einem laufenden Host wird nach dem
 Einsatz erfasst; solange ein Host ihn für den eingesetzten Release nicht erfasst hat, lehnt das Gate
 board ab wie jedes Modul ohne Nachweis.
 
 Ein Kunde, der ohne angekreuztes board angelegt wird, hat dafür keine Plattformzeile; das board ist
-für ihn also trotzdem eingeschaltet. Um es später auszublenden, auf der Kundenseite zuerst „Modul
-aktivieren“ und dann „Modul deaktivieren“ verwenden.
+für ihn also trotzdem eingeschaltet und wird aus den Kernel-Tabellen ausgeliefert. Das spätere
+Einschalten von board für einen solchen aktiven Kunden wird abgelehnt (es wird nichts geschrieben),
+weil die Aktivierung eine leere board-Datenbank neben den Kernel-Zeilen anlegen würde; der Schritt,
+der das board in die eigene Datenbank verschiebt, gehört nicht zu diesem Release. „Modul
+aktivieren“ ist daher auch kein Weg, dieses board auszublenden. Zum Ausblenden `config.modules.board`
+von Hand auf false setzen (siehe die board-README).
+
+Der Runbook-Abschnitt „Board: where a customer's board lives“
+([tenant-lifecycle](../runbooks/tenant-lifecycle.md), englisch) enthält die schreibgeschützte Prüfung,
+die je Kunde zeigt, ob das Board in der eigenen Datenbank oder in den Kernel-Tabellen liegt, und die
+Reihenfolge für die Anlage des echten Kunden: nachdem der Release läuft, mit angekreuztem board, damit
+sein Board in der eigenen Datenbank beginnt.
 
 ## 4. Übergaben
 

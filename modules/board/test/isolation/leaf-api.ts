@@ -71,5 +71,7 @@ export function leafApi(server: http.Server, secret: string): BoardApi {
     moveCard: (as, id, to) => call(as, 'PATCH', `/api/v1/cards/${seg(id)}/move`, to),
     promote: (as, id, input) => call(as, 'POST', `/api/v1/boards/${seg(id)}/promote`, input),
     promoted: (as, candidateIds) => call(as, 'POST', '/api/v1/cards/promoted', { candidateIds }),
+    eraseSubject: (as, subjectId) => call(as, 'POST', '/api/v1/erase-subject', { subjectId }),
+    deleteOrgUnitBoards: (as, orgUnitId) => call(as, 'DELETE', `/api/v1/org-units/${seg(orgUnitId)}/boards`),
   }
 }

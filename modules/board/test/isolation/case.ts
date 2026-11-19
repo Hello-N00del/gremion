@@ -81,8 +81,9 @@ export const is2xx = (r: ApiResult): boolean => r.status >= 200 && r.status < 30
 
 /**
  * What each leaf route does, for validateCase: a read needs a read attempt, a
- * write a write attempt, and POST /api/v1/boards is covered by a control
- * (vector 9, see boardControls). case.test.ts pins these keys to the route table.
+ * write a write attempt, and POST /api/v1/boards, POST /api/v1/erase-subject
+ * and DELETE /api/v1/org-units/:id/boards are covered by a control (vectors 9,
+ * E and O, see boardControls). case.test.ts pins these keys to the route table.
  */
 export const BOARD_ROUTE_KINDS: ReadonlyMap<string, 'read' | 'write' | 'control'> = new Map([
   ['GET /api/v1/boards', 'read'],
@@ -95,6 +96,11 @@ export const BOARD_ROUTE_KINDS: ReadonlyMap<string, 'read' | 'write' | 'control'
   ['PATCH /api/v1/cards/:id/move', 'write'],
   ['POST /api/v1/cards/promoted', 'read'],
   ['POST /api/v1/boards/:id/promote', 'write'],
+  // The two routes the kernel itself calls (the erasure of a person, the delete of an org unit). A tenant may
+  // legitimately call them for anything inside its OWN database, so a 2xx is not a refusal: each is a control
+  // (vectors E and O, see boardControls) that asserts the effect stays in the caller's database.
+  ['POST /api/v1/erase-subject', 'control'],
+  ['DELETE /api/v1/org-units/:id/boards', 'control'],
 ])
 
 function byId<T extends { id?: unknown }>(rows: readonly T[]): T[] {
@@ -248,13 +254,82 @@ export function boardControls(): Control[] {
         return { ok, detail: `${r.status} ${ok ? "carries A's canary only" : body.slice(0, 200)}` }
       },
     },
+    {
+      vector: 'E',
+      route: 'POST /api/v1/erase-subject',
+      what: "erasing one person, who holds a card in BOTH tenants, changes A's cards only: B keeps the person and B's fingerprint is unchanged",
+      async run({ api, attacker, own, victim, fingerprint }) {
+        // the same person (an identity-provider id) holds a card in each tenant, as author and as assignee
+        const subject = randomUUID()
+        const make = (as: TenantRef, rec: BoardRecord) =>
+          api.createCard(as, { stackId: rec.stackIds[0], title: `control-E-${randomUUID()}`, createdBy: subject, assigneeKeycloakId: subject })
+        const a = await make(attacker, own)
+        const b = await make(victim.tenant, victim)
+        if (!is2xx(a) || !is2xx(b)) return { ok: false, detail: `seeding answered ${a.status} / ${b.status}` }
+        const aCardId = (a.body as { id: string }).id
+        const bCardId = (b.body as { id: string }).id
+        const fpBefore = await fingerprint(victim.tenant, victim)
+        const r = await api.eraseSubject(attacker, subject)
+        const countsOf = (x: ApiResult) => (x.body as { counts?: Record<string, number> } | null)?.counts
+        const why: string[] = []
+        if (r.status !== 200) why.push(`erase answered ${r.status}`)
+        if (countsOf(r)?.['card_assignee'] !== 1 || countsOf(r)?.['card_created_by'] !== 1) {
+          why.push(`A's counts are ${JSON.stringify(countsOf(r))}, expected exactly one card each`)
+        }
+        type DeckCard = { id: string; created_by: string | null; assignee_keycloak_id: string | null }
+        const cardOf = async (as: TenantRef, rec: BoardRecord, id: string) =>
+          ((await api.deck(as, rec.boardId)).body as { cards?: DeckCard[] } | null)?.cards?.find((c) => c.id === id)
+        const aAfter = await cardOf(attacker, own, aCardId)
+        if (aAfter?.created_by !== 'erased' || aAfter.assignee_keycloak_id !== null) why.push("A's card still carries the person")
+        const bAfter = await cardOf(victim.tenant, victim, bCardId)
+        if (bAfter?.created_by !== subject || bAfter.assignee_keycloak_id !== subject) why.push("B's card lost the person")
+        if ((await fingerprint(victim.tenant, victim)) !== fpBefore) why.push("B's fingerprint changed")
+        const again = await api.eraseSubject(attacker, subject)
+        if (again.status !== 200 || countsOf(again)?.['card_assignee'] !== 0 || countsOf(again)?.['card_created_by'] !== 0) why.push('a repeat is not a no-op')
+        return { ok: why.length === 0, detail: why.length ? why.join('; ') : "A's one card erased, B's card and fingerprint unchanged, a repeat is a no-op" }
+      },
+    },
+    {
+      vector: 'O',
+      route: 'DELETE /api/v1/org-units/:id/boards',
+      what: "deleting the boards of an org unit id that BOTH tenants have boards on removes A's boards only; B's boards and fingerprint stay",
+      async run({ api, attacker, own, victim, fingerprint }) {
+        const ou = victim.orgUnitId
+        // A gets a board with a card on that org unit id: self-contained, whatever vector 9 left behind
+        const made = await api.createBoard(attacker, { orgUnitId: ou, name: `control-O-${randomUUID()}`, stacks: ['To Do'] })
+        if (made.status !== 201) return { ok: false, detail: `A's board create answered ${made.status}` }
+        const mine = made.body as { board: { id: string }; stacks: { id: string }[] }
+        const card = await api.createCard(attacker, { stackId: mine.stacks[0]!.id, title: 'control-O-card', createdBy: 'control' })
+        if (!is2xx(card)) return { ok: false, detail: `A's card create answered ${card.status}` }
+        const listOf = async (as: TenantRef, orgUnit: string) =>
+          (((await api.listBoards(as, [orgUnit])).body as { data?: unknown[] } | null)?.data ?? []) as { id: string }[]
+        const deletedOf = (x: ApiResult) => (x.body as { deleted?: number } | null)?.deleted
+        const aBefore = await listOf(attacker, ou)
+        const bBefore = await listOf(victim.tenant, ou)
+        const fpBefore = await fingerprint(victim.tenant, victim)
+        const why: string[] = []
+        if (aBefore.length < 1) why.push("A's boards on that org unit are not listed")
+        if (bBefore.length < 1) why.push('B has no board on that org unit: the control would prove nothing')
+        const r = await api.deleteOrgUnitBoards(attacker, ou)
+        if (r.status !== 200) why.push(`delete answered ${r.status}`)
+        if (deletedOf(r) !== aBefore.length) why.push(`deleted ${JSON.stringify(deletedOf(r))}, A had ${aBefore.length}`)
+        if ((await listOf(attacker, ou)).length !== 0) why.push("A's boards are still there")
+        if ((await api.getBoard(attacker, mine.board.id)).status !== 404) why.push("A's deleted board still answers")
+        if ((await listOf(attacker, own.orgUnitId)).length < 1) why.push("A's board on its own org unit went too")
+        if (JSON.stringify(await listOf(victim.tenant, ou)) !== JSON.stringify(bBefore)) why.push("B's boards on that org unit changed")
+        if ((await fingerprint(victim.tenant, victim)) !== fpBefore) why.push("B's fingerprint changed")
+        const again = await api.deleteOrgUnitBoards(attacker, ou)
+        if (again.status !== 200 || deletedOf(again) !== 0) why.push('a repeat is not a no-op')
+        return { ok: why.length === 0, detail: why.length ? why.join('; ') : `A's ${aBefore.length} board(s) deleted with their cards, B's board and fingerprint unchanged` }
+      },
+    },
   ]
 }
 
 export function boardIsolationCase(api: BoardApi, seeder: Seeder): IsolationCase<BoardRecord> {
   return {
     module: 'board',
-    routePrefixes: ['/api/v1/boards', '/api/v1/cards'],
+    routePrefixes: ['/api/v1/boards', '/api/v1/cards', '/api/v1/erase-subject', '/api/v1/org-units'],
     seed: (as) => seeder(as),
     // TASK-044's single read and write: vector 3 (deck) and vector 5 (card into a stack).
     read: (as, rec) => api.deck(as, rec.boardId),
