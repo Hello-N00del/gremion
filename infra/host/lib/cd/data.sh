@@ -32,16 +32,22 @@
 # shellcheck disable=SC2016  # the jq programs and SQL texts below are single-quoted on purpose
 
 # -- constants (plain assignments; none is a config key) ---------------------------------
-# The fixed allowance of the lock span for the dump, the start, the gates and the two kernel
-# one-shots, which have no cap of their own that is summed (the dump time of the module
-# servers is an owed measurement; the constant is revised from it).
+# No environment variable overrides any of them: the lock span floor sums them, so a value
+# that could be changed from outside could undercut it.
+#
+# The fixed allowance of the lock span for the dump, the start and the gates (the dump time of
+# the module servers is an owed measurement; the constant is revised from it). The two kernel
+# one-shots are NOT in it: each has its own cap below, and the floor sums both caps and a
+# kill confirmation for each.
 _CD_DATA_ALLOWANCE_MIN=30
 # One confirmation poll after a kill by label, per container-running step and service.
 _CD_DATA_KILL_CONFIRM_S=60
 # A leaf service count in the sum of the lock span: calendar, content, publishing.
 _CD_DATA_LEAF_SERVICES=3
-# The cap of one kernel one-shot (migrate, kernel-api-migrate). The timeout ends the
-# docker client, not the container: the stage then kills by label.
+# The kernel one-shots that run under the host lock: migrate and kernel-api-migrate.
+_CD_DATA_ONESHOTS=2
+# The cap of one kernel one-shot. The timeout ends the docker client, not the container: the
+# stage then kills by label and confirms it gone (one kill confirmation per one-shot).
 _CD_DATA_ONESHOT_TIMEOUT_S=600
 # The lifetime of one query through docker exec.
 _CD_DATA_QUERY_TIMEOUT_S=120
@@ -161,7 +167,7 @@ _cd_data_psql() {
         _cd_data_err "the ${svc} container is not running"
         return 4
     fi
-    out="$(timeout -k 5 "${CD_DATA_QUERY_TIMEOUT_S:-$_CD_DATA_QUERY_TIMEOUT_S}" \
+    out="$(timeout -k 5 "$_CD_DATA_QUERY_TIMEOUT_S" \
         docker exec "$cid" psql -X -U "$role" -d "$db" -Atq -v ON_ERROR_STOP=1 -c "$sql" </dev/null 2>/dev/null)" || {
         _cd_data_err "a query on the ${svc} server failed"
         return 4
@@ -224,8 +230,9 @@ _cd_data_status_read() {
 # -- the lock span ------------------------------------------------------------------------
 # cd_data_lock_span_floor -- the least CD_LOCK_SPAN_MAX_MIN that covers every cap of the
 # stages that run under the host lock, in whole minutes: the module step, three leaf runs,
-# one 60 second kill confirmation per container-running step and service, the watch, the
-# longest pause, the commit, and the fixed allowance for dump, start and gates.
+# the two kernel one-shots, one 60 second kill confirmation per container-running step and
+# service (module step, leaf services and both one-shots), the watch, the longest pause, the
+# commit, and the fixed allowance for dump, start and gates.
 cd_data_lock_span_floor() {
     local mod leaf watch pause commit secs
     mod="$(cd_cfg CD_MODULE_UPGRADE_TIMEOUT_S)" || return 2
@@ -233,7 +240,8 @@ cd_data_lock_span_floor() {
     watch="$(cd_cfg CD_WATCH_MINUTES)" || return 2
     pause="$(cd_cfg CD_PAUSE_MAX_MIN)" || return 2
     commit="$(cd_cfg CD_COMMIT_MAX_MIN)" || return 2
-    secs=$((10#$mod + _CD_DATA_LEAF_SERVICES * 10#$leaf + (1 + _CD_DATA_LEAF_SERVICES) * _CD_DATA_KILL_CONFIRM_S))
+    secs=$((10#$mod + _CD_DATA_LEAF_SERVICES * 10#$leaf + _CD_DATA_ONESHOTS * _CD_DATA_ONESHOT_TIMEOUT_S \
+        + (1 + _CD_DATA_LEAF_SERVICES + _CD_DATA_ONESHOTS) * _CD_DATA_KILL_CONFIRM_S))
     printf '%s\n' "$(( (secs + 59) / 60 + 10#$watch + 10#$pause + 10#$commit + _CD_DATA_ALLOWANCE_MIN ))"
 }
 
@@ -272,7 +280,8 @@ _cd_data_timer_next() {
 # A timer overlaps when its next elapse lies in [now, now + SPAN_MIN + its longest run]. The
 # interval is wider than the overlap itself needs: the longest run is added because a
 # stage that runs into a backup cannot be stopped half way. A backup or a purge that is
-# already running holds the host lock, which is read as busy (3) as well.
+# already running holds the host lock, which is read as busy (3) as well (probed last, and
+# only when no timer overlaps: see the end of the function).
 #
 # The hourly Karenz run (minute 17) cannot be avoided by a span of this length and is not
 # guarded; the guard says so on stdout (the status verb discards stdout today).
@@ -287,14 +296,6 @@ cd_data_timer_guard() {
     now="$(cd_now)" || return 2
     bmax="$(cd_cfg CD_BACKUP_MAX_MIN)" || return 2
     pmax="$(cd_cfg CD_PURGE_MAX_MIN)" || return 2
-    _cd_data_hostlock_free || rc=$?
-    if ((rc == 2)); then
-        _cd_data_err "timer guard: flock is not installed"
-        return 2
-    elif ((rc != 0)); then
-        _cd_data_err "timer guard: the host lock is held (a backup, a purge or a customer operation)"
-        return 3
-    fi
     command -v systemctl >/dev/null 2>&1 || { _cd_data_err "timer guard: systemctl is not installed"; return 2; }
     json="$(timeout -k 5 30 systemctl list-timers --all --output json --no-pager </dev/null 2>/dev/null)" || {
         _cd_data_err "timer guard: the timer list cannot be read"
@@ -322,6 +323,18 @@ cd_data_timer_guard() {
             return 3
         fi
     done
+    # The host lock is probed LAST, and only when no timer elapses within the span: the probe
+    # takes the lock exclusively for an instant, and a backup that starts in that instant (it
+    # takes the lock without waiting) would exit "busy" and skip the night. With both timers
+    # clear of the span, only a run started by hand can meet the probe, which is what it is for.
+    _cd_data_hostlock_free || rc=$?
+    if ((rc == 2)); then
+        _cd_data_err "timer guard: flock is not installed"
+        return 2
+    elif ((rc != 0)); then
+        _cd_data_err "timer guard: the host lock is held (a backup, a purge or a customer operation)"
+        return 3
+    fi
     printf 'lock span: fits before the next backup and purge; the hourly karenz run (minute 17) is not guarded (accepted)\n'
     return 0
 }
@@ -553,9 +566,9 @@ _cd_data_plan() {
 
 # -- precheck -----------------------------------------------------------------------------
 # cd_data_precheck -- may a dump set be taken now? 0 yes. 2 a refusal (the dump directory, a
-# ledger lock, a live set of another label, a lock span below its floor, a listing that does
-# not add up); 4 the disk or a query. Creates the dump directory 0700 when it is absent
-# (`take` will not).
+# ledger lock, a live set of another label, a lock span below its floor, free space below
+# twice the size of the set, a listing that does not add up); 4 the free space cannot be read
+# or a query failed. Creates the dump directory 0700 when it is absent (`take` will not).
 cd_data_precheck() {
     local dir mode owner floor span own need sum entry free rc=0 label
     local -a fields=()
@@ -609,7 +622,7 @@ cd_data_precheck() {
     [[ "$free" =~ ^[0-9]+$ ]] || { _cd_data_err "the free space of the dump directory cannot be read"; return 4; }
     if ((free * 1024 < need)); then
         _cd_data_err "the dump directory has $((free / 1024)) MB free; twice the size of the set is $((need / 1048576)) MB"
-        return 4
+        return 2
     fi
     return 0
 }
@@ -699,13 +712,13 @@ cd_data_dumpset_take() {
         _cd_data_status_read "$label" || { _cd_data_err "the ledger cannot be read back after the take"; return 4; }
         if ((_CD_DATA_ST_N < total)); then
             _cd_data_err "the ledger holds ${_CD_DATA_ST_N} live dumps of ${label}, ${total} were planned"
-            return 1
+            return 4
         fi
         for entry in "${_CD_DATA_PLAN[@]}"; do
             IFS='|' read -r -a fields <<<"$entry"
             if [[ -z "${_CD_DATA_ST_DB[${fields[2]}]:-}" ]]; then
                 _cd_data_err "a planned database has no live dump of ${label} in the ledger"
-                return 1
+                return 4
             fi
         done
     fi
@@ -851,11 +864,33 @@ ALTER ROLE pgbouncer_auth LOGIN PASSWORD '@PW@';
 SQL
 )"
     sql="${sql//@PW@/$pw}"
-    if ! printf '%s\n' "$sql" | timeout -k 5 "${CD_DATA_QUERY_TIMEOUT_S:-$_CD_DATA_QUERY_TIMEOUT_S}" \
+    if ! printf '%s\n' "$sql" | timeout -k 5 "$_CD_DATA_QUERY_TIMEOUT_S" \
         docker exec -i "$cid" psql -X -U "$pguser" -d postgres -q -v ON_ERROR_STOP=1 -f - >/dev/null 2>&1; then
         sql=''
         pw=''
         _cd_data_err "the pgbouncer auth role could not be ensured"
+        return 4
+    fi
+    return 0
+}
+
+# _cd_data_pgbouncer_ensure TREE -- the whole of the PgBouncer auth setup, as the installer
+# does it on every migrate: the role with its password, then the lookup function of the NEW
+# tree's docker/pgbouncer/pgbouncer-auth.sql in the `gremion` database (idempotent, so a
+# release that changes the file has it applied). The file reaches psql on its stdin. 0; 2 the
+# tree has no such file or the key is unusable; 4 psql.
+_cd_data_pgbouncer_ensure() {
+    local tree="$1" sqlfile pguser cid
+    sqlfile="${tree}/docker/pgbouncer/pgbouncer-auth.sql"
+    [[ -f "$sqlfile" && -r "$sqlfile" ]] || { _cd_data_err "the release tree has no docker/pgbouncer/pgbouncer-auth.sql"; return 2; }
+    _cd_data_pgbouncer_role || return $?
+    pguser="$(_cd_data_env POSTGRES_USER)" || return 2
+    [[ "$pguser" =~ ^[a-z_][a-z0-9_]{0,62}$ ]] || return 2
+    cid="$(_cd_data_cid postgres)" || return 4
+    [[ -n "$cid" ]] || { _cd_data_err "the postgres container is not running"; return 4; }
+    if ! timeout -k 5 "$_CD_DATA_QUERY_TIMEOUT_S" \
+        docker exec -i "$cid" psql -X -U "$pguser" -d gremion -q -v ON_ERROR_STOP=1 -f - <"$sqlfile" >/dev/null 2>&1; then
+        _cd_data_err "the pgbouncer auth_query function could not be applied"
         return 4
     fi
     return 0
@@ -868,10 +903,9 @@ SQL
 # a container that cannot be confirmed gone, or a bad call; 4 anything else (compose's or
 # the daemon's own failure).
 _cd_data_oneshot() {
-    local tree="$1" colour="$2" svc="$3" rid="$4" log rc=0 cap
+    local tree="$1" colour="$2" svc="$3" rid="$4" log rc=0
     log="$(_cd_data_logfile "cd-data-${svc}")" || { _cd_data_err "the one-shot log cannot be opened"; return 2; }
-    cap="${CD_DATA_ONESHOT_TIMEOUT_S:-$_CD_DATA_ONESHOT_TIMEOUT_S}"
-    CD_DC_TIMEOUT="$cap" cd_dc "$tree" "app-${colour}" run --rm --no-deps --pull never -T --label "gremion.cd=${rid}" "$svc" \
+    CD_DC_TIMEOUT="$_CD_DATA_ONESHOT_TIMEOUT_S" cd_dc "$tree" "app-${colour}" run --rm --no-deps --pull never -T --label "gremion.cd=${rid}" "$svc" \
         >"$log" 2>&1 </dev/null || rc=$?
     _cd_data_trim_log "$log" 15 || true
     case "$rc" in
@@ -890,7 +924,7 @@ _cd_data_oneshot() {
     esac
 }
 
-# cd_data_migrate TREE COLOUR -- the migrate stage: the pgbouncer auth role, the `migrate` and
+# cd_data_migrate TREE COLOUR -- the migrate stage: the pgbouncer auth role and function, the `migrate` and
 # `kernel-api-migrate` one-shots from the NEW tree with the target colour's env, then the
 # module step (cd_modules_upgrade) and, when a module dump of the label exists, the leaf step
 # (cd_leaves_migrate); then the live colour's portal probe and the start of the live signal.
@@ -917,7 +951,7 @@ cd_data_migrate() {
     done
     ((_CD_DATA_ST_MOD > 0)) && modules_dumped=1
     _cd_data_signal_prime "$rid" || true
-    _cd_data_pgbouncer_role || { rc=$?; return "$rc"; }
+    _cd_data_pgbouncer_ensure "$tree" || { rc=$?; return "$rc"; }
     _cd_data_oneshot "$tree" "$colour" migrate "$rid" || { rc=$?; return "$rc"; }
     _cd_data_oneshot "$tree" "$colour" kernel-api-migrate "$rid" || { rc=$?; return "$rc"; }
     cd_modules_upgrade "$tree" "$colour" "$tag" || { rc=$?; return "$rc"; }
@@ -1016,7 +1050,7 @@ cd_data_live_signal_start() {
     fi
     cd_mkdir "$CD_DATA" || return 2
     jq -cn --arg r "$rid" --argjson e "$now" --argjson b "$base" '{v: 1, release: $r, epoch: $e, baseline: $b}' \
-        | cd_atomic_write "$f" 600 || return 1
+        | cd_atomic_write "$f" 600 || { _cd_data_err "live signal: the signal file cannot be written"; return 4; }
     return 0
 }
 

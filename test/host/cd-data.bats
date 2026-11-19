@@ -36,7 +36,8 @@ H6="ffffffffffffffffffffffffffffffff"
 #   rows.module_database      "db_name|state" lines of plt.module_database
 #   tenants.active            the hex ids of the active customers
 #   psql.fail.<service>       a query on that server fails
-#   pgb.stdin / pgb.fail      what `psql -f -` read on stdin / make it fail
+#   pgb.stdin.<db>, pgb.fail  what `psql -f -` read on stdin in that database (pgb.stdin: the
+#                             postgres one) / make every such call fail (pgb.fail.<db>: one)
 #   ref, config.json, config.fail   what `compose config --format json` answers
 #   run.<service>.rc/.out/.leave    a one-shot: exit code, its output, a container that
 #                             outlives a timeout (label gremion.cd, removed by `docker rm`)
@@ -117,8 +118,10 @@ case "$1" in
     fi
     [ -f "$DK/psql.fail.$svc" ] && { echo "psql: error: something is wrong with $db" >&2; exit 1; }
     if [ -n "$file" ]; then
-        cat >"$DK/pgb.stdin"
+        cat >"$DK/pgb.stdin.$db"
+        [ "$db" = postgres ] && cp "$DK/pgb.stdin.$db" "$DK/pgb.stdin"
         [ -f "$DK/pgb.fail" ] && exit 1
+        [ -f "$DK/pgb.fail.$db" ] && exit 1
         exit 0
     fi
     case "$sql" in
@@ -204,8 +207,9 @@ case "$cmd" in
   status)
     [ -f "$DK/status.fail" ] && exit 1
     if [ -f "$DK/status.garbage" ]; then echo "nonsense"; exit 0; fi
-    awk -F'\t' -v r="$rel" 'r == "" || $2 == r { printf "LIVE %s release=%s db=%s taken=2026-11-17T00:00:00Z bytes=100 file=%s\n", $1, $2, $3, $6 }' "$live"
-    n="$(awk -F'\t' -v r="$rel" 'r == "" || $2 == r { c++ } END { print c + 0 }' "$live")"
+    hide="$(cat "$DK/status.hide" 2>/dev/null)"
+    awk -F'\t' -v r="$rel" -v h="$hide" '(r == "" || $2 == r) && $3 != h { printf "LIVE %s release=%s db=%s taken=2026-11-17T00:00:00Z bytes=100 file=%s\n", $1, $2, $3, $6 }' "$live"
+    n="$(awk -F'\t' -v r="$rel" -v h="$hide" '(r == "" || $2 == r) && $3 != h { c++ } END { print c + 0 }' "$live")"
     [ -f "$DK/status.lie" ] && n=$((n + 1))
     printf 'STATUS: %s live dump(s)\n' "$n"
     ;;
@@ -254,7 +258,8 @@ setup() {
     DUMPDIR="${GREMION_ROOT}/migration-dumps"
     TREE="${GREMION_ROOT}/releases/cccccccccccc"
     export DK DUMPDIR TREE
-    mkdir -p "$DK" "${TREE}" "${GREMION_ROOT}/runtime"
+    mkdir -p "$DK" "${TREE}" "${GREMION_ROOT}/runtime" "${TREE}/docker/pgbouncer"
+    printf -- '-- fixture of the auth_query function\nCREATE SCHEMA IF NOT EXISTS pgbouncer;\n' >"${TREE}/docker/pgbouncer/pgbouncer-auth.sql"
     mkdir -m 700 "$DUMPDIR"
     : >"$DK/dump.log"
     : >"$DK/exec.log"
@@ -483,9 +488,11 @@ leak_haystack() {
 @test "set: no call of the set uses a role on a server that does not have it (the postgres role only on the main server)" {
     run --separate-stderr dat "cd_data_dumpset_take ${TAG} app; echo rc=\$?"
     [[ "$output" == *"rc=0"* ]]
-    # every exec of the shim carries the role of its own server
+    # every exec of the shim carries the role of its own server, and every one of the four
+    # running servers was entered (a check that collected nothing fails)
+    [ "$(takes | wc -l)" -gt 0 ]
     while read -r svc role; do
-        [ "$(grep -c "^exec svc=${svc} " "$DK/exec.log")" -gt 0 ] || continue
+        [ "$(grep -c "^exec svc=${svc} " "$DK/exec.log")" -gt 0 ]
         [ "$(grep "^exec svc=${svc} " "$DK/exec.log" | grep -vc "role=${role} ")" -eq 0 ]
     done <<EOF
 postgres postgres
@@ -498,6 +505,11 @@ EOF
 @test "set: the servers of messaging, governance and Nextcloud and the Keycloak server are never entered" {
     run --separate-stderr dat "cd_data_dumpset_take ${TAG} app; echo rc=\$?"
     [[ "$output" == *"rc=0"* ]]
+    # the set did run: the main server and the running module servers were entered, and
+    # databases were taken (a check that collected nothing fails)
+    [ "$(grep -c '^exec svc=postgres ' "$DK/exec.log")" -gt 0 ]
+    [ "$(grep -c '^exec svc=calendar-postgres ' "$DK/exec.log")" -gt 0 ]
+    [ "$(takes | wc -l)" -gt 0 ]
     [ "$(grep -c 'svc=messaging-postgres\|svc=governance-postgres\|svc=nextcloud-postgres\|svc=keycloak' "$DK/exec.log")" -eq 0 ]
     [ "$(grep -c 'c-messaging\|c-governance\|c-nextcloud' "$SHIM_LOG")" -eq 0 ]
 }
@@ -680,6 +692,8 @@ EOF
     run --separate-stderr dat "CD_CFG[CD_DUMP_POLICY]=migration; cd_data_dumpset_take ${TAG} app; echo rc=\$?"
     [[ "$output" == *"rc=0"* ]]
     [ ! -s "$DK/dump.log" ]
+    # the take itself ran and recorded an empty set (a stub that returns 0 records nothing)
+    grep -q 'dumpset_taken' "${GREMION_ROOT}/data/cd/history.jsonl"
 }
 
 # ---------------------------------------------------------------- precheck
@@ -687,6 +701,9 @@ EOF
 @test "precheck: passes on a healthy fixture" {
     run --separate-stderr dat 'cd_data_precheck; echo rc=$?'
     [ "$output" = "rc=0" ]
+    # it read the ledger and sized the set from the servers (a stub that returns 0 does neither)
+    grep -q '^status ' "$DK/dump.log"
+    [ "$(grep -c '^exec svc=postgres ' "$DK/exec.log")" -gt 0 ]
 }
 
 @test "precheck: creates the dump directory 0700 when it is absent and refuses a directory with another mode" {
@@ -744,8 +761,14 @@ EOF
     # df shim answers KB: 2 x sum bytes needs ceil(2*sum/1024) KB
     echo $(( (2 * sum) / 1024 )) >"$DK/df"
     run --separate-stderr dat 'cd_data_precheck; echo rc=$?'
-    [ "$output" = "rc=4" ]
+    # a refusal (2), not a failure that a retry could clear
+    [ "$output" = "rc=2" ]
     [[ "$stderr" == *"free"* ]]
+    # a free space that cannot be read is the infrastructure code
+    echo "not-a-number" >"$DK/df"
+    run --separate-stderr dat 'cd_data_precheck; echo rc=$?'
+    [ "$output" = "rc=4" ]
+    echo $(( (2 * sum) / 1024 )) >"$DK/df"
     echo $(( (2 * sum) / 1024 + 1 )) >"$DK/df"
     run --separate-stderr dat 'cd_data_precheck; echo rc=$?'
     [ "$output" = "rc=0" ]
@@ -771,8 +794,37 @@ EOF
 @test "lock span: the default of CD_LOCK_SPAN_MAX_MIN is no less than the sum of the stage caps plus the allowance (it passes the precheck with the default config)" {
     run --separate-stderr dat 'cd_data_lock_span_floor; cd_cfg CD_LOCK_SPAN_MAX_MIN'
     [ "${lines[0]}" -le "${lines[1]}" ]
-    # the arithmetic: 900 + 3 x 600 + 4 x 60 = 2940 s = 49 min, + 20 + 15 + 30 + 30
-    [ "${lines[0]}" -eq 144 ]
+    # the arithmetic: module step 900 + three leaf runs 3 x 600 + the two kernel one-shots
+    # 2 x 600 + six kill confirmations 6 x 60 = 4260 s = 71 min, + watch 20 + pause 15 + commit 30
+    # + the allowance 30
+    [ "${lines[0]}" -eq 166 ]
+}
+
+@test "lock span: the floor counts the cap of each kernel one-shot and a kill confirmation for each (guard: watched red when only the module and leaf caps were summed)" {
+    # a longer one-shot cap raises the floor by two caps (2 x 600 s = 20 min); a second one-shot
+    # more would raise it by one cap and one confirmation (11 min)
+    run --separate-stderr dat '_CD_DATA_ONESHOT_TIMEOUT_S=1200; cd_data_lock_span_floor'
+    [ "$output" -eq 186 ]
+    run --separate-stderr dat '_CD_DATA_ONESHOTS=3; cd_data_lock_span_floor'
+    [ "$output" -eq 177 ]
+    # the default passes the precheck only because it covers them: a default one cap short refuses
+    cd_write_cfg CD_LOCK_SPAN_MAX_MIN=165
+    run --separate-stderr dat 'cd_data_precheck; echo rc=$?'
+    [ "$output" = "rc=2" ]
+    [[ "$stderr" == *"166"* ]]
+    cd_write_cfg CD_LOCK_SPAN_MAX_MIN=166
+    run --separate-stderr dat 'cd_data_precheck; echo rc=$?'
+    [ "$output" = "rc=0" ]
+}
+
+@test "lock span: no environment variable changes the cap of a one-shot or of a query (the floor sums the constants)" {
+    run --separate-stderr env CD_DATA_ONESHOT_TIMEOUT_S=7200 CD_DATA_QUERY_TIMEOUT_S=7200 bash -c "$(declare -f dat); dat 'cd_data_lock_span_floor; cd_data_precheck; echo rc=\$?'"
+    [ "${lines[0]}" -eq 166 ]
+    [ "${lines[1]}" = "rc=0" ]
+    run --separate-stderr env TAG="$TAG" CD_DATA_ONESHOT_TIMEOUT_S=7200 bash -c "$(declare -f dat mig); mig"
+    [[ "$output" == *"rc=0"* ]]
+    grep -qE "^timeout -k 10 600 docker compose .* migrate\$" "$SHIM_LOG"
+    [ "$(grep -c "^timeout -k 10 7200 " "$SHIM_LOG")" -eq 0 ]
 }
 
 @test "lock span: a raised cap without a raised default is refused (guard: watched red by setting CD_LEAF_MIGRATE_TIMEOUT_S to 1800)" {
@@ -821,6 +873,10 @@ EOF
 
 @test "label: the resolved compose document (it holds secrets) reaches no stream" {
     run --separate-stderr dat "cd_data_dumpset_take ${TAG} app; echo rc=\$?"
+    # compose was asked for the document (and the take ran on it), so the absence below means something
+    [[ "$output" == *"rc=0"* ]]
+    grep -qE '^docker compose .* config ' "$SHIM_LOG"
+    [ "$(takes | wc -l)" -gt 0 ]
     [[ "$output" != *"resolved-secret-marker"* ]]
     [[ "$stderr" != *"resolved-secret-marker"* ]]
 }
@@ -920,6 +976,10 @@ EOF
 @test "leak: the dump program's stdout and stderr of every call are in a 0600 file, never on CD's own streams" {
     run --separate-stderr dat "cd_data_dumpset_take ${TAG} app; echo rc=\$?"
     [ "$output" = "rc=0" ]
+    # the program ran and its words are in the file (a stub prints nothing anywhere)
+    [ "$(takes | wc -l)" -gt 0 ]
+    grep -q 'TAKE-OK' "${GREMION_ROOT}/logs/cd-data-dump.log"
+    [ "$(stat -c %a "${GREMION_ROOT}/logs/cd-data-dump.log")" = 600 ]
     [[ "$output" != *"TAKE-OK"* ]]
     [[ "$output" != *"premigration-dump"* ]]
     [[ "$stderr" != *"TAKE-OK"* ]]
@@ -963,6 +1023,25 @@ EOF
     touch "$DK/status.lie"
     run --separate-stderr dat "cd_data_dumpset_take ${TAG} app; echo rc=\$?"
     [[ "$output" == *"rc=4"* ]]
+}
+
+@test "dump failure: a ledger that holds fewer live dumps than planned, or lacks a planned database, is code 4 and never 1 (the code of a fault of the commit; a ledger or tool fault must not block a good sha)" {
+    # a planned database the ledger does not show: fewer lines than planned
+    printf 'gremion\n' >"$DK/status.hide"
+    run --separate-stderr dat "cd_data_dumpset_take ${TAG} app; echo rc=\$?"
+    [[ "$output" == *"rc=4"* ]]
+    [[ "$stderr" == *"were planned"* ]]
+    # every take ran, so the verdict is about the read-back and not about nothing having happened
+    grep -q "^take rel=${TAG} db=gremion " "$DK/dump.log"
+    # as many lines as planned, but one of them is no planned database (an extra live line of
+    # the label stands in for the hidden one)
+    : >"$DK/dump.log"
+    rm -f "$DK/live.tsv" "$DK/idseq"
+    printf '99\t%s\tunplanned_extra\t\t\t%s/unplanned_extra.99.dump\n' "$TAG" "$TAG" >"$DK/live.tsv"
+    run --separate-stderr dat "cd_data_dumpset_take ${TAG} app; echo rc=\$?"
+    [[ "$output" == *"rc=4"* ]]
+    [[ "$stderr" == *"no live dump of ${TAG}"* ]]
+    [ "$(takes | wc -l)" -gt 0 ]
 }
 
 # ---------------------------------------------------------------- timer guard
@@ -1028,12 +1107,40 @@ EOF
     [[ "$output" == *"rc=0"* ]]
 }
 
+@test "timer guard: the host lock is probed only when no timer overlaps (a probe takes the lock for an instant, and a backup that starts then exits busy and skips the night; guard: watched red when the probe ran first)" {
+    local now=1700000000
+    : >"${GREMION_ROOT}/runtime/hostd.lock"
+    shim flock 'exit 0'
+    # a backup elapses inside the span: the verdict is 3 and the lock was never probed
+    timers_json $((now + 600)) $((now + 100000))
+    run --separate-stderr dat 'cd_data_timer_guard 30; echo rc=$?'
+    [[ "$output" == *"rc=3"* ]]
+    [ "$(grep -c '^flock -n 7$' "$SHIM_LOG")" -eq 0 ]
+    # likewise a purge
+    timers_json $((now + 100000)) $((now + 600))
+    run --separate-stderr dat 'cd_data_timer_guard 30; echo rc=$?'
+    [[ "$output" == *"rc=3"* ]]
+    [ "$(grep -c '^flock -n 7$' "$SHIM_LOG")" -eq 0 ]
+    # no timer data: unknown, and again no probe
+    : >"$DK/timers.json"
+    run --separate-stderr dat 'cd_data_timer_guard 30; echo rc=$?'
+    [[ "$output" == *"rc=2"* ]]
+    [ "$(grep -c '^flock -n 7$' "$SHIM_LOG")" -eq 0 ]
+    # both timers clear of the span: now it is probed, once
+    timers_json $((now + 100000)) $((now + 100000))
+    run --separate-stderr dat 'cd_data_timer_guard 30; echo rc=$?'
+    [[ "$output" == *"rc=0"* ]]
+    [ "$(grep -c '^flock -n 7$' "$SHIM_LOG")" -eq 1 ]
+}
+
 @test "timer guard: CD's own hold of the host lock is not an overlap (the reconcile stage guards each child with the lock held)" {
     cd_need_flock
     local now=1700000000
     timers_json $((now + 100000)) $((now + 100000))
     run --separate-stderr dat 'cd_hostlock_take 0; cd_data_timer_guard 6; echo rc=$?'
     [[ "$output" == *"rc=0"* ]]
+    # the real guard answered (a stub prints nothing)
+    [[ "$output" == *"lock span: fits"* ]]
 }
 
 @test "timer guard: a different time zone and a moved backup time are followed (the timers are read as epochs)" {
@@ -1116,8 +1223,8 @@ cd_data_migrate ${TREE} green; echo rc=\$?"
     [ "$output" = "rc=0" ]
     # the order of the calls the shims and stubs saw
     local order
-    order="$(grep -nE '^docker exec -i c-postgres psql|^docker compose .* run |^stub cd_modules_upgrade|^stub cd_leaves_migrate|^stub cd_colour_portal_probe' "$SHIM_LOG" | sed -E 's/^[0-9]+://' | awk '{ if ($1 == "docker" && $2 == "exec") print "pgbouncer"; else if ($1 == "docker") print "run:" $NF; else print $2 }' | tr '\n' ' ')"
-    [ "$order" = "pgbouncer run:migrate run:kernel-api-migrate cd_modules_upgrade cd_leaves_migrate cd_colour_portal_probe " ]
+    order="$(grep -nE '^docker exec -i c-postgres psql|^docker compose .* run |^stub cd_modules_upgrade|^stub cd_leaves_migrate|^stub cd_colour_portal_probe' "$SHIM_LOG" | sed -E 's/^[0-9]+://' | awk '{ if ($1 == "docker" && $2 == "exec") { if ($0 ~ / -d gremion /) print "pgbouncer-function"; else print "pgbouncer-role" } else if ($1 == "docker") print "run:" $NF; else print $2 }' | tr '\n' ' ')"
+    [ "$order" = "pgbouncer-role pgbouncer-function run:migrate run:kernel-api-migrate cd_modules_upgrade cd_leaves_migrate cd_colour_portal_probe " ]
     # from the NEW tree with the TARGET colour's env, no --profile, never the live colour's file
     [ "$(grep -c '^run app-green ' "$DK/run.log")" -eq 2 ]
     [ "$(grep -c '^run app-blue ' "$DK/run.log")" -eq 0 ]
@@ -1160,6 +1267,39 @@ cd_data_migrate ${TREE} green; echo rc=\$?"
     run --separate-stderr mig
     [[ "$output" == *"rc=4"* ]]
     [ ! -s "$DK/run.log" ]
+}
+
+@test "migrate: the auth_query function of the NEW tree is applied to the gremion database after the role, on stdin, as the installer does (guard: watched red when only the role was ensured)" {
+    printf -- '-- marker of this release\nCREATE OR REPLACE FUNCTION pgbouncer.get_auth(uname text) RETURNS void LANGUAGE sql AS $$ SELECT $$;\n' >>"${TREE}/docker/pgbouncer/pgbouncer-auth.sql"
+    run --separate-stderr mig
+    [ "$output" = "rc=0" ]
+    # the file of the tree reached psql unchanged, in the gremion database, as the superuser of state.env
+    cmp "${TREE}/docker/pgbouncer/pgbouncer-auth.sql" "$DK/pgb.stdin.gremion"
+    grep -q "docker exec -i c-postgres psql -X -U postgres -d gremion -q -v ON_ERROR_STOP=1 -f -" "$SHIM_LOG"
+    grep -q 'exec svc=postgres role=postgres db=gremion' "$DK/exec.log"
+    # the role came first, and the password is in the role's stdin only
+    [ "$(grep -c "$PW" "$DK/pgb.stdin.gremion")" -eq 0 ]
+    [ "$(grep -c "$PW" "$DK/pgb.stdin.postgres")" -eq 1 ]
+}
+
+@test "migrate: a tree with no pgbouncer-auth.sql is a refusal before the role and the one-shots" {
+    rm -f "${TREE}/docker/pgbouncer/pgbouncer-auth.sql"
+    run --separate-stderr mig
+    [[ "$output" == *"rc=2"* ]]
+    [[ "$stderr" == *"pgbouncer-auth.sql"* ]]
+    [ ! -s "$DK/pgb.stdin" ]
+    [ ! -s "$DK/run.log" ]
+}
+
+@test "migrate: a failing auth_query function is code 4, names no database, and no one-shot runs" {
+    touch "$DK/pgb.fail.gremion"
+    run --separate-stderr mig
+    [[ "$output" == *"rc=4"* ]]
+    [[ "$stderr" == *"auth_query function could not be applied"* ]]
+    # the role was ensured; nothing after the function ran
+    [ -s "$DK/pgb.stdin.postgres" ]
+    [ ! -s "$DK/run.log" ]
+    [ "$(grep -c '^stub cd_modules_upgrade' "$SHIM_LOG")" -eq 0 ]
 }
 
 @test "migrate: a one-shot that exits 124 is code 3, the container that outlived the client is killed by label and confirmed gone with docker ps -a" {
@@ -1355,6 +1495,18 @@ cd_data_live_portal_probe; echo rc=$?; cd_state_get ".release.rollback_target"'
     [ "${lines[0]}" = "ok" ]
     [ "${lines[1]}" = "rc=0" ]
     [ "${lines[2]}" = "null" ]
+}
+
+@test "live signal: a signal file that cannot be written is code 4 (infrastructure), never 1, the code of a fault of the commit" {
+    cd_stub_set cd_watch_accesslog_count 0 '4'
+    run --separate-stderr dat 'cd_atomic_write() { cat >/dev/null; return 1; }; cd_data_live_signal_start; echo rc=$?'
+    [ "$output" = "rc=4" ]
+    [[ "$stderr" == *"signal file cannot be written"* ]]
+    [ ! -e "${GREMION_ROOT}/data/cd/live-signal" ]
+    # the same start with a writable file stores the epoch: the failure above was the write
+    run --separate-stderr dat 'cd_data_live_signal_start; echo rc=$?'
+    [ "$output" = "rc=0" ]
+    [ -s "${GREMION_ROOT}/data/cd/live-signal" ]
 }
 
 @test "live signal: 10 errors with a zero baseline is a trigger and sets rollback_target=unusable; with a baseline that scales to 3 times as many it is not" {
