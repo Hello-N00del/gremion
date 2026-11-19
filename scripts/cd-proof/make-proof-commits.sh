@@ -18,9 +18,9 @@
 #     --patches DIR  where the three <branch>.patch files are (default: patches/ beside this file)
 #
 # Guards, each a refusal (exit 2) before anything is made: a patch may touch only files under
-# gremion-ui/, may not touch a migration (a path in a migrations/, migration/ or migrate/
-# folder, or a .sql file) and may only create or modify files (no rename, copy, delete or mode
-# change).
+# gremion-ui/, may not touch a migration (a .sql file, or a folder or file whose name starts
+# with "migrat", whatever its extension) and may only create or modify files (no rename, copy,
+# delete or mode change). --out may be a drive-letter path (C:/dir) on a Windows workstation.
 #
 # The commits are built with plumbing (a temporary index, no checkout) with a fixed author,
 # committer and date, so the same inputs give the same commit ids and no workstation identity
@@ -79,8 +79,10 @@ if [[ -z "$out" ]]; then
     out="${TMPDIR:-/tmp}/cd-proof-${base:0:12}.git"
 fi
 [[ ! -e "$out" ]] || die 2 "the output path exists already (remove it or pass another --out)"
+# A drive-letter path (C:/dir, as Git Bash on a Windows workstation takes it) is absolute too:
+# putting the working folder in front of it would make a path git cannot use.
 case "$out" in
-    /*) ;;
+    /* | [A-Za-z]:/* | [A-Za-z]:\\*) ;;
     *) out="${PWD}/${out}" ;;
 esac
 
@@ -119,7 +121,9 @@ check_patch() {
         case "/${path}/" in
             */../* | */./*) die 2 "${name}.patch names a path with a dot segment: ${path}" ;;
         esac
-        if [[ "$path" == *.sql || "/${path}" == */migrations/* || "/${path}" == */migration/* || "/${path}" == */migrate/* ]]; then
+        # a .sql file, or any path part (folder or file name) that starts with "migrat"
+        # (migrations/, migration/, migrate/, migrations-control/, migration-list.json, ...)
+        if [[ "$path" == *.sql || "/${path}" == */migrat* ]]; then
             die 2 "${name}.patch touches a migration: ${path}"
         fi
     done < <(git -C "$work" apply --numstat "$f")

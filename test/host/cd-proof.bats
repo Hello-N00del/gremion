@@ -330,6 +330,31 @@ new mode 100755'
     [ ! -e "$OUT" ]
 }
 
+@test "guard: a patch that adds a file under a migration-named folder or with a migration-named file is refused, whatever its extension" {
+    cp_src_repo
+    for p in gremion-ui/migrations-control/manifest.json gremion-ui/migrate-data/x.json gremion-ui/src/lib/migration-list.json; do
+        cp_bad_patches x "diff --git a/${p} b/${p}
+new file mode 100644
+--- /dev/null
++++ b/${p}
+@@ -0,0 +1 @@
++{}"
+        cp_make --patches "$BAD"
+        [ "$status" -eq 2 ] || { echo "accepted: $p"; return 1; }
+        [[ "$output" == *"migration"* ]]
+        [ ! -e "$OUT" ]
+    done
+}
+
+@test "an output path with a drive letter is taken as absolute, not put under the current folder" {
+    cp_src_repo
+    cd "$BATS_TEST_TMPDIR"
+    run bash "$MAKE" "$BASE" --repo "$SRC" --out 'C:/proof-drive.git'
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"CD_PROOF_REPO=C:/proof-drive.git"* ]]
+    [ -d "${BATS_TEST_TMPDIR}/C:/proof-drive.git" ]
+}
+
 # ---------------------------------------------------------------------------
 # spike.sh
 # ---------------------------------------------------------------------------
@@ -627,4 +652,91 @@ sheet_section() {
         n=$((n + 1))
     done
     [ "$n" -ge 15 ] || { echo "only $n blocks were checked"; return 1; }
+}
+
+@test "run sheet: every proof release names the full 40-character sha (the program refuses a short one in proof mode)" {
+    run grep -nE 'gremion-cd release-now[^`]*--unverified' "$SHEET"
+    [ "$status" -eq 0 ]
+    [ "$(wc -l <<<"$output")" -ge 3 ]
+    while IFS= read -r line; do
+        [[ "$line" =~ gremion-cd\ release-now\ \"\$SHA\"\ --ref\ proof-[a-z0-9-]+\ --unverified$ ]] || { echo "not the full sha: $line"; return 1; }
+    done <<<"$output"
+    run grep -nF 'SHA:0:' "$SHEET"
+    [ "$status" -eq 0 ]
+    while IFS= read -r line; do
+        [[ "$line" != *release-now* ]] || { echo "a short sha on release-now: $line"; return 1; }
+    done <<<"$output"
+}
+
+@test "run sheet: every flag typed on gremion-cd release-now, resume and rollback is one the program takes" {
+    local verb allowed seg flag
+    for verb in release-now resume rollback; do
+        case "$verb" in
+            release-now) allowed=" --with-state --force-blocked --accept-range --reason --ref --unverified " ;;
+            resume) allowed=" --reason --discard-dump --accept-descendants " ;;
+            rollback) allowed=" --reason " ;;
+        esac
+        run grep -ohE "gremion-cd ${verb}[^\`]*" "$SHEET"
+        [ "$status" -eq 0 ]
+        while IFS= read -r seg; do
+            for flag in $(grep -oE -- ' --[a-z-]+' <<<"$seg" || true); do
+                [[ "$allowed" == *" ${flag} "* ]] || { echo "not a flag of ${verb}: ${flag}"; return 1; }
+            done
+        done <<<"$output"
+    done
+}
+
+@test "run sheet: scenario 1 tries --accept-descendants alone first (the dump refusal), then clears with both flags" {
+    local body
+    body="$(sheet_section 2)"
+    run grep -E 'gremion-cd resume' <<<"$body"
+    [ "$status" -eq 0 ]
+    # --discard-dump is always typed together with --accept-descendants while the block is open
+    while IFS= read -r line; do
+        if [[ "$line" == *--discard-dump* ]]; then
+            [[ "$line" == *--accept-descendants* ]] || { echo "discard without accept: $line"; return 1; }
+        fi
+    done <<<"$output"
+    run grep -cE 'gremion-cd resume --accept-descendants --reason' <<<"$body"
+    [ "$output" -ge 1 ]
+    run grep -cE 'gremion-cd resume --discard-dump --accept-descendants --reason' <<<"$body"
+    [ "$output" -ge 1 ]
+}
+
+@test "run sheet: the dump file read from the ledger is joined to the dump folder (the ledger holds a relative name)" {
+    assert_present '^FILE="\$\{DUMPDIR\}/\$\(' "$SHEET"
+    assert_present '^MFILE="\$\{DUMPDIR\}/\$\(' "$SHEET"
+}
+
+@test "run sheet: the journal check leaves out the names every journal line carries by design (the server's own role and postgres)" {
+    assert_present "^NAMES='SELECT datname FROM pg_database WHERE NOT datistemplate AND datname NOT IN \\(\\\$\\\$postgres\\\$\\\$, " "$SHEET"
+    assert_present 'journalctl -t premigration-dump --since "-60 min" \| grep -cF -f <\(.*"\$NAMES"\)$' "$SHEET"
+    # and it says how many names it compared, so a count of 0 over an empty list cannot pass for a check
+    assert_present '"\$NAMES" \| wc -l$' "$SHEET"
+}
+
+@test "run sheet: the second build of the live commit goes under a throwaway tag, and the tag is removed again" {
+    assert_present '^IMAGE_TAG=proof-twice docker compose --env-file .* build --no-cache gremion-ui$' "$SHEET"
+    assert_present '^docker image rm gremion-ui:proof-twice$' "$SHEET"
+    run grep -nE 'docker compose .*build' "$SHEET"
+    [ "$status" -eq 0 ]
+    while IFS= read -r line; do
+        [[ "$line" == *IMAGE_TAG=proof-twice* ]] || { echo "a build under the real tag: $line"; return 1; }
+    done <<<"$output"
+}
+
+@test "run sheet: the proof flag is read with a default, since the key is absent when proof mode never ran" {
+    run grep -cF "'.live.proof'" "$SHEET"
+    [ "$output" = 0 ]
+    assert_present "jq -r '\.live\.proof // false' " "$SHEET"
+}
+
+@test "run sheet: the kill-by-label proof covers both labels the program puts on its containers" {
+    assert_present '^for L in gremion\.request gremion\.cd; do$' "$SHEET"
+    assert_present '--label "\$L=\$U"' "$SHEET"
+}
+
+@test "run sheet: the burst size is not demanded exactly (a slow host cuts the burst at the time limit)" {
+    run grep -nF 'sent=40' "$SHEET"
+    [ "$status" -eq 1 ] || { echo "$output"; return 1; }
 }

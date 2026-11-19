@@ -51,7 +51,8 @@ jq -r '.phase, (.hold // "none" | tostring)' "$ST"
 
 Passed when: `status` exits 0 and prints no PROOF MODE banner yet; `phase` is `idle` and the
 hold is `none`; the live release is the one the host runs (`readlink "$ROOT/current"` ends in
-the live short SHA of `jq -r .live.sha12 "$ST"`); `jq -r '.live.proof' "$ST"` prints `false`.
+the live short SHA of `jq -r .live.sha12 "$ST"`); `jq -r '.live.proof // false' "$ST"` prints
+`false` (the key is absent until a proof release has run, which is the same answer).
 
 Read the live commit (HOST terminal), then make the proof commits from it (WORKSTATION
 terminal, in a checkout of the kernel repository that has that commit; three branches, one
@@ -94,8 +95,10 @@ CD_PROOF_REPO=/opt/gremion/data/cd-proof/proof.git
 CD_WATCH_MINUTES=6
 ```
 
-Passed when: `gremion-cd status` exits 0 (an exit 2 that names `CD_PROOF_REPO` means the
-program does not accept a local path there yet: stop, the proof cannot start), its FIRST line
+Passed when: `gremion-cd status` exits 0 (known gap: the program reads the type of
+`CD_PROOF_REPO` as an https address; an exit 2 that names `CD_PROOF_REPO` means it still does
+not accept a local path there: stop, the proof cannot start until the program takes one, and
+you report that), its FIRST line
 is the PROOF MODE banner, and it lists `CD_PROOF_MODE`, `CD_PROOF_REPO` and `CD_WATCH_MINUTES`
 by name as non-default keys (the value of `CD_PROOF_REPO` is shown as `set`).
 
@@ -142,11 +145,12 @@ Passed when: every `take` exits 0, `stat` shows a non-zero size, the dump is gon
 `discard`, and the journal lines of `journalctl -t premigration-dump --since "-10 min"` for the
 module server say `svc=` and no database name. Note bytes, seconds and `uptime` load for each.
 
-One dump restored into a SCRATCH database (never over the live one), timed:
+One dump restored into a SCRATCH database (never over the live one), timed (the `file` of a
+ledger line is relative to the dump folder, hence `"${DUMPDIR}/..."` below):
 
 ```
 gremion-migration-dump take --release proof-restore --db gremion
-FILE="$(jq -r 'select(.event == "created" and .release == "proof-restore") | .file' "$DUMPDIR/ledger.jsonl" | tail -1)"
+FILE="${DUMPDIR}/$(jq -r 'select(.event == "created" and .release == "proof-restore") | .file' "$DUMPDIR/ledger.jsonl" | tail -1)"
 docker exec "$PG" createdb -U "$PGU" proof_scratch
 time docker exec -i "$PG" pg_restore -U "$PGU" --no-owner -d proof_scratch < "$FILE"
 Q='SELECT count(*) FROM information_schema.tables WHERE table_schema NOT IN ($$pg_catalog$$, $$information_schema$$)'
@@ -181,9 +185,23 @@ One commit built twice, the image IDs compared (equal IDs are fine; record the a
 docker image inspect --format '{{.Id}}' "$(docker inspect --format '{{.Config.Image}}' "$(cid "app-$(active)" gremion-ui)")"
 ```
 
-Read it for the image of the live colour, then build the same commit a second time
-(`docker compose --env-file "$ROOT/etc/env/app-$(other "$(active)").env" build --no-cache gremion-ui`,
-run from the release tree of that commit) and read the new image's ID the same way.
+Read it for the image of the live colour, then build the same commit a second time under a
+THROWAWAY tag (the shell value wins over the env file, so the tag of either colour, which a
+rollback would start, is never touched), read the new image's ID, and remove the throwaway tag:
+
+```
+cd "$ROOT/current"
+LIVE_TAG="$(docker inspect --format '{{.Config.Image}}' "$(cid "app-$(active)" gremion-ui)")"
+BEFORE_ID="$(docker image inspect --format '{{.Id}}' "$LIVE_TAG")"
+IMAGE_TAG=proof-twice docker compose --env-file "$ROOT/etc/env/app-$(active).env" build --no-cache gremion-ui
+docker image inspect --format '{{.Id}}' gremion-ui:proof-twice
+docker image rm gremion-ui:proof-twice
+[ "$BEFORE_ID" = "$(docker image inspect --format '{{.Id}}' "$LIVE_TAG")" ] && echo live-tag-unchanged
+```
+
+Passed when: the build exits 0, `docker image inspect gremion-ui:proof-twice` fails afterwards
+(the throwaway tag is gone), and `live-tag-unchanged` is printed (the live tag still names the
+image it named before). Write down whether the two image IDs are equal.
 
 The next elapse of the backup, purge and Karenz timers against the lock span:
 
@@ -235,7 +253,7 @@ SCRATCH database on that server (never over a live one), timed:
 ```
 MS="$(cid state <module>-postgres)"
 gremion-migration-dump take --release proof-restore --db <module database> --pg-service <module>-postgres --pg-user <module>
-MFILE="$(jq -r 'select(.event == "created" and .release == "proof-restore") | .file' "$DUMPDIR/ledger.jsonl" | tail -1)"
+MFILE="${DUMPDIR}/$(jq -r 'select(.event == "created" and .release == "proof-restore") | .file' "$DUMPDIR/ledger.jsonl" | tail -1)"
 docker exec "$MS" createdb -U <module> proof_scratch
 time docker exec -i "$MS" pg_restore -U <module> --no-owner -d proof_scratch < "$MFILE"
 docker exec "$MS" dropdb -U <module> proof_scratch
@@ -257,18 +275,22 @@ service can be run without `--profile`:
 cd "$ROOT/current"
 ENVF="$ROOT/etc/env/app-$(active).env"
 docker compose --env-file "$ENVF" run --rm --no-deps --entrypoint true calendar-service; echo "run-exit=$?"
-U="$(cat /proc/sys/kernel/random/uuid)"
-timeout -s KILL 8 docker compose --env-file "$ENVF" run --rm --no-deps --label "gremion.request=$U" \
-    --entrypoint sleep calendar-service 300; echo "client-exit=$?"
-docker ps -q --filter "label=gremion.request=$U" | wc -l
-docker ps -q --filter "label=gremion.request=$U" | xargs -r docker kill
-sleep 1; docker ps -q --filter "label=gremion.request=$U" | wc -l
-sleep 1; docker ps -aq --filter "label=gremion.request=$U" | wc -l
+for L in gremion.request gremion.cd; do
+    U="$(cat /proc/sys/kernel/random/uuid)"
+    timeout -s KILL 8 docker compose --env-file "$ENVF" run --rm --no-deps --label "$L=$U" \
+        --entrypoint sleep calendar-service 300; echo "$L client-exit=$?"
+    docker ps -q --filter "label=$L=$U" | wc -l
+    docker ps -q --filter "label=$L=$U" | xargs -r docker kill
+    sleep 1; docker ps -q --filter "label=$L=$U" | wc -l
+    sleep 1; docker ps -aq --filter "label=$L=$U" | wc -l
+done
 ```
 
-Passed when: the first run exits 0 (the profile is on without `--profile`); `client-exit` is
-non-zero (the client was killed); the first count is `1` (the container outlived its
-client); after the kill both later counts are `0`.
+Passed when: the first run exits 0 (the profile is on without `--profile`); and for EACH of
+the two labels (`gremion.request` is the executor's, `gremion.cd` is the one the CD module
+step and data one-shots put on their containers) `client-exit` is non-zero (the client was
+killed), the first count is `1` (the container outlived its client), and after the kill both
+later counts are `0`.
 
 The leaf scheduler is on in the running containers, and a leaf database of the placeholder is
 migrated about 30 seconds after the `start` of a new colour: read the first scheduler tick in
@@ -288,10 +310,16 @@ The journal never carries a module database name after `take`, reuse, `switched`
 `restore`:
 
 ```
-journalctl -t premigration-dump --since "-60 min" | grep -cF -f <(docker exec "$(cid state <module>-postgres)" psql -U <module> -Atc "SELECT datname FROM pg_database WHERE NOT datistemplate")
+NAMES='SELECT datname FROM pg_database WHERE NOT datistemplate AND datname NOT IN ($$postgres$$, $$<module>$$)'
+docker exec "$(cid state <module>-postgres)" psql -U <module> -Atc "$NAMES" | wc -l
+journalctl -t premigration-dump --since "-60 min" | grep -cF -f <(docker exec "$(cid state <module>-postgres)" psql -U <module> -Atc "$NAMES")
 ```
 
-Passed when: it prints `0`.
+The list leaves out `postgres` and the module's own role name on purpose: every journal line of
+a module dump carries `svc=<module>-postgres`, so those two can never count as a leak. Passed
+when: the first command prints a number of at least `1` (the names compared) and the second
+prints `0`. A module server that has no other database than those two proves nothing here:
+repeat it on one that has.
 
 The database ACL is put back by a restore of a gate database (PUBLIC and the app role, before
 and after). This one DOES restore over a live database, so it is done on the placeholder's
@@ -324,7 +352,7 @@ FROM_COLOUR="$(active)"; TO_COLOUR="$(other "$FROM_COLOUR")"
 BEFORE="$(sha256sum "$ROOT/etc/edge/active.yml" "$ROOT/runtime/active-colour")"
 T0="$(date -u +%FT%TZ)"
 SHA="$(git -C "$PROOF" rev-parse proof-readiness-fail)"
-gremion-cd release-now "${SHA:0:12}" --ref proof-readiness-fail --unverified
+gremion-cd release-now "$SHA" --ref proof-readiness-fail --unverified
 echo "exit=$?"
 ```
 
@@ -359,14 +387,21 @@ live colour and SHA are unchanged. Also:
 - The `rejected` mail arrives at the operator address, and no personal data is in it. The
   copies on the host hold none either: `grep -rlF -e "$SLUG" -e "$CUSTOMER_HOST" "$ROOT/data/cd" "$ROOT/runtime/cd"`
   prints nothing.
-- A second `gremion-cd release-now "${SHA:0:12}" --ref proof-readiness-fail --unverified`
-  is refused (non-zero exit, a message naming the block).
-- The dump set is still live (`gremion-migration-dump status --release "pilot-${SHA:0:12}"`
-  lists it) and a plain `gremion-cd resume` is refused (non-zero) until
-  `gremion-cd resume --discard-dump --reason "proof scenario 1"` is given.
+- The dump set is still live: `gremion-migration-dump status --release "pilot-${SHA:0:12}"`
+  lists it.
+- The block is open, so a plain `gremion-cd resume` is refused (non-zero exit, a message that
+  names the open block).
+- With the block accepted but the dump set still live, the next one is refused for the dump
+  set (non-zero exit, a message about a live dump set), and nothing is discarded:
+  `gremion-cd resume --accept-descendants --reason "proof scenario 1 first try"`. Check with
+  `gremion-migration-dump status --release "pilot-${SHA:0:12}"` that the set is still listed
+  and with `jq 'map(select(.cleared == null)) | length' "$BL"` that the block is still open.
 
-Then clear the proof block so the next scenario can start:
+Then clear the proof block so the next scenario can start, with both flags (the block needs
+`--accept-descendants`, the failed release's dump set needs `--discard-dump`):
 `gremion-cd resume --discard-dump --accept-descendants --reason "proof scenario 1 over"`.
+Passed when it exits 0 and, after the next tick (or a minute), `jq -r '.hold' "$ST"` prints
+`null`, the dump set is no longer listed and no block is open (the `jq` above prints `0`).
 
 ## 3. Scenario 2a - a release that passes readiness and fails in the window
 
@@ -375,7 +410,7 @@ The proof commit makes `/readyz` flip to 503 when `/tmp/cd-proof-fail` exists in
 ```
 FROM_COLOUR="$(active)"; TO_COLOUR="$(other "$FROM_COLOUR")"
 SHA="$(git -C "$PROOF" rev-parse proof-window-fail)"
-gremion-cd release-now "${SHA:0:12}" --ref proof-window-fail --unverified
+gremion-cd release-now "$SHA" --ref proof-window-fail --unverified
 ```
 
 When `gremion-cd status` shows the release in its watch (the switch is done and the active
@@ -391,10 +426,11 @@ Passed when:
 ```
 # the active colour is the old one again
 [ "$(active)" = "$FROM_COLOUR" ] && echo old-colour-serves
-# the switch back took at most three samples (about 45 seconds), measured in the history
+# the switch back is read from the history
 jq -r --arg t "$T1" 'select(.at >= $t) | [.at, .event] | @tsv' "$HIST"
-# the old colour is confirmed for all three services, the new colour project is stopped
+# the old colour serves through the edge and both of its app services run, the new colour project is stopped
 curl -s "https://${CUSTOMER_HOST}/healthz" | jq -r .colour
+for S in gremion-ui gremion-public; do docker inspect --format '{{.State.Running}}' "$(cid "app-${FROM_COLOUR}" "$S")"; done
 docker ps -q --filter "label=com.docker.compose.project=${STACK}-app-${TO_COLOUR}" | wc -l
 # blocked with watch_readiness, and the live release never moved
 jq -r --arg s "$SHA" '.[] | select(.sha == $s) | .rule' "$BL"
@@ -402,7 +438,10 @@ jq -r '.live.sha12' "$ST"
 ```
 
 `old-colour-serves` is printed; the first rollback line in the history is at most 60 seconds
-after `$T1` (`secs`); `healthz` names `$FROM_COLOUR`; the new project count is `0`; the rule is
+after `$T1` (`secs`: the watch takes a sample every 15 seconds by default and needs three bad
+ones in a row, about 45 seconds, and the 60 leaves 15 for the sample's own time and the
+switch back); `healthz` names `$FROM_COLOUR`; both services print `true`; the new project
+count is `0`; the rule is
 `watch_readiness`; the live SHA is the one from before. The `rolled_back` mail arrives. Then
 clear the block as at the end of scenario 1.
 
@@ -413,11 +452,11 @@ A second proof commit makes one public page answer 500 while the flag file exist
 
 ```
 SHA="$(git -C "$PROOF" rev-parse proof-5xx)"
-gremion-cd release-now "${SHA:0:12}" --ref proof-5xx --unverified
+gremion-cd release-now "$SHA" --ref proof-5xx --unverified
 ```
 
 When the release is in its watch, create the flag in the new colour (HOST terminal), then send
-the one bounded burst from the WORKSTATION terminal (40 requests over 20 seconds from that
+the one bounded burst from the WORKSTATION terminal (at most 40 requests over about 20 seconds from that
 one process; it refuses a second run within 10 minutes, keeping its time stamp under
 `~/.local/state/gremion-cd-proof`; the host is an argument, never a default):
 
@@ -437,11 +476,13 @@ jq -r --arg s "$SHA" '.[] | select(.sha == $s) | .rule' "$BL"
 curl -s "https://${CUSTOMER_HOST}/readyz"
 ```
 
-The spike prints `sent=40` and a `5xx` count near 40; the rule is `watch_5xx`; the public
+The spike prints `sent=<n>` with `n` up to 40 (a host that answers slowly cuts the burst at
+the time limit of its starts, about 25 seconds, so a smaller `n` is not a failure: write it
+down) and a `5xx` count near `n` and at least 10 (the default `CD_5XX_MIN`); the rule is `watch_5xx`; the public
 `/readyz` answers `{"ready":true}` all along; the counts in the `rolled_back` mail match the
 `5xx` count the spike printed (within the window it saw). If part of the burst is not
 answered with a 5xx (the `other` count: a rate limit of the edge, a refused connection), write
-that count down: the rule can still hold, and the numbers in the mail then differ from 40.
+that count down: the rule can still hold, and the numbers in the mail then differ from `n`.
 Then clear the block.
 
 ## 5. Scenario 3 - a good release with a migration (a real merged change)
@@ -620,6 +661,9 @@ placeholder's gate module off and on, and see the dump-series refusal; then
 
 ## 13. Also: the worker gate
 
+The gate is a file per colour that the colour reads at every tick; there is no route to call
+(the application has no internal workers route), so nothing is asked of the container over
+HTTP here, and the readiness call of section 1 is the only secret-bearing call of this proof.
 On a release in its watch (any scenario above that reaches it):
 
 ```
@@ -678,7 +722,7 @@ gremion-cd status | head -5
 ```
 
 Passed when: `status` exits 0 and mentions neither proof mode nor a proof value (the first
-line is not a banner, `status | grep -ci proof` prints `0`), `jq -r '.live.proof' "$ST"`
+line is not a banner, `status | grep -ci proof` prints `0`), `jq -r '.live.proof // false' "$ST"`
 prints `false`, `stat -c %a "$ST"` prints `600`, and `[ ! -e "$PROOF" ]`. Only then is the
 real customer created.
 
