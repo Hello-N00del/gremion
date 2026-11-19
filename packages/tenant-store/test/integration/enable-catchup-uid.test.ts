@@ -36,10 +36,14 @@ const code = async (p) => p.then(() => 'no error', (e) => e.code ?? String(e.mes
 
 // runs as root
 const SCENARIO = `
-import { chmodSync, chownSync, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, chownSync, cpSync, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { takeDump } from './take.js'
 ${COMMON}
+// the bind mount is owned by whoever ran the test (0700 from mkdtemp), so the uid 1000 and 1001 children cannot read it:
+// they run from a world-readable copy inside the container
+cpSync('/work', '/tmp/app', { recursive: true })
+spawnSync('chmod', ['-R', 'a+rX', '/tmp/app'])
 const dir = '/tmp/dumps'
 mkdirSync(dir, { mode: 0o700 })
 chownSync(dir, 1000, 1000)
@@ -52,7 +56,7 @@ out.take = taken.status
 out.stat = { dir: stat(dir), release: stat(dir + '/dist-v1'), dump: stat(taken.path), ledger: stat(dir + '/ledger.jsonl') }
 out.lockGone = !existsSync(dir + '/ledger.lock')
 const run = (script) => {
-  const r = spawnSync(process.execPath, ['/work/' + script, dir], { uid: script === 'as-other.mjs' ? 1001 : 1000, gid: script === 'as-other.mjs' ? 1001 : 1000, encoding: 'utf8' })
+  const r = spawnSync(process.execPath, ['/tmp/app/' + script, dir], { uid: script === 'as-other.mjs' ? 1001 : 1000, gid: script === 'as-other.mjs' ? 1001 : 1000, encoding: 'utf8' })
   try { return JSON.parse(r.stdout) } catch { return { error: r.stderr || r.stdout, status: r.status } }
 }
 out.deploy = run('as-deploy.mjs')

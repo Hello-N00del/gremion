@@ -42,14 +42,14 @@ import {
 const DAY = 24 * 3600 * 1000
 const RELEASE = 'dist-v1.2.3'
 const MOD_SERVICE = 'lcfix-postgres' // runs on the harness module server `pgm`
-const KERNEL_SERVICE = 'lcfk-postgres' // runs on the harness kernel server `pg`: a module whose server is not the module server
+const KERNEL_SERVICE = 'lcfk-postgres' // the same module declared on the harness kernel server `pg`: a module whose server is not the module server (no second catalogue key is seeded)
 
 const moduleOn = (id: string, service: string): LifecycleModule => {
   const base = lcfixModule()
   return { ...base, id, moduleJson: { ...base.moduleJson, id, runtime: { ...base.moduleJson.runtime, database: { postgresService: service, migrations: 'migrations' } } } }
 }
 const lcfix = () => moduleOn('lcfix', MOD_SERVICE)
-const lcfk = () => moduleOn('lcfk', KERNEL_SERVICE)
+const lcfixOnKernel = () => moduleOn('lcfix', KERNEL_SERVICE)
 
 /** The dump dir checks need a POSIX uid; a Windows workstation has none, so it gets a fake 0700 stat of its own directory. */
 const dumpFs = (): DumpFs => (typeof process.getuid === 'function' ? defaultDumpFs : { statDir: () => ({ isDirectory: true, mode: 0o700, uid: 1000 }), freeBytes: () => 10 ** 12, uid: 1000 })
@@ -185,12 +185,11 @@ describe('the enable catch-up on the scratch stack', () => {
     server = moduleServer()
     kernelAdmin = connect('postgres', { max: 2 })
     await seedCatalogue(platform, 'lcfix')
-    await seedCatalogue(platform, 'lcfk')
     await resetModuleServer(server.admin, platform)
   })
 
   const dropKernelSide = async () => {
-    for (const { datname } of await kernelAdmin<{ datname: string }[]>`SELECT datname FROM pg_database WHERE datname LIKE 't\\_%\\_\\_lcfk'`) {
+    for (const { datname } of await kernelAdmin<{ datname: string }[]>`SELECT datname FROM pg_database WHERE datname LIKE 't\\_%\\_\\_lcfix'`) {
       const [q] = await kernelAdmin<{ stmt: string }[]>`SELECT format('DROP DATABASE IF EXISTS %I WITH (FORCE)', ${datname}::text) AS stmt`
       await kernelAdmin.unsafe(q!.stmt)
     }
@@ -205,9 +204,10 @@ describe('the enable catch-up on the scratch stack', () => {
   afterAll(async () => {
     await resetModuleServer(server.admin, platform)
     await dropKernelSide()
-    await kernelAdmin.unsafe('DROP ROLE IF EXISTS m_lcfk').catch(() => {})
-    await kernelAdmin.unsafe('DROP ROLE IF EXISTS m_lcfk_app').catch(() => {})
     await Promise.all(kernelPools.map((p) => p.end({ timeout: 5 }).catch(() => {})))
+    // the module's roles were created on the kernel server for the second-server case: nothing of this file stays behind there
+    await kernelAdmin.unsafe('DROP ROLE IF EXISTS m_lcfix_app')
+    await kernelAdmin.unsafe('DROP ROLE IF EXISTS m_lcfix')
     await kernelAdmin.end({ timeout: 5 })
     await server.close()
     await platform.end()
@@ -302,13 +302,13 @@ describe('the enable catch-up on the scratch stack', () => {
   }, 120_000)
 
   it('a module whose server is NOT the module server: the dump is taken on that server by its own service (a real exporter on two servers)', async () => {
-    const { X, db } = await blockedTenant(lcfk(), kernelServer())
+    const { X, db } = await blockedTenant(lcfixOnKernel(), kernelServer())
     expect(await databasesOn(kernelAdmin)).toContain(db)
     expect(await databasesOn(server.admin)).not.toContain(db)
     const dir = freshDumpDir()
     const log: { service: string; database: string }[] = []
     const c = catchup(dir, log)
-    const mod = withExtra(lcfk())
+    const mod = withExtra(lcfixOnKernel())
     let toc = ''
     const hooks = (moduleId: string, service: string) => {
       const inner = c.upgradeHooks(moduleId, service)!
@@ -326,7 +326,7 @@ describe('the enable catch-up on the scratch stack', () => {
     expect(toc).toMatch(new RegExp(`^;\\s+dbname: ${db}$`, 'm'))
     expect(readEvents(dir).filter((e) => e.event === 'created')).toMatchObject([{ database: db, pg_service: KERNEL_SERVICE, pg_user: stack().user }])
     expect(liveDumps(readEvents(dir))).toEqual([])
-    expect(await stateOf(X, 'lcfk')).toBe('enabled')
+    expect(await stateOf(X, 'lcfix')).toBe('enabled')
   }, 120_000)
 
   describe('the day-30 job retires a live dump of a database it drops', () => {
@@ -412,7 +412,7 @@ describe('the enable catch-up on the scratch stack', () => {
     }, 120_000)
   })
 
-  it('F65 case b: a failed release leaves its live dump of the database; switching the module off and on refuses with DUMP_SERIES naming it, the database stays blocked, nothing is applied; after the discard it succeeds', async () => {
+  it('case (b): a failed release leaves its live dump of the database; switching the module off and on refuses with DUMP_SERIES naming it, the database stays blocked, nothing is applied; after the discard it succeeds', async () => {
     const X = uuidv7()
     const db = tenantModuleDbName(X, 'lcfix')
     const dir = freshDumpDir()

@@ -329,7 +329,7 @@ describe('enable of a blocked database: the catch-up dump', () => {
   })
 })
 
-describe('the upgradeHooks factory form (F63)', () => {
+describe('the upgradeHooks factory form', () => {
   it('is called with the module and ITS OWN server, and the exporter of the dump receives that service', async () => {
     const exporter = fakeExporter()
     const seen: [string, string][] = []
@@ -382,7 +382,7 @@ describe('fail closed: no usable dump directory', () => {
   })
 })
 
-describe('CD interplay: a failed release leaves its set live (F65, case b)', () => {
+describe('CD interplay: a failed release leaves its set live (case b)', () => {
   it('the switch-on refuses with DUMP_SERIES naming the failed release and the discard command; the database stays blocked, nothing is applied', async () => {
     const dir = freshDir()
     const dbName = tenantModuleDbName(TENANT, 'finance')
