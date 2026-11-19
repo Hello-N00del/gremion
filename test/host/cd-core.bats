@@ -15,6 +15,19 @@ load 'test_helper/cd'
 setup() { cd_setup; }
 teardown() { cd_teardown; }
 
+# The data stages (lib/cd/data.sh) are real now. The tests that drive status and resume
+# through stubbed data functions run the program from a copy of the host tree without that
+# library, so the helper's stubs stand in for it; the real functions are tested in
+# cd-data.bats.
+nodata() {
+    local src="${GREMION_ROOT}/.host-nodata"
+    if [ ! -d "$src" ]; then
+        cp -R "$HOST_SRC" "$src"
+        rm -f "${src}/lib/cd/data.sh"
+    fi
+    export HOST_SRC="$src"
+}
+
 SHA_A=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 SHA_B=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 
@@ -1076,6 +1089,7 @@ cd_block_open_list | cut -d" " -f1' "$C2" "$D1" "$C3"
 }
 
 @test "status: open blocks, live dump sets, mail transport and the lock span are shown through the stubs" {
+    nodata
     cd_need_flock
     cd_seed_state
     cd_stub_set cd_data_dumpset_live 0 'pilot-0123456789ab'
@@ -1162,6 +1176,7 @@ request_count() { find "${GREMION_ROOT}/runtime/cd/requests" -maxdepth 1 -name '
 }
 
 @test "resume: on an operator hold writes a request and does not touch the state" {
+    nodata
     cd_seed_state '.hold = {"kind":"operator","reason":"operator","sha12":"","since":"2026-11-17T01:00:00Z"}'
     shim sudo
     local before
@@ -1175,6 +1190,7 @@ request_count() { find "${GREMION_ROOT}/runtime/cd/requests" -maxdepth 1 -name '
 }
 
 @test "resume: refuses (exit 2, with the reason) while a block is open, unless --accept-descendants with a reason" {
+    nodata
     cd_need_flock
     cd_seed_state '.hold = {"kind":"blocked","reason":"build_failed","sha12":"aaaaaaaaaaaa","since":"2026-11-17T01:00:00Z"}'
     shim sudo
@@ -1241,6 +1257,7 @@ request_count() { find "${GREMION_ROOT}/runtime/cd/requests" -maxdepth 1 -name '
 }
 
 @test "resume: refuses while a failed release's dump set is live unless --discard-dump (cd_data_dumpset_live is stubbed)" {
+    nodata
     cd_seed_state '.hold = {"kind":"failure","reason":"infra","sha12":"0123456789ab","since":"2026-11-17T01:00:00Z"}'
     shim sudo
     cd_stub_set cd_data_dumpset_live 0 'pilot-0123456789ab'
@@ -1258,6 +1275,7 @@ request_count() { find "${GREMION_ROOT}/runtime/cd/requests" -maxdepth 1 -name '
 }
 
 @test "resume: no live dump set means a plain resume goes through; a dump check that fails is exit 2" {
+    nodata
     cd_seed_state '.hold = {"kind":"failure","reason":"infra","sha12":"0123456789ab","since":"2026-11-17T01:00:00Z"}'
     shim sudo
     run cd_prog resume
