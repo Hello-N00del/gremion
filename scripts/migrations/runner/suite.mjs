@@ -4,7 +4,8 @@
 //
 // One run checks, and counts as collected:
 //   1. chain-runners.json covers scripts/migrations/ranges.json exactly, every
-//      chain with a known class (tenant-store | legacy-boot | unadopted | fresh-only),
+//      chain with a known class (tenant-store | legacy-boot | module-upgrade |
+//      unadopted | fresh-only),
 //      and a fresh-only chain holds at most one file (a second never reaches
 //      existing databases: flip the class first);
 //   2. expand-contract-baseline.json is the one written at the merge: its
@@ -17,8 +18,8 @@
 //      and a lint that stopped refusing is caught;
 //   4. every file of every chain's dirs[] that the baseline does not map is
 //      linted by its declared phase (lint.mjs), contract files also against
-//      git (checkContract), and a new file in an unadopted chain must carry
-//      -- gremion:manual-dump <runbook step>.
+//      git (checkContract), and a new file in an unadopted or module-upgrade
+//      chain must carry -- gremion:manual-dump <runbook step>.
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -39,7 +40,15 @@ const REPO_ROOT = join(import.meta.dirname, '..', '..', '..')
 /** The digest of the baseline written at the TASK-075 merge. Never edited. */
 export const BASELINE_DIGEST = '11464e9ccab82f662db062c0be334aabf15e71c7c7465cae035b0682e6779341'
 
-export const CLASSES = ['tenant-store', 'legacy-boot', 'unadopted', 'fresh-only']
+export const CLASSES = ['tenant-store', 'legacy-boot', 'module-upgrade', 'unadopted', 'fresh-only']
+
+/**
+ * The classes whose new files must carry `-- gremion:manual-dump <runbook step>`. `unadopted`: no
+ * runner dumps the chain. `module-upgrade`: a release applies the chain after a host dump set, but
+ * gremion-deploy, upgrade.sh and a hand upgrade after a classifier hold never run that step or take
+ * a module dump, so the marker is the runbook step for those paths. CD takes its own dump as well.
+ */
+export const MANUAL_DUMP_CLASSES = ['unadopted']
 
 /**
  * The canaries fixtures/canaries.json must keep (by name). A canary deleted to
@@ -77,8 +86,8 @@ export function lintFile({ root, relPath, text, priorRoutines, chainClass, exclu
   if (r.phase === 'contract') {
     for (const p of checkContract({ cwd: root, file: relPath, contractAfter: r.contractAfter, dropped: r.dropped, excludeDirs })) problems.push({ statement: 0, ...p })
   }
-  if (chainClass === 'unadopted' && r.manualDump === null) {
-    problems.push({ statement: 0, rule: RULES.manualDumpMissing, message: 'no runner in this repo dumps this chain yet: name the runbook step that takes the pre-migration dump (-- gremion:manual-dump <step>)' })
+  if (MANUAL_DUMP_CLASSES.includes(chainClass) && r.manualDump === null) {
+    problems.push({ statement: 0, rule: RULES.manualDumpMissing, message: 'a hand upgrade runs no dump step for this chain: name the runbook step that takes the pre-migration dump (-- gremion:manual-dump <step>)' })
   }
   return problems
 }
