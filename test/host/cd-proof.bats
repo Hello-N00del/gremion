@@ -382,6 +382,24 @@ exit "$SPIKE_TEST_RC"'
     assert_absent 'example' "${CD_PROOF_STATE_DIR}/spike.last"
 }
 
+@test "spike: the default state folder is on the machine it runs on, not under the host's install root" {
+    sp_shims 500
+    unset CD_PROOF_STATE_DIR
+    export HOME="${BATS_TEST_TMPDIR}/home"
+    unset XDG_STATE_HOME
+    mkdir -p "$HOME"
+    run bash "$SPIKE" example.org
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    assert_present '^[0-9]{9,12}$' "${HOME}/.local/state/gremion-cd-proof/spike.last"
+    # nothing was written under the install root of a host
+    [ ! -e "${GREMION_ROOT}/runtime/cd-proof" ]
+    # and XDG_STATE_HOME moves it
+    rm -rf "${HOME}/.local"
+    XDG_STATE_HOME="${BATS_TEST_TMPDIR}/xdg" run bash "$SPIKE" example.org
+    [ "$status" -eq 0 ]
+    assert_present '^[0-9]{9,12}$' "${BATS_TEST_TMPDIR}/xdg/gremion-cd-proof/spike.last"
+}
+
 @test "spike: a second run within 10 minutes is refused with exit 3 and sends nothing" {
     sp_shims 500
     run bash "$SPIKE" example.org
@@ -441,7 +459,8 @@ exit "$SPIKE_TEST_RC"'
     [[ "$output" =~ sent=([0-9]+)\ .*seconds=([0-9]+)$ ]]
     sent="${BASH_REMATCH[1]}"
     took="${BASH_REMATCH[2]}"
-    [ "$sent" -ge 1 ] && [ "$sent" -lt 40 ]
+    [ "$sent" -ge 1 ]
+    [ "$sent" -lt 40 ]
     [ "$took" -le 8 ]
 }
 
@@ -519,6 +538,40 @@ sheet_section() {
         'stat -c'; do
         grep -qiF -- "$want" "$SHEET" || { echo "the sheet does not mention: $want"; return 1; }
     done
+}
+
+@test "run sheet: the proof commits and the spike run on the workstation, and the bare repository is copied to the host" {
+    assert_present 'WORKSTATION' "$SHEET"
+    assert_absent 'current/scripts/cd-proof' "$SHEET" "the scripts are not run from a release tree on the host"
+    assert_present '^bash scripts/cd-proof/make-proof-commits\.sh "\$LIVE_SHA" --out \./proof\.git$' "$SHEET"
+    assert_present '^bash scripts/cd-proof/spike\.sh "\$CUSTOMER_HOST"$' "$SHEET"
+    # the copy step sits between making the commits and turning proof mode on
+    make="$(grep -n 'make-proof-commits.sh "\$LIVE_SHA"' "$SHEET" | head -1 | cut -d: -f1)"
+    copy="$(grep -n 'rsync -a ./proof.git/' "$SHEET" | head -1 | cut -d: -f1)"
+    on="$(grep -n '^CD_PROOF_MODE=1$' "$SHEET" | head -1 | cut -d: -f1)"
+    [ -n "$make" ]
+    [ -n "$copy" ]
+    [ -n "$on" ]
+    [ "$make" -lt "$copy" ]
+    [ "$copy" -lt "$on" ]
+}
+
+@test "run sheet: every restore of a measurement goes into a scratch database; the one restore over a live database is the placeholder's gate database" {
+    [ "$(grep -c '^gremion-migration-dump restore ' "$SHEET")" -eq 1 ]
+    assert_present '^gremion-migration-dump restore --release proof-acl --db <gate database>' "$SHEET"
+    [ "$(grep -c 'pg_restore .* -d proof_scratch' "$SHEET")" -eq 2 ]
+    [ "$(grep -c 'createdb .* proof_scratch' "$SHEET")" -eq 2 ]
+    [ "$(grep -c 'dropdb .* proof_scratch' "$SHEET")" -eq 2 ]
+}
+
+@test "run sheet: every shell variable a block uses is set in the variable block or in the block itself" {
+    for v in EDGE PG PGU ST BL HIST STACK DUMPDIR PROOF SLUG CUSTOMER_HOST; do
+        grep -qE "^${v}=" "$SHEET" || { echo "no assignment of $v"; return 1; }
+    done
+    # the first assignment of the edge and database container ids is in the variable block (section 0)
+    first="$(grep -n '^EDGE=\|^PG=' "$SHEET" | head -1 | cut -d: -f1)"
+    sec1="$(grep -n '^## 1\. ' "$SHEET" | cut -d: -f1)"
+    [ "$first" -lt "$sec1" ]
 }
 
 @test "run sheet: every gremion-cd verb it types is a verb of the program, every CD_ key is a key the program knows" {

@@ -11,14 +11,17 @@ Rules for the whole run:
 - Placeholder data only. Nothing of a real customer is read, copied or pasted here. The
   placeholder's slug and host name live in two shell variables (`SLUG`, `CUSTOMER_HOST`) that
   you set by hand in your own terminal; this file never names a real one (it uses example.org).
-- One person, one terminal, as the deploy user, on the host. Run the blocks in order.
+- One person, two terminals: a WORKSTATION terminal (a checkout of the kernel repository, git
+  and a network path to the customer host; it never logs in anywhere by itself) and a HOST
+  terminal (the deploy user on the host). Each block says which one. Run the blocks in order.
 - Any step whose "Passed when" check fails: stop, note the command and the output, do not
   continue to the next scenario.
 - A command that is refused as an unknown verb or flag: stop and report that. Do not improvise.
 
 ## 0. Before you start
 
-Shell variables used by every block (set them once per terminal):
+HOST terminal: shell variables used by every host block (set them once per terminal, the
+placeholder values by hand):
 
 ```
 ROOT="${GREMION_ROOT:-/opt/gremion}"
@@ -27,6 +30,7 @@ BL="$ROOT/data/cd/blocked.json"
 HIST="$ROOT/data/cd/history.jsonl"
 STACK="$(sed -n 's/^STACK=//p' "$ROOT/etc/env/state.env")"
 DUMPDIR="$(sed -n 's/^GREMION_MIGRATION_DUMP_DIR=//p' "$ROOT/etc/env/state.env")"
+PGU="$(sed -n 's/^POSTGRES_USER=//p' "$ROOT/etc/env/state.env")"
 PROOF="$ROOT/data/cd-proof/proof.git"
 SLUG='<placeholder slug>'
 CUSTOMER_HOST='<placeholder customer host>'
@@ -34,6 +38,8 @@ cid() { docker ps -q --filter "label=com.docker.compose.project=${STACK}-$1" --f
 other() { [ "$1" = blue ] && echo green || echo blue; }
 active() { cat "$ROOT/runtime/active-colour"; }
 secs() { date -u -d "$1" +%s; }
+EDGE="$(cid state traefik)"
+PG="$(cid state postgres)"
 ```
 
 Preconditions, each read off the system:
@@ -47,19 +53,40 @@ Passed when: `status` exits 0 and prints no PROOF MODE banner yet; `phase` is `i
 hold is `none`; the live release is the one the host runs (`readlink "$ROOT/current"` ends in
 the live short SHA of `jq -r .live.sha12 "$ST"`); `jq -r '.live.proof' "$ST"` prints `false`.
 
-Make the proof commits from the live commit (three branches, one commit each, on top of it):
+Read the live commit (HOST terminal), then make the proof commits from it (WORKSTATION
+terminal, in a checkout of the kernel repository that has that commit; three branches, one
+commit each, on top of it; nothing is pushed anywhere):
 
 ```
-bash "$ROOT/current/scripts/cd-proof/make-proof-commits.sh" "$(jq -r .live.sha "$ST")" \
-    --repo "$ROOT/data/cd/mirror.git" --out "$PROOF"
+jq -r .live.sha "$ST"
+```
+
+```
+LIVE_SHA=<the 40 characters printed above>
+git fetch origin && git cat-file -e "${LIVE_SHA}^{commit}"
+bash scripts/cd-proof/make-proof-commits.sh "$LIVE_SHA" --out ./proof.git
 ```
 
 Passed when: it prints three `proof-...` lines and `CD_PROOF_REPO=<path>`, exits 0; and
-`git -C "$PROOF" for-each-ref --format='%(refname:short)' refs/heads | sort` prints exactly
-`proof-5xx`, `proof-readiness-fail`, `proof-window-fail`.
+`git -C ./proof.git for-each-ref --format='%(refname:short)' refs/heads | sort` prints exactly
+`proof-5xx`, `proof-readiness-fail`, `proof-window-fail`. (If it says a patch does not apply to
+the commit, the live commit is not the one the patches were made for: stop and report.)
 
-Turn proof mode on in `etc/cd.env` (edit by hand; the keys already exist in the file). The
-repository value is the `--out` path above, written out (here for the default root):
+Copy the bare repository to the host (WORKSTATION terminal; any copy that keeps the files as
+they are will do, for example `rsync -a ./proof.git/ <deploy user>@<host>:/opt/gremion/data/cd-proof/proof.git/`
+with the host name written out by hand), then check it on the HOST terminal:
+
+```
+git -C "$PROOF" for-each-ref --format='%(refname:short) %(objectname)' refs/heads
+git -C "$PROOF" fsck --connectivity-only --no-dangling
+```
+
+Passed when: the three branches are listed with the same commit ids the workstation printed,
+and `fsck` exits 0.
+
+Turn proof mode on in `etc/cd.env` (HOST terminal; edit by hand; add the lines if the file
+does not carry them yet). The repository value is the path above, written out (here for the
+default root):
 
 ```
 CD_PROOF_MODE=1
@@ -80,7 +107,6 @@ repository.
 The access log fields in the edge container (the scenarios below read them):
 
 ```
-EDGE="$(cid state traefik)"
 docker exec "$EDGE" tail -n 1 /logs/access.log | jq -r 'keys[]'
 ```
 
@@ -116,26 +142,31 @@ Passed when: every `take` exits 0, `stat` shows a non-zero size, the dump is gon
 `discard`, and the journal lines of `journalctl -t premigration-dump --since "-10 min"` for the
 module server say `svc=` and no database name. Note bytes, seconds and `uptime` load for each.
 
-One dump restored into a scratch database, timed:
+One dump restored into a SCRATCH database (never over the live one), timed:
 
 ```
 gremion-migration-dump take --release proof-restore --db gremion
-time gremion-migration-dump restore --release proof-restore --db gremion --accept-loss-since "$(date -u +%FT%TZ)"
+FILE="$(jq -r 'select(.event == "created" and .release == "proof-restore") | .file' "$DUMPDIR/ledger.jsonl" | tail -1)"
+docker exec "$PG" createdb -U "$PGU" proof_scratch
+time docker exec -i "$PG" pg_restore -U "$PGU" --no-owner -d proof_scratch < "$FILE"
+Q='SELECT count(*) FROM information_schema.tables WHERE table_schema NOT IN ($$pg_catalog$$, $$information_schema$$)'
+docker exec "$PG" psql -U "$PGU" -d gremion -Atc "$Q"
+docker exec "$PG" psql -U "$PGU" -d proof_scratch -Atc "$Q"
+docker exec "$PG" dropdb -U "$PGU" proof_scratch
 gremion-migration-dump discard --release proof-restore --reason "proof measurement, nothing to keep"
 ```
 
-Run this only against the placeholder installation; the restore replaces the live `gremion`
-database with its own dump taken seconds earlier. Passed when: both exit 0 and the
-placeholder customer's portal page still answers
-`curl -s -o /dev/null -w '%{http_code}\n' "https://${CUSTOMER_HOST}/healthz"` with `200`.
+Passed when: every command exits 0, the two table counts are equal and non-zero, the scratch
+database is gone afterwards (`docker exec "$PG" psql -U "$PGU" -Atc 'SELECT count(*) FROM pg_database WHERE datname = $$proof_scratch$$'`
+prints `0`), and the dump is gone after the `discard`. Note bytes of `stat -c %s "$FILE"`
+(taken before the `discard`) and the seconds of the restore.
 
 The databases of the main server and of each running module server, compared with the dump
 rule (the main server except the login server's database and `postgres`; the module servers
 are named, not listed). Output stays on the terminal:
 
 ```
-PG="$(cid state postgres)"
-docker exec "$PG" psql -U "$(sed -n 's/^POSTGRES_USER=//p' "$ROOT/etc/env/state.env")" -Atc \
+docker exec "$PG" psql -U "$PGU" -Atc \
     "SELECT datname FROM pg_database WHERE NOT datistemplate ORDER BY 1"
 docker exec "$(cid state <module>-postgres)" psql -U <module> -Atc \
     "SELECT datname FROM pg_database WHERE NOT datistemplate ORDER BY 1"
@@ -169,7 +200,6 @@ from INSIDE the containers (the secret is read there and never typed):
 
 ```
 COLOUR="$(active)"
-PGU="$(sed -n 's/^POSTGRES_USER=//p' "$ROOT/etc/env/state.env")"
 XACT='SELECT xact_commit FROM pg_stat_database WHERE datname = $$gremion$$'
 docker exec "$PG" psql -U "$PGU" -Atc "$XACT"
 docker exec "$(cid "app-$COLOUR" gremion-public)" node -e \
@@ -191,7 +221,7 @@ One customer reconcile, timed, with its access-record row read back:
 
 ```
 time gremion-tenant reconcile "$SLUG" --apply --reason "proof measurement of one reconcile"
-docker exec "$PG" psql -U "$(sed -n 's/^POSTGRES_USER=//p' "$ROOT/etc/env/state.env")" -d gremion_platform -Atc \
+docker exec "$PG" psql -U "$PGU" -d gremion_platform -Atc \
     "SELECT origin, actor, action, why FROM oac.access_record WHERE customer_slug = '${SLUG}' AND action = 'host_reconcile' ORDER BY at DESC LIMIT 1"
 ```
 
@@ -199,12 +229,26 @@ Passed when: the reconcile exits 0 and the row exists with origin `host`, the ac
 `id -un` of the deploy user, and the fixed reason text. Note the seconds and the login
 server's load.
 
-One module step against a scratch module server, timed, and one `take` with `--pg-service`
-and `--pg-user` on a running module server with its restore into a scratch database: run the
-`module-upgrade --all` verb of the tenant-create one-shot of the live colour only against a
-scratch module server (never against the placeholder's own), then repeat the module `take` of
-the measurement above followed by `restore` into the scratch database. Note seconds. Passed
-when: the verb's one JSON line shows `failed` equal to `0`, and the restore exits 0.
+One `take` with `--pg-service` and `--pg-user` on a running module server, restored into a
+SCRATCH database on that server (never over a live one), timed:
+
+```
+MS="$(cid state <module>-postgres)"
+gremion-migration-dump take --release proof-restore --db <module database> --pg-service <module>-postgres --pg-user <module>
+MFILE="$(jq -r 'select(.event == "created" and .release == "proof-restore") | .file' "$DUMPDIR/ledger.jsonl" | tail -1)"
+docker exec "$MS" createdb -U <module> proof_scratch
+time docker exec -i "$MS" pg_restore -U <module> --no-owner -d proof_scratch < "$MFILE"
+docker exec "$MS" dropdb -U <module> proof_scratch
+gremion-migration-dump discard --release proof-restore --reason "proof measurement, nothing to keep"
+```
+
+Passed when: every command exits 0 and the scratch database is gone afterwards (the same
+`pg_database` count as above, run in `"$MS"` as `<module>`, prints `0`). Note seconds.
+
+One module step against a scratch module server, timed: run the `module-upgrade --all` verb
+of the tenant-create one-shot of the live colour only against a scratch module server (never
+against the placeholder's own). Passed when: the verb's one JSON line shows `failed` equal to
+`0`; note seconds.
 
 That kill by label ends a container a killed client left behind, and that a profile-gated leaf
 service can be run without `--profile`:
@@ -250,12 +294,18 @@ journalctl -t premigration-dump --since "-60 min" | grep -cF -f <(docker exec "$
 Passed when: it prints `0`.
 
 The database ACL is put back by a restore of a gate database (PUBLIC and the app role, before
-and after):
+and after). This one DOES restore over a live database, so it is done on the placeholder's
+own gate database only, while nothing else writes to it (the restore puts back the dump taken
+seconds earlier):
 
 ```
 Q="SELECT datacl::text, has_database_privilege('<app role>', datname, 'CONNECT') FROM pg_database WHERE datname = '<gate database>'"
-docker exec "$(cid state <module>-postgres)" psql -U <module> -Atc "$Q"
-# take, restore (as in the measurement above), then the same query again
+MS="$(cid state <module>-postgres)"
+docker exec "$MS" psql -U <module> -Atc "$Q"
+gremion-migration-dump take --release proof-acl --db <gate database> --pg-service <module>-postgres --pg-user <module>
+gremion-migration-dump restore --release proof-acl --db <gate database> --accept-loss-since "$(date -u +%FT%TZ)"
+docker exec "$MS" psql -U <module> -Atc "$Q"
+gremion-migration-dump discard --release proof-acl --reason "proof measurement, nothing to keep"
 ```
 
 Passed when: both answers are identical: no entry starting with `=` (PUBLIC) before or after,
@@ -366,13 +416,18 @@ SHA="$(git -C "$PROOF" rev-parse proof-5xx)"
 gremion-cd release-now "${SHA:0:12}" --ref proof-5xx --unverified
 ```
 
-When the release is in its watch, create the flag in the new colour and send the one bounded
-burst (40 requests over 20 seconds from this one process; it refuses a second run within 10
-minutes; the host is an argument, never a default):
+When the release is in its watch, create the flag in the new colour (HOST terminal), then send
+the one bounded burst from the WORKSTATION terminal (40 requests over 20 seconds from that
+one process; it refuses a second run within 10 minutes, keeping its time stamp under
+`~/.local/state/gremion-cd-proof`; the host is an argument, never a default):
 
 ```
 docker exec "$(cid "app-$(other "$(jq -r .live.colour "$ST")")" gremion-ui)" touch /tmp/cd-proof-fail
-bash "$ROOT/current/scripts/cd-proof/spike.sh" "$CUSTOMER_HOST"
+```
+
+```
+CUSTOMER_HOST='<placeholder customer host>'
+bash scripts/cd-proof/spike.sh "$CUSTOMER_HOST"
 ```
 
 Passed when:
@@ -384,7 +439,10 @@ curl -s "https://${CUSTOMER_HOST}/readyz"
 
 The spike prints `sent=40` and a `5xx` count near 40; the rule is `watch_5xx`; the public
 `/readyz` answers `{"ready":true}` all along; the counts in the `rolled_back` mail match the
-`5xx` count the spike printed (within the window it saw). Then clear the block.
+`5xx` count the spike printed (within the window it saw). If part of the burst is not
+answered with a 5xx (the `other` count: a rate limit of the edge, a refused connection), write
+that count down: the rule can still hold, and the numbers in the mail then differ from 40.
+Then clear the block.
 
 ## 5. Scenario 3 - a good release with a migration (a real merged change)
 

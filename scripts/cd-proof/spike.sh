@@ -17,8 +17,9 @@
 #   - at most 30 seconds in all: the burst stops before a request could end after the
 #     deadline (each request has a 3 second timeout), whatever was sent;
 #   - a second run within 10 minutes of the last one is refused (exit 3). The time of the
-#     last run is a number in a state file (default ${GREMION_ROOT:-/opt/gremion}/runtime/cd-proof,
-#     CD_PROOF_STATE_DIR overrides the folder); it is written BEFORE the first request, so a
+#     last run is a number in a state file on the machine you run this on (default
+#     ${XDG_STATE_HOME:-$HOME/.local/state}/gremion-cd-proof, CD_PROOF_STATE_DIR overrides the
+#     folder); it is written BEFORE the first request, so a
 #     run that dies half way still counts. A stamp that is not a number, or lies in the
 #     future, refuses too. Two runs started at the very same moment are not told apart:
 #     this is a hand-run proof tool, one operator at a time.
@@ -59,7 +60,7 @@ host="$1"
 re_host='^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$'
 [[ "$host" =~ $re_host && "$host" != *..* ]] || die 2 "the argument is not a bare host name"
 
-state_dir="${CD_PROOF_STATE_DIR:-${GREMION_ROOT:-/opt/gremion}/runtime/cd-proof}"
+state_dir="${CD_PROOF_STATE_DIR:-${XDG_STATE_HOME:-${HOME:-/tmp}/.local/state}/gremion-cd-proof}"
 stamp="${state_dir}/spike.last"
 now="$(printf '%(%s)T' -1)"
 
