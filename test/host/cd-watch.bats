@@ -8,7 +8,7 @@
 # Nothing here touches a real docker, curl, Traefik or network: docker, curl and timeout are
 # recording shims whose answers are files under $DK, the host layout is a temp $GREMION_ROOT,
 # the clock is the fake clock of test_helper/cd. The real watch.sh runs on the real core.sh and
-# docker.sh; the functions of colour.sh are stand-ins (fixtures/cd/watch/fakes.sh) that read
+# docker.sh; the functions of colour.sh are stand-ins (fixtures/cd/watch/fakes.bash) that read
 # files, so each test decides what the colour answers. Every name is a reserved example name.
 
 bats_require_minimum_version 1.5.0
@@ -192,7 +192,7 @@ wl() {
 . \"\${HOST_SRC}/lib/cd/docker.sh\"
 . \"\${HOST_SRC}/lib/cd/watch.sh\"
 . \"\${GREMION_CD_STUBS_DIR}/cd-stubs.sh\"
-. \"\${FIX}/fakes.sh\"
+. \"\${FIX}/fakes.bash\"
 CD_LOCK_PID=\$\$
 cd_cfg_load
 ${1}" wl

@@ -51,6 +51,8 @@
 # the number of samples after a resume that may not trigger (the reboot rule), and the
 # duration of the previous sample (a slow sample is not a resume).
 
+# shellcheck disable=SC2016  # the jq programs below are single-quoted on purpose
+
 _cd_watch_err() { printf 'cd-watch: %s\n' "$*" >&2; }
 
 # The edge access log of the state project's traefik container, and how far back one read
