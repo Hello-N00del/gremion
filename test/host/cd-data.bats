@@ -953,7 +953,7 @@ EOF
     [[ "$output" == *"rc=0"* ]]
 }
 
-# ---------------------------------------------------------------- leaks (F48)
+# ---------------------------------------------------------------- leaks
 
 @test "leak: a module database name that carries a slug reaches no stream, state, history, outbox, journal line or file name of CD across take, reuse, retire, discard and the status read" {
     local o="${GREMION_ROOT}/.o" e="${GREMION_ROOT}/.e"
