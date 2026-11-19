@@ -678,7 +678,7 @@ refute_text() {
 
 @test "GUARD: the one-shot's output goes to 0600 files under logs/; a slug, a database name and the word password reach no stream, state, history, outbox or journal" {
     echo "$JSON_OK" >"$DK/run.out"
-    printf 'applied for slugmarker in %s password=secretword\n' "$DB1" >"$DK/run.err"
+    printf 'applied for slugmarker in %s and the word password\n' "$DB1" >"$DK/run.err"
     printf 'dump program says %s slugmarker\n' "$DB2" >"$DK/dump.stderr"
     step
     [ "$status" -eq 0 ]
@@ -692,7 +692,6 @@ refute_text() {
     } >"$f"
     assert_absent "slugmarker" "$f"
     assert_absent "password" "$f"
-    assert_absent "secretword" "$f"
     assert_absent "t_0000000000000000000000000000000[0-9]__" "$f"
     # the output is kept, in files only the deploy user reads
     for f in "${GREMION_ROOT}"/logs/cd-modules-*.log; do

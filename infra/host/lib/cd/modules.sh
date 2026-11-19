@@ -40,6 +40,7 @@
 # psql, the dump program and the one-shot say goes to 0600 files under logs/, and only
 # the file name is ever printed.
 
+# shellcheck disable=SC2034,SC2016  # SC2034: CD_MODULES_REASON is read by the driver, which this file does not see; SC2016: the jq programs are single-quoted on purpose
 CD_MODULES_REASON=''
 
 # The gate-database name the registry holds (plt.module_database CHECK) and the five
