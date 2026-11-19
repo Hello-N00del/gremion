@@ -26,7 +26,7 @@
 import { join } from 'node:path'
 import type { Sql } from '@gremion/db'
 import { tenantModuleDbName } from '../names.js'
-import { hasControlChar, runMigrations, type RunMigrationsHooks } from '../runner.js'
+import { hasControlChar, MigrationRunnerError, runMigrations, type RunMigrationsHooks } from '../runner.js'
 import { blockModuleDatabase, lockDownDatabase, unblockModuleDatabase } from './block.js'
 import { execFormatted, sqlState } from './ddl.js'
 import {
@@ -131,6 +131,19 @@ export async function openAsOwner(server: ModuleServer, dbName: string, owner: s
     await sql.end({ timeout: 5 }).catch(() => {})
     throw err
   }
+}
+
+/**
+ * The runner reports a refusing preApply as "preApply refused <file>; ..." and keeps the reason only as the error's
+ * `cause`, which the one-shot's top-level handler never prints. The pre-migration dump refuses with a named reason
+ * that an operator must read (no dump directory, another release's live dump of the database and the discard command
+ * that clears it), so the reason is appended to the message. Same class, same code, same files and cause.
+ */
+function withPreApplyReason(err: unknown): unknown {
+  if (err instanceof MigrationRunnerError && err.code === 'PRE_APPLY_FAILED' && err.cause instanceof Error && err.cause.message !== '') {
+    return new MigrationRunnerError(err.code, `${err.message}: ${err.cause.message}`, err.files, { cause: err.cause })
+  }
+  return err
 }
 
 function checkGate(gate: GateResult): void {
@@ -277,6 +290,8 @@ export async function enableModule(tenantId: string, module: LifecycleModule, ac
           ...(phaseFor ? { phaseFor } : {}),
           ...(hooks ? { hooks } : {}),
           log,
+        }).catch((err: unknown) => {
+          throw withPreApplyReason(err)
         })
         applied = r.applied
         await grantAppPrivileges(owned, owner, app)

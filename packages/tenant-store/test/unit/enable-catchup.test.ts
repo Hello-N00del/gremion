@@ -15,6 +15,7 @@ const runMigrations = vi.fn()
 vi.mock('../../src/runner.js', async (importOriginal) => ({ ...(await importOriginal<typeof import('../../src/runner.js')>()), runMigrations: (o: unknown) => runMigrations(o) }))
 
 const { enableModule } = await import('../../src/lifecycle/enable.js')
+const { MigrationRunnerError } = await import('../../src/runner.js')
 const { upgradeModuleDatabases } = await import('../../src/lifecycle/upgrade.js')
 const { catchupDump } = await import('../../src/dump/catchup.js')
 const { appendEvent, liveDumps, readEvents } = await import('../../src/dump/ledger.js')
@@ -158,7 +159,8 @@ function setup(o: { module: string; state?: 'blocked' | 'enabling'; pending?: st
       try {
         await opts.hooks?.preApply?.(file, { ...ctx, dir: '/x', applied: [], pending: o.pending ?? [] } as never)
       } catch (err) {
-        throw Object.assign(new Error(`preApply refused ${file}: ${(err as Error).message}`), { code: 'PRE_APPLY_FAILED', cause: err })
+        // what the real runner does: the reason stays on `cause`, the message names the file only
+        throw new MigrationRunnerError('PRE_APPLY_FAILED', `preApply refused ${file}; it and every later file were not applied (earlier files of this run stay applied)`, [file], { cause: err })
       }
       if (applied.length === 0) o.afterFirstDump?.()
       if (file === o.applyFails) throw new Error(`${file} failed`)
