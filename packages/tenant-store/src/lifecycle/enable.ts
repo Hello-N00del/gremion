@@ -375,7 +375,7 @@ export async function enableModule(tenantId: string, module: LifecycleModule, ac
     try {
       await deps.dumpRetire.afterEnable(deps.releaseRef as string, dbName)
     } catch (err) {
-      log(`(${tenantId}, ${moduleId}) is enabled, but the pre-migration dump of ${dbName} could not be retired (${err instanceof Error ? err.message : String(err)}); it stays live and the next release's dump refuses until it is discarded: gremion-migration-dump discard --release ${deps.releaseRef as string} --reason <text>`)
+      log(`(${tenantId}, ${moduleId}) is enabled, but retiring any pre-migration dump of ${dbName} failed (${err instanceof Error ? err.message : String(err)}); if this enable took one, it stays live and the next release's dump refuses until it is discarded (gremion-migration-dump status lists it): gremion-migration-dump discard --release ${deps.releaseRef as string} --reason <text>`)
     }
   }
   await hook('enabled', dbName)

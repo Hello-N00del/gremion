@@ -2,7 +2,7 @@
 // hand-over (ownerUid), and the server fields of a module-server dump line. No database: a fake exporter and a
 // fake DumpFs on a real scratch directory. The real-uid half (a real root process, a real uid 1000) is
 // test/integration/enable-catchup-uid.test.ts.
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -157,6 +157,33 @@ describe('retireDump: one database of one release', () => {
     expect(liveDumps(readEvents(evil))).toHaveLength(1)
     writeFileSync(join(dir, LEDGER_FILE), '{"not":"an event"}\n')
     expect(await code(retireDump(dir, 'dist-v1.0.0', DB_A, 'r', { fs: fsAs() }))).toBe('LEDGER_CORRUPT')
+  })
+
+  it('an unwritable ledger refuses BEFORE anything is unlinked (the host checks it first too): the file and the live line stay, a repeat after the fix retires', async () => {
+    const dir = freshDir()
+    const taken = await take(dir)
+    const ledger = join(dir, LEDGER_FILE)
+    chmodSync(ledger, 0o444)
+    // a root process (a container) writes through a read-only mode: nothing to prove there, the ledger is writable
+    let writable = true
+    try {
+      closeSync(openSync(ledger, 'a'))
+    } catch {
+      writable = false
+    }
+    if (writable) {
+      chmodSync(ledger, 0o600)
+      return
+    }
+    try {
+      await expect(retireDump(dir, 'dist-v1.0.0', DB_A, 'enable committed', { fs: fsAs(), audit: () => {} })).rejects.toMatchObject({ code: 'LEDGER_UNWRITABLE' })
+      expect(existsSync(taken.path)).toBe(true)
+      expect(liveDumps(readEvents(dir))).toHaveLength(1)
+    } finally {
+      chmodSync(ledger, 0o600)
+    }
+    await retireDump(dir, 'dist-v1.0.0', DB_A, 'enable committed', { fs: fsAs(), audit: () => {} })
+    expect(liveDumps(readEvents(dir))).toEqual([])
   })
 
   it('refuses a directory this process does not own, like every other dump call', async () => {

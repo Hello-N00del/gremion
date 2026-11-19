@@ -45,6 +45,7 @@ export type DumpErrorCode =
   | 'DUMP_SCOPE'
   | 'LEDGER_LOCKED'
   | 'LEDGER_CORRUPT'
+  | 'LEDGER_UNWRITABLE'
 
 export class DumpError extends Error {
   override name = 'DumpError'
@@ -166,6 +167,20 @@ export function appendEvent(dir: string, event: DumpEvent, handOver?: HandOver):
   }
   handOver?.(file, 0o600)
   fsyncDir(dir)
+}
+
+/**
+ * Proves the ledger can take an append, before anything it describes is destroyed. The host's delete_release checks
+ * the same first (`-w` and an open for append): a dump file unlinked before a failed append leaves a live ledger line
+ * with no file. Call it only while the ledger exists (a live dump is in it); it never creates the file.
+ */
+export function assertLedgerWritable(dir: string): void {
+  const file = join(dir, LEDGER_FILE)
+  try {
+    closeSync(openSync(file, 'a', 0o600))
+  } catch (err) {
+    throw new DumpError('LEDGER_UNWRITABLE', `${file} cannot be opened for append: ${err instanceof Error ? err.message : 'unknown error'}; nothing was unlinked`, { cause: err })
+  }
 }
 
 /** The one stdout audit line per event (TRD-143): ids, never content. */

@@ -7,6 +7,7 @@
 //
 // It mirrors infra/host/bin/gremion-migration-dump delete_release, under the same ledger lock:
 //   1. the live dumps that match (this release and this database; or this database under any release);
+//   1b. the ledger must take an append (LEDGER_UNWRITABLE) BEFORE anything is unlinked, as the host checks first;
 //   2. the dump file and the sidecar files the host writes beside it are unlinked and the directory fsynced,
 //      and a file that is still there fails the retire (the clear-text copy must really be gone);
 //   3. one `deleted` line per dump, fsynced, of the shape the host writes;
@@ -15,7 +16,7 @@
 // A root process hands the ledger to the directory's owner exactly as takeDump does.
 import { existsSync, rmdirSync, rmSync } from 'node:fs'
 import { dirname, isAbsolute, join, sep } from 'node:path'
-import { appendEvent, assertRelease, auditLine, DumpError, fsyncDir, liveDumps, readEvents, withLedgerLock, type DumpEvent } from './ledger.js'
+import { appendEvent, assertLedgerWritable, assertRelease, auditLine, DumpError, fsyncDir, liveDumps, readEvents, withLedgerLock, type DumpEvent } from './ledger.js'
 import { checkDumpDir, defaultDumpFs, handOverFor, type DumpFs } from './take.js'
 
 export interface RetireOptions {
@@ -59,6 +60,8 @@ async function retireMatching(o: RetireOptions, match: (e: DumpEvent) => boolean
       const mine = liveDumps(readEvents(dir)).filter(match)
       const retired: string[] = []
       const releaseDirs = new Set<string>()
+      // the host does this first too: the `deleted` line must be writable BEFORE a file is unlinked
+      if (mine.length > 0) assertLedgerWritable(dir)
       for (const e of mine) {
         const path = dumpPath(dir, e)
         rmSync(path, { force: true })

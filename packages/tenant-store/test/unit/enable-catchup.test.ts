@@ -325,7 +325,22 @@ describe('enable of a blocked database: the catch-up dump', () => {
     const r = await enableModule(TENANT, s.m, ACTOR, s.deps)
     expect(r.noop).toBe(false)
     expect(events).not.toContain('reblock')
-    expect(lines.join('\n')).toMatch(/could not be retired \(LEDGER_LOCKED: a stale lock\).*gremion-migration-dump discard --release dist-v9\.9\.9/)
+    expect(lines.join('\n')).toMatch(/retiring any pre-migration dump of \S+ failed \(LEDGER_LOCKED: a stale lock\).*gremion-migration-dump discard --release dist-v9\.9\.9/)
+  })
+
+  it('an enable with NOTHING pending against an unusable directory still commits, and its log line does not claim that a dump exists', async () => {
+    const lines: string[] = []
+    const bad = catchupDump({ env: { GREMION_MIGRATION_DUMP_DIR: '/definitely/absent' }, release: RELEASE, exporter: fakeExporter(), pgUserFor: () => 'finance', pgDumpMajor: async () => 18, audit: () => {} })
+    const s = setup({ module: 'finance', pending: [], upgradeHooks: bad.upgradeHooks, dumpRetire: bad.retire })
+    s.deps.log = (l) => lines.push(l)
+    const r = await enableModule(TENANT, s.m, ACTOR, s.deps)
+    expect(r.noop).toBe(false)
+    expect(events).toEqual(['unblock', 'commit'])
+    const text = lines.join('\n')
+    expect(text).toMatch(/DUMP_DIR_INVALID/)
+    // no dump was taken: the text must not assert that one exists, only say what holds if there is one
+    expect(text).not.toMatch(/dump of \S+ could not be retired/)
+    expect(text).toMatch(/if this enable took one, it stays live/)
   })
 })
 
