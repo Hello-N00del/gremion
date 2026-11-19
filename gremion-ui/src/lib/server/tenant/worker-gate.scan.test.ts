@@ -67,12 +67,13 @@ const NOT_GATED: readonly NotGated[] = [
 // call's arguments with balanced brackets.
 // ---------------------------------------------------------------------------------------------
 
+const fill = (s: string) => s.replace(/[^\n]/g, ' ')
+
 /** Replace comments and string contents with spaces, keeping every offset and newline. */
 export function blank(src: string): string {
   let out = ''
   let i = 0
   const n = src.length
-  const fill = (s: string) => s.replace(/[^\n]/g, ' ')
   while (i < n) {
     const c = src[i]
     const d = src[i + 1]
@@ -196,7 +197,7 @@ export function scanSource(src: string): Site[] {
       sites.push({ kind, line: text.slice(0, m.index).split('\n').length, gated })
     }
   }
-  return sites.sort((a, b) => a.line - b.line)
+  return sites.toSorted((a, b) => a.line - b.line)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -216,7 +217,7 @@ function walk(dir: string, out: string[] = []): string[] {
     else if (
       /\.(ts|js|mjs)$/.test(name) &&
       !/\.(test|spec|integration\.test|d)\.ts$/.test(name) &&
-      !/\.generated\.ts$/.test(name)
+      !name.endsWith('.generated.ts')
     ) {
       out.push(p)
     }

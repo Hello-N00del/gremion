@@ -243,8 +243,9 @@ services:
       # The worker gate directory: the host writes <GREMION_ROOT>/runtime/workers/<colour>
       # and this colour sees it read-only at /run/gremion/workers/<colour>. This
       # line only provides the mount (the contract: a file with the content `off`
-      # means off, absent or anything else means on); nothing in the app reads it
-      # yet, so today it has no effect. A bind mount, so no named volume is added
+      # means off, absent or anything else means on); gremion-ui reads it at the top
+      # of every background tick (tenant/worker-gate.ts, via forEachActiveTenant).
+      # A bind mount, so no named volume is added
       # and the gate state survives a restart or a reboot of the colour. The host
       # must create the directory (owned by the deploy user) before the colour starts.
       - ${GREMION_WORKERS_DIR:-${GREMION_ROOT:-/opt/gremion}/runtime/workers}:/run/gremion/workers:ro
