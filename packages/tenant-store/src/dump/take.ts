@@ -46,6 +46,10 @@ export interface DumpFs {
   chown?(path: string, uid: number): void
 }
 
+function defaultChown(path: string, uid: number): void {
+  chownSync(path, uid, -1)
+}
+
 export const defaultDumpFs: DumpFs = {
   statDir(dir) {
     const s = statSync(dir)
@@ -56,9 +60,7 @@ export const defaultDumpFs: DumpFs = {
     return Number(s.bavail) * Number(s.bsize)
   },
   uid: typeof process.getuid === 'function' ? process.getuid() : undefined,
-  chown(path, uid) {
-    chownSync(path, uid, -1)
-  },
+  chown: defaultChown,
 }
 
 /** A uid that can own a directory: a non-negative 32-bit integer. */
@@ -74,9 +76,9 @@ export function isOwnerUid(v: unknown): v is number {
  */
 export function handOverFor(fs: DumpFs, ownerUid: number | undefined): HandOver | undefined {
   if (ownerUid === undefined || fs.uid !== 0) return undefined
-  const chown = fs.chown ?? defaultDumpFs.chown!
   return (path, mode) => {
-    chown(path, ownerUid)
+    if (fs.chown) fs.chown(path, ownerUid)
+    else defaultChown(path, ownerUid)
     chmodSync(path, mode)
   }
 }
@@ -275,7 +277,7 @@ export async function takeDump(o: TakeDumpOptions): Promise<TakenDump> {
         sha256,
         bytes,
         dump_taken_at: takenAt.toISOString(),
-        ...(server ?? {}),
+        ...server,
       }
       appendEvent(dir, event, handOver)
       audit(auditLine(event))

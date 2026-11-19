@@ -290,7 +290,7 @@ describe('the enable catch-up on the scratch stack', () => {
     const dir = freshDumpDir()
     const c = catchup(dir)
     const bad = withExtra(lcfix(), '003_bad.sql', '-- fixture 003: fails\nSELECT 1 / 0;\n')
-    await expect(enableModule(X, bad, OPERATOR, deps(c))).rejects.toThrow()
+    await expect(enableModule(X, bad, OPERATOR, deps(c))).rejects.toThrow(/division by zero|003_bad\.sql/)
     expect(await stateOf(X, 'lcfix')).toBe('blocked')
     expect(await appConnectCode(db, 'm_lcfix_app', stack().modulePort)).toBe('42501')
     const live = liveDumps(readEvents(dir))
@@ -335,7 +335,7 @@ describe('the enable catch-up on the scratch stack', () => {
       await backdate(t.karenzId)
       const dir = freshDumpDir()
       const c = catchup(dir)
-      await expect(enableModule(t.X, bad, OPERATOR, deps(c))).rejects.toThrow() // the failed catch-up: the dump stays live, the database blocked
+      await expect(enableModule(t.X, bad, OPERATOR, deps(c))).rejects.toThrow(/division by zero|003_bad\.sql/) // the failed catch-up: the dump stays live, the database blocked
       expect(liveDumps(readEvents(dir))).toHaveLength(1)
       return { ...t, dir }
     }
@@ -357,7 +357,9 @@ describe('the enable catch-up on the scratch stack', () => {
         scope: 'customer',
         customerId: X,
         moduleId: 'lcfix',
-        exporter: { dump: async (_t, file) => void writeFileSync(file, 'PGDMP fake', { flag: 'wx', mode: 0o600 }), list: async () => `;\n; Archive created at 2026-11-17 03:00:00 UTC\n;     dbname: ${db}\n` },
+        exporter: { dump: async (_t, file) => {
+            writeFileSync(file, 'PGDMP fake', { flag: 'wx', mode: 0o600 })
+          }, list: async () => `;\n; Archive created at 2026-11-17 03:00:00 UTC\n;     dbname: ${db}\n` },
         probe: { serverMajor: async () => 18, pgDumpMajor: async () => 18, databaseBytes: async () => 1000 },
         fs: dumpFs(),
         audit: () => {},

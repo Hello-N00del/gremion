@@ -97,7 +97,7 @@ function fakePlatform(state: 'blocked' | 'enabling', dbName: string): LifecycleD
   }
   const run: Tag = (strings) => {
     const text = textOf(strings)
-    if (/^UPDATE plt\.module_database SET state = 'enabled'/.test(text)) events.push('commit')
+    if (text.startsWith("UPDATE plt.module_database SET state = 'enabled'")) events.push('commit')
     return Promise.resolve(answer(text))
   }
   return Object.assign(run, { begin: async (fn: (tx: unknown) => Promise<unknown>) => fn(run) }) as unknown as LifecycleDeps['platform']
@@ -107,14 +107,14 @@ function fakePlatform(state: 'blocked' | 'enabling', dbName: string): LifecycleD
 function fakeServer(owner: string, dbName: string, existsAlready: boolean) {
   let exists = existsAlready
   const unsafe = (query: string, params: unknown[] = []): Promise<unknown[]> => {
-    if (/^SELECT pg_catalog\.format/.test(query)) {
+    if (query.startsWith('SELECT pg_catalog.format')) {
       let i = 0
       const [template, ...args] = params as string[]
       return Promise.resolve([{ stmt: template!.replace(/%[IL]/g, () => String(args[i++])) }])
     }
-    if (/^CREATE DATABASE/.test(query)) exists = true
-    if (/^GRANT CONNECT ON DATABASE/.test(query)) events.push('unblock')
-    if (/^REVOKE CONNECT ON DATABASE/.test(query)) events.push('reblock')
+    if (query.startsWith('CREATE DATABASE')) exists = true
+    if (query.startsWith('GRANT CONNECT ON DATABASE')) events.push('unblock')
+    if (query.startsWith('REVOKE CONNECT ON DATABASE')) events.push('reblock')
     return Promise.resolve([])
   }
   const admin = Object.assign(
@@ -289,7 +289,7 @@ describe('enable of a blocked database: the catch-up dump', () => {
     const dir = freshDir()
     const c = catchup(dir, fakeExporter())
     const first = setup({ module: 'finance', pending: ['002_a.sql', '003_bad.sql'], applyFails: '003_bad.sql', upgradeHooks: c.upgradeHooks, dumpRetire: c.retire })
-    await expect(enableModule(TENANT, first.m, ACTOR, first.deps)).rejects.toThrow()
+    await expect(enableModule(TENANT, first.m, ACTOR, first.deps)).rejects.toThrow(/003_bad\.sql failed/)
     const id = liveDumps(readEvents(dir))[0]!.migration_dump_id
     events = []
     const second = setup({ module: 'finance', pending: ['003_bad.sql'], upgradeHooks: c.upgradeHooks, dumpRetire: c.retire })

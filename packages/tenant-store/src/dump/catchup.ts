@@ -92,7 +92,7 @@ export function catchupDump(o: CatchupDumpOptions): CatchupDump {
           dir,
           release: o.release,
           exporter: o.exporter,
-          pgDumpMajor: o.pgDumpMajor ?? localPgDumpMajor,
+          pgDumpMajor: () => (o.pgDumpMajor ? o.pgDumpMajor() : localPgDumpMajor()),
           service: postgresService,
           pgUser: o.pgUserFor(postgresService),
           ...more,
