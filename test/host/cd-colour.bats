@@ -72,7 +72,7 @@ teardown() {
 #   svc.<cid> mounts.<cid> nets.<cid> eps.<cid>   the isolation formats
 #   ready.<cid>         answers of the internal /readyz exec, one per call ("EXIT n" = fail)
 #   portal.<cid>        answers of the portal exec
-#   up.fail up.timeout ps.fail slow
+#   up.fail up.timeout up.killdaemon (up fails and docker stops answering) down.fail down.timeout ps.fail slow
 shim_docker() {
     shim docker "$(cat <<'EOF'
 (IFS='|'; printf '%s\n' "$*" >> "$DK/argv.log")
@@ -94,10 +94,14 @@ case "$1" in
       *" up "*)
         printf 'up %s cwd=%s workers=%s\n' "$colour" "$PWD" "$(cat "$GREMION_ROOT/runtime/workers/${colour#app-}" 2>/dev/null || echo absent)" >> "$DK/order.log"
         [ -f "$DK/up.timeout" ] && exit 124
+        [ -f "$DK/up.killdaemon" ] && { touch "$DK/ps.fail"; exit 1; }
         [ -f "$DK/up.fail" ] && exit 1
         exit 0 ;;
       *" down "*|*" down")
-        printf 'down %s cwd=%s\n' "$colour" "$PWD" >> "$DK/order.log"; exit 0 ;;
+        printf 'down %s cwd=%s\n' "$colour" "$PWD" >> "$DK/order.log"
+        [ -f "$DK/down.timeout" ] && exit 124
+        [ -f "$DK/down.fail" ] && exit 1
+        exit 0 ;;
       *" config "*"--services"*)
         [ -f "$DK/services" ] && cat "$DK/services"
         exit 0 ;;
@@ -473,6 +477,26 @@ ready_green() { call "cd_colour_ready green ${TAG_NEW} \"\$TREE\""; }
     [ "$(cat "${GREMION_ROOT}/runtime/workers/green")" = off ]
 }
 
+@test "start: leftovers that cannot be taken down, or a down that times out, are infrastructure (4), never a verdict on the commit" {
+    happy
+    touch "$DK/down.fail"
+    call "cd_colour_start \"\$TREE\" green ${TAG_NEW}"
+    [[ "$output" == *"rc=4"* ]]
+    rm -f "$DK/down.fail"
+    touch "$DK/down.timeout"
+    call "cd_colour_start \"\$TREE\" green ${TAG_NEW}"
+    [[ "$output" == *"rc=4"* ]]
+    # nothing was brought up after the failed down
+    assert_absent '^up ' "$DK/order.log" "an up ran after a down that failed"
+}
+
+@test "start: a compose up that fails while docker no longer answers is infrastructure (4)" {
+    happy
+    touch "$DK/up.killdaemon"
+    call "cd_colour_start \"\$TREE\" green ${TAG_NEW}"
+    [[ "$output" == *"rc=4"* ]]
+}
+
 @test "start: stack isolation passes with an anonymous volume, a bind mount and the aliases (the workers bind mount is accepted)" {
     happy
     # a bind mount has no name: its token is empty, an anonymous volume is 64 hex
@@ -598,6 +622,16 @@ ready_green() { call "cd_colour_ready green ${TAG_NEW} \"\$TREE\""; }
     [[ "$output" == *"rc=1 reason=restart"* ]]
 }
 
+@test "ready: layer 1, a health read that cannot be made at the end of the stable window is 2, not a restart verdict" {
+    happy
+    rm -f "$DK/w.n"
+    call 'cd_wait_healthy() { local n; n=$(cat "$DK/w.n" 2>/dev/null || echo 0); echo $((n + 1)) > "$DK/w.n"; [ "$n" -ge 1 ] && return 2; return 0; }
+        cd_colour_ready green '"${TAG_NEW}"' "$TREE"'
+    [[ "$output" == *"rc=2 reason=unhealthy"* ]]
+    # the second call is the one at the end of the window
+    [ "$(cat "$DK/w.n")" -eq 2 ]
+}
+
 @test "ready: layer 1, a one-shot that exited non-zero" {
     happy
     printf 'c-migrate\n' > "$DK/exited.teststack-app-green"
@@ -656,6 +690,25 @@ ready_green() { call "cd_colour_ready green ${TAG_NEW} \"\$TREE\""; }
     [[ "$output" == *"rc=4"* ]]
 }
 
+@test "ready: layer 2, a Traefik API that does not answer says curl's reason" {
+    happy
+    touch "$DK/traefik.down"
+    run --separate-stderr colour_lib "cd_colour_ready green ${TAG_NEW} \"\$TREE\"; echo \"rc=\$?\""
+    [[ "$output" == *"rc=4"* ]]
+    [[ "$stderr" == *"the Traefik API does not answer: curl: (7) Failed to connect"* ]]
+}
+
+@test "ready: layer 2, a public probe that gets no answer at all is infrastructure (4), not a verdict on the commit" {
+    happy
+    rm -f "$DK/pub.seq"
+    ready_green
+    [[ "$output" == *"rc=4 reason=public_none"* ]]
+    # the status 000 curl writes when nothing answered is the same case
+    seqf "$DK/pub.seq" '000|'
+    ready_green
+    [[ "$output" == *"rc=4 reason=public_none"* ]]
+}
+
 @test "ready: layer 2, the portal list page answering 500 fails the gate" {
     happy
     printf '500\\n\n' > "$DK/portal.c-pub"
@@ -707,7 +760,7 @@ ready_green() { call "cd_colour_ready green ${TAG_NEW} \"\$TREE\""; }
     [ "$(grep -c '/readyz' "$DK/curl.log")" -eq 3 ]
 }
 
-@test "ready: layer 2, /healthz answers 200 while /readyz answers 503 (the lesson of F4)" {
+@test "ready: layer 2, /healthz answers 200 while /readyz answers 503 (a healthy process is not a ready one)" {
     happy
     seqf "$DK/pub.seq" '503|{"ready":false}'
     ready_green
@@ -932,6 +985,7 @@ shim_isolation() {
 printf '%s|%s\n' "${GREMION_RELEASE_DIR:-unset}" "$*" >> "$DK/iso.log"
 echo "output that names host.example.org and a router table"
 echo "stderr line for host.example.org" >&2
+[ -f "$DK/iso.hang" ] && exec sleep 30
 [ -f "$DK/iso.fail" ] && exit "$(cat "$DK/iso.fail")"
 if [ "$1" = run ]; then
   out="$3"
@@ -1041,6 +1095,21 @@ EOF
     echo 1 > "$DK/iso.fail"
     call 'cd_colour_isolation_record "$TREE"'
     [[ "$output" == *"rc=1 reason=isolation_record"* ]]
+}
+
+@test "isolation run and record: a program that hangs is cut off by the time limit and is infrastructure (4)" {
+    shim_isolation
+    mkdir -p "${GREMION_ROOT}/data/isolation-evidence"
+    echo '{}' > "${GREMION_ROOT}/data/isolation-evidence/${TIP}.json"
+    touch "$DK/iso.hang"
+    export CD_COLOUR_ISOLATION_TIMEOUT_S=1 CD_COLOUR_ISOLATION_RECORD_TIMEOUT_S=1
+    SECONDS=0
+    call 'cd_colour_isolation_run "$TREE"'
+    [[ "$output" == *"rc=4 reason=isolation_run"* ]]
+    call 'cd_colour_isolation_record "$TREE"'
+    [[ "$output" == *"rc=4 reason=isolation_record"* ]]
+    # two one-second limits, not the 30 seconds the program slept
+    [ "$SECONDS" -lt 20 ]
 }
 
 # ================================================================== verify

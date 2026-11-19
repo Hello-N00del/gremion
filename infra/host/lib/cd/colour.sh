@@ -14,8 +14,11 @@
 # RETURN CODES of every public function (they return, none exits):
 #   0 ok - 1 an assertion about the colour failed (attributable to the release) -
 #   2 a usage error or a missing precondition (an env file or key, a tool, the
-#   baseline, a tree) - 4 an infrastructure answer is missing (docker or the Traefik
-#   API did not answer, so nothing can be said about the colour).
+#   baseline, a tree) - 3 blocked (a child program reports a leftover of an earlier
+#   killed run: retry later, never a verdict on the commit; isolation run, isolation
+#   record and an enforced verify only) - 4 an infrastructure answer is missing
+#   (docker, the Traefik API, the test router or a child program did not answer or
+#   ran out of time, so nothing can be said about the colour).
 # Unknown is never success. A failed readiness layer leaves one short code in
 # CD_COLOUR_REASON (names of checks only, never an id, a host or a slug) and says it
 # once on stderr; call the function directly, not in $(...), to keep the variable.
@@ -26,7 +29,7 @@
 # gremion-isolation) names hosts and tables and goes to a 0600 file under logs/;
 # only the file name is printed.
 #
-# The worker gate file (section 4 of the plan): runtime/workers/<colour>, the host
+# The worker gate file: runtime/workers/<colour>, the host
 # side of the read-only bind mount that gremion-ui reads at every background tick (the
 # directory is GREMION_WORKERS_DIR when the environment or the colour's env file sets it).
 # `off` stops the colour's jobs; absent, unreadable or any other content means on.
@@ -324,6 +327,11 @@ _cd_colour_stack_isolation() {
 
 # -- start ----------------------------------------------------------------------
 
+# _cd_colour_docker_answers - does the docker daemon answer a plain listing at all.
+_cd_colour_docker_answers() {
+    timeout -k 5 "$(_cd_colour_int "${CD_COLOUR_EXEC_TIMEOUT_S:-}" 30)" docker ps -q </dev/null >/dev/null 2>&1
+}
+
 # cd_colour_start TREE COLOUR TAG - bring one colour up from one release tree.
 #  1. the env file of the colour must carry IMAGE_TAG equal to TAG (a stale or
 #     retagged env is refused, 2) and the colour must not be the serving one;
@@ -332,7 +340,8 @@ _cd_colour_stack_isolation() {
 #  3. leftovers of an earlier, interrupted start are taken down;
 #  4. `up -d` from TREE with the colour's own env file (cd_dc: no profile, no -f, no -p);
 #  5. the stack isolation assert; a violation takes the colour down again (1).
-# The health wait belongs to cd_colour_ready. 4 when compose timed out.
+# The health wait belongs to cd_colour_ready. 4 when compose timed out, when the leftovers
+# could not be taken down, or when up failed and docker no longer answers.
 cd_colour_start() {
     local tree="${1:-}" colour="${2:-}" tag="${3:-}" f cur rc=0
     [[ "$#" -eq 3 ]] || { _cd_colour_err "cd_colour_start: usage: TREE COLOUR TAG"; return 2; }
@@ -351,11 +360,25 @@ cd_colour_start() {
     }
     _cd_colour_guard "$colour" cd_colour_start || return $?
     cd_colour_workers "$colour" off || { _cd_colour_err "cd_colour_start: the worker gate could not be set to off; nothing was started"; return 2; }
-    cd_dc "$tree" "app-${colour}" down || { _cd_colour_err "cd_colour_start: the leftovers of the ${colour} colour could not be taken down"; return 1; }
+    # a down that fails or times out says nothing about the commit: 2 is cd_dc's own
+    # precondition, anything else is infrastructure
+    cd_dc "$tree" "app-${colour}" down || {
+        rc=$?
+        [[ "$rc" -eq 2 ]] || rc=4
+        _cd_colour_fail down_failed "$rc" "cd_colour_start: the leftovers of the ${colour} colour could not be taken down"
+        return "$rc"
+    }
     cd_dc "$tree" "app-${colour}" up -d || rc=$?
     if [[ "$rc" -ne 0 ]]; then
         if [[ "$rc" -eq 124 || "$rc" -eq 137 ]]; then
             _cd_colour_err "cd_colour_start: compose up of the ${colour} colour timed out"
+            return 4
+        fi
+        [[ "$rc" -ne 2 ]] || return 2
+        # compose says 1 for a bad file of the release and for a daemon that went away:
+        # only when docker still answers is the failure the release's
+        if ! _cd_colour_docker_answers; then
+            _cd_colour_fail up_failed 4 "cd_colour_start: compose up of the ${colour} colour failed and docker does not answer"
             return 4
         fi
         _cd_colour_fail up_failed 1 "cd_colour_start: compose up of the ${colour} colour failed"
@@ -567,8 +590,11 @@ _cd_colour_l1_stable() { # COLOUR TREE
     after="$(_cd_colour_restarts "$1")" || return 4
     [[ "$before" == "$after" ]] || { _cd_colour_fail restart 1 "layer 1: a container of the ${1} colour restarted during the stable window"; return 1; }
     cd_wait_healthy "app-${1}" 0 "$2" || rc=$?
-    [[ "$rc" -eq 0 ]] || { _cd_colour_fail restart 1 "layer 1: the ${1} colour is not healthy at the end of the stable window"; return 1; }
-    return 0
+    case "$rc" in
+        0) return 0 ;;
+        3) _cd_colour_fail restart 1 "layer 1: the ${1} colour is not healthy at the end of the stable window"; return 1 ;;
+        *) _cd_colour_fail unhealthy 2 "layer 1: the health of the ${1} colour could not be read at the end of the stable window"; return 2 ;;
+    esac
 }
 
 # Layer 2: the edge's next route (app-next@file and public-next@file name the target).
@@ -601,10 +627,11 @@ _cd_colour_l2_route_once() { # COLOUR
 # the wait is for the status only; a wrong colour fails at once; an API that does not
 # answer is 4.
 _cd_colour_l2_route() { # COLOUR
-    local api deadline rc
+    local api deadline rc why
     api="$(cd_traefik_api)" || return 2
-    curl -fsS --max-time 5 "${api}/api/version" >/dev/null 2>&1 </dev/null || {
-        _cd_colour_err "layer 2: the Traefik API does not answer"
+    why="$(curl -fsS --max-time 5 "${api}/api/version" 2>&1 >/dev/null </dev/null)" || {
+        why="$(printf '%s' "$why" | tr -cd '[:print:]\n' | head -n 1 | cut -c 1-200)"
+        _cd_colour_err "layer 2: the Traefik API does not answer${why:+: ${why}}"
         return 4
     }
     deadline=$(($(_cd_colour_now) + $(_cd_colour_int "${CD_COLOUR_ROUTE_WAIT_S:-}" 40)))
@@ -629,11 +656,20 @@ _cd_colour_internaltest_port() {
 # The public, ready-only answer through the loopback test router (any non-empty Host
 # header takes it): HTTP 200 and exactly {"ready":true}.
 _cd_colour_l2_public() { # PORT
-    local out code body
+    local out code body why errf
+    errf="$(mktemp 2>/dev/null)" || { _cd_colour_err "cd_colour: cannot create a temporary file"; return 2; }
     out="$(curl -sS --max-time "$(_cd_colour_int "${CD_COLOUR_HTTP_TIMEOUT_S:-}" 10)" -H 'Host: cd-readiness.invalid' \
-        -w $'\n%{http_code}' "http://127.0.0.1:${1}/readyz" </dev/null 2>/dev/null)" || out=''
+        -w $'\n%{http_code}' "http://127.0.0.1:${1}/readyz" </dev/null 2>"$errf")" || out=''
+    why="$(tr -cd '[:print:]\n' <"$errf" 2>/dev/null | head -n 1 | cut -c 1-200)"
+    rm -f -- "$errf"
     code="${out##*$'\n'}"
     body="${out%$'\n'*}"
+    # no answer at all (the test router refuses, times out or answers nothing) is the
+    # edge's, never a verdict on the commit; an HTTP status of any kind is an answer
+    if [[ ! "$code" =~ ^[1-5][0-9][0-9]$ ]]; then
+        _cd_colour_fail public_none 4 "layer 2: the public readiness probe got no answer from the test router${why:+: ${why}}"
+        return 4
+    fi
     [[ "$code" == 200 ]] || { _cd_colour_fail public_ready 1 "layer 2: the public readiness answer is HTTP ${code:-none}"; return 1; }
     printf '%s' "$body" | jq -e '. == {"ready": true}' >/dev/null 2>&1 || {
         _cd_colour_fail public_ready 1 "layer 2: the public readiness answer is not {\"ready\":true}"
@@ -672,7 +708,7 @@ _cd_colour_l2_internal() { # COLOUR TAG BASELINE
     return 0
 }
 
-# cd_colour_ready COLOUR TAG [TREE] - the readiness gate, layers 1 to 3 of section 6.
+# cd_colour_ready COLOUR TAG [TREE] - the readiness gate, layers 1 to 3.
 #  Layer 1, containers: every service healthy; no one-shot or service exited non-zero;
 #   every first-party container runs the image of its tag (cd_colour_identity); the
 #   stack isolation holds; no container restarts over CD_COLOUR_STABLE_S (60) seconds.
@@ -681,7 +717,7 @@ _cd_colour_l2_internal() { # COLOUR TAG BASELINE
 #   the public ready-only answer through the loopback test router, the portal list
 #   page, and the internal answer (ready, colour, release, tenants not ready at or
 #   below the baseline of the live colour). Every round must pass.
-#  Layer 3 is the /readyz the probes read (app contract U12a).
+#  Layer 3 is the /readyz the probes read (the app's own readiness contract).
 # TREE (the release tree whose compose files name the services) is optional: it falls
 # back to the state's release, live or previous record of that colour and tag, and 2
 # is returned when none can be found. The baseline is release.watch.baseline_not_ready;
@@ -752,8 +788,11 @@ _cd_colour_evidence_dir() { printf '%s' "$(_cd_colour_root)/data/isolation-evide
 # cd_colour_isolation_run TREE - produce the cross-customer isolation evidence for the
 # tip of TREE (gremion-isolation run, GREMION_RELEASE_DIR = TREE) and require the
 # evidence file for that tip. Prints the evidence path. 1 when the run fails or leaves
-# no evidence for the tip; 2 when the program or the tip is missing. The program's
-# output goes to a 0600 file under logs/.
+# no evidence for the tip; 2 when the program or the tip is missing; 3 and 4 as in
+# _cd_colour_child_rc. The run is bounded by CD_COLOUR_ISOLATION_TIMEOUT_S (2400: the
+# program's own test run is bounded at 1800 plus its image build), so a hang cannot hold
+# the release for ever; a run that hits the limit is 4. The program's output goes to a
+# 0600 file under logs/.
 cd_colour_isolation_run() {
     local tree="${1:-}" prog tip out log rc=0 ev
     [[ "$#" -eq 1 ]] || { _cd_colour_err "cd_colour_isolation_run: usage: TREE"; return 2; }
@@ -763,7 +802,7 @@ cd_colour_isolation_run() {
     tip="$(_cd_colour_tip "$tree")" || { _cd_colour_err "cd_colour_isolation_run: the release tree has no release tip"; return 2; }
     out="$(_cd_colour_evidence_dir)"
     log="$(_cd_colour_logfile isolation)" || return 2
-    GREMION_RELEASE_DIR="$tree" "$prog" run --out "$out" >"$log" 2>&1 </dev/null || rc=$?
+    GREMION_RELEASE_DIR="$tree" timeout -k 10 "$(_cd_colour_int "${CD_COLOUR_ISOLATION_TIMEOUT_S:-}" 2400)" "$prog" run --out "$out" >"$log" 2>&1 </dev/null || rc=$?
     if [[ "$rc" -ne 0 ]]; then
         _cd_colour_child_rc isolation_run "$rc" "isolation run failed (exit ${rc}); output in logs/${log##*/}"
         return $?
@@ -775,7 +814,7 @@ cd_colour_isolation_run() {
 
 # cd_colour_isolation_record TREE - record the evidence of the tip of TREE
 # (gremion-isolation record, GREMION_RELEASE_DIR = TREE). It is separate from the run:
-# the commit point calls it (F13), the gates do not. 1 when the evidence file for the
+# the commit point calls it, the gates do not. 1 when the evidence file for the
 # tip is absent or the record fails.
 cd_colour_isolation_record() {
     local tree="${1:-}" prog tip ev log rc=0
@@ -787,7 +826,7 @@ cd_colour_isolation_record() {
     ev="$(_cd_colour_evidence_dir)/${tip}.json"
     [[ -s "$ev" ]] || { _cd_colour_fail isolation_record 1 "isolation record: no evidence file for the tip"; return 1; }
     log="$(_cd_colour_logfile isolation-record)" || return 2
-    GREMION_RELEASE_DIR="$tree" "$prog" record "$ev" >"$log" 2>&1 </dev/null || rc=$?
+    GREMION_RELEASE_DIR="$tree" timeout -k 10 "$(_cd_colour_int "${CD_COLOUR_ISOLATION_RECORD_TIMEOUT_S:-}" 600)" "$prog" record "$ev" >"$log" 2>&1 </dev/null || rc=$?
     if [[ "$rc" -ne 0 ]]; then
         _cd_colour_child_rc isolation_record "$rc" "isolation record failed (exit ${rc}); output in logs/${log##*/}"
         return $?
@@ -797,8 +836,9 @@ cd_colour_isolation_record() {
 
 # cd_colour_verify COLOUR TREE - gremion-verify --colour COLOUR, with the waiver ledger
 # of TREE. REPORT-ONLY until CD_VERIFY_ENFORCE=1: with 0 a failure is logged (history
-# event verify_report, counts only) and 0 is returned; with 1 it is 1 (2 when verify
-# could not run). The program's output goes to a 0600 file under logs/.
+# event verify_report, counts only) and 0 is returned; with 1 the exit of the program
+# is told apart as in _cd_colour_child_rc (1, 2, 3 or 4). The program's output goes to a
+# 0600 file under logs/.
 cd_colour_verify() {
     local colour="${1:-}" tree="${2:-}" prog log ledger enf rc=0
     [[ "$#" -eq 2 ]] || { _cd_colour_err "cd_colour_verify: usage: COLOUR TREE"; return 2; }
@@ -828,7 +868,7 @@ cd_colour_verify() {
 
 # cd_colour_gates TREE COLOUR TAG - what the target colour must pass before the switch:
 # the readiness gate, the isolation evidence for the new tip, verify, and the readiness
-# gate once more immediately before the switch (section 6). The first failure's code.
+# gate once more immediately before the switch. The first failure's code.
 cd_colour_gates() {
     local tree="${1:-}" colour="${2:-}" tag="${3:-}"
     [[ "$#" -eq 3 ]] || { _cd_colour_err "cd_colour_gates: usage: TREE COLOUR TAG"; return 2; }
