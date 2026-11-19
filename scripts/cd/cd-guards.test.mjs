@@ -50,7 +50,7 @@ function filesOf(glob) {
 }
 
 function scannedFiles() {
-  return [...new Set(ADDRESS_SCAN_GLOBS.flatMap(filesOf))].sort()
+  return [...new Set(ADDRESS_SCAN_GLOBS.flatMap(filesOf))].toSorted((a, b) => a.localeCompare(b))
 }
 
 // An address: local part, '@', a dotted domain ending in letters. A domain is allowed when it
