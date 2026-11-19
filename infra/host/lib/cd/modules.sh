@@ -63,6 +63,8 @@ declare -gA _CD_MOD_SVC_RUN=()    # service -> 1 when its container is running
 declare -gA _CD_MOD_SVC_DBS=()    # "<service> <database>" -> 1, the gate databases a running server holds
 declare -gA _CD_MOD_LIVE=()       # database name -> 1, a live ledger line of this release
 _CD_MOD_CID=''                    # the running container of the state project's postgres
+_CD_MOD_LOG=''                    # the path of the log file _cd_mod_logfile made last
+declare -ga _CD_MOD_LOGS=()       # every log file of this run
 
 _cd_mod_err() { printf 'cd-modules: %s\n' "$*" >&2; }
 
@@ -107,8 +109,9 @@ _cd_mod_int() {
 # _cd_mod_limit - the seconds one docker, psql or program call of this library may take.
 _cd_mod_limit() { _cd_mod_int "${CD_MODULES_DOCKER_LIMIT:-}" 60; }
 
-# _cd_mod_logfile NAME - a new 0600 file under logs/; prints its path. Only the file NAME
-# is ever said to the journal or to stdout.
+# _cd_mod_logfile NAME - a new 0600 file under logs/, its path left in _CD_MOD_LOG (not
+# printed, and remembered in _CD_MOD_LOGS so that a run that succeeds removes the ones that
+# stayed empty). Only the file NAME is ever said to the journal or to stdout.
 _cd_mod_logfile() {
     local dir f
     dir="$(_cd_mod_root)/logs"
@@ -118,12 +121,25 @@ _cd_mod_logfile() {
         _cd_mod_err "cannot create a log file under logs/"
         return 2
     }
-    printf '%s' "$f"
+    _CD_MOD_LOG="$f"
+    _CD_MOD_LOGS+=("$f")
+}
+
+# _cd_mod_tidy - remove the log files of this run that are still empty.
+_cd_mod_tidy() {
+    local f
+    for f in "${_CD_MOD_LOGS[@]}"; do
+        if [[ -e "$f" && ! -s "$f" ]]; then rm -f -- "$f"; fi
+    done
+    _CD_MOD_LOGS=()
+    return 0
 }
 
 # _cd_mod_reset - forget everything a previous run held.
 _cd_mod_reset() {
     CD_MODULES_REASON=''
+    _CD_MOD_LOG=''
+    _CD_MOD_LOGS=()
     _CD_MOD_ROW_STATE=()
     _CD_MOD_ENABLED_Q2=()
     _CD_MOD_ENABLED=()
@@ -149,10 +165,14 @@ _cd_mod_owned_dir() {
     [[ -z "$want" || "$mode" == "$want" ]]
 }
 
-# _cd_mod_precheck_dirs ENVFILE - the host directories the one-shot bind-mounts. The
-# governance and tenant secrets directories must exist as 0700 directories of the deploy
-# user; the module export directory (also mounted by the service) must exist and be the
-# deploy user's. Else code 2 and no container starts.
+# _cd_mod_precheck_dirs ENVFILE - the host directories the one-shot bind-mounts that hold
+# secrets: etc/secrets/governance and TENANT_SECRETS_DIR (from the target env file) must exist
+# as 0700 directories of the deploy user (gremion-init and bootstrap make them so), else code
+# 2 and no container starts: Docker would create a missing bind source as root. The service
+# also mounts data/module-exports; nothing of the module step uses it and its owner on a host
+# is whatever the first tenant-create run made it, so it is not checked. A TENANT_SECRETS_DIR in
+# the process environment that differs from the env file is refused: compose prefers the
+# environment, and the directory checked here would not be the one that is mounted.
 _cd_mod_precheck_dirs() {
     local envf="$1" root ts
     root="$(_cd_mod_root)"
@@ -163,10 +183,12 @@ _cd_mod_precheck_dirs() {
         _cd_mod_fail secrets_dir 2 "the target env file does not give TENANT_SECRETS_DIR as one absolute path"
         return 2
     fi
+    if [[ -n "${TENANT_SECRETS_DIR:-}" && "${TENANT_SECRETS_DIR}" != "$ts" ]]; then
+        _cd_mod_fail secrets_dir 2 "TENANT_SECRETS_DIR in the environment differs from the target env file"
+        return 2
+    fi
     _cd_mod_owned_dir "$ts" 700 \
         || { _cd_mod_fail secrets_dir 2 "TENANT_SECRETS_DIR must exist as a 0700 directory of the deploy user"; return 2; }
-    _cd_mod_owned_dir "${root}/data/module-exports" \
-        || { _cd_mod_fail exports_dir 2 "data/module-exports must exist as a directory of the deploy user"; return 2; }
     return 0
 }
 
@@ -262,10 +284,12 @@ _cd_mod_load_rows() {
 cd_modules_enabled_count() {
     local errlog rc=0
     _cd_mod_reset
-    errlog="$(_cd_mod_logfile count)" || return 2
+    _cd_mod_logfile count || return 2
+    errlog="$_CD_MOD_LOG"
     _cd_mod_state_cid || return 2
     _cd_mod_load_rows "$_CD_MOD_CID" "$errlog" || rc=$?
     [[ "$rc" -eq 0 ]] || return "$rc"
+    _cd_mod_tidy
     printf '%s\n' "${#_CD_MOD_ENABLED_Q2[@]}"
 }
 
@@ -524,8 +548,16 @@ _cd_mod_policy_skips() {
 
 # -- the step -------------------------------------------------------------------------------------
 
-# cd_modules_upgrade TREE COLOUR TAG - see the head of the file.
+# cd_modules_upgrade TREE COLOUR TAG - see the head of the file. A run that succeeds removes
+# the log files that stayed empty; a run that fails keeps every one of them.
 cd_modules_upgrade() {
+    local rc=0
+    _cd_mod_upgrade "$@" || rc=$?
+    if [[ "$rc" -eq 0 ]]; then _cd_mod_tidy; fi
+    return "$rc"
+}
+
+_cd_mod_upgrade() {
     local tree="${1:-}" colour="${2:-}" tag="${3:-}" rid rtag rcol envf pol rc=0 tmo
     local errlog outf runerr json ids start
     [[ "$#" -eq 3 ]] || { _cd_mod_fail usage 2 "usage: TREE COLOUR TAG"; return 2; }
@@ -559,7 +591,8 @@ cd_modules_upgrade() {
     [[ -f "$envf" && -r "$envf" ]] || { _cd_mod_fail usage 2 "the target colour's env file is not readable"; return 2; }
     _cd_mod_precheck_dirs "$envf" || return $?
 
-    errlog="$(_cd_mod_logfile query)" || return 2
+    _cd_mod_logfile query || return 2
+    errlog="$_CD_MOD_LOG"
     _cd_mod_state_cid || return 2
     _cd_mod_load_rows "$_CD_MOD_CID" "$errlog" || return $?
     _cd_mod_servers "$tree" "$errlog" || return $?
@@ -584,8 +617,10 @@ cd_modules_upgrade() {
     fi
 
     tmo="$(_cd_mod_int "$(cd_cfg CD_MODULE_UPGRADE_TIMEOUT_S 2>/dev/null)" 900)"
-    outf="$(_cd_mod_logfile out)" || return 2
-    runerr="$(_cd_mod_logfile run)" || return 2
+    _cd_mod_logfile out || return 2
+    outf="$_CD_MOD_LOG"
+    _cd_mod_logfile run || return 2
+    runerr="$_CD_MOD_LOG"
     start="$(_cd_mod_now)"
     (
         CD_DC_TIMEOUT="$tmo" cd_dc "$tree" "app-${colour}" run --rm --no-deps -T --label "gremion.cd=${rid}" tenant-create module-upgrade --all

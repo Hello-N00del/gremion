@@ -146,7 +146,7 @@ setup() {
     cp "${FIX}/state.env" "${FIX}/app-blue.env" "${FIX}/app-green.env" "${GREMION_ROOT}/etc/env/"
     printf 'TENANT_SECRETS_DIR=%s/etc/secrets/tenants\n' "$GREMION_ROOT" >>"${GREMION_ROOT}/etc/env/app-green.env"
     printf 'TENANT_SECRETS_DIR=%s/etc/secrets/tenants\n' "$GREMION_ROOT" >>"${GREMION_ROOT}/etc/env/app-blue.env"
-    mkdir -p "${GREMION_ROOT}/etc/secrets/governance" "${GREMION_ROOT}/etc/secrets/tenants" "${GREMION_ROOT}/data/module-exports"
+    mkdir -p "${GREMION_ROOT}/etc/secrets/governance" "${GREMION_ROOT}/etc/secrets/tenants"
     chmod 700 "${GREMION_ROOT}/etc/secrets/governance" "${GREMION_ROOT}/etc/secrets/tenants"
     TREE="${GREMION_ROOT}/releases/bbbbbbbbbbbb"
     export TREE
@@ -359,12 +359,31 @@ refute_text() {
     [ "$(calls run)" -eq 0 ]
 }
 
-@test "the module export directory that the service also mounts must exist: Docker would create it as root" {
-    rmdir "${GREMION_ROOT}/data/module-exports"
-    step
+@test "GUARD: a TENANT_SECRETS_DIR in the environment that differs from the env file is code 2 (compose would mount that one)" {
+    mkdir -m 700 "${GREMION_ROOT}/etc/secrets/other"
+    run --separate-stderr mod 'export TENANT_SECRETS_DIR="${GREMION_ROOT}/etc/secrets/other"; cd_lock_take; rc=0; cd_modules_upgrade "$TREE" green "$TAG" || rc=$?; echo "reason=${CD_MODULES_REASON}"; exit "$rc"'
     [ "$status" -eq 2 ]
+    out_has 'reason=secrets_dir'
     [ "$(calls run)" -eq 0 ]
-    out_has 'reason=exports_dir'
+    # the same value as the env file's is no difference
+    echo "$JSON_OK" >"$DK/run.out"
+    run --separate-stderr mod 'export TENANT_SECRETS_DIR="${GREMION_ROOT}/etc/secrets/tenants"; cd_lock_take; rc=0; cd_modules_upgrade "$TREE" green "$TAG" || rc=$?; exit "$rc"'
+    [ "$status" -eq 0 ]
+}
+
+@test "a step that succeeds leaves no empty log file behind; the counted listing neither" {
+    echo "$JSON_OK" >"$DK/run.out"
+    step
+    [ "$status" -eq 0 ]
+    local f
+    for f in "${GREMION_ROOT}"/logs/cd-modules-*.log; do
+        [ -s "$f" ]
+    done
+    run --separate-stderr mod 'cd_modules_enabled_count'
+    [ "$status" -eq 0 ]
+    for f in "${GREMION_ROOT}"/logs/cd-modules-count-*.log; do
+        [ ! -e "$f" ]
+    done
 }
 
 # ------------------------------------------------------------------------ the listing
