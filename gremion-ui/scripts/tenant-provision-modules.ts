@@ -16,7 +16,9 @@
 //       STDOUT: exactly ONE JSON line of counts and nothing else,
 //         {"v":1,"total":N,"upgraded":N,"unchanged":N,"skipped":N,"failed":N,"files_applied":N}
 //       printed on every exit this verb controls (0, 1 and 3). No module, database or
-//       customer name reaches stdout or stderr: a failure is a fixed code and a position.
+//       customer name reaches stdout or stderr: a failure is a fixed code and a position. (A usage
+//       error, exit 2, names the missing environment variable, e.g. MODULE_PG_ADMIN_<ID>_FILE: a
+//       module id and a path, never a customer, a database or a database message.)
 //         total          rows skipped plus databases opened; a database after the first
 //                        failure is not reached and not counted, so the four counts below
 //                        always add up to total
@@ -33,8 +35,15 @@
 //         2  usage, or a missing environment value (named): nothing was connected to
 //         3  a connection-level error on a database BEFORE any DDL began (a refused or
 //            timed-out connection, a server going down or not accepting yet, a full
-//            disk), or on the platform database: the infrastructure's fault, retried
+//            disk), or on the platform database, or a LOCK WAIT THAT GAVE UP (the migration
+//            lock, a file's DDL lock timeout, the re-grant lock: contention with the live
+//            colour, the file rolled back whole): the infrastructure's fault, retried.
+//            On a platform that cannot be reached the counts are all 0 (failed 0, total 0):
+//            a consumer must not assume failed >= 1 on exit 3.
 //         A connection that drops once a file's transaction has begun is exit 1.
+//       Interrupted earlier runs are repaired: a database with nothing pending whose app role
+//       lacks privileges that an earlier run committed files for gets its re-grant (stderr
+//       line "regranted N"; counted as unchanged, the JSON line does not carry it).
 //       An unexpected throw that cannot be turned into counts ends exit 1 with NO JSON
 //       line; the host reads that as the container's own failure, not the release's.
 import type postgres from 'postgres'
@@ -42,7 +51,7 @@ import { upgradeModuleDatabases, type LifecycleModule, type ModuleServer, type U
 
 export const MODULE_VERBS: ReadonlySet<string> = new Set(['module-upgrade'])
 
-export const MODULE_USAGE = `  module-upgrade --all   (CD module step: apply the pending migration files of every enabled module database as its owner, re-grant the app role; stops at the first failure; one JSON line of counts; exit 0 ok, 1 a file or the re-grant failed, 2 usage, 3 a connection-level error)`
+export const MODULE_USAGE = `  module-upgrade --all   (CD module step: apply the pending migration files of every enabled module database as its owner, re-grant the app role; stops at the first failure; one JSON line of counts; exit 0 ok, 1 a file or the re-grant failed, 2 usage, 3 a connection-level error or a lock wait that gave up)`
 
 export interface ModuleVerbContext {
   /** process.argv after the verb */
@@ -109,10 +118,10 @@ export async function moduleVerb(verb: string, ctx: ModuleVerbContext): Promise<
   } finally {
     await Promise.all([platform.end({ timeout: 5 }).catch(() => {}), ...[...servers.values()].map((s) => s.close().catch(() => {}))])
   }
-  ctx.log(`module-upgrade: ${summary.total} row(s): ${summary.upgraded} upgraded, ${summary.unchanged} unchanged, ${summary.skipped} skipped, ${summary.failed} failed, ${summary.files_applied} file(s) applied`)
+  ctx.log(`module-upgrade: ${summary.total} row(s): ${summary.upgraded} upgraded, ${summary.unchanged} unchanged, ${summary.skipped} skipped, ${summary.failed} failed, ${summary.files_applied} file(s) applied${summary.regranted > 0 ? `, regranted ${summary.regranted}` : ''}`)
   if (summary.failure) {
     const f = summary.failure
-    ctx.log(`module-upgrade: stopped at database ${f.ordinal}: ${f.kind === 'connection' ? 'connection-level error before any DDL' : 'commit failure'} (${f.code}${f.file ? `, ${f.file}` : ''})`)
+    ctx.log(`module-upgrade: stopped at database ${f.ordinal}: ${f.kind === 'connection' ? 'connection-level error or lock contention, infrastructure' : 'commit failure'} (${f.code}${f.file ? `, ${f.file}` : ''})`)
   }
   ;(ctx.stdout ?? ((t: string) => void process.stdout.write(t)))(`${moduleUpgradeLine(summary)}\n`)
   process.exitCode = moduleUpgradeExitCode(summary)

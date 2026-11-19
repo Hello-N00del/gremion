@@ -9,8 +9,11 @@ import { join } from 'node:path'
 import type { Sql } from '@gremion/db'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { blockModuleDatabase, enableModule, upgradeModuleDatabases } from '../../src/lifecycle/index.js'
-import type { LifecycleModule } from '../../src/lifecycle/index.js'
+import type { LifecycleModule, UpgradeDeps } from '../../src/lifecycle/index.js'
+import { grantAppPrivileges } from '../../src/lifecycle/enable.js'
+import { appPrivilegesMissing, GRANT_LOCK_NAME } from '../../src/lifecycle/upgrade.js'
 import { tenantModuleDbName } from '../../src/names.js'
+import { runMigrations } from '../../src/runner.js'
 import { connectModule, connectModuleAs } from '../harness/db.js'
 import { writeManifest } from '../harness/migrations.js'
 import { APP_PASSWORD, LCFIX_DIR, lcfixModule, lifecycleDeps, moduleServer, OPERATOR, platformDb, resetModuleServer, seedCatalogue, uuidv7 } from '../harness/lifecycle.js'
@@ -67,8 +70,33 @@ describe('upgradeModuleDatabases on the scratch stack (module step)', () => {
     await enableModule(tenant, module, OPERATOR, lifecycleDeps(platform, server, { releaseRef: OLD_RELEASE }))
     return { tenant, db: tenantModuleDbName(tenant, 'lcfix') }
   }
-  const upgrade = (module: LifecycleModule, srv = server, releaseRef = NEW_RELEASE) =>
-    upgradeModuleDatabases({ platform, server: () => srv, catalogue: [module], releaseRef, phaseFor: expandOnly, log: () => {} })
+  const upgrade = (module: LifecycleModule, srv = server, releaseRef = NEW_RELEASE, extra: Partial<UpgradeDeps> = {}) =>
+    upgradeModuleDatabases({ platform, server: () => srv, catalogue: [module], releaseRef, phaseFor: expandOnly, log: () => {}, ...extra })
+
+  /** What an interrupted run leaves: the pending files committed by the real runner as the owner, the re-grant never run. */
+  async function commitWithoutGrant(module: LifecycleModule, db: string): Promise<string[]> {
+    const owned = await server.open(db, { role: 'm_lcfix' })
+    try {
+      const r = await runMigrations({ sql: owned, dir: join(module.dir, 'migrations'), releaseRef: NEW_RELEASE, phaseFor: expandOnly(), log: () => {} })
+      return r.applied
+    } finally {
+      await owned.end({ timeout: 5 })
+    }
+  }
+
+  /** True when the app role may insert into `table` (a 42501 is the only refusal accepted). */
+  async function appCanInsert(db: string, statement: string): Promise<boolean> {
+    const app = connectModuleAs(db, 'm_lcfix_app', APP_PASSWORD)
+    try {
+      await app.unsafe(statement)
+      return true
+    } catch (err) {
+      if ((err as { code?: string }).code === '42501') return false
+      throw err
+    } finally {
+      await app.end()
+    }
+  }
 
   /** DDL command starts, seen on the database from now on (a ddl_command_start event trigger; rolled back ones count). */
   async function installProbe(db: string): Promise<() => Promise<number>> {
@@ -262,5 +290,154 @@ describe('upgradeModuleDatabases on the scratch stack (module step)', () => {
     const r = await upgrade(c.module)
     expect(r).toMatchObject({ failed: 1, failure: { kind: 'commit', code: 'DATABASE_FOREIGN_OWNER' } })
     expect((await ledger(db)).map((x) => x.filename)).toEqual(['001_init.sql'])
+  })
+
+  it('an interrupted run (files committed, the re-grant never ran) is repaired by the next run although nothing is pending; after that a run does no DDL', async () => {
+    const c = chain(['001_init.sql'])
+    const { db } = await enableAtOldChain(c.module)
+    c.add('002_extra.sql', '-- lcfix 002\nCREATE SCHEMA extra;\nCREATE TABLE extra.thing (thing_id serial PRIMARY KEY, label text NOT NULL);\nCREATE TABLE later (id int PRIMARY KEY);\n')
+    // the files are live and the grant is not: what a kill after the last COMMIT, a failed re-grant or UNLOCK_FAILED leaves
+    expect(await commitWithoutGrant(c.module, db)).toEqual(['002_extra.sql'])
+    // default privileges reach the new table of public, nothing reaches the new schema
+    expect(await appCanInsert(db, 'INSERT INTO later (id) VALUES (1)')).toBe(true)
+    expect(await appCanInsert(db, "INSERT INTO extra.thing (label) VALUES ('x')")).toBe(false)
+    const su = connectModule(db, { max: 1 })
+    try {
+      expect(await appPrivilegesMissing(su, 'm_lcfix', 'm_lcfix_app')).toBe(true)
+    } finally {
+      await su.end()
+    }
+
+    const r = await upgrade(c.module)
+    expect(r).toMatchObject({ total: 1, upgraded: 0, unchanged: 1, regranted: 1, files_applied: 0, failed: 0, failure: null })
+    expect(await appCanInsert(db, "INSERT INTO extra.thing (label) VALUES ('x')")).toBe(true)
+
+    // converged: the check is false and a further run executes no DDL command at all
+    const ddlCount = await installProbe(db)
+    const before = await ddlCount()
+    const again = await upgrade(c.module)
+    expect(again).toMatchObject({ unchanged: 1, regranted: 0, failed: 0, failure: null })
+    expect(await ddlCount()).toBe(before)
+  })
+
+  it('a run that finds the grant incomplete while another run is still granting waits for that run and then finds nothing to repair (no two grants at once)', async () => {
+    const c = chain(['001_init.sql'])
+    const { db } = await enableAtOldChain(c.module)
+    c.add('002_extra.sql', '-- lcfix 002\nCREATE SCHEMA extra;\nCREATE TABLE extra.thing (thing_id serial PRIMARY KEY, label text NOT NULL);\n')
+    await commitWithoutGrant(c.module, db)
+    // the winner of a concurrent pair, mid-grant: it holds the grant lock while its grant is not finished
+    const winner = connectModule(db, { max: 1 })
+    try {
+      await winner`SELECT pg_advisory_lock(hashtextextended(${GRANT_LOCK_NAME}, 0))`
+      let done = false
+      const second = upgrade(c.module).finally(() => void (done = true))
+      await new Promise((r) => setTimeout(r, 1500))
+      expect(done, 'the second run must wait for the grant lock').toBe(false)
+      // the winner finishes its grant, then lets go
+      const owned = await server.open(db, { role: 'm_lcfix' })
+      try {
+        await grantAppPrivileges(owned, 'm_lcfix', 'm_lcfix_app')
+      } finally {
+        await owned.end({ timeout: 5 })
+      }
+      await winner`SELECT pg_advisory_unlock(hashtextextended(${GRANT_LOCK_NAME}, 0))`
+      const r = await second
+      expect(r).toMatchObject({ total: 1, unchanged: 1, regranted: 0, failed: 0, failure: null })
+    } finally {
+      await winner.end()
+    }
+    expect(await appCanInsert(db, "INSERT INTO extra.thing (label) VALUES ('x')")).toBe(true)
+  })
+
+  it('a wait for the grant lock that outlasts the lock wait bound fails as contention (connection class), and grants nothing', async () => {
+    const c = chain(['001_init.sql'])
+    const { db } = await enableAtOldChain(c.module)
+    c.add('002_extra.sql', '-- lcfix 002\nCREATE SCHEMA extra;\nCREATE TABLE extra.thing (thing_id serial PRIMARY KEY, label text NOT NULL);\n')
+    await commitWithoutGrant(c.module, db)
+    const holder = connectModule(db, { max: 1 })
+    try {
+      await holder`SELECT pg_advisory_lock(hashtextextended(${GRANT_LOCK_NAME}, 0))`
+      const r = await upgrade(c.module, server, NEW_RELEASE, { lockWaitTimeoutMs: 500 })
+      expect(r).toMatchObject({ failed: 1, failure: { kind: 'connection', code: 'sql_55P03' } })
+    } finally {
+      await holder.end()
+    }
+    expect(await appCanInsert(db, "INSERT INTO extra.thing (label) VALUES ('x')")).toBe(false)
+    // the lock is free again: the next run repairs it
+    expect(await upgrade(c.module)).toMatchObject({ regranted: 1, failed: 0, failure: null })
+  })
+
+  it('the privilege check is false on a complete database (serial and identity sequences, the read-only ledger, every owned schema) and true after each single revoke', async () => {
+    const c = chain(['001_init.sql'])
+    const { db } = await enableAtOldChain(c.module)
+    c.add('002_extra.sql', '-- lcfix 002\nCREATE SCHEMA extra;\nCREATE TABLE extra.thing (thing_id serial PRIMARY KEY, label text NOT NULL);\nCREATE VIEW extra.thing_v AS SELECT label FROM extra.thing;\n')
+    expect((await upgrade(c.module)).failure).toBeNull()
+    const su = connectModule(db, { max: 1 })
+    try {
+      const missing = () => appPrivilegesMissing(su, 'm_lcfix', 'm_lcfix_app')
+      expect(await missing()).toBe(false)
+      // each statement undoes ONE thing the re-grant does; after each the check must say so, then the re-grant restores it
+      const undo = [
+        'REVOKE USAGE ON SCHEMA extra FROM m_lcfix_app',
+        'REVOKE INSERT ON TABLE public.item FROM m_lcfix_app',
+        'REVOKE SELECT ON TABLE extra.thing_v FROM m_lcfix_app',
+        'REVOKE USAGE ON SEQUENCE public.audit_audit_id_seq FROM m_lcfix_app',
+        'REVOKE SELECT ON SEQUENCE extra.thing_thing_id_seq FROM m_lcfix_app',
+        'GRANT INSERT ON TABLE public.schema_migrations TO m_lcfix_app',
+        'REVOKE SELECT ON TABLE public.schema_migrations FROM m_lcfix_app',
+        'ALTER DEFAULT PRIVILEGES FOR ROLE m_lcfix IN SCHEMA extra REVOKE SELECT, INSERT, UPDATE, DELETE ON TABLES FROM m_lcfix_app',
+        'ALTER DEFAULT PRIVILEGES FOR ROLE m_lcfix IN SCHEMA public REVOKE USAGE, SELECT ON SEQUENCES FROM m_lcfix_app',
+      ]
+      for (const stmt of undo) {
+        await su.unsafe(`SET ROLE m_lcfix; ${stmt}; RESET ROLE`)
+        expect(await missing(), stmt).toBe(true)
+        expect((await upgrade(c.module)).regranted, stmt).toBe(1)
+        expect(await missing(), stmt).toBe(false)
+      }
+    } finally {
+      await su.end()
+    }
+  })
+
+  it('files committed before a failing file are live and usable by the app role: the failing run re-grants once before it reports', async () => {
+    const c = chain(['001_init.sql'])
+    const { db } = await enableAtOldChain(c.module)
+    c.add('002_extra.sql', '-- lcfix 002\nCREATE SCHEMA extra;\nCREATE TABLE extra.thing (thing_id serial PRIMARY KEY, label text NOT NULL);\n')
+    c.add('003_bad.sql', '-- lcfix 003\nSELECT 1 / 0;\n')
+    const r = await upgrade(c.module)
+    expect(r).toMatchObject({ failed: 1, files_applied: 1, failure: { kind: 'commit', code: 'APPLY_FAILED', file: '003_bad.sql' } })
+    expect(await appCanInsert(db, "INSERT INTO extra.thing (label) VALUES ('x')")).toBe(true)
+  })
+
+  it('a DDL that cannot get its lock in time (a live reader holds the table) is the infrastructure\'s failure, rolls back whole, and the next run applies it', async () => {
+    const c = chain(['001_init.sql'])
+    const { db } = await enableAtOldChain(c.module)
+    c.add('002_alter.sql', '-- lcfix 002\nALTER TABLE item ADD COLUMN extra_col text;\n')
+    const reader = connectModule(db, { max: 1 })
+    let release!: () => void
+    const held = new Promise<void>((resolve) => (release = resolve))
+    let locked!: () => void
+    const lockTaken = new Promise<void>((resolve) => (locked = resolve))
+    // the live colour: one open transaction that has read the table
+    const tx = reader.begin(async (t) => {
+      await t`SELECT count(*) FROM item`
+      locked()
+      await held
+    })
+    try {
+      await lockTaken
+      const started = Date.now()
+      const r = await upgrade(c.module, server, NEW_RELEASE, { ddlLockTimeoutMs: 300, lockWaitTimeoutMs: 2000 })
+      expect(Date.now() - started).toBeLessThan(15_000)
+      expect(r).toMatchObject({ failed: 1, files_applied: 0, failure: { kind: 'connection', code: 'APPLY_FAILED', file: '002_alter.sql' } })
+      expect((await ledger(db)).map((x) => x.filename)).toEqual(['001_init.sql'])
+    } finally {
+      release()
+      await tx
+      await reader.end()
+    }
+    const again = await upgrade(c.module)
+    expect(again).toMatchObject({ upgraded: 1, files_applied: 1, failed: 0, failure: null })
+    expect((await ledger(db)).map((x) => x.filename)).toEqual(['001_init.sql', '002_alter.sql'])
   })
 })

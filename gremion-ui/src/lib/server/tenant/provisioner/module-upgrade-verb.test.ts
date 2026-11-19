@@ -101,7 +101,7 @@ const noNames = (h: Harness) => {
   const text = [...h.out, ...h.err].join('\n')
   for (const s of HOSTILE) expect(text).not.toContain(s)
 }
-const summary = (over: Record<string, unknown> = {}) => ({ total: 4, upgraded: 2, unchanged: 1, skipped: 1, failed: 0, files_applied: 3, skippedByState: { blocked: 1 }, failure: null, ...over })
+const summary = (over: Record<string, unknown> = {}) => ({ total: 4, upgraded: 2, unchanged: 1, skipped: 1, failed: 0, files_applied: 3, regranted: 0, skippedByState: { blocked: 1 }, failure: null, ...over })
 
 describe('module-upgrade usage', () => {
   it('is the one verb of the file and is in the usage text', () => {
@@ -158,6 +158,33 @@ describe('module-upgrade stdout and exit codes', () => {
     const h = harness()
     await moduleVerb('module-upgrade', h.c)
     expect(h.out).toEqual(['{"v":1,"total":1,"upgraded":0,"unchanged":0,"skipped":0,"failed":1,"files_applied":0}\n'])
+    expect(process.exitCode).toBe(3)
+  })
+
+  it('exit 3 on an unreachable platform: all counts are 0 (failed 0, total 0), the line is still printed', async () => {
+    override.upgrade = async () => summary({ total: 0, upgraded: 0, unchanged: 0, skipped: 0, failed: 0, files_applied: 0, skippedByState: {}, failure: { kind: 'connection', code: 'connection_ECONNREFUSED', ordinal: 0, file: null } })
+    const h = harness()
+    await moduleVerb('module-upgrade', h.c)
+    expect(h.out).toEqual(['{"v":1,"total":0,"upgraded":0,"unchanged":0,"skipped":0,"failed":0,"files_applied":0}\n'])
+    expect(process.exitCode).toBe(3)
+  })
+
+  it('a repaired grant is named on stderr as a count (no name), counted as unchanged, and does not change the JSON line', async () => {
+    override.upgrade = async () => summary({ total: 1, upgraded: 0, unchanged: 1, skipped: 0, failed: 0, files_applied: 0, regranted: 1, skippedByState: {} })
+    const h = harness()
+    await moduleVerb('module-upgrade', h.c)
+    expect(h.out).toEqual(['{"v":1,"total":1,"upgraded":0,"unchanged":1,"skipped":0,"failed":0,"files_applied":0}\n'])
+    expect(h.err.join('\n')).toContain('0 file(s) applied, regranted 1')
+    expect(process.exitCode).toBe(0)
+    noNames(h)
+  })
+
+  it('a lock wait that gave up is exit 3 and says so (contention is not a commit failure)', async () => {
+    override.upgrade = async () => summary({ total: 1, upgraded: 0, unchanged: 0, skipped: 0, failed: 1, files_applied: 0, skippedByState: {}, failure: { kind: 'connection', code: 'LOCK_TIMEOUT', ordinal: 1, file: null } })
+    const h = harness()
+    await moduleVerb('module-upgrade', h.c)
+    expect(h.err.join('\n')).toContain('lock contention')
+    expect(h.err.join('\n')).toContain('LOCK_TIMEOUT')
     expect(process.exitCode).toBe(3)
   })
 

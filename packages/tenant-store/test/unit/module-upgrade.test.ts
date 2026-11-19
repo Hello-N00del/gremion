@@ -82,6 +82,8 @@ function fakeSql(statements: string[], answer: (text: string) => unknown[] | Err
     unsafe: () => Promise.reject(new Error('unsafe() must not be used here')),
     options: { max: 2 },
     end: async () => void ended?.push(label),
+    // the re-grant's own connection (grantLocked): its statements are recorded and answered like the pool's
+    reserve: async () => Object.assign((strings: TemplateStringsArray) => run(strings), { release: () => {} }),
   }) as never
 }
 
@@ -89,6 +91,7 @@ interface Fixture {
   deps: UpgradeDeps
   platformStatements: string[]
   adminStatements: string[]
+  ownedStatements: string[]
   opened: { db: string; role: string | undefined }[]
   ended: string[]
   servers: string[]
@@ -109,6 +112,8 @@ function fixture(
     serverError?: Error
     /** What an opened pool says it is connected to / runs as (default: the database asked for and the role asked for). */
     who?: { db?: string; usr?: string }
+    /** What the read-only privilege check on an opened pool answers: `missing` true when the app role lacks something (default: nothing missing); an Error is raised instead. */
+    privileges?: { missing: boolean } | Error
   } = {},
 ): Fixture {
   const platformStatements: string[] = []
@@ -116,6 +121,7 @@ function fixture(
   const opened: Fixture['opened'] = []
   const ended: string[] = []
   const servers: string[] = []
+  const ownedStatements: string[] = []
   const platform = fakeSql(platformStatements, (t) => {
     if (opts.platformAnswer) return opts.platformAnswer(t)
     if (/current_database\(\)/.test(t)) return [{ db: 'gremion_platform' }]
@@ -147,12 +153,22 @@ function fixture(
         open: (db: string, o?: { role?: string }) => {
           if (opts.never?.includes(db)) throw new Error(`the step opened ${db}, which it must not`)
           opened.push({ db, role: o?.role })
-          return fakeSql([], (t) => (/current_database\(\)/.test(t) ? [{ db: opts.who?.db ?? db, usr: opts.who?.usr ?? o?.role }] : new Error(`unexpected owned statement: ${t}`)), ended, db)
+          return fakeSql(
+            ownedStatements,
+            (t) => {
+              if (/pg_advisory_(un)?lock|set_config\('lock_timeout'/.test(t)) return []
+              if (/current_database\(\)/.test(t)) return [{ db: opts.who?.db ?? db, usr: opts.who?.usr ?? o?.role }]
+              if (/has_schema_privilege/.test(t)) return opts.privileges instanceof Error ? opts.privileges : [opts.privileges ?? { missing: false }]
+              return new Error(`unexpected owned statement: ${t}`)
+            },
+            ended,
+            db,
+          )
         },
       } as never
     },
   }
-  return { deps, platformStatements, adminStatements, opened, ended, servers }
+  return { deps, platformStatements, adminStatements, ownedStatements, opened, ended, servers }
 }
 
 beforeEach(() => {
@@ -380,7 +396,6 @@ describe('commit failure or connection failure (exit 1 or 3 of the verb)', () =>
     ['a runner refusal: unknown ledger row', new MigrationRunnerError('LEDGER_UNKNOWN_FILE', 'x', ['0004_a.sql'])],
     ['a runner refusal: hash mismatch', new MigrationRunnerError('LEDGER_HASH_MISMATCH', 'x', ['0004_a.sql'])],
     ['a runner refusal: a headerless file with no phase', new MigrationRunnerError('PHASE_MISSING', 'x', ['0009_x.sql'])],
-    ['a runner refusal: the lock was not granted in time', new MigrationRunnerError('LOCK_TIMEOUT', 'x')],
     ['a plain SQL error of the re-grant', sqlErr('42501')],
   ])('%s is a commit failure, never exit 3', async (_n, err) => {
     runMigrations.mockRejectedValueOnce(err)
