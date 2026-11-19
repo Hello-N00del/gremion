@@ -100,6 +100,15 @@ ad_order() {
     [ "$output" = "rc=0" ]
 }
 
+@test "manifest diff: the current link is accepted as the tree (status passes it), and a change under it is seen" {
+    run adlib 'cd_manifest_write "${GREMION_ROOT}/releases/${A12}"; rc=0; cd_manifest_diff "${GREMION_ROOT}/current" || rc=$?; echo "rc=$rc"'
+    [ "$output" = "rc=0" ]
+    printf '# core changed\n' > "${GREMION_ROOT}/releases/${A12}/infra/host/lib/cd/core.sh"
+    ad_git -C "${GREMION_ROOT}/releases/${A12}" commit -q -a -m changed
+    run adlib 'cd_manifest_diff "${GREMION_ROOT}/current"'
+    [ "$output" = "infra/host/lib/cd/core.sh" ]
+}
+
 @test "manifest diff: lists exactly the changed files, and a file the tree no longer has" {
     run adlib 'cd_manifest_write "${GREMION_ROOT}/releases/${A12}"'
     [ "$status" -eq 0 ]
