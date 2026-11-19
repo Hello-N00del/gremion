@@ -12,6 +12,7 @@
 
 bats_require_minimum_version 1.5.0
 load 'test_helper/host'
+load 'test_helper/cd'
 
 setup() {
     CP_DIR="${KERNEL_ROOT}/scripts/cd-proof"
@@ -20,11 +21,11 @@ setup() {
     SHEET="${CP_DIR}/run-sheet.md"
     PATCHES="${CP_DIR}/patches"
     BRANCHES=(proof-readiness-fail proof-window-fail proof-5xx)
-    setup_host_root
+    cd_setup
     export CD_PROOF_STATE_DIR="${BATS_TEST_TMPDIR}/spike-state"
 }
 
-teardown() { teardown_host_root; }
+teardown() { cd_teardown; }
 
 # ---------------------------------------------------------------------------
 # helpers
@@ -112,6 +113,8 @@ cp_changed() {
     [ "$status" -eq 0 ]
     for b in "${BRANCHES[@]}"; do
         [ "$(git -C "$OUT" log -1 --format='%an <%ae>|%cn <%ce>' "refs/heads/$b")" = "cd-proof <cd-proof@example.invalid>|cd-proof <cd-proof@example.invalid>" ]
+        # both dates are pinned, so two runs a second apart still give the same ids
+        [ "$(git -C "$OUT" log -1 --format='%at|%ct' "refs/heads/$b")" = "1767225600|1767225600" ]
     done
     first="$(git -C "$OUT" rev-parse refs/heads/proof-5xx refs/heads/proof-window-fail refs/heads/proof-readiness-fail)"
     OUT="${BATS_TEST_TMPDIR}/proof2.git"
@@ -631,6 +634,12 @@ sheet_section() {
         [ -z "$ip" ] && continue
         [[ "$ip" == 127.0.0.1 || "$ip" == 203.0.113.* ]] || { echo "IP literal: $ip"; return 1; }
     done <<<"$output"
+    # no bare host name either (a CUSTOMER_HOST or an rsync target written without a scheme)
+    run grep -ohiE '\b[a-z0-9-]+(\.[a-z0-9-]+)*\.(com|org|net|de|eu|io|dev|app|cloud|info|biz|me|ch|at|uk|fr|nl|us|xyz|local|lan|internal|invalid|test)\b' "${files[@]}"
+    while read -r h; do
+        [ -z "$h" ] && continue
+        [[ "$h" == example.org || "$h" == example.com || "$h" == *.example.org || "$h" == *.example.com || "$h" == *.invalid || "$h" == *.test ]] || { echo "host name: $h"; return 1; }
+    done <<<"$output"
     # no e-mail address whose domain is not a reserved example domain
     run grep -ohE '[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+' "${files[@]}"
     while read -r a; do
@@ -807,6 +816,63 @@ sheet_section() {
     grep -qF "jq 'map(select(.cleared == null)) | length' \"\$BL\"" <<<"$body" || { echo "no open-block count"; return 1; }
     grep -qiE 'nothing to resume' <<<"$body" || { echo "it does not say that resume is a no-op without a hold"; return 1; }
     grep -qiE 'do not (edit|touch)' <<<"$body" || { echo "it does not forbid a hand edit"; return 1; }
+}
+
+# The final gate reads the program's real status output: a cleaned host must pass it, a host
+# that still has proof mode on, a live proof release or the proof window must not.
+cp_status_checks() { # -- the four counts the closing section asks for, one per line
+    cd_prog status | grep -c 'PROOF MODE' || true
+    cd_prog status | grep -c '(proof)' || true
+    cd_prog status | grep -c 'CD_PROOF_REPO=unset' || true
+    cd_prog status | grep '^config differs from the default:' | grep -c 'CD_WATCH_MINUTES' || true
+}
+
+@test "run sheet: the closing section reads the real status output and a cleaned host passes it" {
+    local body
+    body="$(sheet_section 16)"
+    # the check the program's own operator-values line would fail by construction is gone
+    assert_absent 'grep -ci proof' "$SHEET" "a case-insensitive proof count (CD_PROOF_REPO=unset matches it)"
+    for c in "grep -c 'PROOF MODE'" "grep -c '(proof)'" "grep -c 'CD_PROOF_REPO=unset'" "grep -c 'CD_WATCH_MINUTES'"; do
+        grep -qF "$c" <<<"$body" || { echo "the closing section does not run: $c"; return 1; }
+    done
+    # the cleaned host: no proof keys, an idle state
+    cd_seed_state
+    cd_write_cfg
+    run cd_prog status
+    [ "$status" -eq 0 ]
+    [[ "${lines[0]}" != *PROOF* ]]
+    run cp_status_checks
+    [ "$output" = $'0\n0\n1\n0' ] || { echo "$output"; return 1; }
+}
+
+@test "run sheet: the closing checks see proof mode, the proof repository, a live proof release and the proof watch window" {
+    cd_seed_state ".live = ${CD_LIVE_JSON} | .live.proof = true"
+    cd_write_cfg 'CD_PROOF_MODE=1' 'CD_PROOF_REPO=https://example.org/proof.git' 'CD_WATCH_MINUTES=6'
+    run cd_prog status
+    [ "$status" -eq 0 ]
+    run cp_status_checks
+    [ "$output" = $'1\n1\n0\n1' ] || { echo "$output"; return 1; }
+}
+
+@test "run sheet: the proof watch window is recorded before it is changed and put back in the closing section" {
+    local s0 s16
+    s0="$(sheet_section 0)"
+    s16="$(sheet_section 16)"
+    # section 0 tells the operator to note what the line was (no line means the default)
+    grep -qF "grep -n '^CD_WATCH_MINUTES=' " <<<"$s0" || { echo "section 0 does not read the old value"; return 1; }
+    grep -qiE 'default' <<<"$s0" || { echo "section 0 does not say what no line means"; return 1; }
+    grep -qiE 'section 16|closing section|after the proof' <<<"$s0" || { echo "section 0 does not say where it is undone"; return 1; }
+    # section 16 puts it back and checks it off the program
+    grep -qF 'CD_WATCH_MINUTES' <<<"$s16" || { echo "section 16 never mentions the window"; return 1; }
+    grep -qiE 'put .*CD_WATCH_MINUTES.* back|CD_WATCH_MINUTES.* back to' <<<"$s16" || { echo "section 16 does not put it back"; return 1; }
+}
+
+@test "run sheet: section 0 says where the program lists the proof keys" {
+    local s0
+    s0="$(sheet_section 0)"
+    grep -qF 'config differs from the default' <<<"$s0" || { echo "the line status prints is not named"; return 1; }
+    grep -qF 'operator values' <<<"$s0" || { echo "the operator-values line is not named"; return 1; }
+    assert_absent 'by name as non-default keys' "$SHEET" "the old wording"
 }
 
 @test "the LF rule of the proof folder lives in the folder, carries no unit id, and the root rules do not mention it" {

@@ -92,9 +92,17 @@ git -C "$PROOF" fsck --connectivity-only --no-dangling
 Passed when: the three branches are listed with the same commit ids the workstation printed,
 and `fsck` exits 0.
 
+First write down what the window line is now (HOST terminal). No line means the default of 20
+minutes; the window is put back to exactly that in section 16, the closing section:
+
+```
+grep -n '^CD_WATCH_MINUTES=' "$ROOT/etc/cd.env" || echo "no line: the default"
+```
+
 Turn proof mode on in `etc/cd.env` (HOST terminal; edit by hand; add the lines if the file
 does not carry them yet). The repository value is the path above, written out (here for the
-default root):
+default root). The 6-minute window stays in force for every scenario, the real merged
+releases included, until section 16 takes it out again:
 
 ```
 CD_PROOF_MODE=1
@@ -110,8 +118,9 @@ remove those lines again from `etc/cd.env` (`CD_PROOF_MODE`, `CD_PROOF_REPO` and
 tick included, and CD is down. Then report that the proof cannot start until the program takes
 a path there),
 its FIRST line
-is the PROOF MODE banner, and it lists `CD_PROOF_MODE`, `CD_PROOF_REPO` and `CD_WATCH_MINUTES`
-by name as non-default keys (the value of `CD_PROOF_REPO` is shown as `set`).
+is the PROOF MODE banner, the line `config differs from the default:` lists `CD_PROOF_MODE`
+and `CD_WATCH_MINUTES`, and the `operator values` line shows `CD_PROOF_REPO=set` (the value
+itself is never printed).
 
 ## 1. Setup checks and owed measurements
 
@@ -837,16 +846,26 @@ login server back and `gremion-cd resume`.
 
 ## 16. After the proof
 
+Edit `etc/cd.env` by hand: `CD_PROOF_MODE=0`, remove the `CD_PROOF_REPO` line, and
+put `CD_WATCH_MINUTES` back to what section 0 wrote down (remove the line when there was none).
+Then:
+
 ```
-# edit etc/cd.env: CD_PROOF_MODE=0 and remove the CD_PROOF_REPO line, then:
 rm -rf "$PROOF"
 gremion-cd resume --accept-descendants --reason "proof-over"
 gremion-cd status | head -5
+gremion-cd status | grep -c 'PROOF MODE'
+gremion-cd status | grep -c '(proof)'
+gremion-cd status | grep -c 'CD_PROOF_REPO=unset'
+gremion-cd status | grep '^config differs from the default:' | grep -c 'CD_WATCH_MINUTES'
 jq 'map(select(.cleared == null)) | length' "$BL"
 ```
 
-Passed when: `status` exits 0 and mentions neither proof mode nor a proof value (the first
-line is not a banner, `status | grep -ci proof` prints `0`), `jq -r '.live.proof // false' "$ST"`
+Passed when: `status` exits 0 and the first line is not a banner; the first two counts print
+`0` (no PROOF MODE banner, no live release marked `(proof)`); the third prints `1` (the
+proof repository is unset again); the fourth prints `0` (the window is no longer a changed
+key; if section 0 wrote down a value other than the default and you put that value back, it
+prints `1` and that is the value you wrote down); `jq -r '.live.proof // false' "$ST"`
 prints `false`, `stat -c %a "$ST"` prints `600`, `[ ! -e "$PROOF" ]`, and the last `jq` prints
 `0` (no block of a proof commit is still open). Only then is the real customer created.
 
