@@ -22,9 +22,11 @@
 # failure, a crash, a kill and a stage retry included, goes through cd_rollback_run. From
 # `committed_at` on NO failure of any kind does: cd_failure_policy and cd_pipeline_resume ask
 # cd_release_committed before they choose a rollback, and every other path to
-# cd_rollback_run goes through _cd_drv_rollback_auto, which asks it again. Each of the five
-# committed-side paths has its own check (marked LINE-1 to LINE-5 below), so that removing
-# one is a failing test of that path alone.
+# cd_rollback_run goes through _cd_drv_rollback_auto, which asks it again (the backstop). Each
+# committed-side path has its own check (marked LINE-1 to LINE-5 below). The backstop would
+# catch what a missing check let through, and so hide it: it writes the history line
+# `rollback_door_refused` when it fires, and every test of THE LINE asserts there is none, so
+# that removing one check is a failing test of that path alone.
 #
 # shellcheck disable=SC2016  # the jq programs are single-quoted on purpose: $name is jq's own syntax
 #
@@ -307,13 +309,14 @@ _cd_drv_retry_gate() {
 
 # -- after the switch: roll back ----------------------------------------------------
 # _cd_drv_rollback_auto RULE STAGE -- the one door to cd_rollback_run for a release that has
-# not committed. A committed release is never sent through here (LINE-5); if a caller does,
-# nothing is touched and the failure becomes the committed side's hold.
+# not committed. A committed release is never sent through here; if a caller does, nothing is
+# touched and the failure becomes the committed side's hold.
 _cd_drv_rollback_auto() {
     local rule="$1" stage="${2:-watch}" rc=0
-    # LINE-5: the last of the three checks that keep a committed release out of a rollback
+    # BACKSTOP: the last check that keeps a committed release out of a rollback
     if cd_release_committed; then
         cd_err "driver: a rollback was asked for a committed release (rule ${rule}); refused, nothing touched"
+        cd_hist rollback_door_refused rule="$(_cd_drv_code "$rule" unknown)" stage="$stage" || true
         _cd_drv_policy_committed "$stage" host "post_commit_${stage}"
         return 0
     fi
@@ -1419,7 +1422,7 @@ _cd_drv_do_rollback() {
     _cd_drv_load
     case "$D_PHASE" in
         releasing | watching | rolling_back)
-            if [[ -z "$R_COMMIT" && "$R_SWITCH" != true ]]; then
+            if [[ "$D_PHASE" != rolling_back && -z "$R_COMMIT" && "$R_SWITCH" != true ]]; then
                 _cd_drv_abort operator
                 CD_DRV_ROLLED=1
                 return 0
@@ -1743,7 +1746,10 @@ _cd_drv_tick_inflight() {
     fi
     _cd_drv_inflight_locks || return $?
     if cd_killswitch_active; then
-        if [[ "$R_SWITCH" != true && -z "$R_COMMIT" ]]; then
+        # phase rolling_back is past the line whatever the record says: an idle manual rollback
+        # has no release record at all (so no switch_started), and its half-run sequence is
+        # parked, never ended as if it were a release that had not switched
+        if [[ "$D_PHASE" != rolling_back && "$R_SWITCH" != true && -z "$R_COMMIT" ]]; then
             cd_hist killswitch_abort stage="$R_STAGE" sha12="$R_SHA12" || true
             _cd_drv_abort killswitch
             return 0

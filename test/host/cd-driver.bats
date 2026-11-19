@@ -12,7 +12,9 @@
 #
 # The guards of THE LINE are separate checks in driver.sh, marked LINE-1 to LINE-5 there; the
 # drill that watches each one go red copies the tree, removes that one check and runs the test
-# (HOST_SRC points the suite at the copy).
+# (HOST_SRC points the suite at the copy). The backstop of the one door to the rollback would
+# catch what a removed check let through, so every test of THE LINE also asserts that the
+# backstop's history line (rollback_door_refused) is absent.
 
 load 'test_helper/host'
 load 'test_helper/cd'
@@ -172,6 +174,37 @@ drv_hostlock_free() { ( exec 9>>"${GREMION_ROOT}/runtime/hostd.lock"; flock -n 9
     assert_recorded stub "cd_commit_watch_loop"
     [ "$(drv_state '.live.sha12')" = bbbbbbbbbbbb ]
     [ "$(drv_n '^stub cd_rollback_run')" -eq 0 ]
+}
+
+@test "tick: the kill switch with a half-run idle rollback (phase rolling_back, no release record) parks it, and the sequence is resumed when the file is gone" {
+    cd_need_flock
+    drv_seed '.phase = "rolling_back" | .release = null'
+    : > "${GREMION_ROOT}/etc/cd.disabled"
+    drv_bg_tick
+    drv_wait "[ \"\$(grep -c killswitch_park '${GREMION_ROOT}/data/cd/history.jsonl')\" -ge 1 ]"
+    [ "$(drv_n '^stub cd_rollback_run')" -eq 0 ]
+    [ "$(drv_state '.phase')" = rolling_back ]
+    rm -f "${GREMION_ROOT}/etc/cd.disabled"
+    drv_wait "! kill -0 ${DRV_BG_PID} 2>/dev/null"
+    assert_recorded stub "cd_rollback_run manual_rollback"
+    [ "$(drv_hist release_aborted)" -eq 0 ]
+    [ "$(drv_hist killswitch_abort)" -eq 0 ]
+    [ "$(drv_state '.phase')" = idle ]
+    [ "$(drv_state '.hold')" = null ]
+}
+
+@test "tick: a rollback request found while a half-run idle rollback is parked runs the sequence, it does not abort a release that does not exist" {
+    cd_need_flock
+    drv_seed '.phase = "rolling_back" | .release = null'
+    : > "${GREMION_ROOT}/etc/cd.disabled"
+    drv_bg_tick
+    drv_wait "[ \"\$(grep -c killswitch_park '${GREMION_ROOT}/data/cd/history.jsonl')\" -ge 1 ]"
+    run cd_lib 'cd_request_put rollback "{\"reason\":\"\"}"'
+    [ "$status" -eq 0 ]
+    drv_wait "! kill -0 ${DRV_BG_PID} 2>/dev/null"
+    assert_recorded stub "cd_rollback_run manual_rollback"
+    [ "$(drv_hist release_aborted)" -eq 0 ]
+    [ "$(drv_state '.phase')" = idle ]
 }
 
 @test "tick: requests are drained in order" {
@@ -821,6 +854,9 @@ drv_hostlock_free() { ( exec 9>>"${GREMION_ROOT}/runtime/hostd.lock"; flock -n 9
 drv_assert_untouched() {
     # no rollback, no block, nothing of the live colour moved, the new colour not stopped
     [ "$(drv_n '^stub cd_rollback_run')" -eq 0 ]
+    # and the backstop of the one door did not have to catch it: it would hide a missing check
+    # of the path under test (the history line is written by _cd_drv_rollback_auto only)
+    [ "$(drv_hist rollback_door_refused)" -eq 0 ]
     [ "$(drv_blocks)" -eq 0 ]
     [ "$(drv_n '^stub cd_colour_down')" -eq 0 ]
     [ "$(readlink "${GREMION_ROOT}/current")" = releases/aaaaaaaaaaaa ]
@@ -906,7 +942,10 @@ drv_assert_untouched() {
     drv_seed_commit watch failed
     run cd_lib ". \"\${HOST_SRC}/lib/cd/driver.sh\"; cd_cfg_load; cd_lock_take; _cd_drv_rollback_auto watch_5xx watch"
     [ "$status" -eq 0 ]
-    drv_assert_untouched
+    [ "$(drv_n '^stub cd_rollback_run')" -eq 0 ]
+    [ "$(drv_hist rollback_door_refused)" -eq 1 ]
+    [ "$(drv_blocks)" -eq 0 ]
+    [ "$(drv_state '.live.sha12')" = bbbbbbbbbbbb ]
     [ "$(drv_state '.hold.kind')" = failure ]
 }
 

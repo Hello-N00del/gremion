@@ -105,3 +105,11 @@ test/host/fixtures/release/*/docs/ops/*.md text eol=lf
 # TOM annex (TRD-141): the generator emits LF; golden fixtures and the committed annex must match byte for byte on Windows checkouts too.
 scripts/fixtures/tom-annex/** text eol=lf
 docs/compliance/tom-annex.md text eol=lf
+
+# cd-driver: test/host/fixtures/cd/driver/driver-stubs.bash is appended to the helper's stub
+# file and sourced by bash, so a CRLF copy fails every test with a carriage-return
+# command-not-found. `.bash` matches no rule above, and the rule for test_helper reaches
+# that directory only (measured: `git check-attr eol` answered "unspecified" and
+# `git ls-files --eol` reported w/crlf under core.autocrlf=true). The glob covers a
+# future fixture of the same kind.
+test/host/fixtures/cd/**/*.bash text eol=lf
