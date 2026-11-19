@@ -452,15 +452,17 @@ _cd_leaf_alive() {
 # -- the answer of the entry --------------------------------------------------------------------
 
 # _cd_leaf_json OUTFILE - the one JSON line the entry prints on stdout, reduced to its four
-# counts. Exactly one line that starts with { must exist, its version must be 1, its four keys
-# must be whole non-negative numbers, and the three outcomes must add up to the total;
-# anything else is no valid line (rc 1). Prints the reduced object.
+# counts. Exactly one line that starts with { must exist, its version must be 1 and its four
+# keys must be whole non-negative numbers; anything else is no valid line (rc 1). Prints the
+# reduced object. The shape only: an entry that stops at its first failing database prints a
+# line whose outcomes fall short of the total, and that is a real failure of the commit; only
+# an exit 0 must add up (checked by the caller).
 _cd_leaf_json() {
     local f="$1" n line obj
     n="$(grep -c '^[[:space:]]*{' "$f" 2>/dev/null)" || n=0
     [[ "$n" -eq 1 ]] || return 1
     line="$(grep '^[[:space:]]*{' "$f" 2>/dev/null)" || return 1
-    obj="$(printf '%s' "$line" | jq -c 'select(type == "object" and .v == 1) | {total, migrated, skipped, failed} | select(all(.[]; type == "number" and . >= 0 and . == floor and . < 1000000000)) | select((.migrated + .skipped + .failed) == .total)' 2>/dev/null)" || return 1
+    obj="$(printf '%s' "$line" | jq -c 'select(type == "object" and .v == 1) | {total, migrated, skipped, failed} | select(all(.[]; type == "number" and . >= 0 and . == floor and . < 1000000000))' 2>/dev/null)" || return 1
     [[ -n "$obj" ]] || return 1
     printf '%s' "$obj"
 }
@@ -529,7 +531,7 @@ _cd_leaf_run_one() {
     json="$(_cd_leaf_json "$outf")" || json=''
     case "$rc" in
         0)
-            if [[ -z "$json" ]] || ! printf '%s' "$json" | jq -e '.failed == 0' >/dev/null 2>&1; then
+            if [[ -z "$json" ]] || ! printf '%s' "$json" | jq -e '.failed == 0 and (.migrated + .skipped + .failed) == .total' >/dev/null 2>&1; then
                 _cd_leaf_fail leaf_result_invalid 1 "the leaf step exited 0 without a valid count line; output in logs/${outf##*/}"
                 return 1
             fi

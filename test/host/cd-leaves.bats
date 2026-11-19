@@ -752,12 +752,26 @@ leaf_drift() {
     [ "$(calls run)" -eq 1 ]
 }
 
-@test "exit 1 with a line that does not add up is no valid line: code 4" {
+@test "GUARD: exit 1 with a line of the right shape that does not add up (an entry that stopped at its first failing database) is still code 1: a failure of the commit, not a retry" {
     svc_out calendar-service '{"v":1,"total":9,"migrated":1,"skipped":0,"failed":1}'
+    svc_rc calendar-service 1
+    step
+    [ "$status" -eq 1 ]
+    out_has 'reason=leaf_migrate'
+    [ "$(calls run)" -eq 1 ]
+    [ "$(state_leaves)" = '{"total":9,"migrated":1,"skipped":0,"failed":1}' ]
+}
+
+@test "exit 1 with a line of the wrong shape (no version, a string count) is no valid line: code 4" {
+    svc_out calendar-service '{"total":2,"migrated":1,"skipped":0,"failed":1}'
     svc_rc calendar-service 1
     step
     [ "$status" -eq 4 ]
     out_has 'reason=leaf_run_failed'
+    seed_release
+    svc_out calendar-service '{"v":1,"total":"2","migrated":1,"skipped":0,"failed":1}'
+    step
+    [ "$status" -eq 4 ]
 }
 
 @test "exit 0 with a missing line is code 1" {
@@ -946,6 +960,43 @@ exit "$rc"'
     refute_text password "$all"
     refute_text hunter2 "$all"
     refute_text t_00000000 "$all"
+}
+
+@test "GUARD: a run that succeeds writes its history line, and neither that line, the state nor any stream holds what the entry printed" {
+    local leak='boom calendar_slugmarker t_00000000000000000000000000000001__calendar password=hunter2'
+    printf '%s\n%s\n' "$leak" "$JSON_OK" >"$DK/run.out"
+    printf '%s\n' "$leak" >"$DK/run.err"
+    step
+    [ "$status" -eq 0 ]
+    # the history line exists, so the absence below is read from something that was written
+    assert_present 'leaves_done' "${GREMION_ROOT}/data/cd/history.jsonl"
+    local all
+    all="${output}${stderr}"
+    all+="$(cat "${GREMION_ROOT}/data/cd/state.json")"
+    all+="$(cat "${GREMION_ROOT}/data/cd/history.jsonl")"
+    all+="$(cat "$DK/argv.log" "$DK/run.log")"
+    refute_text slugmarker "$all"
+    refute_text hunter2 "$all"
+    refute_text t_00000000 "$all"
+}
+
+@test "GUARD: the container-alive path writes its history line and its mail, and neither holds what the entry printed" {
+    local leak='boom calendar_slugmarker password=hunter2'
+    printf '%s\n' "$leak" >"$DK/run.out"
+    printf '%s\n' "$leak" >"$DK/run.err"
+    touch "$DK/run.calendar-service.hang" "$DK/run.calendar-service.creates" "$DK/rm.refuse"
+    step_with always 1
+    [ "$status" -eq 2 ]
+    out_has 'reason=leaf_container_alive'
+    assert_present 'leaves_container_alive' "${GREMION_ROOT}/data/cd/history.jsonl"
+    local mails all
+    mails="$(cat "${GREMION_ROOT}"/data/cd/outbox/*stopped*.eml)"
+    [ -n "$mails" ]
+    all="${output}${stderr}${mails}"
+    all+="$(cat "${GREMION_ROOT}/data/cd/history.jsonl")"
+    all+="$(cat "${GREMION_ROOT}/data/cd/state.json")"
+    refute_text slugmarker "$all"
+    refute_text hunter2 "$all"
 }
 
 @test "the journal line of a failure names the log file and nothing of its content" {
