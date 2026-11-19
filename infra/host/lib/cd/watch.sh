@@ -319,6 +319,8 @@ _cd_watch_containers() {
         fi
         bad=$((bad + 1))
     done <<<"$cids"
+    # a colour with no container at all is not a healthy colour
+    ((total > 0)) || bad=1
     printf '1 %s %s %s' "$total" "$bad" "$restarts"
 }
 
@@ -371,8 +373,10 @@ _cd_watch_sample_run() {
     pub_ok="$(_cd_watch_rcb "$pub_rc")"
     if [[ "$ready" == 000 || "$login" == 000 ]]; then timed_out=true; fi
     if ans="$(CD_COLOUR_EXEC_TIMEOUT_S="$(_cd_watch_ct || echo 1)" cd_colour_probe "$colour" 2>/dev/null)"; then
-        int_json="$(printf '%s' "$ans" | jq -c '{answered: true, ready: (.ready == true), colour: (.colour | tostring), release: (.release | tostring), not_ready: .tenants.notReady}' 2>/dev/null)" \
-            || int_json='{"answered":false,"ready":false,"colour":"","release":"","not_ready":null}'
+        int_json="$(printf '%s' "$ans" | jq -ce '{answered: true, ready: (.ready == true), colour: (.colour | tostring), release: (.release | tostring), not_ready: .tenants.notReady}' 2>/dev/null)" \
+            || int_json=''
+        # a function that printed nothing (or something that is no answer) is no answer
+        [[ -n "$int_json" ]] || int_json='{"answered":false,"ready":false,"colour":"","release":"","not_ready":null}'
     fi
     # 4. the route: app@file and public@file name the colour and are UP
     r1=0
@@ -452,7 +456,7 @@ cd_watch_eval() {
     local grace restarts_base last_dur counted gap resume=0 timed_out
     local pub_ok int_ok route_ok ident_ok portal_ok cont_known cont_bad cont_restarts shared_ok=true
     local ready_fail=false crash=false hit5=false new_not_ready=false old_ready n window w_new w_old
-    local verdict extra='' delta mail_blind=false mail_paused=false req failing=false
+    local verdict extra='' delta mail_blind=false mail_paused=false first_pause=false req failing=false
     [[ -n "$sample" ]] || { _cd_watch_err "eval: no sample"; return 2; }
     printf '%s' "$sample" | jq -e '
         type == "object" and .v == 1 and (.at | type) == "number"
@@ -552,6 +556,7 @@ cd_watch_eval() {
     elif [[ "$shared_ok" == false ]]; then
         # a failing sample while a shared service is down is nobody's fault but the outage: the
         # observed clock stops and the paused clock runs, up to the cap
+        ((paused == 0)) && first_pause=true
         paused=$((paused + counted))
         if ((paused >= cap_s)); then
             if [[ "$old_ready" == true && "$new_not_ready" == true ]]; then
@@ -561,7 +566,7 @@ cd_watch_eval() {
             fi
         else
             verdict=paused
-            mail_paused=true
+            [[ "$first_pause" == true ]] && mail_paused=true
         fi
     elif ((grace > 0)); then
         observed=$((observed + counted))

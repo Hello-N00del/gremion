@@ -1,0 +1,12 @@
+{"v":1,"at":0,"duration_s":2,"colour":"green","tag":"pilot-bbbbbbbbbbbb","old_colour":"blue",
+ "public":{"readyz":"200","login":"302","ok":true},
+ "internal":{"answered":true,"ready":true,"colour":"green","release":"pilot-bbbbbbbbbbbb","not_ready":0},
+ "route":{"known":true,"ok":true},
+ "identity":{"ok":true},
+ "portal":{"ok":true},
+ "containers":{"known":true,"total":4,"bad":0,"restarts":0},
+ "fivexx":0,"requests":120,"window_s":300,
+ "workers":{"new":"on","old":"off"},
+ "old_ready":true,
+ "shared":{"state_ok":true,"traefik_ok":true,"docker_ok":true},
+ "timed_out":false}
