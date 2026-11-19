@@ -1,0 +1,11 @@
+[Unit]
+Description=Gremion continuous deployment watchdog: every ten minutes
+
+[Timer]
+OnBootSec=10min
+OnUnitInactiveSec=10min
+RandomizedDelaySec=30s
+Unit=gremion-cd-watchdog.service
+
+[Install]
+WantedBy=timers.target

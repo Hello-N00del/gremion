@@ -1,0 +1,16 @@
+[Unit]
+Description=Gremion continuous deployment: look for a release every five minutes
+
+[Timer]
+# The first tick comes three minutes after boot, after gremion-cd-resume.service has finished a
+# release the reboot interrupted and the executor is up.
+OnBootSec=3min
+# Five minutes after the previous tick ENDED, however long that tick took: a release that runs
+# for an hour does not queue up ticks behind it.
+OnUnitInactiveSec=5min
+# Spread the polls of a fleet of hosts over the API budget of the repository host.
+RandomizedDelaySec=30s
+Unit=gremion-cd.service
+
+[Install]
+WantedBy=timers.target
