@@ -45,6 +45,7 @@ CD_DRV_RESUME_HOLDS=" operator failure proof rollback_failed killswitch stuck_st
 
 CD_DRV_RESUME_ONLY=0   # 1 in `tick --resume-only` (the boot unit)
 CD_DRV_ROLLED=0        # 1 once a rollback has ended the release in this process
+CD_DRV_STARTED=0       # 1 once this process has started a release (an idle tick does one thing)
 CD_DRV_ATT=1           # the attempt number of the stage about to run
 CD_DRV_SWITCH_DONE=0   # 1 when a resumed switch stage found the new colour already serving
 CD_DRV_RETRY_BACKOFF=(60 300 900)
@@ -63,7 +64,8 @@ _cd_drv_set() {
 # _cd_drv_mail KIND [k=v ...] -- queue a mail; never fails, never waits.
 _cd_drv_mail() { cd_notify "$@" >/dev/null 2>&1 || true; }
 
-_cd_drv_in_list() { [[ " $2 " == *" $1 "* ]]; }
+# an empty word is in no list (the lists carry a space at both ends, so " " would match)
+_cd_drv_in_list() { [[ -n "$1" && " $2 " == *" $1 "* ]]; }
 
 # _cd_drv_other COLOUR -- the other colour
 _cd_drv_other() {
@@ -1149,6 +1151,7 @@ _cd_drv_hold_candidate() {
 _cd_drv_select() {
     local sha="$1" mode="$2" ws="$3" ref="${4:-}" sha12 now iso colour rc=0
     sha12="${sha:0:12}"
+    CD_DRV_STARTED=1
     _cd_drv_load
     colour="$(_cd_drv_other "$D_LCOL")"
     now="$(cd_now)" || return 2
@@ -1727,6 +1730,8 @@ _cd_drv_tick_idle() {
     _cd_drv_drain
     _cd_drv_load
     [[ "$D_PHASE" == idle ]] || return 0
+    # a request that started a release was this tick's one thing
+    ((CD_DRV_STARTED == 0)) || return 0
     if cd_killswitch_active; then
         _cd_drv_mail killswitch phase=idle command="gremion-cd status" key="killswitch.idle"
         return 0
@@ -1740,7 +1745,7 @@ _cd_drv_tick_idle() {
 
 # cd_cmd_tick [--resume-only]
 cd_cmd_tick() {
-    local rc=0 lrc=0 flavour=normal
+    local rc=0 lrc=0 flavour=normal ran=0
     while (($# > 0)); do
         case "$1" in
             --resume-only) CD_DRV_RESUME_ONLY=1; shift ;;
@@ -1748,6 +1753,7 @@ cd_cmd_tick() {
         esac
     done
     CD_DRV_ROLLED=0
+    CD_DRV_STARTED=0
     if [[ ! -f "$CD_STATE_FILE" ]]; then
         cd_alert "no state file: gremion-cd adopt has not run"
         cd_die 2 "no state file (gremion-cd adopt has not run)"
@@ -1773,6 +1779,7 @@ cd_cmd_tick() {
     _cd_drv_load
     case "$D_PHASE" in
         releasing | watching | rolling_back)
+            ran=1
             _cd_drv_tick_inflight || rc=$?
             ;;
         parked)
@@ -1787,7 +1794,13 @@ cd_cmd_tick() {
     fi
     _cd_drv_load
     if ((rc == 0)) && [[ "$D_PHASE" == idle ]]; then
-        _cd_drv_tick_idle || rc=$?
+        if ((ran == 1)); then
+            # a tick that has just run a release does one thing: the next candidate waits for the
+            # next tick (an explicit request of the operator is still taken)
+            _cd_drv_drain
+        else
+            _cd_drv_tick_idle || rc=$?
+        fi
     fi
     if ! cd_killswitch_active; then
         cd_notify_digest >/dev/null 2>&1 || true

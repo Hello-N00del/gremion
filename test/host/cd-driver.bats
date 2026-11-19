@@ -824,7 +824,7 @@ drv_assert_untouched() {
 
 @test "THE LINE (2): a kill -9 after commit step 5, then tick --resume-only: finished forward, ended as interrupted, never rolled back" {
     cd_need_flock
-    drv_seed_sw commit started
+    drv_seed_sw watch ok
     export CD_STUB_HOOK_cd_commit_promote='drv_step5; drv_killme'
     run cd_prog tick --resume-only
     [ "$status" -eq 137 ]
@@ -899,6 +899,7 @@ drv_assert_untouched() {
     assert_recorded stub "cd_rollback_run commit_stuck"
     [ "$(drv_n '^stub cd_commit_promote')" -eq 0 ]
     drv_seed_sw watch ok
+    export CD_STUB_HOOK_cd_commit_promote=''
     cd_stub_set cd_commit_promote 1
     : > "$SHIM_LOG"
     run cd_prog tick
@@ -1214,6 +1215,7 @@ drv_rn() { # drv_rn ARGS... -- the verb, then a tick
     [ "$status" -eq 2 ]
     cd_write_cfg CD_PROOF_MODE=1 CD_PROOF_REPO=https://example.org/org/proof
     cd_stub_set cd_classify 0 '{"v":1,"holds":[],"hold":null,"migrations":{"total":1,"chains":{}}}'
+    cd_stub_set cd_gh_candidate 0 '{"verdict":"none","sha":"","reason":"up_to_date","final":true}'
     : > "$SHIM_LOG"
     run cd_prog release-now "$SHA_B" --ref proof/x --unverified
     [ "$status" -eq 0 ]
