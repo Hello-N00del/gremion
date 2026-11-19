@@ -1,7 +1,7 @@
 // CD module step: upgradeModuleDatabases opens ONLY the enabled gate databases
 // whose enablement is enabled, as the owner m_<id>, applies the pending files of the module's chain,
 // re-grants the app role, and stops at the first database that fails. Fake deps in the style of
-// board-enable-no-database.test.ts: the fake server FAILS THE TEST when it is asked for a database
+// the lifecycle fake-deps tests: the fake server FAILS THE TEST when it is asked for a database
 // the step must not open. The runner and the re-grant are replaced by spies here; the throwaway-Postgres
 // integration test (test/integration/module-upgrade.test.ts) runs the real ones.
 import { readFileSync } from 'node:fs'
@@ -34,12 +34,12 @@ const C5 = '0192f0c1-2b3c-7d4e-8f00-000000000005'
 const C6 = '0192f0c1-2b3c-7d4e-8f00-000000000006'
 const RELEASE = 'dist-v9.9.9'
 
-const BOARD_DIR = fileURLToPath(new URL('../../../../modules/board', import.meta.url))
+const VOTES_DIR = fileURLToPath(new URL('../../../../modules/votes', import.meta.url))
 function realModule(id: string): LifecycleModule {
   const dir = fileURLToPath(new URL(`../../../../modules/${id}`, import.meta.url))
   return { id, dir, moduleJson: JSON.parse(readFileSync(`${dir}/module.json`, 'utf8')) as LifecycleModule['moduleJson'] }
 }
-const BOARD = realModule('board')
+const VOTES = realModule('votes')
 const CALENDAR = realModule('calendar')
 const FINANCE = realModule('finance')
 const FIXTURE_DIR = fileURLToPath(new URL('../fixtures/lifecycle/lcfix/', import.meta.url))
@@ -130,7 +130,7 @@ function fixture(
   })
   const deps: UpgradeDeps = {
     platform,
-    catalogue: opts.catalogue ?? [BOARD, CALENDAR, FINANCE, ZZ],
+    catalogue: opts.catalogue ?? [VOTES, CALENDAR, FINANCE, ZZ],
     releaseRef: RELEASE,
     server: (service) => {
       servers.push(service)
@@ -198,10 +198,10 @@ describe('which rows the step opens', () => {
     expect(f.adminStatements.filter((s) => /pg_database/.test(s))).toHaveLength(1)
   })
 
-  it('a module that declares no database is never opened (the real modules/board/module.json)', async () => {
-    expect(BOARD.moduleJson.runtime.database).toBeNull()
-    expect(BOARD.dir).toBe(BOARD_DIR)
-    const f = fixture([row(C1, 'board')], { never: [tenantModuleDbName(C1, 'board')] })
+  it('a module that declares no database is never opened (the real modules/votes/module.json)', async () => {
+    expect(VOTES.moduleJson.runtime.database).toBeNull()
+    expect(VOTES.dir).toBe(VOTES_DIR)
+    const f = fixture([row(C1, 'votes')], { never: [tenantModuleDbName(C1, 'votes')] })
     const r = await upgradeModuleDatabases(f.deps)
     expect(f.opened).toEqual([])
     expect(f.servers).toEqual([])
