@@ -58,7 +58,7 @@ teardown() {
 make_installed_set() {
     local r="$GREMION_ROOT" u
     mkdir -p "$r/bin" "$r/lib/cd"
-    cp "${FX}/fake-gremion-cd.sh" "$r/bin/gremion-cd"
+    cp "${FX}/fake-gremion-cd.body" "$r/bin/gremion-cd"
     printf '#!/bin/sh\necho other-old\n' > "$r/bin/gremion-other"
     printf '# common, old\n' > "$r/lib/common.sh"
     printf '# core, old\n' > "$r/lib/cd/core.sh"
@@ -89,7 +89,7 @@ make_release_tree() {
     local t="${BATS_TEST_TMPDIR}/rel" sha
     rm -rf "$t"
     mkdir -p "$t/infra/host"
-    cp "${FX}/fake-bootstrap.sh" "$t/infra/host/bootstrap.sh"
+    cp "${FX}/fake-bootstrap.body" "$t/infra/host/bootstrap.sh"
     git -C "$t" init -q
     git -C "$t" add -A
     git -C "$t" -c user.name=t -c user.email=t@example.org -c commit.gpgsign=false commit -q -m x
@@ -185,7 +185,7 @@ assert_set_is_backup() {
     [ "$status" -eq 2 ]
     # a directory that is not a git work tree
     mkdir -p "${GREMION_ROOT}/releases/222222222222/infra/host"
-    cp "${FX}/fake-bootstrap.sh" "${GREMION_ROOT}/releases/222222222222/infra/host/bootstrap.sh"
+    cp "${FX}/fake-bootstrap.body" "${GREMION_ROOT}/releases/222222222222/infra/host/bootstrap.sh"
     apply 222222222222
     [ "$status" -eq 2 ]
     refute_recorded bootstrap "cd"
