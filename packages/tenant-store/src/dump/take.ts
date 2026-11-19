@@ -19,11 +19,11 @@
 //      the database, sha256;
 //   7. append `created` (fsynced) and print one audit line.
 import { randomBytes } from 'node:crypto'
-import { chmodSync, closeSync, createReadStream, fsyncSync, mkdirSync, openSync, rmSync, statSync, statfsSync } from 'node:fs'
+import { chmodSync, chownSync, closeSync, createReadStream, fsyncSync, mkdirSync, openSync, rmSync, statSync, statfsSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import type { Exporter } from '../lifecycle/types.js'
-import { appendEvent, assertRelease, auditLine, DumpError, fsyncDir, liveDumps, readEvents, withLedgerLock, type ByKind, type DumpEvent, type DumpScope } from './ledger.js'
+import { appendEvent, assertRelease, auditLine, DumpError, fsyncDir, liveDumps, readEvents, withLedgerLock, type ByKind, type DumpEvent, type DumpScope, type HandOver } from './ledger.js'
 
 /** Free space must be at least this multiple of pg_database_size (brief §1). */
 export const SPACE_FACTOR = 1.2
@@ -42,6 +42,12 @@ export interface DumpFs {
   freeBytes(dir: string): number
   /** This process's uid; undefined where the platform has none (the owner check then refuses). */
   uid: number | undefined
+  /** chown(path, uid) leaving the group alone; only a root process with an `ownerUid` ever calls it. Default: fs.chownSync. */
+  chown?(path: string, uid: number): void
+}
+
+function defaultChown(path: string, uid: number): void {
+  chownSync(path, uid, -1)
 }
 
 export const defaultDumpFs: DumpFs = {
@@ -54,6 +60,27 @@ export const defaultDumpFs: DumpFs = {
     return Number(s.bavail) * Number(s.bsize)
   },
   uid: typeof process.getuid === 'function' ? process.getuid() : undefined,
+  chown: defaultChown,
+}
+
+/** A uid that can own a directory: a non-negative 32-bit integer. */
+export function isOwnerUid(v: unknown): v is number {
+  return typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 0xfffffffe
+}
+
+/**
+ * The hand-over of a ROOT process (the tenant-create one-shot runs as root, the dump directory belongs to the
+ * deploy user): every path it writes goes to `ownerUid` with its mode re-asserted, so the host's
+ * gremion-migration-dump status, verify and switched, which run as that user, can read and retire it. undefined
+ * (no hand-over at all) for a process that is not root, and when no `ownerUid` is declared.
+ */
+export function handOverFor(fs: DumpFs, ownerUid: number | undefined): HandOver | undefined {
+  if (ownerUid === undefined || fs.uid !== 0) return undefined
+  return (path, mode) => {
+    if (fs.chown) fs.chown(path, ownerUid)
+    else defaultChown(path, ownerUid)
+    chmodSync(path, mode)
+  }
 }
 
 export interface TakeDumpOptions {
@@ -68,6 +95,18 @@ export interface TakeDumpOptions {
   exporter: Exporter
   /** ExportTarget.service handed to the exporter (compose service name). Default 'postgres'. */
   service?: string
+  /**
+   * The login role the exporter dumps as on that module server. With a `service` other than `postgres` it is
+   * written to the ledger line beside the service (`pg_service`, `pg_user`), which is how the host's `restore`
+   * finds the server of a dump (it takes no option). Without it the line names no server.
+   */
+  pgUser?: string
+  /**
+   * GREMION_MIGRATION_DUMP_OWNER_UID: the uid that owns the dump directory when this process is root (the
+   * tenant-create one-shot). A root process is accepted only on a directory owned by exactly that uid, and
+   * hands everything it writes to it; for every other process it is ignored and nothing changes.
+   */
+  ownerUid?: number
   probe: DumpProbe
   fs?: DumpFs
   byKind?: ByKind
@@ -114,8 +153,12 @@ function fsyncFile(file: string): void {
   }
 }
 
-/** The dump dir checks (brief §1 "Never a series"): set, a directory, 0700, owned by this uid. */
-export function checkDumpDir(dir: string | undefined, fs: DumpFs = defaultDumpFs): string {
+/**
+ * The dump dir checks (brief §1 "Never a series"): set, a directory, 0700, owned by this uid. A root process
+ * with a declared `ownerUid` is the one exception: the directory must be owned by exactly that uid (anything
+ * else, including a directory root owns, is still DUMP_DIR_OWNER), because everything it writes is handed to it.
+ */
+export function checkDumpDir(dir: string | undefined, fs: DumpFs = defaultDumpFs, ownerUid?: number): string {
   if (typeof dir !== 'string' || dir.trim() === '') {
     throw new DumpError('DUMP_DIR_UNSET', 'GREMION_MIGRATION_DUMP_DIR is not set: no pre-migration dump can be taken, so nothing is migrated')
   }
@@ -128,6 +171,11 @@ export function checkDumpDir(dir: string | undefined, fs: DumpFs = defaultDumpFs
   if (!s.isDirectory) throw new DumpError('DUMP_DIR_INVALID', `${dir} is not a directory`)
   if ((s.mode & 0o777) !== 0o700) throw new DumpError('DUMP_DIR_MODE', `${dir} has mode ${(s.mode & 0o777).toString(8).padStart(4, '0')}, want 0700 (the dump holds the whole database in clear)`)
   if (fs.uid === undefined) throw new DumpError('DUMP_DIR_OWNER', `the owner of ${dir} cannot be verified on this platform (no uid)`)
+  if (ownerUid !== undefined && !isOwnerUid(ownerUid)) throw new DumpError('DUMP_DIR_OWNER', `the declared owner uid ${String(ownerUid)} is not a uid`)
+  if (ownerUid !== undefined && fs.uid === 0) {
+    if (s.uid !== ownerUid) throw new DumpError('DUMP_DIR_OWNER', `${dir} is owned by uid ${s.uid}, not by the declared owner uid ${ownerUid} (this process is root and writes only into that owner's directory)`)
+    return dir
+  }
   if (s.uid !== fs.uid) throw new DumpError('DUMP_DIR_OWNER', `${dir} is owned by uid ${s.uid}, not by this process (uid ${fs.uid})`)
   return dir
 }
@@ -140,7 +188,12 @@ export async function takeDump(o: TakeDumpOptions): Promise<TakenDump> {
   if (o.scope !== 'platform' && o.scope !== 'customer') throw new DumpError('DUMP_SCOPE', `scope ${JSON.stringify(o.scope)}`)
   if ((o.scope === 'customer') !== Boolean(o.customerId)) throw new DumpError('DUMP_SCOPE', 'a customer-scope dump names its customer_id; a platform dump names none (DB-OPS-MIGRATION-DUMP scope check)')
   const fs = o.fs ?? defaultDumpFs
-  const dir = checkDumpDir(o.dir, fs)
+  const dir = checkDumpDir(o.dir, fs, o.ownerUid)
+  const handOver = handOverFor(fs, o.ownerUid)
+  const server = o.service !== undefined && o.service !== 'postgres' && o.pgUser !== undefined ? { pg_service: o.service, pg_user: o.pgUser } : null
+  if (server && (!/^[a-z][a-z0-9]*-postgres$/.test(server.pg_service) || !/^[a-z_][a-z0-9_]{0,62}$/.test(server.pg_user))) {
+    throw new DumpError('DUMP_SCOPE', 'the server and role of a module-server dump are not valid names; nothing was dumped or migrated')
+  }
   const now = o.now ?? (() => new Date())
   const audit = o.audit ?? ((l: string) => console.log(l))
 
@@ -187,6 +240,7 @@ export async function takeDump(o: TakeDumpOptions): Promise<TakenDump> {
     const releaseDir = join(dir, relDir)
     mkdirSync(releaseDir, { recursive: true, mode: 0o700 })
     chmodSync(releaseDir, 0o700)
+    handOver?.(releaseDir, 0o700)
     const file = `${relDir}/${o.database}.${id}.dump`
     const path = join(dir, file)
     try {
@@ -197,6 +251,7 @@ export async function takeDump(o: TakeDumpOptions): Promise<TakenDump> {
     }
     try {
       chmodSync(path, 0o600)
+      handOver?.(path, 0o600)
       fsyncFile(path)
       fsyncDir(releaseDir)
       fsyncDir(dir)
@@ -222,8 +277,9 @@ export async function takeDump(o: TakeDumpOptions): Promise<TakenDump> {
         sha256,
         bytes,
         dump_taken_at: takenAt.toISOString(),
+        ...server,
       }
-      appendEvent(dir, event)
+      appendEvent(dir, event, handOver)
       audit(auditLine(event))
       return { status: 'created', id, path, sha256, bytes }
     } catch (err) {
@@ -231,5 +287,5 @@ export async function takeDump(o: TakeDumpOptions): Promise<TakenDump> {
       if (err instanceof DumpError) throw err
       throw new DumpError('DUMP_UNVERIFIED', `the dump of ${o.database} could not be verified: ${(err as Error).message}; it was removed, nothing was migrated`, { cause: err })
     }
-  })
+  }, handOver)
 }
