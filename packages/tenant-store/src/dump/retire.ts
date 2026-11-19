@@ -108,7 +108,7 @@ async function retireMatching(o: RetireOptions, match: (e: DumpEvent) => boolean
  * Retires the live dump of `database` that `release` took, if there is one. The one-database counterpart of the
  * host's `switched` and `discard`: a dump of another release or another database is never touched.
  */
-export function retireDump(dir: string | undefined, release: string, database: string, reason: string, more: Omit<RetireOptions, 'dir' | 'database' | 'reason'> = {}): Promise<RetireResult> {
+export async function retireDump(dir: string | undefined, release: string, database: string, reason: string, more: Omit<RetireOptions, 'dir' | 'database' | 'reason'> = {}): Promise<RetireResult> {
   assertRelease(release)
   return retireMatching({ dir, database, reason, ...more }, (e) => e.database === database && e.release === release)
 }
@@ -118,6 +118,6 @@ export function retireDump(dir: string | undefined, release: string, database: s
  * dropped it): the Karenz row carries no release label, and the job may run under a later release than the one
  * that took the dump, so a retire keyed on the current release would silently do nothing.
  */
-export function retireDatabaseDumps(dir: string | undefined, database: string, reason: string, more: Omit<RetireOptions, 'dir' | 'database' | 'reason'> = {}): Promise<RetireResult> {
+export async function retireDatabaseDumps(dir: string | undefined, database: string, reason: string, more: Omit<RetireOptions, 'dir' | 'database' | 'reason'> = {}): Promise<RetireResult> {
   return retireMatching({ dir, database, reason, ...more }, (e) => e.database === database)
 }
