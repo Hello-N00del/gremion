@@ -15,8 +15,7 @@ set -euo pipefail
 #      holds the locks, so the check asserts they are held and no test mail is sent).
 #   3. on ANY failure after step 1 (a non-zero exit, a TERM at the unit's timeout) put the backup
 #      back byte for byte (verified with cmp), reload again and exit non-zero. Half-installed is
-#      not an end state. (SIGKILL cannot be caught: `gremion-cd selftest` after such a kill finds
-#      the mix, and the backup stays in data/cd/host-backup for the operator.)
+#      not an end state.
 #
 # THE BACKUP (written by the deploy-user side, data/cd/host-backup/<time>/, a real directory;
 # `pending` is a link to it, or the directory itself, and its real path must lie under

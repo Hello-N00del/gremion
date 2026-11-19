@@ -180,7 +180,7 @@ test('the three tick-side units pin no NoNewPrivileges (the sudo -n calls need i
     const lines = readUnit(u)
     assert.ok(
       !unitHas(lines, 'NoNewPrivileges'),
-      `${u} must not set NoNewPrivileges: the program restarts the executor and starts the apply unit through "sudo -n systemctl", and a unit with NoNewPrivileges makes sudo refuse (the pilot's setuid facts, F15)`,
+      `${u} must not set NoNewPrivileges: the program restarts the executor and starts the apply unit through "sudo -n systemctl", and a unit with NoNewPrivileges makes sudo refuse`,
     )
   }
 })

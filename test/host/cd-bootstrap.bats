@@ -15,6 +15,7 @@
 # scripts/cd/cd-guards.test.mjs.
 
 load 'test_helper/host'
+load 'test_helper/cd'
 
 BOOTSTRAP="${HOST_SRC}/bootstrap.sh"
 UNITS=(gremion-cd.service gremion-cd.timer gremion-cd-watchdog.service gremion-cd-watchdog.timer
@@ -37,6 +38,9 @@ setup() {
     # runuser -u USER -- CMD...: run CMD as ourselves
     shim runuser 'shift 3; exec "$@"'
     shim systemctl
+    # the program's status reads the engine and the mail transport: nothing here touches a real daemon
+    shim docker
+    shim curl
     hash -r
 }
 
@@ -482,4 +486,28 @@ template_keys() {
     [ "$status" -eq 2 ]
     [[ "$output" == *"user"* ]]
     [ ! -e "${GREMION_ROOT}/lib/cd" ]
+}
+
+@test "stage cd passes its status check in the middle of an apply: a release in flight, a hold, an ALERT file and both locks held by the caller" {
+    cd_need_flock
+    run_stage
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    sed -i \
+        -e 's|^CD_REPO_URL=.*|CD_REPO_URL=https://example.org/org/repo|' \
+        -e 's|^CD_MAIL_TO=.*|CD_MAIL_TO=ops@example.org|' \
+        -e 's|^CD_HOST_LABEL=.*|CD_HOST_LABEL=pilot-a|' \
+        -e 's|^CD_PROBE_HOST=.*|CD_PROBE_HOST=app.example.org|' "${GREMION_ROOT}/etc/cd.env"
+    # what release-now leaves behind while it applies host programs
+    cd_seed_state '.phase = "releasing"
+        | .live = ('"$CD_LIVE_JSON"')
+        | .hold = {"kind":"failure","reason":"build","sha12":"bbbbbbbbbbbb","since":"2026-11-17T01:00:00Z"}
+        | .release = {"id":"bbbbbbbbbbbb-1","sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","sha12":"bbbbbbbbbbbb","tag":"pilot-bbbbbbbbbbbb","colour":"green","tree":"/opt/gremion/releases/bbbbbbbbbbbb","mode":"manual","stage":"host_apply","stage_status":"started","attempt":1}'
+    printf 'an earlier fatal exit\n' > "${GREMION_ROOT}/data/cd/ALERT"
+    hold_host_lock 30
+    exec 8>>"${GREMION_ROOT}/runtime/cd/cd.lock"
+    flock -n 8
+    run_stage
+    exec 8>&-
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"gremion-cd status runs"* ]]
 }

@@ -16,7 +16,6 @@ SupplementaryGroups=docker
 Environment=GREMION_ROOT=${GREMION_ROOT}
 Environment=PATH=${GREMION_ROOT}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 WorkingDirectory=${GREMION_ROOT}
-UMask=0077
 ExecStart=${GREMION_ROOT}/bin/gremion-cd tick
 # A release builds images, migrates databases and watches the new colour for a while: no
 # deadline here. The program bounds every stage itself and writes a heartbeat the watchdog

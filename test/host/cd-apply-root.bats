@@ -148,6 +148,8 @@ assert_set_is_backup() {
     for bad in "" abc 0123456789a 0123456789abc 0123456789AB 0123456789ag '../releases' '0123456789a/' '0123456789 b'; do
         apply "$bad"
         [ "$status" -eq 2 ] || { echo "'${bad}' gave ${status}: ${output}"; return 1; }
+        # refused by the name alone, before any path is built from it
+        [[ "$output" == *"twelve lower-case hex digits"* ]] || { echo "'${bad}': ${output}"; return 1; }
     done
     refute_recorded bootstrap "cd"
     refute_recorded systemctl "daemon-reload"
