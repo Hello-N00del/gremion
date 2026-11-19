@@ -36,7 +36,14 @@ export const LOCATION_MIGRATION = 'gremion-ui/migrations/0066_board_location.sql
 export const KARENZ_MIGRATION = 'packages/tenant-store/src/lifecycle/platform-migrations/0016_plt_module_karenz.sql'
 export const BOARD_SECTION = '## Board: where a customer\'s board lives'
 
-export const FILES = [RUNBOOK, README_EN, README_DE, DEFAULTS_EN, DEFAULTS_DE, EXPORT_HOLD, LOCATION_MIGRATION, KARENZ_MIGRATION]
+export const PROVISION = 'gremion-ui/scripts/tenant-provision.ts'
+
+export const FILES = [RUNBOOK, README_EN, README_DE, DEFAULTS_EN, DEFAULTS_DE, EXPORT_HOLD, LOCATION_MIGRATION, KARENZ_MIGRATION, PROVISION]
+
+/** Kebab-case names that are commands of the lifecycle one-shot or of the host: each must be a `case` of the one-shot or a host program. */
+export const VERB_LIKE = /^(?:board|karenz|enable|disable|purge|import|seed|gate|dpia|isolation|regate|export|materialize|operator|bootstrap|record|render|request)-[a-z-]+$/
+/** Names that start like a verb but are compose services (they must still exist in the source). */
+export const SERVICE_NAMES = new Set(['board-postgres', 'board-service'])
 
 /** Statements that were true before the board declared its own database and are false now. */
 export const STALE = [
@@ -112,7 +119,7 @@ export const TOOLING = new Set([
 /** Whether a tracked file that is not a document contains `token`. */
 export function repoHasToken(root, token) {
   try {
-    const out = execFileSync('git', ['grep', '-l', '-F', '-e', token, '--', '.', ':(exclude)*.md', ':(exclude)docs', ':(exclude)*.de.md'], {
+    const out = execFileSync('git', ['grep', '-l', '-F', '-e', token, '--', '.', ':(exclude)*.md', ':(exclude)docs', ':(exclude)*.de.md', ':(exclude)scripts/check-board-docs.mjs', ':(exclude)scripts/check-board-docs.test.mjs'], {
       cwd: root,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
@@ -124,7 +131,14 @@ export function repoHasToken(root, token) {
   }
 }
 
-export function runChecks(root = ROOT, { exists = (t) => repoHasToken(root, t) } = {}) {
+/** Whether `verb` is a `case` of the lifecycle one-shot or a program of the host. A text that merely mentions it does not count. */
+export function verbExists(root, verb) {
+  const src = text(root, PROVISION)
+  if (src !== null && src.includes(`case '${verb}':`)) return true
+  return existsSync(join(root, 'infra/host/bin', verb)) || existsSync(join(root, 'infra/host/ops', `${verb}.sh`))
+}
+
+export function runChecks(root = ROOT, { exists = (t) => repoHasToken(root, t), isVerb = (t) => verbExists(root, t) } = {}) {
   const failures = []
   const docs = Object.fromEntries(FILES.map((f) => [f, text(root, f)]))
   for (const [f, body] of Object.entries(docs)) if (body === null) failures.push(`${f} is missing`)
@@ -154,7 +168,9 @@ export function runChecks(root = ROOT, { exists = (t) => repoHasToken(root, t) }
     for (const t of identifiers(body)) {
       if (TOOLING.has(t)) continue
       tokens.add(t)
-      if (!exists(t)) failures.push(`(c) ${f} names \`${t}\`, which no source file outside the documents contains`)
+      if (VERB_LIKE.test(t) && !SERVICE_NAMES.has(t)) {
+        if (!isVerb(t)) failures.push(`(c) ${f} names the verb \`${t}\`, which is no case of ${PROVISION} and no host program`)
+      } else if (!exists(t)) failures.push(`(c) ${f} names \`${t}\`, which no source file outside the documents contains`)
     }
   }
 

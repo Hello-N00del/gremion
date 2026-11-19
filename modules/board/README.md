@@ -118,11 +118,12 @@ None besides the kernel, the leaf and the leaf's PostgreSQL server (`board-postg
   fixed period after that, not deleted with it
   ([runbooks/tenant-lifecycle.md](../../docs/runbooks/tenant-lifecycle.md), the Karenz table and the
   retention catalogue rows RC-MOD-EXPORT and RC-BRD).
-- A board that is still in the kernel tables has no database to export. A platform `disable_module`
-  for such a customer, where it had a board enablement, only hides the board and opens the 30-day
-  clock; nothing is exported and nothing is deleted. A switch-on of that board is refused by the same
-  gate as a later enable (see above), so it is shown again by setting `config.modules.board` to true
-  by hand.
+- A board that is still in the kernel tables has no database to export. Do not switch it off through
+  the platform: a platform `disable_module` for such a customer, where it had a board enablement, only
+  hides the board and opens the 30-day clock (nothing is exported and nothing is deleted), a switch-on
+  is refused by the same gate as a later enable (see above), and while the platform row is disabled the
+  reconciler below puts a hand-set `config.modules.board` back to false. The hide is one-way in this
+  release; hide such a board with `config.modules.board = false` alone.
 - Instance setting: `config.modules.board = false` makes `/tasks` and `/api/board` answer with the
   module-disabled surface. This is the way to hide a board that is in the kernel tables.
 - What hides the board after a platform `disable_module` is the app's module-switch

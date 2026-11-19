@@ -1,4 +1,4 @@
-<!-- i18n-sync: source=README.md sha256=75dee5109a5de2d9cbeb7210ebda95df5db0b3f3cea7c9b52619d5b5507a57c8 -->
+<!-- i18n-sync: source=README.md sha256=e4a2e7a67cd2bb3cea9af659415caa7c2121bc1440a6112733a0ab9c5c525a2b -->
 [English](./README.md) | **Deutsch**
 
 # board
@@ -121,10 +121,13 @@ Keine außer dem Kernel, dem Leaf und dem PostgreSQL-Server des Leaf (`board-pos
   ([runbooks/tenant-lifecycle.md](../../docs/runbooks/tenant-lifecycle.md) (englisch), die Karenz-Tabelle
   und die Katalogzeilen RC-MOD-EXPORT und RC-BRD der Aufbewahrungsübersicht).
 - Ein Board, das noch in den Kernel-Tabellen liegt, hat keine Datenbank, die exportiert werden könnte.
-  Ein Plattform-`disable_module` für einen solchen Kunden, der eine Board-Aktivierung hatte, blendet das
-  Board nur aus und startet die 30-Tage-Uhr; nichts wird exportiert, nichts wird gelöscht. Ein Einschalten
-  dieses Boards wird vom selben Gate abgelehnt wie ein späteres Aktivieren (siehe oben); es wird daher
-  wieder sichtbar, indem `config.modules.board` von Hand auf true gesetzt wird.
+  Es sollte nicht über die Plattform ausgeschaltet werden: Ein Plattform-`disable_module` für einen
+  solchen Kunden, der eine Board-Aktivierung hatte, blendet das Board nur aus und startet die
+  30-Tage-Uhr (nichts wird exportiert, nichts gelöscht), ein Einschalten wird vom selben Gate abgelehnt
+  wie ein späteres Aktivieren (siehe oben), und solange die Plattformzeile deaktiviert ist, setzt der
+  Reconciler (unten) ein von Hand auf true gesetztes `config.modules.board` wieder auf false zurück.
+  Das Ausblenden ist in diesem Release eine Einbahnstraße; ein solches Board wird allein mit
+  `config.modules.board = false` ausgeblendet.
 - Instanzeinstellung: Mit `config.modules.board = false` liefern `/tasks` und `/api/board` die
   Antwort für deaktivierte Module aus. So wird ein Board ausgeblendet, das in den Kernel-Tabellen liegt.
 - Nach einem Plattform-`disable_module` blendet der Modul-Schalt-Reconciler der App das Board

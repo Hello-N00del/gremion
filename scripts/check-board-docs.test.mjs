@@ -75,8 +75,10 @@ test('RED (c): a verb or key that is named but exists in no source file is repor
     assert.equal(f.report(known), '')
     f.write(RUNBOOK, f.read(RUNBOOK).replace(/(\n## Board: where a customer's board lives\n)/, '$1\nRun `board-move` first, with `BOARD_MOVE_FREEZE_SECONDS` set.\n'))
     const out = f.report(known)
-    assert.match(out, /\(c\) docs\/runbooks\/tenant-lifecycle\.md names `board-move`/)
+    assert.match(out, /\(c\) docs\/runbooks\/tenant-lifecycle\.md names the verb `board-move`/)
     assert.match(out, /\(c\) docs\/runbooks\/tenant-lifecycle\.md names `BOARD_MOVE_FREEZE_SECONDS`/)
+    // a source file that merely MENTIONS the verb (the refusal text of the create flow does) must not satisfy it: every token "exists" here
+    assert.match(f.report(), /\(c\) docs\/runbooks\/tenant-lifecycle\.md names the verb `board-move`/)
   } finally {
     f.cleanup()
   }

@@ -551,7 +551,7 @@ in the same transaction that turns the enablement off. That row is the only cloc
 |---|---|---|---|
 | Module database (calendar, content, finance, publishing, vault) | exported and verified, then BLOCKED: the app role loses CONNECT, the database stays alive | unblocked, the data is back | dropped, and the row's own export is deleted with it |
 | `board` in its own module database (a customer created with board ticked) | exported and verified, then BLOCKED like the rows above; the board is hidden through `config.modules.board` | unblocked, the same boards are back | the database is dropped and the export is KEPT: it stays 365 days after day 30 (provisional until the DPO confirms the length: `EXPORT_KEEP_DAYS` in `packages/provisioning/src/export-hold.ts`, retention catalogue rows RC-BRD and RC-MOD-EXPORT), the date is written to `export_kept_until`, and the day-30 job deletes the dump only after that date; every other module in this table keeps the 30-day rule |
-| `board` still in the kernel tables (a customer created without board ticked, or before board had its own database) | where the customer had a board enablement: hidden by the module-switch reconciler through `config.modules.board`, and the 30-day clock opens; no export is taken, because there is no database to export | refused by the same gate as a later enable of board (it would create an empty database beside the kernel rows); the board is shown again by setting `config.modules.board` to true by hand | nothing is deleted (`registerNoRetention`); the rows stay in the customer's kernel database, and how long they may be kept is decided under the module's processing record (`rp-brd-module-data`) |
+| `board` still in the kernel tables (a customer created without board ticked, or before board had its own database) | where the customer had a board enablement: hidden by the module-switch reconciler through `config.modules.board`, and the 30-day clock opens; no export is taken, because there is no database to export | refused by the same gate as a later enable of board (it would create an empty database beside the kernel rows), and while the platform row is disabled the reconciler puts a hand-set `config.modules.board` back to false: a platform switch-off of a kernel board is one-way in this release, so hide such a board with `config.modules.board = false` and do not switch it off | nothing is deleted (`registerNoRetention`); the rows stay in the customer's kernel database, and how long they may be kept is decided under the module's processing record (`rp-brd-module-data`) |
 | `votes` (Nextcloud Polls) | every open poll is locked by moving its deadline into the past, the remaining time is stored | the deadline becomes "now plus the stored remaining time"; a poll without a deadline gets none again; a poll that had already expired or been closed is never reopened | polls are deleted unless a protocol references them; a poll without a sealed line is kept and reported |
 | `elections` (Helios) | open elections are paused through the pause port | unpaused with the stored remaining time | nothing is deleted in Helios; an election with a sealed result is archived in the tenant table |
 | `messaging` (Matrix) | every org unit's room is archived (read-only) | unarchived | rooms the Karenz archived are deleted, except meeting-linked rooms (RC-MSG-LINK) |
@@ -724,12 +724,20 @@ pg() {
     -e PGOPTIONS='-c default_transaction_read_only=on' postgres \
     psql -U postgres -tA -v ON_ERROR_STOP=1 "$@" </dev/null
 }
-for db in $(pg -c "SELECT datname FROM pg_database WHERE datname ~ '^t_[0-9a-f]{32}__kernel\$' ORDER BY datname"); do
+dbs=$(pg -c "SELECT datname FROM pg_database WHERE datname ~ '^t_[0-9a-f]{32}__kernel\$' ORDER BY datname") || echo "listing failed: stop"
+echo "customer databases found: $(printf '%s\n' "$dbs" | grep -c .)"
+for db in $dbs; do
   pg -d "$db" -c "SELECT coalesce((SELECT location FROM board_location WHERE id), 'kernel') || ' ' || CASE WHEN (SELECT count(*) FROM board) + (SELECT count(*) FROM stack) + (SELECT count(*) FROM card) > 0 THEN 'rows' ELSE 'empty' END" 2>/dev/null || echo unreadable
 done | sort | uniq -c
-# one line per distinct answer, with the number of customers that gave it, for example:
+# first line: how many customer databases exist; then one line per distinct answer with the number of
+# customers that gave it, for example:
+# customer databases found: 2
 #       2 module empty
 ```
+
+The number on the first line must not be 0, and the numbers in front of the answers must add up to it.
+A 0, or a sum that differs, means the listing or a read failed: stop, and do not take the rest as an
+all-clear.
 
 How to read each line:
 
@@ -742,15 +750,16 @@ How to read each line:
 | `moving ...` | a move marked the customer | no step of this release writes this value: stop and raise it |
 | `unreadable` | the table `board_location` does not exist in that database (the kernel migration 0066 is not applied to it) or the database could not be read | apply the release's migrations for that customer, then run the check again |
 
-"No customer has its board located in the kernel" is the case in which no line starts with `kernel`
-or `moving` and none reads `unreadable`.
+"No customer has its board located in the kernel" is the case in which the first line is not 0, the
+numbers in front of the answers add up to it, no answer starts with `kernel` or `moving`, and none
+reads `unreadable`.
 
 ### Order for the real customer
 
 1. Deploy the release and confirm the check above has no `unreadable` line.
 2. Create the real customer, with board ticked, from the panel's create form or the create request.
-3. Run the check again. The number of `module empty` lines is one higher than before, and no `kernel`
-   or `moving` line appeared or changed.
+3. Run the check again. The number in front of `module empty` is one higher than before, the first
+   line is one higher too, and no `kernel` or `moving` answer appeared or changed.
 4. Enter the real data only after that. A customer created before this release stays in the kernel and
    is not the real customer; a placeholder customer that should have its own board database is created
    again (staging only), never moved.
@@ -787,8 +796,8 @@ A deploy, a switch, a rollback, a snapshot and a backup each hold the host lock 
 (`gremion-hostd`). The executor, `karenz.sh`, `purge.sh` and `gremion-tenant` take that lock too and
 skip, wait or answer busy (exit 3). The raw one-shot `tc <verb>` of `infra/host/lib/customer-ops.sh`
 takes no lock. So while a release is being deployed, run only read-only verbs through it
-(`karenz-status`, `status`, `gate-status`) and no raw verb that writes (`enable-module`,
-`disable-module`, `karenz-run`, `purge-run`, `import-apply`, `export`, `delete`): such a write races the
+(`karenz-status`, `status`) and no raw verb that writes (`enable-module`, `disable-module`,
+`karenz-run`, `purge-run`, `import-apply`, `delete`): such a write races the
 migrations and the colour switch of the release. Wait for the deploy to end, or go through the
 executor or `gremion-tenant`, which respect the lock.
 
