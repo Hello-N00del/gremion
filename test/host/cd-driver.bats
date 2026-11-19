@@ -392,6 +392,19 @@ drv_hostlock_free() { ( exec 9>>"${GREMION_ROOT}/runtime/hostd.lock"; flock -n 9
     [ "$(drv_state '.phase')" = idle ]
 }
 
+@test "reconcile composition: a committed release in its reconcile stage is ended under the kill switch too, never parked" {
+    cd_need_flock
+    drv_seed_commit reconcile started
+    : > "${GREMION_ROOT}/etc/cd.disabled"
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    [ "$(drv_state '.hold.reason')" = interrupted ]
+    [ "$(drv_state '.phase')" = idle ]
+    [ "$(drv_n '^stub cd_reconcile_run')" -eq 0 ]
+    [ "$(drv_hist killswitch_park)" -eq 0 ]
+    drv_hostlock_free
+}
+
 # ===========================================================================================
 # --resume-only
 # ===========================================================================================
