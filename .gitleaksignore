@@ -35,3 +35,7 @@ c19f9854d36ee5fc5d6d414bc560c53695e776c7:scripts/migrations/applied.lock.json:ge
 119ad2a81a02245725ccae197cd785553998950b:scripts/check-board-compose.test.mjs:generic-api-key:34
 scripts/check-board-compose.test.mjs:generic-api-key:33
 scripts/check-board-compose.test.mjs:generic-api-key:34
+
+# Same two board leaf fixture values at their lines in the pre-squash board wave 2 commit that the unit tips are based on.
+421bf5e380cf97b92ea127e4a04a69719875833b:scripts/check-board-compose.test.mjs:generic-api-key:30
+421bf5e380cf97b92ea127e4a04a69719875833b:scripts/check-board-compose.test.mjs:generic-api-key:31
