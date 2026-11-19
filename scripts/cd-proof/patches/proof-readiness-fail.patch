@@ -1,0 +1,14 @@
+diff --git a/gremion-ui/src/routes/readyz/+server.ts b/gremion-ui/src/routes/readyz/+server.ts
+index eccc16a8..18e9a43b 100644
+--- a/gremion-ui/src/routes/readyz/+server.ts
++++ b/gremion-ui/src/routes/readyz/+server.ts
+@@ -91,7 +91,8 @@ function answer(body: Record<string, unknown>, ready: boolean): Response {
+ export const GET: RequestHandler = async ({ request }) => {
+   try {
+     const bootComplete = getBootStatus().complete
+-    const controlOk = bootComplete ? await controlPing() : false
++    // CD PROOF ONLY (never merged): the control check is reported failed for ever.
++    const controlOk = bootComplete ? (await controlPing()) && false : false
+     const ready = bootComplete && controlOk
+     if (!isInternalCaller(request)) return answer({ ready }, ready)
+ 

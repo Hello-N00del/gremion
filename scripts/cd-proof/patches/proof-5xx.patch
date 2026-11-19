@@ -1,0 +1,15 @@
+diff --git a/gremion-ui/src/routes/legal/cd-proof/+server.ts b/gremion-ui/src/routes/legal/cd-proof/+server.ts
+new file mode 100644
+--- /dev/null
++++ b/gremion-ui/src/routes/legal/cd-proof/+server.ts
+@@ -0,0 +1,10 @@
++import type { RequestHandler } from './$types'
++import { existsSync } from 'node:fs'
++
++// CD PROOF ONLY (never merged): a public page that answers 200 and, while the flag
++// file exists, 500. /readyz and /healthz are not touched.
++export const GET: RequestHandler = () =>
++  new Response(existsSync('/tmp/cd-proof-fail') ? 'proof' : 'ok', {
++    status: existsSync('/tmp/cd-proof-fail') ? 500 : 200,
++    headers: { 'content-type': 'text/plain', 'cache-control': 'no-store' },
++  })
