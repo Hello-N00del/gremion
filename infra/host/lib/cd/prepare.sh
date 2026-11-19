@@ -43,16 +43,26 @@ CD_PREPARE_INFRA_PATTERNS=(
     'unexpected EOF'
     '50[234] (Bad Gateway|Service Unavailable|Gateway Time-?out)'
     'unexpected (HTTP )?status:? 50[234]'
+    'Cannot connect to the Docker daemon'
+    'failed to connect to the docker API'
+    'context deadline exceeded'
 )
+
+# How much of a failed call the classifier reads: the last lines of THAT call's own output.
+# A warning a call recovered from, or text one RUN step printed long before the build
+# failed, is not the reason it failed.
+_CD_PREP_CLASSIFY_TAIL=40
 
 # Lines the infra patterns must never see: bash says the same words about a broken RUN
 # script, and that is the commit's own error.
 _CD_PREP_NOT_INFRA='unexpected EOF while looking for matching|syntax error: unexpected end of file'
 
-# the first-party repositories whose images only a build with the profile star
-# produces (the one-shots: gremion-migrate serves migrate and tenant-create, the
-# kernel-api image serves kernel-api-migrate); the build stage fails when the image
-# list it computed has none of them under the new tag
+# the first-party repositories the image list is checked for under the new tag. Only
+# gremion-migrate (it serves migrate and tenant-create) is produced by the profile star
+# alone; the kernel-api image also serves the kernel-api service, which has no profile, so
+# it is in the list with or without the star. A lost star is therefore detected by
+# gremion-migrate (and, after the build, by the migration smoke test going RED); both
+# names stay listed so that a missing one of either fails the build stage
 _CD_PREP_ONESHOT_REPOS=(gremion-migrate gremion-kernel-api)
 
 _cd_prep_err() { printf 'cd-prepare: %s\n' "$*" >&2; }
@@ -456,7 +466,7 @@ _cd_prep_active_colour() {
 
 # _cd_prep_retag_locked TREE COLOUR TAG -- the body of cd_prepare_retag, under the lock.
 _cd_prep_retag_locked() {
-    local tree="$1" colour="$2" tag="$3" proj envf live_colour live_env live_tag active cids prev saved
+    local tree="$1" colour="$2" tag="$3" proj envf live_colour live_env live_tag active cids prev saved has_release
     proj="app-${colour}"
     envf="$(cd_envfile "$proj")" || return 2
     if ! _cd_prep_tree_tag "$tree" "$tag"; then
@@ -501,6 +511,13 @@ _cd_prep_retag_locked() {
         _cd_prep_err "retag: the target env file has no single IMAGE_TAG"
         return 2
     }
+    # without a release record there is nowhere to keep the tag this replaces, so nothing
+    # could be restored afterwards: refuse before anything is edited
+    has_release="$(cd_state_get '.release != null')" || return 2
+    if [[ "$has_release" != true ]]; then
+        _cd_prep_err "retag: no release is recorded, the replaced tag could not be restored"
+        return 2
+    fi
     saved="$(cd_state_get '.release.retag_prev // empty')" || return 2
     if [[ "$prev" == "$tag" ]]; then
         # a re-run after a crash: the env already carries the tag, the first run saved the
@@ -672,15 +689,28 @@ cd_prepare_render() {
 # BUILD
 # ==============================================================================
 
-# cd_prepare_classify_build_failure LOGFILE -- prints `infra` when the log matches one of
-# CD_PREPARE_INFRA_PATTERNS (outside the lines bash writes about a broken script), else
-# `commit`. 2 (nothing printed) when the file cannot be read.
+# cd_prepare_classify_build_failure LOGFILE [FROM_BYTE [TAIL_LINES]] -- prints `infra` when
+# the text read matches one of CD_PREPARE_INFRA_PATTERNS (outside the lines bash writes
+# about a broken script), else `commit`. Without the optional arguments it reads the whole
+# file; with them only what the file holds from byte FROM_BYTE on (0 = the start), and of
+# that only the last TAIL_LINES lines (0 = all): the output of the one failing call, not of
+# the calls before it. 2 (nothing printed) when the file cannot be read or an argument is
+# not a number.
 cd_prepare_classify_build_failure() {
-    local f="${1:-}" body p
+    local f="${1:-}" from="${2:-0}" lines="${3:-0}" body p
     [[ -n "$f" && -f "$f" && -r "$f" ]] || { _cd_prep_err "classify: no readable log"; return 2; }
-    body="$(grep -viE -- "$_CD_PREP_NOT_INFRA" "$f")" || body=''
+    if [[ ! "$from" =~ ^[0-9]+$ || ! "$lines" =~ ^[0-9]+$ ]]; then
+        _cd_prep_err "classify: the window is not a number"
+        return 2
+    fi
+    # streamed, never held whole: one call's output can be megabytes
+    if ((10#$lines > 0)); then
+        body="$(tail -c "+$((10#$from + 1))" -- "$f" | tail -n "$((10#$lines))" | grep -viE -- "$_CD_PREP_NOT_INFRA")" || body=''
+    else
+        body="$(tail -c "+$((10#$from + 1))" -- "$f" | grep -viE -- "$_CD_PREP_NOT_INFRA")" || body=''
+    fi
     for p in "${CD_PREPARE_INFRA_PATTERNS[@]}"; do
-        if printf '%s\n' "$body" | grep -qiE -- "$p"; then
+        if grep -qiE -- "$p" <<<"$body"; then
             printf 'infra\n'
             return 0
         fi
@@ -746,8 +776,8 @@ _cd_prep_remaining() {
 # asked, no live colour).
 cd_prepare_build() {
     local tree="${1:-}" colour="${2:-}" tag="${3:-}" proj envf live_colour live_proj envtag
-    local refs ref repo found r missing='' before after line cid img rid brid rc kind
-    local log attempt=0 retries start deadline remaining secs outoftime=0
+    local refs ref repo found r missing='' before after line cid img rid rc kind
+    local log attempt=0 retries start deadline remaining secs outoftime=0 callstart=0
     if ! _cd_prep_colour_ok "$colour" || ! _cd_prep_tag_ok "$tag" || [[ ! -d "$tree" ]]; then
         _cd_prep_err "build: usage: TREE blue|green pilot-<sha12>"
         return 2
@@ -817,11 +847,16 @@ cd_prepare_build() {
             return 3
         fi
         rc=0
+        # where the output of the call that runs now starts in the log
+        callstart="$(wc -c <"$log" 2>/dev/null | tr -d ' ')" || callstart=0
+        [[ "$callstart" =~ ^[0-9]+$ ]] || callstart=0
         _cd_prep_run_dc "$remaining" "$tree" "$proj" pull --ignore-buildable >>"$log" 2>&1 || rc=$?
         if ((rc == 0)); then
             remaining="$(_cd_prep_remaining "$deadline")" || outoftime=$?
             if ((outoftime == 2)); then return 2; fi
             if ((outoftime == 0)); then
+                callstart="$(wc -c <"$log" 2>/dev/null | tr -d ' ')" || callstart=0
+                [[ "$callstart" =~ ^[0-9]+$ ]] || callstart=0
                 _cd_prep_run_dc "$remaining" "$tree" "$proj" build >>"$log" 2>&1 || rc=$?
             fi
         fi
@@ -835,7 +870,8 @@ cd_prepare_build() {
             _cd_prep_err "build: compose was refused; log kept as ${log##*/}"
             return 2
         fi
-        kind="$(cd_prepare_classify_build_failure "$log")" || kind=commit
+        # only the failing call's own error tail: the log also holds the calls before it
+        kind="$(cd_prepare_classify_build_failure "$log" "$callstart" "$_CD_PREP_CLASSIFY_TAIL")" || kind=commit
         if [[ "$kind" == commit ]]; then
             _cd_prep_err "build: the build failed (a failure of the commit); log kept as ${log##*/}"
             cd_hist build_failed kind=commit attempts=$((attempt + 1)) || true
@@ -877,11 +913,6 @@ cd_prepare_build() {
     while read -r cid img rid; do
         if [[ "$img" != "$rid" ]]; then
             _cd_prep_err "build: a live container no longer runs the image its tag resolves to: the build moved a live tag"
-            return 1
-        fi
-        brid="$(printf '%s\n' "$before" | awk -v c="$cid" '$1 == c { print $3 }')"
-        if [[ -n "$brid" && "$brid" != "$rid" ]]; then
-            _cd_prep_err "build: the build changed the image a live tag resolves to"
             return 1
         fi
     done <<<"$after"

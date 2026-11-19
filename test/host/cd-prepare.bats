@@ -27,7 +27,8 @@ docker_shim_body() {
 #   ctx.log       cwd, CD_DC_TIMEOUT and COMPOSE_PARALLEL_LIMIT of every compose call
 #   env.log       the COMPOSE_* variables every compose call could see
 #   <verb>.script one line per call of that compose verb (pull, build): "<exit> <text>",
-#                 the text goes to stderr; a call past the last line succeeds
+#                 the text goes to stderr (a text of the form @NAME sends the file $DK/NAME
+#                 instead, for output of many lines); a call past the last line succeeds
 #   built         images a build produced (the star adds the one-shot images, as compose does)
 #   build.clobber a file naming an image key: a build moves that tag to another image
 #   config.warn   lines `config --quiet` prints on stderr (compose warns on an unset variable)
@@ -44,6 +45,7 @@ docker_shim_body() {
 #   pull.advance  a pull takes this many seconds of the fake clock
 #   ignore.star   a compose call behaves as if the profile star were absent
 #   skip.oneshot.build   a build does not produce the one-shot images (it lies)
+#   build.hook    a shell snippet a build runs first (a container that appears mid-build)
 #   build.same    a file naming an image key: the new gremion-ui image gets that image's id
 #                 (two colours with equal image ids)
 (IFS='|'; printf '%s\n' "$*" >>"$DK/argv.log")
@@ -64,7 +66,11 @@ run_script() {
     rc="${line%% *}"
     msg="${line#* }"
     [ "$msg" = "$line" ] && msg=''
-    [ -n "$msg" ] && printf '%s\n' "$msg" >&2
+    case "$msg" in
+      @*) cat "$DK/${msg#@}" >&2 ;;
+      '') ;;
+      *) printf '%s\n' "$msg" >&2 ;;
+    esac
     return "$rc"
 }
 case "$1" in
@@ -84,6 +90,7 @@ case "$1" in
     tag=$(sed -n 's/^IMAGE_TAG=//p' "$envf" | head -n 1)
     case "$verb" in
       build)
+        [ -f "$DK/build.hook" ] && . "$DK/build.hook"
         run_script build || exit $?
         mk_image "ghcr.io/example/gremion-ui:$tag"
         if [ "$star" = 1 ] && [ ! -f "$DK/skip.oneshot.build" ]; then
@@ -586,7 +593,9 @@ precheck() {
 @test "precheck: a failing docker is never read as free disk or a healthy state project" {
     : >"$DK/ps.fail"
     precheck
-    [ "$status" -ne 0 ]
+    [ "$status" -eq 3 ]
+    has_in 'why=state_unhealthy' "$output"
+    has_in 'postgres(docker_error)' "$output"
 }
 
 # ===================================================================== fetch
@@ -754,8 +763,10 @@ exec ${REALGIT} \"\$@\""
     seed_release
     chmod 640 "${GREMION_ROOT}/etc/env/app-green.env"
     before="$(stat -c '%a %u:%g' "${GREMION_ROOT}/etc/env/app-green.env")"
+    [ -n "$before" ]
     run prep 'cd_lock_take; cd_prepare_retag "$TREE" green "$TAG"'
     [ "$status" -eq 0 ]
+    grep -qx "IMAGE_TAG=${TAG}" "${GREMION_ROOT}/etc/env/app-green.env"
     [ "$(stat -c '%a %u:%g' "${GREMION_ROOT}/etc/env/app-green.env")" = "$before" ]
 }
 
@@ -891,6 +902,18 @@ if ( exec 7>>"${GREMION_ROOT}/runtime/hostd.lock" && flock -n 7 ); then echo FRE
     [ "$status" -eq 2 ]
 }
 
+@test "retag refuses when no release is recorded, and changes neither the env file nor the state (guard)" {
+    mk_tree
+    run jq -r '.release' "${GREMION_ROOT}/data/cd/state.json"
+    [ "$output" = "null" ]
+    cp "${GREMION_ROOT}/etc/env/app-green.env" "$DK/green.before"
+    cp "${GREMION_ROOT}/data/cd/state.json" "$DK/state.before"
+    run prep 'cd_lock_take; cd_prepare_retag "$TREE" green "$TAG"'
+    [ "$status" -eq 2 ]
+    cmp "${GREMION_ROOT}/etc/env/app-green.env" "$DK/green.before"
+    cmp "${GREMION_ROOT}/data/cd/state.json" "$DK/state.before"
+}
+
 @test "retag: a target env file without IMAGE_TAG is refused" {
     mk_tree
     seed_release
@@ -905,6 +928,10 @@ if ( exec 7>>"${GREMION_ROOT}/runtime/hostd.lock" && flock -n 7 ); then echo FRE
     cp "${GREMION_ROOT}/etc/env/app-green.env" "$DK/green.original"
     run prep 'cd_lock_take; cd_prepare_retag "$TREE" green "$TAG"'
     [ "$status" -eq 0 ]
+    # the retag did change the file and the flag: the restore below has something to undo
+    grep -qx "IMAGE_TAG=${TAG}" "${GREMION_ROOT}/etc/env/app-green.env"
+    run jq -r '.previous.startable' "${GREMION_ROOT}/data/cd/state.json"
+    [ "$output" = "false" ]
     run prep 'cd_lock_take; cd_prepare_retag_restore'
     [ "$status" -eq 0 ]
     cmp "${GREMION_ROOT}/etc/env/app-green.env" "$DK/green.original"
@@ -963,7 +990,11 @@ if ( exec 7>>"${GREMION_ROOT}/runtime/hostd.lock" && flock -n 7 ); then echo FRE
     mk_tree
     run prep 'cd_prepare_render "$TREE" green'
     [ "$status" -eq 0 ]
-    [ "$(stat -c %i "${GREMION_ROOT}/etc/secrets/ipcrypt_key.txt")" = "$(stat -c %i "${TREE}/secrets/ipcrypt_key.txt")" ]
+    [ -f "${GREMION_ROOT}/etc/secrets/ipcrypt_key.txt" ]
+    [ -f "${TREE}/secrets/ipcrypt_key.txt" ]
+    host_inode="$(stat -c %i "${GREMION_ROOT}/etc/secrets/ipcrypt_key.txt")"
+    [ -n "$host_inode" ]
+    [ "$host_inode" = "$(stat -c %i "${TREE}/secrets/ipcrypt_key.txt")" ]
     [ -z "$(git -C "$TREE" status --porcelain)" ]
 }
 
@@ -1032,9 +1063,9 @@ if ( exec 7>>"${GREMION_ROOT}/runtime/hostd.lock" && flock -n 7 ); then echo FRE
 
 # ============================================================ build failure kinds
 
-@test "the infra pattern list is pinned at nine entries" {
+@test "the infra pattern list is pinned at twelve entries" {
     run prep 'echo "${#CD_PREPARE_INFRA_PATTERNS[@]}"'
-    [ "$output" = "9" ]
+    [ "$output" = "12" ]
 }
 
 classify() { # TEXT -> kind
@@ -1100,6 +1131,56 @@ classify() { # TEXT -> kind
     [ "$output" = "commit" ]
 }
 
+@test "classify: a docker daemon that cannot be reached is infra" {
+    classify 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?'
+    [ "$output" = "infra" ]
+    classify 'failed to connect to the docker API at unix:///var/run/docker.sock'
+    [ "$output" = "infra" ]
+}
+
+@test "classify: a registry or daemon call that ran past its deadline is infra" {
+    classify 'ERROR: failed to solve: failed to do request: context deadline exceeded'
+    [ "$output" = "infra" ]
+}
+
+# a log of one failing call that starts with a recovered warning: 60 lines of build output,
+# then the failure of the commit
+noisy_log() {
+    {
+        echo 'WARN: connection reset by peer, retrying (recovered)'
+        local i
+        for i in $(seq 1 60); do echo "#${i} RUN step output"; done
+        echo 'ERROR: failed to solve: process "/bin/sh -c pnpm build" did not complete successfully: exit code: 1'
+    } >"$DK/classify.log"
+}
+
+@test "classify: only the error tail of the log is read when a window is given" {
+    noisy_log
+    run prep 'cd_prepare_classify_build_failure "$DK/classify.log" 0 40'
+    [ "$status" -eq 0 ]
+    [ "$output" = "commit" ]
+    # the whole file still says infra: the window is what changes the answer
+    run prep 'cd_prepare_classify_build_failure "$DK/classify.log"'
+    [ "$output" = "infra" ]
+}
+
+@test "classify: the window starts at the byte where the failing call began" {
+    printf '%s\n' 'attempt one: TLS handshake timeout' >"$DK/classify.log"
+    size="$(wc -c <"$DK/classify.log" | tr -d ' ')"
+    printf '%s\n' 'attempt two: dockerfile parse error on line 3' >>"$DK/classify.log"
+    run prep 'cd_prepare_classify_build_failure "$DK/classify.log" '"$size"' 40'
+    [ "$output" = "commit" ]
+    run prep 'cd_prepare_classify_build_failure "$DK/classify.log" 0 40'
+    [ "$output" = "infra" ]
+}
+
+@test "classify: a window that is not a number is refused with nothing printed" {
+    classify 'i/o timeout'
+    run prep 'cd_prepare_classify_build_failure "$DK/classify.log" x 40'
+    [ "$status" -eq 2 ]
+    refute_in 'infra' "$output"
+}
+
 @test "classify: an unreadable log is refused with nothing printed" {
     run prep 'cd_prepare_classify_build_failure /nonexistent'
     [ "$status" -eq 2 ]
@@ -1159,6 +1240,17 @@ classify() { # TEXT -> kind
     run prep 'cd_prepare_build "$TREE" green "$TAG"'
     [ "$status" -eq 1 ]
     has_in 'live' "$output"
+}
+
+@test "build fails when a live container that appeared during the build does not run the image its tag resolves to (guard)" {
+    retagged
+    cat >"$DK/build.hook" <<HOOK
+echo lc3 >>"$DK/cids.teststack-app-blue"
+echo "sha256:$(printf '%064d' 5) ghcr.io/example/gremion-public:pilot-aaaaaaaaaaaa" >"$DK/ctr.lc3"
+HOOK
+    run prep 'cd_prepare_build "$TREE" green "$TAG"'
+    [ "$status" -eq 1 ]
+    has_in 'no longer runs' "$output"
 }
 
 @test "build refuses to start when a live container does not run the image its tag resolves to" {
@@ -1227,6 +1319,51 @@ classify() { # TEXT -> kind
     run prep 'cd_prepare_build "$TREE" green "$TAG"'
     [ "$status" -eq 1 ]
     [ "$(grep -c -- '|build' "$DK/argv.log")" -eq 1 ]
+}
+
+@test "build: an infra failure that recovered does not make the next failure of the commit an infra failure (guard)" {
+    retagged
+    printf '%s\n' '1 dial tcp: i/o timeout' '1 dockerfile parse error on line 3: unknown instruction: RUNN' >"$DK/build.script"
+    run prep 't0=$(cd_now); rc=0; cd_prepare_build "$TREE" green "$TAG" || rc=$?; echo "elapsed=$(( $(cd_now) - t0 ))"; exit "$rc"'
+    [ "$status" -eq 1 ]
+    has_in 'elapsed=60' "$output"
+    [ "$(grep -c -- '|build' "$DK/argv.log")" -eq 2 ]
+}
+
+@test "build: an infra failure of the pull does not make a later failure of the build an infra failure (guard)" {
+    retagged
+    printf '%s\n' '1 TLS handshake timeout' >"$DK/pull.script"
+    printf '%s\n' '1 dockerfile parse error on line 3: unknown instruction: RUNN' >"$DK/build.script"
+    run prep 'rc=0; cd_prepare_build "$TREE" green "$TAG" || rc=$?; exit "$rc"'
+    [ "$status" -eq 1 ]
+    [ "$(grep -c -- '|pull' "$DK/argv.log")" -eq 2 ]
+    [ "$(grep -c -- '|build' "$DK/argv.log")" -eq 1 ]
+}
+
+@test "build: a recovered warning early in the output of the failing call does not make it an infra failure (guard)" {
+    retagged
+    {
+        echo 'WARN: connection reset by peer, retrying (recovered)'
+        for i in $(seq 1 80); do echo "#${i} RUN step output"; done
+        echo 'ERROR: failed to solve: process "/bin/sh -c pnpm build" did not complete successfully: exit code: 1'
+    } >"$DK/noisy.out"
+    echo '1 @noisy.out' >"$DK/build.script"
+    run prep 't0=$(cd_now); rc=0; cd_prepare_build "$TREE" green "$TAG" || rc=$?; echo "elapsed=$(( $(cd_now) - t0 ))"; exit "$rc"'
+    [ "$status" -eq 1 ]
+    has_in 'elapsed=0' "$output"
+    [ "$(grep -c -- '|build' "$DK/argv.log")" -eq 1 ]
+}
+
+@test "build: an infra failure at the end of a long output is still an infra failure" {
+    retagged
+    cd_write_cfg CD_BUILD_RETRIES=0
+    {
+        for i in $(seq 1 80); do echo "#${i} pulling layer"; done
+        echo 'ERROR: failed to solve: failed to fetch oauth token: TLS handshake timeout'
+    } >"$DK/noisy.out"
+    echo '1 @noisy.out' >"$DK/build.script"
+    run prep 'rc=0; cd_prepare_build "$TREE" green "$TAG" || rc=$?; exit "$rc"'
+    [ "$status" -eq 4 ]
 }
 
 @test "build: the timeout returns 3" {
