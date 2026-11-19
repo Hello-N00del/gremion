@@ -619,6 +619,15 @@ services:
       # gremion-ui and migrate hard-code it; the kernel migration tenant-create
       # now runs must never apply a *_seed.sql file (TDD 6).
       GREMION_DISABLE_SEEDS: "true"
+      # CD stage 1: switching a module on again inside its Karenz applies the pending files of its chain to the
+      # blocked database, so the enable path first dumps THAT one database into the dump directory the host shares
+      # (the SAME path as the host and kernel-api-migrate, mounted below). This one-shot runs as root with the default
+      # capabilities (no cap_drop: it needs CAP_DAC_OVERRIDE to write into a 0700 directory of another uid and
+      # CAP_CHOWN to hand the files to its owner), and the directory belongs to the deploy user, uid 1000 (the `node`
+      # user of the images, bootstrap.sh creates it for that user): the dump code accepts the directory only for a
+      # root process that names exactly that owner, and hands every file it writes to it. tenant-create ONLY.
+      GREMION_MIGRATION_DUMP_DIR: ${GREMION_MIGRATION_DUMP_DIR:?GREMION_MIGRATION_DUMP_DIR required}
+      GREMION_MIGRATION_DUMP_OWNER_UID: "1000"
     volumes:
       - config-data:/app/config
       - tenant-config-data:/data
@@ -628,6 +637,14 @@ services:
       # reach gremion-ui, migrate and the kernel API): one 0600 credential file per customer.
       - ${GREMION_ROOT:-/opt/gremion}/etc/secrets/governance:/run/secrets/governance
       - ${GREMION_ROOT:-/opt/gremion}/data/module-exports:/var/lib/gremion/exports
+      # The pre-migration dump directory (the whole database in clear), at the SAME path as the host and the
+      # kernel-api-migrate one-shot: one ledger, files that survive the --rm container. create_host_path: false, so a
+      # missing directory fails the run instead of being created root-owned (which the dump code would refuse).
+      - type: bind
+        source: ${GREMION_MIGRATION_DUMP_DIR:?GREMION_MIGRATION_DUMP_DIR required}
+        target: ${GREMION_MIGRATION_DUMP_DIR:?GREMION_MIGRATION_DUMP_DIR required}
+        bind:
+          create_host_path: false
       # The ops realm `init` imports (Q5), read-only like the base realm below.
       # Never an etc/edge mount: the router file is written by the host (Q17, j4).
       - ./docker/keycloak/realm-export.ops.json:/repo/docker/keycloak/realm-export.ops.json:ro
