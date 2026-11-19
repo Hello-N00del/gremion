@@ -74,7 +74,9 @@ if [[ -e "$stamp" ]]; then
 fi
 mkdir -p "$state_dir" || die 2 "cannot create the state folder"
 chmod 700 "$state_dir" 2>/dev/null || true
-printf '%s\n' "$now" >"${stamp}.new" && mv -f "${stamp}.new" "$stamp" || die 2 "cannot write the state file; nothing was sent"
+if ! { printf '%s\n' "$now" >"${stamp}.new" && mv -f "${stamp}.new" "$stamp"; }; then
+    die 2 "cannot write the state file; nothing was sent"
+fi
 
 sent=0
 ok=0
