@@ -576,10 +576,13 @@ take_module() { # <release> <db> [service] [role]
     make_dump_dir
     GREMION_MIGRATION_DUMP_PG_CONTAINER=scratch run take_module r-mod "$SLUG_DB"
     [ "$status" -eq 2 ]
-    [[ "$output" == *"GREMION_MIGRATION_DUMP_PG_CONTAINER"* ]]
+    # the take-time check in main() words it by the option; the backstop in
+    # pg_container words it by the server, so this pins the first
+    [[ "$output" == *"GREMION_MIGRATION_DUMP_PG_CONTAINER"*"override --pg-service silently"* ]]
     printf 'GREMION_MIGRATION_DUMP_PG_CONTAINER=scratch\n' >> "${GREMION_ROOT}/etc/env/state.env"
     run take_module r-mod "$SLUG_DB"
     [ "$status" -eq 2 ]
+    [[ "$output" == *"override --pg-service silently"* ]]
     no_docker_calls
     # without the options the override still names the container, as before
     run "$TOOL" take --release r-main --db gremion
@@ -645,6 +648,16 @@ leak_free() { # <needle> <accumulated output>
     run "$TOOL" restore --release r-leak --db "$SLUG_DB" --accept-loss-since t0; [ "$status" -eq 0 ]; all+="$output"
     [[ "$output" == *"RESTORE-OK release=r-leak svc=finance-postgres id=${id}"* ]]
     [[ "$output" == *"restoring svc=finance-postgres id=${id}"* ]]
+    # a restore that stopped after its DROP, then its re-run (which says so on
+    # stdout): the lines the program prints, stdout only. Its refusal messages
+    # on stderr may name the database, that is not the journal.
+    RESTORE_EXIT=1 run bash -c '"$@" 2>/dev/null' _ "$TOOL" restore --release r-leak --db "$SLUG_DB" --accept-loss-since t0
+    [ "$status" -eq 1 ]; all+="$output"
+    run bash -c '"$@" 2>/dev/null' _ "$TOOL" restore --release r-leak --db "$SLUG_DB" --accept-loss-since t0
+    [ "$status" -eq 0 ]; all+="$output"
+    [[ "$output" == *"former restore of dump ${id}"* ]]
+    [[ "$output" == *"RESTORE-OK release=r-leak svc=finance-postgres id=${id}"* ]]
+    leak_free "$SLUG_DB" "$all"
     run "$TOOL" switched --release r-leak; [ "$status" -eq 0 ]; all+="$output"
     [[ "$output" == *"premigration-dump deleted id=${id} release=r-leak svc=finance-postgres"* ]]
     run take_module r-leak2 "$SLUG_DB"; [ "$status" -eq 0 ]; all+="$output"
@@ -653,6 +666,17 @@ leak_free() { # <needle> <accumulated output>
     [ -n "$(grep '^logger ' "$SHIM_LOG" | grep -F 'svc=finance-postgres' || true)" ]
     # the ledger itself keeps the name (it lives in the 0700 directory)
     jq -e -s 'map(select(.event == "created")) | length == 2 and all(.[]; .database == "calendar_some-slug")' "${DUMPS}/ledger.jsonl"
+}
+
+@test "status prints no new field: a module line has the same shape as a main-server line" {
+    make_dump_dir
+    run take_module r-mod "$SLUG_DB"; [ "$status" -eq 0 ]
+    run "$TOOL" status --release r-mod
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ LIVE\ [^\ ]+\ release=r-mod\ db=calendar_some-slug\ taken=[^\ ]+\ bytes=[0-9]+\ file=[^\ ]+ ]]
+    [[ "$output" != *"svc="* ]]
+    [[ "$output" != *"pg_service"* ]]
+    [[ "$output" != *"pg_user"* ]]
 }
 
 @test "leak rule: the refusal messages on stderr may name the database (stderr is not the journal)" {

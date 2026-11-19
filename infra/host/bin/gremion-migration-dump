@@ -582,7 +582,7 @@ cmd_restore() {
                 acl_before="$(jq -r '.before' "$acl_file")" \
                     || die "RESTORE_FAILED: could not read the saved database ACL of dump ${id} — nothing was dropped" 1
                 acl_saved=1
-                info "a former restore of dump ${id} recreated ${db} and did not finish: its saved original grants are replayed, not the live ones"
+                info "a former restore of dump ${id} (svc=${MD_SERVICE}) recreated its database and did not finish: its saved original grants are replayed, not the live ones"
             fi
         fi
         if [[ "$acl_saved" -eq 0 ]]; then
