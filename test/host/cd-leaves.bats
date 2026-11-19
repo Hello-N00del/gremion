@@ -37,6 +37,7 @@ NEVER_RUN_SERVICES="board-service"
 #   services          what `compose config --services` prints (services.fail makes it fail)
 #   run.<svc>.out/.err/.rc   what the entry of that service prints and its exit code
 #                     (run.out/run.err/run.rc are the defaults); run.<svc>.hang the client hangs
+#                     after printing its output
 #                     (the shim becomes sleep, so `timeout` kills it); .creates the run leaves a
 #                     running labelled container behind; .exited an exited one
 #   ctr               labelled containers, "<id> running|exited"
@@ -124,9 +125,10 @@ case "$1" in
     [ -s "$DK/ctr" ] && echo "run-saw-container" >>"$DK/order.log"
     [ -f "$DK/run.$svc.creates" ] && echo "c-$svc running" >>"$DK/ctr"
     [ -f "$DK/run.$svc.exited" ] && echo "c-$svc exited" >>"$DK/ctr"
-    [ -f "$DK/run.$svc.hang" ] && exec sleep 30
     if [ -f "$DK/run.$svc.out" ]; then cat "$DK/run.$svc.out"; elif [ -f "$DK/run.out" ]; then cat "$DK/run.out"; fi
     if [ -f "$DK/run.$svc.err" ]; then cat "$DK/run.$svc.err" >&2; elif [ -f "$DK/run.err" ]; then cat "$DK/run.err" >&2; fi
+    # a hanging client has already printed what it had: the log files of a timed-out run are not empty
+    [ -f "$DK/run.$svc.hang" ] && exec sleep 30
     if [ -f "$DK/run.$svc.rc" ]; then exit "$(cat "$DK/run.$svc.rc")"; fi
     exit "$(cat "$DK/run.rc" 2>/dev/null || echo 0)" ;;
   kill)
@@ -349,6 +351,9 @@ if ( exec 9>>"${GREMION_ROOT}/runtime/hostd.lock"; flock -n 9 ); then echo HOSTL
 exit "$rc"'
     [ "$status" -eq 0 ]
     out_has 'HOSTLOCK=held'
+    # the step ran: one container per enabled leaf service, so the absences below are read
+    # from a state the step really worked on
+    [ "$(calls run)" -eq 3 ]
     [ "$(jq -c '.hold' "${GREMION_ROOT}/data/cd/state.json")" = null ]
     [ ! -s "${GREMION_ROOT}/data/cd/blocked.json" ] || [ "$(jq 'length' "${GREMION_ROOT}/data/cd/blocked.json")" = 0 ]
     assert_absent 'cd_rollback_run' "$SHIM_LOG"
@@ -989,6 +994,10 @@ exit "$rc"'
     [ "$status" -eq 2 ]
     out_has 'reason=leaf_container_alive'
     assert_present 'leaves_container_alive' "${GREMION_ROOT}/data/cd/history.jsonl"
+    # the hung client printed the leak fixture before it hung, so the entry's log files hold it
+    # and the absences below are read from streams that could have carried it
+    grep -q slugmarker "${GREMION_ROOT}"/logs/cd-leaves-out-calendar-*
+    grep -q slugmarker "${GREMION_ROOT}"/logs/cd-leaves-run-calendar-*
     local mails all
     mails="$(cat "${GREMION_ROOT}"/data/cd/outbox/*stopped*.eml)"
     [ -n "$mails" ]
