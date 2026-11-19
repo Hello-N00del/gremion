@@ -507,7 +507,9 @@ _cd_drv_run() {
 
 _cd_drv_st_fetch() {
     local ref=""
-    [[ "$R_MODE" == proof && -r "${CD_DATA}/release-ref" ]] && read -r ref <"${CD_DATA}/release-ref" || true
+    if [[ "$R_MODE" == proof && -r "${CD_DATA}/release-ref" ]]; then
+        read -r ref <"${CD_DATA}/release-ref" || ref=""
+    fi
     CD_DRV_WHY=''
     if [[ -n "$ref" ]]; then
         cd_prepare_fetch "$R_SHA" "$ref" >/dev/null
@@ -979,7 +981,8 @@ _cd_drv_loop() {
         if [[ "$R_STATUS" == failed ]]; then
             kind="$(printf '%s' "$CD_STATE_DOC" | jq -r '.release.failure.kind // "host"')"
             code="$(printf '%s' "$CD_STATE_DOC" | jq -r '.release.failure.code // ""')"
-            cd_failure_policy "$R_STAGE" "$kind" "$code"
+            # a policy that leaves the release as it was would loop for ever: stop with its code
+            cd_failure_policy "$R_STAGE" "$kind" "$code" || return $?
             continue
         fi
         if [[ "$R_STATUS" == ok ]]; then
@@ -1195,11 +1198,15 @@ _cd_drv_start_gate() {
     fi
     why="$(_cd_drv_code "${CD_PREPARE_WHY:-}" unknown)"
     last=""
-    [[ -r "$f" ]] && read -r last <"$f" || true
+    if [[ -r "$f" ]]; then
+        read -r last <"$f" || last=""
+    fi
     _cd_drv_say "no release now: ${why}"
     if [[ "$last" != "$why" ]]; then
         cd_hist start_refused why="$why" code="$rc" || true
-        cd_mkdir "$CD_RUN" && printf '%s\n' "$why" | cd_atomic_write "$f" 600 || true
+        if cd_mkdir "$CD_RUN"; then
+            printf '%s\n' "$why" | cd_atomic_write "$f" 600 || true
+        fi
     fi
     return 1
 }

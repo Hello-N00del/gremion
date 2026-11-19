@@ -875,7 +875,8 @@ drv_assert_untouched() {
             rm -f "${GREMION_ROOT}/data/cd/blocked.json"
             run cd_lib ". \"\${HOST_SRC}/lib/cd/driver.sh\"; cd_cfg_load; cd_lock_take; cd_failure_policy ${stage} ${kind} some_code"
             [ "$status" -eq 0 ] || { echo "${stage} ${kind}: ${output}" >&2; return 1; }
-            drv_assert_untouched || { echo "${stage} ${kind}" >&2; return 1; }
+            echo "${stage} ${kind}" >&2
+            drv_assert_untouched
             case "$stage" in
                 reconcile) [ "$(drv_state '.hold.kind')" = reconcile_failed ] ;;
                 *) [ "$(drv_state '.hold.kind')" = failure ] ;;
@@ -1053,6 +1054,25 @@ drv_final() { jq -S '{phase, hold, live: (.live | {sha12, tag, colour}), previou
     [ "$(drv_n '^stub cd_rollback_run')" -eq 0 ]
     [ "$(drv_n '^stub cd_prepare_build')" -eq 0 ]
     [ "$(drv_n '^stub cd_colour_down')" -eq 1 ]
+}
+
+@test "kill switch: a release before its switch is aborted at the next stage boundary (teardown, hold killswitch, no block), and a hold request does not stop a release" {
+    drv_seed_rel build ok
+    : > "${GREMION_ROOT}/etc/cd.disabled"
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    [ "$(drv_state '.hold.kind')" = killswitch ]
+    [ "$(drv_state '.release')" = null ]
+    [ "$(drv_blocks)" -eq 0 ]
+    [ "$(drv_n '^stub cd_prepare_build')" -eq 0 ]
+    [ "$(drv_n '^stub cd_colour_down')" -eq 1 ]
+    rm -f "${GREMION_ROOT}/etc/cd.disabled"
+    drv_seed_rel build ok
+    cd_lib 'cd_request_put hold "{\"reason\":\"later\"}"'
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    [ "$(drv_state '.live.sha12')" = bbbbbbbbbbbb ]
+    [ "$(drv_state '.hold.kind')" = operator ]
 }
 
 @test "rollback: during the watch it runs the sequence" {

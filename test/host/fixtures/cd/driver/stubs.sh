@@ -56,6 +56,7 @@ drv_probe() { printf 'probe %s %s\n' "$1" "$(drv_lockstate)" >> "${SHIM_LOG}"; }
 # drv_switch_started -- what cd_traffic_switch writes before it calls gremion-switch.
 drv_switch_started() { cd_state_set '.release.switch_started = true'; }
 
+# shellcheck disable=SC2016  # a jq program: $t is jq's own variable
 # drv_step5 -- commit step 5: live = the release, previous = the old live, committed_at.
 drv_step5() {
     cd_state_set '.previous = (.live | if . == null then null else {sha: .sha, sha12: .sha12, tag: .tag, colour: .colour, tree: .tree, startable: true} end)
