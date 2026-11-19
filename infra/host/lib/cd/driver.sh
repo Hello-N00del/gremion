@@ -46,6 +46,7 @@ CD_DRV_RESUME_HOLDS=" operator failure proof rollback_failed killswitch stuck_st
 CD_DRV_RESUME_ONLY=0   # 1 in `tick --resume-only` (the boot unit)
 CD_DRV_ROLLED=0        # 1 once a rollback has ended the release in this process
 CD_DRV_ATT=1           # the attempt number of the stage about to run
+CD_DRV_SWITCH_DONE=0   # 1 when a resumed switch stage found the new colour already serving
 CD_DRV_RETRY_BACKOFF=(60 300 900)
 CD_DRV_RETRY_MAX=3
 
@@ -705,7 +706,10 @@ _cd_drv_st_switch() {
             command="gremion-cd status" key="unusable.${R_ID}"
     fi
     _cd_drv_begin switch 600
-    cd_traffic_switch "$R_TREE" "$R_COL" || rc=$?
+    if ((CD_DRV_SWITCH_DONE == 0)); then
+        cd_traffic_switch "$R_TREE" "$R_COL" || rc=$?
+    fi
+    CD_DRV_SWITCH_DONE=0
     if ((rc != 0)); then
         cd_heartbeat_stop
         _cd_drv_rollback_auto post_switch_verify switch
@@ -1006,6 +1010,7 @@ cd_pipeline_run() {
 # committed_at a crash in the switch stage is a rollback, a crash anywhere else re-runs the
 # stage (the third attempt is `stuck_stage`).
 cd_pipeline_resume() {
+    local rc
     _cd_drv_load
     case "$D_PHASE" in
         rolling_back)
@@ -1027,10 +1032,23 @@ cd_pipeline_resume() {
     fi
     if [[ "$R_SWITCH" == true && "$R_STATUS" != ok ]] && ! cd_killswitch_active; then
         case "$R_STAGE" in
-            switch | commit | reconcile)
-                # a crash in the switch (the call may have written the edge file and died in its
-                # poll) or in the commit before commit step 5: the switch back. A crash in the
-                # watch is not this: the loop resumes with its observed time.
+            switch)
+                # the call may have written the edge file and died in its poll: what serves is read
+                # from the file and the Traefik API (U8a), never from our own state
+                rc=0
+                _cd_drv_switch_truth || rc=$?
+                if ((rc == 0)); then
+                    CD_DRV_SWITCH_DONE=1
+                elif ((rc != 1)); then
+                    cd_hist resume_crash stage=switch sha12="$R_SHA12" || true
+                    _cd_drv_rollback_auto commit_stuck switch
+                    return 0
+                fi
+                ;;
+            commit | reconcile)
+                # a crash in the commit before commit step 5 (or any later stage of a release
+                # that never committed): the switch back. A crash in the watch is not this: the
+                # loop resumes with its observed time.
                 cd_hist resume_crash stage="$R_STAGE" sha12="$R_SHA12" || true
                 _cd_drv_rollback_auto commit_stuck "$R_STAGE"
                 return 0
@@ -1039,6 +1057,24 @@ cd_pipeline_resume() {
     fi
     _cd_drv_loop
     return 0
+}
+
+# _cd_drv_switch_truth -- what serves, after a crash in the switch stage: 0 the new colour
+# (the call went through), 1 the old colour (it never wrote the file), 2 not known (the file and
+# the API differ, or neither can be read). The answer of cd_traffic_truth names the colour(s) it
+# read; a failure or two different colours is "not known".
+_cd_drv_switch_truth() {
+    local out cols n rc=0
+    out="$(cd_traffic_truth 2>/dev/null)" || rc=$?
+    ((rc == 0)) || return 2
+    cols="$(printf '%s
+' "$out" | grep -oE 'blue|green' | LC_ALL=C sort -u)" || return 2
+    n="$(printf '%s
+' "$cols" | grep -c .)" || n=0
+    ((n == 1)) || return 2
+    if [[ "$cols" == "$R_COL" ]]; then return 0; fi
+    if [[ "$cols" == "$D_LCOL" ]]; then return 1; fi
+    return 2
 }
 
 # _cd_drv_resume_rollback -- phase rolling_back with no process: the sequence is resumable and
