@@ -24,7 +24,12 @@ vi.mock('./registry', () => ({
   finishTenantMigrationRun: vi.fn(),
 }))
 
+// The worker gate (CD stage 1, U12b) is mocked here: its own file contract is pinned
+// in worker-gate.test.ts. These cases pin WHERE it sits in the tick.
+vi.mock('./worker-gate', () => ({ isWorkerGateOff: vi.fn() }))
+
 import { listActiveTenants, resolveTenantBySlug, startTenantMigrationRun } from './registry'
+import { isWorkerGateOff } from './worker-gate'
 import { currentTenantId } from './context'
 import {
   setTenantReadinessFromFleet,
@@ -39,6 +44,7 @@ const ctxFor = (id: string, slug: string) => ({ id, slug }) as unknown as Tenant
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(isWorkerGateOff).mockResolvedValue(false)
   _resetWorkerFleetForTests()
   // D-READY worker gate: ticks only serve tenants the boot fleet marked
   // ready — populate the map so the helper-contract tests above the gate
@@ -267,5 +273,86 @@ describe('forEachActiveTenant — D-READY worker-plane readiness gate', () => {
     expect(startTenantMigrationRun).not.toHaveBeenCalled()
     expect(getTenantReadiness('tid-default')).toBe('failed')
     warnSpy.mockRestore()
+  })
+})
+
+// CD stage 1 (U12b): the worker gate. forEachActiveTenant is the ONE seam every background
+// tick goes through, so the gate is read at the very top of it, once per tick.
+describe('forEachActiveTenant — the worker gate', () => {
+  it('gate OFF: the tick returns at once; it neither lists the tenants nor runs the work', async () => {
+    vi.mocked(isWorkerGateOff).mockResolvedValue(true)
+    const work = vi.fn()
+
+    await forEachActiveTenant('test-worker', work)
+
+    expect(listActiveTenants).not.toHaveBeenCalled()
+    expect(resolveTenantBySlug).not.toHaveBeenCalled()
+    expect(work).not.toHaveBeenCalled()
+  })
+
+  it('gate OFF is checked before the boot-readiness gate (nothing is consulted, nothing is logged per tick)', async () => {
+    vi.mocked(isWorkerGateOff).mockResolvedValue(true)
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+    _resetReadinessForTests() // fleet not populated: the readiness gate would log and skip
+
+    await forEachActiveTenant('test-worker', vi.fn())
+
+    expect(info).not.toHaveBeenCalled()
+    info.mockRestore()
+  })
+
+  it('gate ON: nothing changes, every active tenant is served', async () => {
+    vi.mocked(isWorkerGateOff).mockResolvedValue(false)
+    const seen: string[] = []
+
+    await forEachActiveTenant('test-worker', () => {
+      seen.push(currentTenantId())
+    })
+
+    expect(seen).toEqual(['tid-default', 'tid-beta'])
+    expect(isWorkerGateOff).toHaveBeenCalledTimes(1)
+  })
+
+  it('the gate is read on EVERY tick: off then on takes effect with no restart', async () => {
+    const work = vi.fn()
+    vi.mocked(isWorkerGateOff).mockResolvedValueOnce(true).mockResolvedValueOnce(false)
+
+    await forEachActiveTenant('test-worker', work)
+    expect(work).not.toHaveBeenCalled()
+
+    await forEachActiveTenant('test-worker', work)
+    expect(work).toHaveBeenCalledTimes(2)
+    expect(isWorkerGateOff).toHaveBeenCalledTimes(2)
+  })
+
+  it('a gate read that throws counts as ON (the tick goes on, it never rejects)', async () => {
+    vi.mocked(isWorkerGateOff).mockRejectedValue(new Error('boom'))
+    const work = vi.fn()
+
+    await expect(forEachActiveTenant('test-worker', work)).resolves.toBeUndefined()
+
+    expect(work).toHaveBeenCalledTimes(2)
+  })
+
+  it('a tick that is already running when the gate turns off finishes (named residual)', async () => {
+    let release!: () => void
+    const hold = new Promise<void>((r) => {
+      release = r
+    })
+    let entered!: () => void
+    const inside = new Promise<void>((r) => {
+      entered = r
+    })
+    const done: string[] = []
+    const running = forEachActiveTenant('test-worker', async () => {
+      entered()
+      await hold
+      done.push(currentTenantId())
+    })
+    await inside
+    vi.mocked(isWorkerGateOff).mockResolvedValue(true)
+    release()
+    await running
+    expect(done.length).toBeGreaterThan(0)
   })
 })
