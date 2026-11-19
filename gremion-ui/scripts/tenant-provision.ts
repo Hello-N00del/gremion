@@ -70,6 +70,7 @@ import {
 } from '@gremion/provisioning'
 import {
   assertPlatform,
+  catchupDump,
   dropGovernanceDatabase,
   dropKernelDatabase,
   ensureKernelApiReader,
@@ -539,6 +540,31 @@ async function liveDeps(opts: { configFile?: string; bodyName?: string; needEdge
   try {
     await assertPlatform(platform)
     const serviceId = (service: string) => service.replace(/-postgres$/, '')
+    // TRD-044: the disable-module verb exports with pg_dump (the builder image carries the
+    // postgresql18 client) over the module server's admin URL; the password rides in PGPASSWORD.
+    const exporter = pgDumpExporter({
+      pgDump: ['pg_dump'],
+      pgRestore: ['pg_restore'],
+      connection: (target) => {
+        const id = serviceId(target.service)
+        const u = new URL(directPostgresUrl(`MODULE_PG_ADMIN_${envId(id)}_FILE`, reqFileEnv(`MODULE_PG_ADMIN_${envId(id)}_FILE`)))
+        return {
+          args: ['--no-owner', '--host', u.hostname, '--port', u.port || '5432', '--username', decodeURIComponent(u.username), '--dbname', target.database],
+          ...(u.password ? { env: { PGPASSWORD: decodeURIComponent(u.password) } } : {}),
+        }
+      },
+    })
+    // CD stage 1 (U6g): the enable of a blocked (Karenz) module database applies the pending files of its chain, so it
+    // dumps that ONE database first, on the module's own server, into the dump directory the host shares (compose mounts
+    // it at the same path as the kernel-api-migrate one-shot). This process is root; the directory belongs to the deploy
+    // user, whose uid GREMION_MIGRATION_DUMP_OWNER_UID names. No usable directory: the enable of a database with a pending
+    // file is refused by name before anything is applied (fail closed); an enable with nothing pending needs none.
+    const catchup = catchupDump({
+      env: process.env,
+      release: env.releaseRef,
+      exporter,
+      pgUserFor: (service) => decodeURIComponent(new URL(directPostgresUrl(`MODULE_PG_ADMIN_${envId(serviceId(service))}_FILE`, reqFileEnv(`MODULE_PG_ADMIN_${envId(serviceId(service))}_FILE`))).username),
+    })
     const adapters = customerAdapters({
       apexDomain: env.apexDomain,
       kcInternalBase: kcInternalBase(),
@@ -594,20 +620,9 @@ async function liveDeps(opts: { configFile?: string; bodyName?: string; needEdge
               return reqFileEnv(`MODULE_APP_PASSWORD_${envId(serviceId(svc))}_FILE`)
             },
           },
-          // TRD-044: the disable-module verb exports with pg_dump (the builder image carries the
-          // postgresql18 client) over the module server's admin URL; the password rides in PGPASSWORD.
-          exporter: pgDumpExporter({
-            pgDump: ['pg_dump'],
-            pgRestore: ['pg_restore'],
-            connection: (target) => {
-              const id = serviceId(target.service)
-              const u = new URL(directPostgresUrl(`MODULE_PG_ADMIN_${envId(id)}_FILE`, reqFileEnv(`MODULE_PG_ADMIN_${envId(id)}_FILE`)))
-              return {
-                args: ['--no-owner', '--host', u.hostname, '--port', u.port || '5432', '--username', decodeURIComponent(u.username), '--dbname', target.database],
-                ...(u.password ? { env: { PGPASSWORD: decodeURIComponent(u.password) } } : {}),
-              }
-            },
-          }),
+          exporter,
+          upgradeHooks: catchup.upgradeHooks,
+          dumpRetire: catchup.retire,
           exportDir: env.exportDir,
           releaseRef: env.releaseRef,
           log,
