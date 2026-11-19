@@ -1,0 +1,22 @@
+[Unit]
+Description=Gremion continuous deployment watchdog (is the tick alive, does it still reach the operator)
+Documentation=https://github.com/Hello-N00del/gremion/blob/main/docs/ops/host-tooling.md
+After=docker.service
+
+[Service]
+# A separate unit with its own timer: when the tick hangs, dies or is disabled, this still runs
+# (the kill switch does not stop it). It reads the heartbeat, the lock, the outbox and the
+# state, and sends its alert on its own.
+Type=oneshot
+User=${DEPLOY_USER}
+Group=${DEPLOY_USER}
+SupplementaryGroups=docker
+Environment=GREMION_ROOT=${GREMION_ROOT}
+Environment=PATH=${GREMION_ROOT}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+WorkingDirectory=${GREMION_ROOT}
+UMask=0077
+ExecStart=${GREMION_ROOT}/bin/gremion-cd watchdog
+TimeoutStartSec=5min
+Nice=10
+ProtectSystem=full
+# No NoNewPrivileges, like the tick it watches (see gremion-cd.service).

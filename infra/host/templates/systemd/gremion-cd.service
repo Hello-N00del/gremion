@@ -1,0 +1,34 @@
+[Unit]
+Description=Gremion continuous deployment (one tick: look for a release, run it, watch it)
+Documentation=https://github.com/Hello-N00del/gremion/blob/main/docs/ops/host-tooling.md
+After=docker.service network-online.target
+Wants=docker.service network-online.target
+
+[Service]
+# One tick of the program per run; gremion-cd.timer starts the next one five minutes after
+# this one ends, so two ticks never overlap (the program also holds its own lock).
+Type=oneshot
+User=${DEPLOY_USER}
+Group=${DEPLOY_USER}
+# The program drives `docker compose`, `docker exec` and the engine directly.
+SupplementaryGroups=docker
+# Systemd starts units with an EMPTY environment: the install root is stated.
+Environment=GREMION_ROOT=${GREMION_ROOT}
+Environment=PATH=${GREMION_ROOT}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+WorkingDirectory=${GREMION_ROOT}
+UMask=0077
+ExecStart=${GREMION_ROOT}/bin/gremion-cd tick
+# A release builds images, migrates databases and watches the new colour for a while: no
+# deadline here. The program bounds every stage itself and writes a heartbeat the watchdog
+# unit reads.
+TimeoutStartSec=infinity
+# A build must never compete with the platform for CPU.
+Nice=10
+# /usr, /boot and /etc stay read-only; the install root stays writable. The host programs are
+# NOT applied from here (that needs /etc): gremion-cd-apply@.service does it.
+ProtectSystem=full
+# DELIBERATELY NO NoNewPrivileges. The program restarts the executor and starts the apply
+# unit through `sudo -n systemctl ...`, and a unit that pins NoNewPrivileges makes sudo refuse
+# (the same reason gremion-executor's restart cannot be done from inside that unit). A guard
+# in scripts/cd/cd-guards.test.mjs asserts that this unit, the watchdog and the resume unit
+# never set it.

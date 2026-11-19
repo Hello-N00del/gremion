@@ -1,0 +1,30 @@
+[Unit]
+Description=Gremion continuous deployment: finish a release that a reboot interrupted
+Documentation=https://github.com/Hello-N00del/gremion/blob/main/docs/ops/host-tooling.md
+After=docker.service
+Wants=docker.service
+# The executor runs customer operations from the release tree. While a release is still in
+# flight the old tree must not run them against a database the new one already migrated, so the
+# executor waits for this unit.
+Before=gremion-executor.service
+
+[Service]
+# Not RemainAfterExit: the resumed release holds the program's locks for as long as this
+# process lives, and an exited oneshot would drop them.
+Type=oneshot
+User=${DEPLOY_USER}
+Group=${DEPLOY_USER}
+SupplementaryGroups=docker
+Environment=GREMION_ROOT=${GREMION_ROOT}
+Environment=PATH=${GREMION_ROOT}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+WorkingDirectory=${GREMION_ROOT}
+UMask=0077
+# With nothing in flight this exits at once; with a release in flight it takes the host lock
+# and runs the release to its end (or parks, holding the lock, when the kill switch is on).
+ExecStart=${GREMION_ROOT}/bin/gremion-cd tick --resume-only
+TimeoutStartSec=infinity
+ProtectSystem=full
+# No NoNewPrivileges, like the tick (see gremion-cd.service).
+
+[Install]
+WantedBy=multi-user.target
