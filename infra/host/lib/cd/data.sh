@@ -193,7 +193,7 @@ _cd_data_status_read() {
     prog="$(_cd_data_prog)" || return 2
     [[ -z "$label" ]] || args+=(--release "$label")
     out="$("$prog" "${args[@]}" </dev/null 2>/dev/null)" || return 1
-    re_live='^LIVE [^ ]+ release=([^ ]+) db=([^ ]+) taken=[^ ]* bytes=[0-9]+ file=([^ ]+)$'
+    re_live='^LIVE [^ ]+ release=([^ ]+) db=([^ ]+) taken=[^ ]+ bytes=[^ ]+ file=([^ ]+)$'
     re_stat='^STATUS: ([0-9]+) live dump\(s\)$'
     while IFS= read -r line; do
         line="${line%$'\r'}"
@@ -593,7 +593,7 @@ cd_data_precheck() {
     own="$(cd_state_get '.release.tag // empty')" || return 2
     _cd_data_status_read || { _cd_data_err "the live dumps cannot be listed (unknown is not clear)"; return 2; }
     for label in "${!_CD_DATA_ST_LABEL[@]}"; do
-        if [[ -z "$own" || ( "$label" != "$own" && "$label" != "state-${own}" ) ]]; then
+        if [[ -z "$own" || "$label" != "$own" ]]; then
             _cd_data_err "a dump set of another label is live: ${label} (restore or discard it first)"
             return 2
         fi
@@ -782,25 +782,25 @@ cd_data_dumpset_live() {
 # t_<hex32>__kernel databases of the main server, sorted. Prints nothing. A listing that
 # fails (4) or is empty (2) is an error, never an empty array.
 cd_data_kernel_db_ids() {
-    local _cd_arg="${1:-}" pguser rows line
+    local _cd_arg="${1:-}" _cd_pguser _cd_rows _cd_line
     local -a _cd_found=()
     [[ "$_cd_arg" =~ ^[A-Za-z_][A-Za-z0-9_]*$ && "$_cd_arg" != _cd_* ]] || {
         _cd_data_err "cd_data_kernel_db_ids: not an array name"
         return 2
     }
     local -n _cd_out="$_cd_arg"
-    pguser="$(_cd_data_env POSTGRES_USER)" || { _cd_data_err "POSTGRES_USER is not set once in state.env"; return 2; }
-    [[ "$pguser" =~ ^[a-z_][a-z0-9_]{0,62}$ ]] || { _cd_data_err "POSTGRES_USER is not a role name"; return 2; }
-    rows="$(_cd_data_psql postgres "$pguser" postgres \
+    _cd_pguser="$(_cd_data_env POSTGRES_USER)" || { _cd_data_err "POSTGRES_USER is not set once in state.env"; return 2; }
+    [[ "$_cd_pguser" =~ ^[a-z_][a-z0-9_]{0,62}$ ]] || { _cd_data_err "POSTGRES_USER is not a role name"; return 2; }
+    _cd_rows="$(_cd_data_psql postgres "$_cd_pguser" postgres \
         "select datname from pg_database where not datistemplate and datname <> 'postgres' order by datname")" || return 4
-    [[ -n "${rows//[[:space:]]/}" ]] || { _cd_data_err "the listing of the main server is empty"; return 2; }
-    while IFS= read -r line; do
-        [[ -n "$line" ]] || continue
-        [[ "$line" =~ $_CD_DATA_RE_DB ]] || { _cd_data_err "the main server listed a database that does not parse"; return 2; }
-        if [[ "$line" =~ ^t_([0-9a-f]{32})__kernel$ ]]; then
+    [[ -n "${_cd_rows//[[:space:]]/}" ]] || { _cd_data_err "the listing of the main server is empty"; return 2; }
+    while IFS= read -r _cd_line; do
+        [[ -n "$_cd_line" ]] || continue
+        [[ "$_cd_line" =~ $_CD_DATA_RE_DB ]] || { _cd_data_err "the main server listed a database that does not parse"; return 2; }
+        if [[ "$_cd_line" =~ ^t_([0-9a-f]{32})__kernel$ ]]; then
             _cd_found+=("${BASH_REMATCH[1]}")
         fi
-    done <<<"$rows"
+    done <<<"$_cd_rows"
     _cd_out=("${_cd_found[@]+"${_cd_found[@]}"}")
     return 0
 }
@@ -871,7 +871,7 @@ _cd_data_oneshot() {
     local tree="$1" colour="$2" svc="$3" rid="$4" log rc=0 cap
     log="$(_cd_data_logfile "cd-data-${svc}")" || { _cd_data_err "the one-shot log cannot be opened"; return 2; }
     cap="${CD_DATA_ONESHOT_TIMEOUT_S:-$_CD_DATA_ONESHOT_TIMEOUT_S}"
-    CD_DC_TIMEOUT="$cap" cd_dc "$tree" "app-${colour}" run --rm --no-deps -T --label "gremion.cd=${rid}" "$svc" \
+    CD_DC_TIMEOUT="$cap" cd_dc "$tree" "app-${colour}" run --rm --no-deps --pull never -T --label "gremion.cd=${rid}" "$svc" \
         >"$log" 2>&1 </dev/null || rc=$?
     _cd_data_trim_log "$log" 15 || true
     case "$rc" in
@@ -968,8 +968,8 @@ cd_data_live_portal_probe() {
     return 0
 }
 
-# The live signal file: runtime/cd/live-signal, 0600, counts and an epoch only.
-_cd_data_signal_file() { printf '%s\n' "${CD_RUN}/live-signal"; }
+# The live signal file: data/cd/live-signal, 0600, counts and an epoch only (durable: the read comes a stage later, possibly after a resume).
+_cd_data_signal_file() { printf '%s\n' "${CD_DATA}/live-signal"; }
 
 # _cd_data_count_since EPOCH -- the 5xx count of the live colour since EPOCH, from the edge
 # access log (counts only). Prints an integer, or "null" when the log cannot be read.
@@ -993,7 +993,7 @@ _cd_data_signal_prime() {
     span="$(cd_cfg CD_BASELINE_S)" || return 1
     base="$(_cd_data_count_since "$((now - 10#$span))")"
     f="$(_cd_data_signal_file)"
-    cd_mkdir "$CD_RUN" || return 1
+    cd_mkdir "$CD_DATA" || return 1
     jq -cn --arg r "$rid" --argjson b "$base" '{v: 1, release: $r, epoch: null, baseline: $b}' | cd_atomic_write "$f" 600
 }
 
@@ -1014,7 +1014,7 @@ cd_data_live_signal_start() {
         span="$(cd_cfg CD_BASELINE_S)" || return 2
         base="$(_cd_data_count_since "$((now - 10#$span))")"
     fi
-    cd_mkdir "$CD_RUN" || return 2
+    cd_mkdir "$CD_DATA" || return 2
     jq -cn --arg r "$rid" --argjson e "$now" --argjson b "$base" '{v: 1, release: $r, epoch: $e, baseline: $b}' \
         | cd_atomic_write "$f" 600 || return 1
     return 0

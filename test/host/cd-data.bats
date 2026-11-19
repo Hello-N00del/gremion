@@ -271,6 +271,8 @@ setup() {
     echo "$TAG" >"$DK/ref"
     shim docker "$(docker_shim_body)"
     shim logger
+    # timeout logs its argv, then runs the command: the cap of a call is visible, not enforced
+    shim timeout 'if [ "$1" = -k ]; then shift 2; fi; shift; exec "$@"'
     shim systemctl 'cat "$DK/timers.json" 2>/dev/null || exit 1; [ -f "$DK/timers.json" ] || exit 1'
     shim df 'printf "Filesystem 1024-blocks Used Available Capacity Mounted\nx 1 1 %s 1%% /\n" "$(cat "$DK/df" 2>/dev/null || echo 99999999)"'
     dump_prog_body >"${GREMION_ROOT}/bin/gremion-migration-dump"
@@ -414,6 +416,15 @@ leak_haystack() {
     [ -z "$stderr" ]
     run --separate-stderr dat 'cd_data_kernel_db_ids ids >/tmp/kdi.out 2>&1; rc=$?; [ ! -s /tmp/kdi.out ] && echo "silent rc=$rc"'
     [ "$output" = "silent rc=0" ]
+    # a caller array that is named like a local of the function still gets the ids
+    local name
+    for name in rows line pguser out found arg; do
+        run --separate-stderr dat "declare -a ${name}=(old); cd_data_kernel_db_ids ${name}; echo \"rc=\$? n=\${#${name}[@]} first=\${${name}[0]}\""
+        [ "$output" = "rc=0 n=2 first=${H1}" ]
+    done
+    # a name that the function reserves is refused
+    run --separate-stderr dat 'declare -a _cd_out=(old); cd_data_kernel_db_ids _cd_out; echo "rc=$?"'
+    [ "$output" = "rc=2" ]
 }
 
 @test "kernel_db_ids: an empty listing and a failed listing are errors, never an empty array" {
@@ -711,6 +722,11 @@ EOF
     printf '1\t%s\tgremion\t\t\t%s/gremion.1.dump\n' "$TAG" "$TAG" >"$DK/live.tsv"
     run --separate-stderr dat 'cd_data_precheck; echo rc=$?'
     [ "$output" = "rc=0" ]
+    # the program refuses every label but one: a state-tier set of the same release is another label
+    printf '1\tstate-%s\tgremion\t\t\tstate-%s/gremion.1.dump\n' "$TAG" "$TAG" >"$DK/live.tsv"
+    run --separate-stderr dat 'cd_data_precheck; echo rc=$?'
+    [ "$output" = "rc=2" ]
+    [[ "$stderr" == *"state-${TAG}"* ]]
 }
 
 @test "precheck: a ledger lock file is a refusal with the documented command" {
@@ -1107,7 +1123,11 @@ cd_data_migrate ${TREE} green; echo rc=\$?"
     [ "$(grep -c '^run app-blue ' "$DK/run.log")" -eq 0 ]
     [ "$(grep -c " cwd=${TREE} " "$DK/run.log")" -eq 2 ]
     grep -q -- "--no-deps" "$DK/run.log"
+    grep -q -- "--pull never" "$DK/run.log"
     grep -q -- "-T" "$DK/run.log"
+    # each one-shot runs under the cap of CD_DC_TIMEOUT (the timeout shim logs its own argv)
+    grep -qE "^timeout -k 10 600 docker compose --env-file .*app-green.env run --rm --no-deps --pull never -T --label gremion.cd=${RID} migrate\$" "$SHIM_LOG"
+    grep -qE "^timeout -k 10 600 docker compose --env-file .*app-green.env run --rm --no-deps --pull never -T --label gremion.cd=${RID} kernel-api-migrate\$" "$SHIM_LOG"
     [ "$(grep -c -- '--profile' "$DK/run.log")" -eq 0 ]
     grep -q "gremion.cd=${RID}" "$DK/run.log"
 }
@@ -1229,9 +1249,12 @@ cd_data_migrate ${TREE} green; echo rc=\$?"
     [[ "$output" == *"rc=0"* ]]
     [ "$(grep -c '^stub cd_leaves_migrate' "$SHIM_LOG")" -eq 1 ]
     grep -q "^stub cd_leaves_migrate ${TREE} green ${TAG}\$" "$SHIM_LOG"
+    : >"$SHIM_LOG"
     run --separate-stderr mig 'export CD_STUB_RC_cd_leaves_migrate=3'
     [[ "$output" == *"rc=3"* ]]
-    [ "$(grep -c '^stub cd_colour_portal_probe' "$SHIM_LOG")" -eq 0 ] || true
+    # the leaf step was called and failed, so the probe of the live colour never ran
+    [ "$(grep -c '^stub cd_leaves_migrate' "$SHIM_LOG")" -eq 1 ]
+    [ "$(grep -c '^stub cd_colour_portal_probe' "$SHIM_LOG")" -eq 0 ]
 }
 
 @test "migrate: with no module dump of the label the leaf step is not called" {
@@ -1246,7 +1269,11 @@ cd_data_migrate ${TREE} green; echo rc=\$?"
 }
 
 @test "migrate: the leaf step is not called when the module step failed" {
+    : >"$SHIM_LOG"
     run --separate-stderr mig 'export CD_STUB_RC_cd_modules_upgrade=1'
+    # the module step was called and failed with 1; an early exit of the stage would not say so
+    [[ "$output" == *"rc=1"* ]]
+    [ "$(grep -c '^stub cd_modules_upgrade' "$SHIM_LOG")" -eq 1 ]
     [ "$(grep -c '^stub cd_leaves_migrate' "$SHIM_LOG")" -eq 0 ]
 }
 
@@ -1316,7 +1343,7 @@ cd_data_live_portal_probe; echo rc=$?; cd_state_get ".release.rollback_target"'
     cd_stub_set cd_watch_accesslog_count 0 '4'
     run --separate-stderr dat 'cd_data_live_signal_start; echo rc=$?'
     [ "$output" = "rc=0" ]
-    local f="${GREMION_ROOT}/runtime/cd/live-signal"
+    local f="${GREMION_ROOT}/data/cd/live-signal"
     [ "$(stat -c %a "$f")" = 600 ]
     [ "$(jq -r '.baseline' "$f")" = 4 ]
     [ "$(jq -r '.epoch' "$f")" = 1700000000 ]
@@ -1340,7 +1367,7 @@ cd_data_live_portal_probe; echo rc=$?; cd_state_get ".release.rollback_target"'
     [ "${lines[2]}" = "unusable" ]
     seed_state
     # baseline 3600 over 3600 s = 1 a second; 300 s later 300 expected, 3 x = 900: 10 is no trigger
-    jq -cn --arg r "$RID" '{v:1, release:$r, epoch:1700000000, baseline:3600}' >"${GREMION_ROOT}/runtime/cd/live-signal"
+    jq -cn --arg r "$RID" '{v:1, release:$r, epoch:1700000000, baseline:3600}' >"${GREMION_ROOT}/data/cd/live-signal"
     run --separate-stderr dat 'cd_data_live_signal_read; echo rc=$?; cd_state_get ".release.rollback_target"'
     [ "${lines[0]}" = "ok" ]
     [ "${lines[2]}" = "null" ]
@@ -1366,8 +1393,8 @@ cd_data_live_portal_probe; echo rc=$?; cd_state_get ".release.rollback_target"'
     # a baseline that could not be read is null and the minimum alone decides
     cd_stub_set cd_watch_accesslog_count 1 ''
     seed_state
-    rm -f "${GREMION_ROOT}/runtime/cd/live-signal"
-    run --separate-stderr dat 'cd_data_live_signal_start; jq -r ".baseline | tostring" "${GREMION_ROOT}/runtime/cd/live-signal"'
+    rm -f "${GREMION_ROOT}/data/cd/live-signal"
+    run --separate-stderr dat 'cd_data_live_signal_start; jq -r ".baseline | tostring" "${GREMION_ROOT}/data/cd/live-signal"'
     [ "$output" = "null" ]
     cd_advance 300
     cd_stub_set cd_watch_accesslog_count 0 '10'
@@ -1378,7 +1405,7 @@ cd_data_live_portal_probe; echo rc=$?; cd_state_get ".release.rollback_target"'
 @test "live signal: a read with no start for this release is code 2 and records nothing; a start of another release does not count" {
     run --separate-stderr dat 'cd_data_live_signal_read; echo rc=$?'
     [ "$output" = "rc=2" ]
-    jq -cn '{v:1, release:"ffffffffffff-9", epoch:1700000000, baseline:0}' >"${GREMION_ROOT}/runtime/cd/live-signal"
+    jq -cn '{v:1, release:"ffffffffffff-9", epoch:1700000000, baseline:0}' >"${GREMION_ROOT}/data/cd/live-signal"
     run --separate-stderr dat 'cd_data_live_signal_read; echo rc=$?'
     [ "$output" = "rc=2" ]
 }
@@ -1387,7 +1414,7 @@ cd_data_live_portal_probe; echo rc=$?; cd_state_get ".release.rollback_target"'
     cd_stub_set cd_watch_accesslog_count 0 '7'
     run --separate-stderr mig
     [[ "$output" == *"rc=0"* ]]
-    local f="${GREMION_ROOT}/runtime/cd/live-signal"
+    local f="${GREMION_ROOT}/data/cd/live-signal"
     [ "$(jq -r '.baseline' "$f")" = 7 ]
     [ "$(jq -r '.epoch' "$f")" = 1700000000 ]
     # the baseline was asked before the first one-shot ran
