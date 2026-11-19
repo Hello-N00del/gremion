@@ -323,7 +323,9 @@ cd_cmd_adopt() {
     ((rc == 0)) || cd_die "$rc" "adopt: refused; nothing was written"
 
     if [[ "$mode" == first ]]; then
-        # the repository rules are a precondition of every pick-up (section 1 of the design)
+        # the repository rules are a precondition of every pick-up. A RE-adopt does not ask
+        # GitHub: it re-reads the host, and the host must stay recoverable while the network is
+        # down; the self-test checks the rules.
         rc=0
         cd_gh_rules_ok >/dev/null 2>&1 </dev/null || rc=$?
         ((rc == 0)) || cd_die 1 "adopt: the repository rules of main are not in force (or cannot be read); nothing was written"
@@ -527,7 +529,7 @@ _cd_ad_log() {
 # restore). Needs the cd lock and the host lock. 0 applied; 1 attributable to the commit;
 # 2 a refusal or precondition (nothing changed); 4 an infrastructure failure.
 cd_adopt_apply_state() {
-    local tree="${1:-}" sha12 tag live_tree live_colour cls kinds envf prev rc=0 log initlog
+    local tree="${1:-}" sha12 tag live_tree live_colour cls kinds envf prev rc=0 log initlog retry=0
     CD_ADOPT_STATE_APPLIED=0
     CD_ADOPT_PREVIOUS_STATE_TAG=''
     [[ -n "$tree" ]] || { _cd_ad_err "apply-state: usage: cd_adopt_apply_state TREE"; return 2; }
@@ -556,7 +558,22 @@ cd_adopt_apply_state() {
 
     envf="$(cd_envfile state)" || return 2
     prev="$(cd_kv_get "$envf" IMAGE_TAG 2>/dev/null)" || { _cd_ad_err "apply-state: state.env has no single IMAGE_TAG"; return 2; }
-    [[ "$prev" =~ ^pilot-[0-9a-f]{12}$ || "$prev" =~ ^[A-Za-z0-9._-]{1,128}$ ]] || { _cd_ad_err "apply-state: the IMAGE_TAG of state.env is not usable"; return 2; }
+    [[ "$prev" =~ ^[A-Za-z0-9._-]{1,128}$ ]] || { _cd_ad_err "apply-state: the IMAGE_TAG of state.env is not usable"; return 2; }
+    if [[ "$prev" == "$tag" ]]; then
+        # a retry after a failed apply: the earlier try already retagged state.env. The tag to
+        # go back to is the one that try recorded; recording the new tag over it would lose the
+        # only way back. Without a record there is nothing to go back to: refuse.
+        if [[ -f "${CD_DATA}/previous-state-tag" && ! -L "${CD_DATA}/previous-state-tag" ]]; then
+            prev="$(head -n 1 -- "${CD_DATA}/previous-state-tag" 2>/dev/null)" || prev=''
+        else
+            prev=''
+        fi
+        if [[ ! "$prev" =~ ^[A-Za-z0-9._-]{1,128}$ || "$prev" == "$tag" ]]; then
+            _cd_ad_err "apply-state: state.env already carries ${tag} and there is no record of the tag before it; restore state.env by hand first"
+            return 2
+        fi
+        retry=1
+    fi
     declare -F cd_data_dumpset_take >/dev/null 2>&1 || { _cd_ad_err "apply-state: data.sh is not installed"; return 2; }
 
     # 2. the dump set first: a state apply that fails half way has a restore point
@@ -570,8 +587,10 @@ cd_adopt_apply_state() {
 
     # 3. the record of what to restore, then the change
     cd_mkdir "$CD_DATA" || return 2
-    printf '%s\n' "$prev" | cd_atomic_write "${CD_DATA}/previous-state-tag" 600 \
-        || { _cd_ad_err "apply-state: the previous state tag could not be recorded; nothing was changed"; return 2; }
+    if ((retry == 0)); then
+        printf '%s\n' "$prev" | cd_atomic_write "${CD_DATA}/previous-state-tag" 600 \
+            || { _cd_ad_err "apply-state: the previous state tag could not be recorded; nothing was changed"; return 2; }
+    fi
     CD_ADOPT_PREVIOUS_STATE_TAG="$prev"
     cd_set_env_key "$envf" IMAGE_TAG "$tag" || { _cd_ad_err "apply-state: state.env could not be retagged"; return 2; }
     cd_hist state_retagged sha12="$sha12" || true
@@ -595,7 +614,12 @@ cd_adopt_apply_state() {
     cd_prepare_render "$tree" "$live_colour" </dev/null || rc=$?
     ((rc == 0)) || { _cd_ad_err "apply-state: the render failed"; return 2; }
 
-    # 5. the platform migration of the state tier
+    # 5. the platform migration of the state tier. gremion-tenant is run from the tree being
+    # deployed (its ../lib neighbours must match it) and GREMION_RELEASE_DIR names that tree,
+    # because stage 1 runs compose from the tree being deployed and never from `current`,
+    # which moves only at the commit point. The tenant-create one-shot still starts from the
+    # active colour's env file (the live image tag): whether a NEW platform migration is
+    # reachable from it at this stage is an owed post-deploy proof, not decided here.
     if printf '%s' "$cls" | jq -e '.state_tier | index("platform_migration") != null' >/dev/null 2>&1; then
         initlog="$(_cd_ad_log "cd-state-init-${sha12}")" || { _cd_ad_err "apply-state: cannot create the log file"; return 2; }
         rc=0
@@ -811,7 +835,7 @@ _cd_st_check_state() {
 # code is 1 when any failed, 0 otherwise (a warning does not fail). It sends one test mail of
 # kind `selftest` (except under --post-apply) and prints no address.
 cd_cmd_selftest() {
-    local post=0 rc=0 missing hostfloor span live12 result=ok reason=none mailrc
+    local post=0 rc=0 missing hostfloor span live12 result=ok reason=none mailrc url
     while (($# > 0)); do
         case "$1" in
             --post-apply) post=1; shift ;;
@@ -885,13 +909,18 @@ cd_cmd_selftest() {
     _cd_st_check_probe
     _cd_st_check_timers
 
-    # the ping: once, a failure is a warning
+    # the ping: once, and a failure is a warning. cd_ping (notify.sh) swallows its own result,
+    # so the one request is made here; the URL may carry a token, so it reaches curl on stdin
+    # only and is never printed.
     if cd_cfg_is_set CD_PING_URL; then
-        if cd_ping >/dev/null 2>&1 </dev/null; then
+        url="$(cd_cfg CD_PING_URL)" || url=''
+        if printf 'url = "%s"\n' "$url" \
+            | curl --silent --show-error --fail --connect-timeout 5 --max-time 10 --output /dev/null -K - >/dev/null 2>&1 7>&-; then
             _cd_st_ok ping
         else
             _cd_st_warn ping "the outbound ping failed once"
         fi
+        url=''
     fi
 
     # the test mail: the one thing that proves the relay accepts what the program sends

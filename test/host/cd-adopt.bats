@@ -219,6 +219,28 @@ ad_order() {
     ad_nothing_written
 }
 
+@test "adopt: the REAL rules and merge-method checks (github.sh) pass on the recorded answer, with no state file and no lock held by the caller" {
+    ad_real_github "${HOST_TEST_DIR}/fixtures/cd/github/rules-main.json"
+    run adlib 'cd_cmd_adopt'
+    [ "$status" -eq 0 ] || { echo "$output" >&2; return 1; }
+    jq -e '.live.colour == "blue"' "${GREMION_ROOT}/${STATE}"
+}
+
+@test "adopt: the REAL checks refuse a repository without a rule, or without linear history" {
+    jq 'map(select(.type != "deletion"))' "${HOST_TEST_DIR}/fixtures/cd/github/rules-main.json" > "${GREMION_ROOT}/.rules-nodel.json"
+    ad_real_github "${GREMION_ROOT}/.rules-nodel.json"
+    run adlib 'cd_cmd_adopt'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"repository rules"* ]]
+    ad_nothing_written
+    jq 'map(select(.type != "required_linear_history"))' "${HOST_TEST_DIR}/fixtures/cd/github/rules-main.json" > "${GREMION_ROOT}/.rules-nolin.json"
+    ad_real_github "${GREMION_ROOT}/.rules-nolin.json"
+    run adlib 'cd_cmd_adopt'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"merge methods"* ]]
+    ad_nothing_written
+}
+
 @test "adopt: refuses when the state file already exists (no silent re-adopt) and leaves it as it was" {
     ad_adopted
     cp "${GREMION_ROOT}/${STATE}" "${GREMION_ROOT}/.state.before"
@@ -533,7 +555,7 @@ ad_apply_state() {
     ad_state_setup "$CLASS_PLATFORM"
     run ad_apply_state
     [[ "$output" == *"rc=0"* ]]
-    assert_recorded tenant-init "args=init lock_held=1"
+    assert_recorded tenant-init "args=init lock_held=1 release_dir=${GREMION_ROOT}/releases/${B12}"
     ad_order "stub cd_prepare_render" "tenant-init" "up -d --pull never"
 }
 
@@ -576,6 +598,18 @@ ad_apply_state() {
     run ad_apply_state
     [[ "$output" == *"rc=1"* ]]
     refute_recorded docker "up -d"
+    # the second try finds state.env already retagged: it must not record the NEW tag as the
+    # one to go back to (the record of the first try stays)
+    [ "$(cat "${GREMION_ROOT}/data/cd/previous-state-tag")" = "pilot-aaaaaaaaaaaa" ]
+}
+
+@test "apply-state: state.env already at the target tag and no record of the tag before it is a refusal, nothing taken" {
+    ad_state_setup "$CLASS_STATE"
+    sed -i "s#^IMAGE_TAG=.*#IMAGE_TAG=pilot-${B12}#" "${GREMION_ROOT}/etc/env/state.env"
+    run ad_apply_state
+    [[ "$output" == *"rc=2"* ]]
+    [[ "$output" == *"no record"* ]]
+    refute_recorded stub "cd_data_dumpset_take"
 }
 
 @test "apply-state: a state project that does not become healthy, or an edge that does not answer, is a failure (1)" {
@@ -774,12 +808,34 @@ ad_one_failure() {
 
 @test "selftest: a ping that fails once is a warning, not a failure" {
     ad_green
+    cd_write_cfg CD_MIN_FREE_GB=0 CD_PING_URL=https://ping.example.org/secret-token-path
+    # the relay answers; only the ping URL's request fails
+    shim curl "$(cat <<'EOF'
+cfg="$(cat)"
+printf '%s\n' "$cfg" >> "$GREMION_ROOT/.curl-stdin.all"
+case "$cfg" in
+  *ping.example.org*) exit 22 ;;
+esac
+up="$(printf '%s\n' "$cfg" | sed -n 's/^upload-file = "\(.*\)"$/\1/p')"
+[ -n "$up" ] && [ -f "$up" ] && cp "$up" "$GREMION_ROOT/.sent.$(date +%s%N)"
+exit 0
+EOF
+)"
+    run ad_selftest
+    [ "$status" -eq 0 ] || { echo "$output" >&2; return 1; }
+    [[ "$output" == *"warn  ping"* ]]
+    # the URL (it may carry a token) is on curl's stdin only: no argv, no output
+    [[ "$output" != *"secret-token-path"* ]]
+    refute_recorded curl "secret-token-path"
+    grep -q "ping.example.org/secret-token-path" "${GREMION_ROOT}/.curl-stdin.all"
+}
+
+@test "selftest: a ping that answers is ok" {
+    ad_green
     cd_write_cfg CD_MIN_FREE_GB=0 CD_PING_URL=https://ping.example.org/x
-    export AD_OVERRIDE="cd_ping"
-    cd_stub_set cd_ping 1
     run ad_selftest
     [ "$status" -eq 0 ]
-    [[ "$output" == *"warn  ping"* ]]
+    [[ "$output" == *"ok    ping"* ]]
 }
 
 @test "selftest --post-apply: the locks ARE held by the caller, so it passes the lock check, sends no mail, and exits 0" {
@@ -793,6 +849,19 @@ ad_one_failure() {
     [ "$(sent_count)" = 0 ]
     [ "$(mail_count)" = "$before" ]
     [ "$(curl_calls)" = 0 ]
+}
+
+@test "selftest --post-apply: the REAL rules and merge-method checks need neither the cd lock nor a state write (the caller holds the locks)" {
+    cd_need_flock
+    ad_green
+    ad_real_github "${HOST_TEST_DIR}/fixtures/cd/github/rules-main.json"
+    cd_bg 'cd_lock_take; cd_hostlock_take; echo ready; exec sleep 300'
+    cp "${GREMION_ROOT}/${STATE}" "${GREMION_ROOT}/.state.before"
+    run ad_selftest --post-apply
+    [ "$status" -eq 0 ] || { echo "$output" >&2; return 1; }
+    [[ "$output" == *"ok    rules"* ]]
+    [[ "$output" == *"ok    merge_methods"* ]]
+    cmp "${GREMION_ROOT}/.state.before" "${GREMION_ROOT}/${STATE}"
 }
 
 @test "selftest --post-apply: still fails on any other bad check" {

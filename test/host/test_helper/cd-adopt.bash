@@ -196,6 +196,9 @@ ad_write_prelude() {
 for l in core cmd-state docker classify colour prepare data notify adopt; do
     . "${HOST_SRC}/lib/cd/${l}.sh"
 done
+if [ -n "${AD_REAL_GH:-}" ]; then
+    . "${HOST_SRC}/lib/cd/github.sh"
+fi
 . "${GREMION_CD_STUBS_DIR}/cd-stubs.sh"
 for f in ${AD_OVERRIDE:-}; do
     eval "${f}() { _cd_stub_call ${f} \"\$@\"; }"
@@ -211,6 +214,37 @@ adlib() {
     bash -c "set -euo pipefail
 . \"\${GREMION_ROOT}/.adlib.sh\"
 ${snippet}" adlib "$@"
+}
+
+# ad_real_github RULES_JSON -- the REAL github.sh (rules and merge-method checks) over a curl
+# shim that answers the branch rules from RULES_JSON (and still takes the mail relay's calls).
+# cd_gh_tip stays a stub: it would run git ls-remote against the network.
+ad_real_github() {
+    export AD_REAL_GH=1
+    export AD_OVERRIDE="cd_gh_tip"
+    cd_write_cfg CD_MIN_FREE_GB=0 CD_REPO_URL=https://github.com/example-org/example-repo
+    cp "$1" "${GREMION_ROOT}/.gh-rules.json"
+    shim curl "$(cat <<'EOF'
+cfg="$(cat)"
+printf '%s\n' "$cfg" >> "$GREMION_ROOT/.curl-stdin.all"
+case "$cfg" in
+  *'dump-header'*)
+    body="$(printf '%s\n' "$cfg" | sed -n 's/^output = "\(.*\)"$/\1/p')"
+    hdr="$(printf '%s\n' "$cfg" | sed -n 's/^dump-header = "\(.*\)"$/\1/p')"
+    url="$(printf '%s\n' "$cfg" | sed -n 's/^url = "\(.*\)"$/\1/p')"
+    printf 'HTTP/2 200\r\nx-ratelimit-remaining: 4000\r\n' > "$hdr"
+    case "$url" in
+      */rules/branches/main) cp "$GREMION_ROOT/.gh-rules.json" "$body"; printf 200 ;;
+      *) printf 404 ;;
+    esac
+    exit 0 ;;
+esac
+[ -f "$GREMION_ROOT/.curl-fail" ] && exit 7
+up="$(printf '%s\n' "$cfg" | sed -n 's/^upload-file = "\(.*\)"$/\1/p')"
+[ -n "$up" ] && [ -f "$up" ] && cp "$up" "$GREMION_ROOT/.sent.$(date +%s%N)"
+exit 0
+EOF
+)"
 }
 
 # ad_nothing_written -- a refused adopt leaves no state, no manifest and no mail.
