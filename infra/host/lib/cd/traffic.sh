@@ -49,7 +49,7 @@
 # (U9), the stage records and the choice between rollback and teardown (the driver, U14a, and
 # U8b). release.switched_at is not written here.
 
-# shellcheck disable=SC2016  # the jq programs below are single-quoted on purpose
+# shellcheck disable=SC2016,SC2034  # the jq programs are single-quoted on purpose; CD_TRAFFIC_REASON is read by the caller
 
 CD_TRAFFIC_REASON=''
 
