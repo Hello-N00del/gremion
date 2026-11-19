@@ -20,11 +20,6 @@ const ROUTE_TABLE = buildApiRoutes(() => {
   .map((r) => `${r.method} ${r.path}`)
   .sort()
 
-// The two routes the kernel's erasure and org-unit paths call. They are in the route table but not yet in
-// the recorded case (no attempt, no control): the isolation unit that extends the case takes them out of this
-// list. Naming them keeps the pin below strict for every other route.
-const KERNEL_DRIVEN_ROUTES = ['DELETE /api/v1/org-units/:id/boards', 'POST /api/v1/erase-subject']
-
 const unreachable = (): Promise<ApiResult> => Promise.reject(new Error('not called'))
 const api: BoardApi = {
   listBoards: unreachable,
@@ -37,6 +32,8 @@ const api: BoardApi = {
   updateCard: unreachable,
   promote: unreachable,
   promoted: unreachable,
+  eraseSubject: unreachable,
+  deleteOrgUnitBoards: unreachable,
 }
 const seeder = (): Promise<BoardRecord> => Promise.reject(new Error('not called'))
 const boardCase = boardIsolationCase(api, seeder)
@@ -44,25 +41,25 @@ const boardCase = boardIsolationCase(api, seeder)
 describe('board isolation case — contract shape (TASK-044)', () => {
   it('has the contract fields and the leaf route prefixes', () => {
     expect(boardCase.module).toBe('board')
-    expect(boardCase.routePrefixes).toEqual(['/api/v1/boards', '/api/v1/cards'])
+    expect(boardCase.routePrefixes).toEqual(['/api/v1/boards', '/api/v1/cards', '/api/v1/erase-subject', '/api/v1/org-units'])
     for (const k of ['seed', 'read', 'write', 'fingerprint'] as const) expect(typeof boardCase[k], k).toBe('function')
     expect(boardCase.attempts.length).toBeGreaterThan(0)
     expect(boardCase.controls.length).toBeGreaterThan(0)
   })
 
-  it('BOARD_ROUTE_KINDS names exactly the leaf route table (ten routes), apart from the named kernel-driven routes', () => {
-    expect([...BOARD_ROUTE_KINDS.keys()].sort()).toEqual(ROUTE_TABLE.filter((r) => !KERNEL_DRIVEN_ROUTES.includes(r)))
-    expect(ROUTE_TABLE).toHaveLength(10 + KERNEL_DRIVEN_ROUTES.length)
+  it('BOARD_ROUTE_KINDS names exactly the leaf route table (twelve routes)', () => {
+    expect([...BOARD_ROUTE_KINDS.keys()].sort()).toEqual(ROUTE_TABLE)
+    expect(ROUTE_TABLE).toHaveLength(12)
   })
 
   it('every route has the attempt (or control) it needs, inside routePrefixes', () => {
     expect(validateCase(boardCase, BOARD_ROUTE_KINDS)).toEqual([])
   })
 
-  it('covers every §3.3 vector: 1-8 and H as attempts, 9 and H as controls', () => {
+  it('covers every §3.3 vector: 1-8 and H as attempts; 9, E (erase-subject), H and O (org-unit board delete) as controls', () => {
     expect([...new Set(boardCase.attempts.map((a) => a.vector))].sort()).toEqual(['1', '2', '3', '4', '5', '6', '7', '8', 'H'])
     expect(boardCase.attempts.filter((a) => a.vector === 'H').map((a) => a.kind).sort()).toEqual(['read', 'write'])
-    expect(boardCase.controls.map((c) => c.vector).sort()).toEqual(['9', 'H'])
+    expect(boardCase.controls.map((c) => c.vector).sort()).toEqual(['9', 'E', 'H', 'O'])
   })
 
   it('the refusal cases (A3/A4/A8) call every route of the table', () => {
@@ -82,6 +79,13 @@ describe('validateCase refuses an incomplete case', () => {
   it('a case whose controls omit vector 9 (POST /api/v1/boards)', () => {
     const c = withControls(boardCase.controls.filter((k) => k.vector !== '9'))
     expect(validateCase(c, BOARD_ROUTE_KINDS)).toContain('POST /api/v1/boards has no control')
+  })
+
+  it('a case whose controls omit the erase-subject or the org-unit board delete vector', () => {
+    const noE = withControls(boardCase.controls.filter((k) => k.vector !== 'E'))
+    expect(validateCase(noE, BOARD_ROUTE_KINDS)).toContain('POST /api/v1/erase-subject has no control')
+    const noO = withControls(boardCase.controls.filter((k) => k.vector !== 'O'))
+    expect(validateCase(noO, BOARD_ROUTE_KINDS)).toContain('DELETE /api/v1/org-units/:id/boards has no control')
   })
 
   it('a read route with only a write attempt, and a write route with only a read attempt', () => {

@@ -39,24 +39,51 @@ leaf that is not deployed. The compose side is pinned in
 | votes | in-process | `fake-upstream-app`, a recording fake Nextcloud | `modules/votes/app/lib/server/polls/polls-tenant.test.ts` |
 | files | in-process | `fake-upstream-app`, a recording fake WebDAV | `modules/files/app/lib/server/files/tenant-isolation.test.ts` |
 | messaging | in-process | `fake-upstream-app`, a recording fake Synapse | `modules/messaging/app/lib/server/messages/tenant-isolation.test.ts`, `matrix-synapse.tenant.test.ts`, `livekit.tenant.test.ts` |
-| board | in-process | `real-pg-app`, two real tenant databases on the throwaway Postgres | `modules/board/app/lib/server/board/tenant-isolation.integration.test.ts` |
+| board | the router: in-process for a customer located `kernel`, the board service for a customer located `module` | `real-pg-app`, three real customers (one `kernel`, two `module`) and the real board service on the throwaway Postgres | `modules/board/app/lib/server/board/tenant-isolation.integration.test.ts` |
 
 There is no result for `elections`, `finance`, `vault` or `handover`: a result for
 a module that is not enabled would be evidence for code that is not running. The
-board is served in-process from the customer's own kernel database; its case
-proves that path, not the board leaf (`BOARD_BACKEND=service`, test environment
-only), which has its own suite and is not what the pilot runs.
+board is served by the router (`getBoardBackend()` in its default `auto` mode),
+which reads the customer's location flag per call: a customer whose board has not
+moved is served in-process from its own kernel database, a customer whose board
+lives in the board module's own database (`t_<hex32>__board`) is served by the
+board service. The case proves both paths in one run, so the evidence is for the
+code that serves a customer after a move as well as before it. The board
+service's own two-tenant suite (`modules/board/test/isolation*`) is not what the
+producer records, and no required gate runs it: it is run by hand with
+`pnpm --filter board-service test:integration` against a throwaway Postgres
+(`BOARD_TEST_PG_URL`). It proves the same vectors at the service's own routes and
+adds three: the erasure of one person who holds cards in two tenants, the delete of
+an org unit's boards that both tenants have boards on, and the block of one
+tenant's database (the module's app role loses `CONNECT`), which must leave the
+other tenant served. The first two are also in the recorded case, made through the
+kernel's own erasure hook and org-unit cleanup (see below); the block is not,
+because the recorded case's board service connects as the server's administrative
+role, for which a revoked `CONNECT` has no effect.
 
 The board case runs the real route handlers (`/api/board`, `/api/board/[id]`,
 `.../cards`, `.../promotable`, `.../promote` and the `/tasks` load), the real scope
-resolver, the real `getDb()` and the real per-tenant pool registry against two
-physically separate databases with the kernel migration chain applied. Nothing
-between the handler and the database is mocked; only the Keycloak display-name
-lookup is replaced. The fixtures are written and the before/after fingerprints
-are read over separate administrative connections, so the proof that B's data did
-not change does not depend on the code under test. It covers the board leaf's
-vectors 1 to 9 and H in both directions (A on B, then B on A), with positive
-controls, plus a scan that no board file opens its own connection. It needs
+resolver, the real router, the real `getDb()` and the real per-tenant pool registry
+against three customers with physically separate kernel databases (the kernel
+migration chain applied to each): customer A is located `kernel` and holds its
+board rows in its kernel database; customers B and C are located `module`, hold no
+board rows in their kernel databases, and are served by the real board service
+(its own factory, listening on loopback) from a module database each, migrated by
+the module's own runner. Nothing between the handler and the database is mocked;
+only the Keycloak display-name lookup is replaced. The fixtures are written and
+the before/after fingerprints are read over separate administrative connections
+(the kernel database and, for B and C, the module database), so the proof that
+another customer's data did not change does not depend on the code under test.
+It covers the board service's vectors 1 to 9 and H for every ordered pair of the
+three customers (so the two customers that share the board service are judged
+against each other as well), with positive controls (including that a module
+customer is answered over HTTP by the board service and a kernel customer is
+not), plus the two calls the kernel itself makes into the board: the erasure of a
+person (the board's erasure hook) and the removal of an org unit's boards. Each is
+made as every customer for every other customer's person and org unit (nothing
+anywhere may change) and then for the customer's own (the change lands in the
+store the flag names and in no other, a kernel customer making no call to the board
+service). The case also scans that no board file opens its own connection. It needs
 `ISOLATION_TENANT_PG_URL` like the leaf cases; the runner then states
 `GREMION_PRODUCTION_STACK=none` for that case only, after checking the server is
 loopback and not port 5432, and derives the harness database URLs from it. The same
@@ -64,7 +91,8 @@ file also runs in the shared integration lane, where it uses the server of the
 lane's own `DATABASE_URL`.
 
 Every case runs a positive control first (each customer reaches its own data),
-then the attempts of customer A against customer B's record. The files case
+then the attempts of customer A against customer B's record (the board case, in
+every direction for every pair of its customers). The files case
 derives its routes from `modules/files/app/routes/api/files/**` and from every page
 load under `modules/files/app/routes/files/**` that reaches Nextcloud (the editor
 page), and fails when one has no control or no attempt, or when there is no
@@ -77,14 +105,16 @@ Honest labelling, because the proof kinds differ:
 - `real-pg-leaf`: the leaf's own two-tenant suite against a real Postgres. A
   tenant's data is in a database of its own, and the tenant binding refuses a
   mismatched id and slug.
-- `real-pg-app`: the app half's real handlers and database layer run against two
-  real tenant databases. This shows that every board statement a customer causes
-  reaches that customer's own database and no other, and that the other customer's
-  rows are neither readable nor writable from there. It is the same guarantee as
-  the kernel's own protocols and members, which share the `getDb()` seam; it says
-  nothing about the board leaf and nothing about members of one customer seeing
+- `real-pg-app`: the app half's real handlers, router and database layer run against
+  real tenant databases and, for a customer located `module`, the real board
+  service. This shows that every board statement a customer causes reaches that
+  customer's own database (its kernel database or its module database, as its
+  flag says) and no other, and that another customer's rows are neither readable
+  nor writable from there. It says nothing about members of one customer seeing
   each other's boards (that is the within-customer scope, covered by the board's
-  own route tests).
+  own route tests). A kernel copy that a move leaves behind is not represented: the
+  `module` customers of the case start with no board rows in their kernel
+  databases.
 - `fake-upstream-app`: the real route handlers and clients run against a
   recording fake of the shared upstream. This shows app-layer scoping against
   ONE shared Nextcloud and ONE shared Synapse: every upstream request a caller
