@@ -35,7 +35,7 @@
 // catalogue-race error that persisted after the retries (retry later, not a defect of the commit).
 
 import postgres from 'postgres'
-import { evictTenantPools, requireRuntimePgUrl, storeFor, type TenantRef } from './tenant-store.js'
+import { evictTenantPools, requireRuntimePgUrl, type StoreForOptions, type TenantRef } from './tenant-store.js'
 
 const LEAF = 'newsletter'
 const PG_URL_ENV = 'NEWSLETTER_PG_URL'
@@ -62,6 +62,17 @@ export interface MigrateOnlyResult {
   counts: MigrateOnlyCounts
 }
 
+/**
+ * The leaf's own store opener, handed in by the process wiring (index.ts is the one place that may call
+ * it: the identity-binding guard enumerates the call sites). It creates the database when missing and
+ * runs the leaf's runner when it is not yet in the pool registry.
+ */
+export type OpenStoreFn = (tenant: TenantRef, options: StoreForOptions) => Promise<unknown>
+
+export interface MigrateOnlyDeps {
+  openStore: OpenStoreFn
+}
+
 /** Migrates one existing customer database with the leaf's own runner. Replaceable in tests. */
 export type MigrateFn = (
   tenant: TenantRef,
@@ -73,7 +84,7 @@ export interface MigrateOnlyOptions {
   dbPrefix?: string
   /** Pause between the attempts of a catalogue-race error. */
   retryDelayMs?: number
-  /** Test seam: replaces the leaf's runner. */
+  /** Test seam: replaces the leaf's runner (the default opens the store through deps.openStore). */
   migrate?: MigrateFn
   /** Test seam: a manifest that replaces manifest.json (a bad hash must fail the customer). */
   manifest?: Record<string, string>
@@ -158,13 +169,15 @@ function sleep(ms: number): Promise<void> {
 // ── the leaf's own runner ─────────────────────────────────────────────────────
 
 /**
- * The leaf's storeFor() IS its runner: manifest hash check of every file, then every file in order. It
+ * The leaf's store opener IS its runner: manifest hash check of every file, then every file in order. It
  * is called here only for a database that exists, and its pool is ended straight away so the registry
  * never fills and nothing is evicted with a warning.
  */
-const leafRunner: MigrateFn = async (tenant, ctx) => {
-  await storeFor(tenant, { pgUrl: ctx.pgUrl, dbPrefix: ctx.dbPrefix, _overrideManifest: ctx.manifest })
-  await evictTenantPools({ id: tenant.id })
+function leafRunner(openStore: OpenStoreFn): MigrateFn {
+  return async (tenant, ctx) => {
+    await openStore(tenant, { pgUrl: ctx.pgUrl, dbPrefix: ctx.dbPrefix, _overrideManifest: ctx.manifest })
+    await evictTenantPools({ id: tenant.id })
+  }
 }
 
 // ── one customer ──────────────────────────────────────────────────────────────
@@ -211,7 +224,10 @@ async function migrateCustomer(
 
 // ── the whole run ─────────────────────────────────────────────────────────────
 
-export async function runMigrateOnly(options: MigrateOnlyOptions = {}): Promise<MigrateOnlyResult> {
+export async function runMigrateOnly(
+  deps: MigrateOnlyDeps,
+  options: MigrateOnlyOptions = {},
+): Promise<MigrateOnlyResult> {
   const counts: MigrateOnlyCounts = { v: 1, total: 0, migrated: 0, skipped: 0, failed: 0 }
 
   let pgUrl: string
@@ -226,7 +242,7 @@ export async function runMigrateOnly(options: MigrateOnlyOptions = {}): Promise<
     pgUrl,
     dbPrefix,
     retryDelayMs: options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS,
-    migrate: options.migrate ?? leafRunner,
+    migrate: options.migrate ?? leafRunner(deps.openStore),
     manifest: options.manifest,
   }
 
@@ -296,7 +312,10 @@ function writeLine(line: string): Promise<void> {
  * `node dist/index.js --migrate-only`. Returns the exit code; index.ts exits with it. The counts line
  * is the only thing on stdout, on exits 0, 1 and 3.
  */
-export async function runMigrateOnlyCli(argv: readonly string[] = process.argv.slice(2)): Promise<number> {
+export async function runMigrateOnlyCli(
+  deps: MigrateOnlyDeps,
+  argv: readonly string[] = process.argv.slice(2),
+): Promise<number> {
   if (argv.some((a) => a !== '--migrate-only')) {
     // No slug argument (or any other): the run goes through the customers by itself.
     process.stderr.write(`[${LEAF}] --migrate-only takes no other argument\n`)
@@ -306,7 +325,7 @@ export async function runMigrateOnlyCli(argv: readonly string[] = process.argv.s
   for (const method of ['log', 'info', 'warn', 'error', 'debug', 'trace'] as const) {
     console[method] = () => {}
   }
-  const result = await runMigrateOnly()
+  const result = await runMigrateOnly(deps)
   if (result.code === 2) {
     process.stderr.write(`[${LEAF}] --migrate-only: ${PG_URL_ENV} is not set or not a URL\n`)
     return 2

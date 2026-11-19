@@ -187,7 +187,7 @@ const pgUrl = process.env.HARNESS_PG_URL
 const dbPrefix = process.env.HARNESS_PREFIX
 try {
   if (mode === 'entry') {
-    const r = await runMigrateOnly({ pgUrl, dbPrefix, retryDelayMs: 100 })
+    const r = await runMigrateOnly({ openStore: storeFor }, { pgUrl, dbPrefix, retryDelayMs: 100 })
     process.stdout.write('\\n' + JSON.stringify(r) + '\\n')
   } else {
     await storeFor({ id, slug }, { pgUrl, dbPrefix })
@@ -275,17 +275,19 @@ beforeEach(async () => {
 })
 
 const opts = { pgUrl: TEST_PG_URL, dbPrefix: PREFIX, retryDelayMs: 0 }
+// What index.ts hands the entry: the leaf's own store opener.
+const deps = { openStore: storeFor }
 
 describe('the catalogue is read without creating anything', () => {
   it('no control database: total 0, exit 0, and the control database is NOT created', async () => {
-    const result = await runMigrateOnly(opts)
+    const result = await runMigrateOnly(deps, opts)
     expect(result).toEqual({ code: 0, counts: { v: 1, total: 0, migrated: 0, skipped: 0, failed: 0 } })
     expect(await dbExists(PREFIX + 'control')).toBe(false)
   })
 
   it('a control database with no catalogue table: total 0, exit 0, and the table is NOT created', async () => {
     await admin.unsafe(`CREATE DATABASE "${PREFIX}control"`)
-    const result = await runMigrateOnly(opts)
+    const result = await runMigrateOnly(deps, opts)
     expect(result.code).toBe(0)
     expect(result.counts.total).toBe(0)
     const ctrl = connect(PREFIX + 'control')
@@ -304,7 +306,7 @@ describe('every catalogued customer, in this process', () => {
     await admin.unsafe(`CREATE DATABASE "${PREFIX}ref"`)
     await applyDir(PREFIX + 'ref', REAL_MIGRATIONS)
 
-    const result = await runMigrateOnly(opts)
+    const result = await runMigrateOnly(deps, opts)
 
     expect(result).toEqual({ code: 0, counts: { v: 1, total: 3, migrated: 2, skipped: 1, failed: 0 } })
     expect(await dbExists(PREFIX + 'beta')).toBe(false)
@@ -326,7 +328,7 @@ describe('every catalogued customer, in this process', () => {
     ]
     let result
     try {
-      result = await runMigrateOnly(opts)
+      result = await runMigrateOnly(deps, opts)
     } finally {
       for (const s of spies) s.mockRestore()
     }
@@ -340,7 +342,7 @@ describe('every catalogued customer, in this process', () => {
     await seedCatalogue(PREFIX, [ALPHA], ['alpha'])
     const files = (await readdir(REAL_MIGRATIONS)).filter((f) => f.endsWith('.sql'))
     const manifest = Object.fromEntries(files.map((f) => [f, '0'.repeat(64)]))
-    const result = await runMigrateOnly({ ...opts, manifest })
+    const result = await runMigrateOnly(deps, { ...opts, manifest })
     expect(result.code).toBe(1)
     expect(result.counts).toMatchObject({ total: 1, migrated: 0, failed: 1 })
     const db = connect(PREFIX + 'alpha')
@@ -374,7 +376,7 @@ describe('exit codes: a catalogue race is retried, a defect is not', () => {
   it('23505 on a pg_ index, then 42710, then 40P01 on the first attempts: retried, and the database ends migrated', async () => {
     await seedCatalogue(PREFIX, [ALPHA], ['alpha'])
     const f = failing([raceFirst(), pgErr('42710'), pgErr('40P01')])
-    const result = await runMigrateOnly({ ...opts, migrate: f.migrate })
+    const result = await runMigrateOnly(deps, { ...opts, migrate: f.migrate })
     expect(result).toEqual({ code: 0, counts: { v: 1, total: 1, migrated: 1, skipped: 0, failed: 0 } })
     expect(f.calls()).toBe(MAX_ATTEMPTS)
   })
@@ -382,7 +384,7 @@ describe('exit codes: a catalogue race is retried, a defect is not', () => {
   it('the same race on every attempt ends exit 3 with failed 1, and NOT exit 1', async () => {
     await seedCatalogue(PREFIX, [ALPHA], ['alpha'])
     const f = failing([], raceFirst())
-    const result = await runMigrateOnly({ ...opts, migrate: f.migrate })
+    const result = await runMigrateOnly(deps, { ...opts, migrate: f.migrate })
     expect(result.code).toBe(3)
     expect(result.counts).toMatchObject({ total: 1, migrated: 0, failed: 1 })
     expect(f.calls()).toBe(MAX_ATTEMPTS)
@@ -391,10 +393,22 @@ describe('exit codes: a catalogue race is retried, a defect is not', () => {
   it('a plain 42601 syntax error is exit 1 and is not retried', async () => {
     await seedCatalogue(PREFIX, [ALPHA], ['alpha'])
     const f = failing([], pgErr('42601'))
-    const result = await runMigrateOnly({ ...opts, migrate: f.migrate })
+    const result = await runMigrateOnly(deps, { ...opts, migrate: f.migrate })
     expect(result.code).toBe(1)
     expect(result.counts).toMatchObject({ failed: 1 })
     expect(f.calls()).toBe(1)
+  })
+
+  it('a server that goes away mid-run is exit 3, and the customers after it are counted failed without a connect timeout each', async () => {
+    await seedCatalogue(PREFIX, [ALPHA, BETA, GAMMA], ['alpha', 'beta', 'gamma'])
+    const calls: string[] = []
+    const migrate: MigrateFn = async (tenant) => {
+      calls.push(tenant.slug)
+      throw pgErr('ECONNREFUSED')
+    }
+    const result = await runMigrateOnly(deps, { ...opts, migrate })
+    expect(result).toEqual({ code: 3, counts: { v: 1, total: 3, migrated: 0, skipped: 0, failed: 3 } })
+    expect(calls).toEqual(['alpha'])
   })
 
   it('one defect among races is still exit 1; the customers after a defect are still migrated', async () => {
@@ -405,7 +419,7 @@ describe('exit codes: a catalogue race is retried, a defect is not', () => {
       if (tenant.slug === 'alpha') throw pgErr('42601')
       if (tenant.slug === 'beta') throw raceFirst()
     }
-    const result = await runMigrateOnly({ ...opts, migrate })
+    const result = await runMigrateOnly(deps, { ...opts, migrate })
     expect(result.code).toBe(1)
     expect(result.counts).toEqual({ v: 1, total: 3, migrated: 1, skipped: 0, failed: 2 })
     expect(calls).toContain('gamma')
@@ -419,7 +433,7 @@ describe('the session advisory lock', () => {
     const ran = vi.fn(async () => {})
     try {
       await holder`SELECT pg_advisory_lock(hashtextextended(${MIGRATE_LOCK_NAME}, 0))`
-      const pending = runMigrateOnly({ ...opts, migrate: ran })
+      const pending = runMigrateOnly(deps, { ...opts, migrate: ran })
 
       // The entry is parked on the lock: its runner has not been called and a waiter shows in pg_locks.
       await vi.waitFor(
@@ -449,10 +463,10 @@ describe('the session advisory lock', () => {
 describe('idempotence: the claim that makes the scheduler redundant', () => {
   it('a second run, and a cold-miss storeFor of the same customer, leave the schema fingerprint identical', async () => {
     await seedCatalogue(PREFIX, [ALPHA], ['alpha'])
-    expect((await runMigrateOnly(opts)).code).toBe(0)
+    expect((await runMigrateOnly(deps, opts)).code).toBe(0)
     const afterFirst = await fingerprint(PREFIX + 'alpha')
 
-    expect((await runMigrateOnly(opts)).code).toBe(0)
+    expect((await runMigrateOnly(deps, opts)).code).toBe(0)
     expect(await fingerprint(PREFIX + 'alpha')).toBe(afterFirst)
 
     await _resetTenantStoreForTests() // a cold miss: nothing in the registry

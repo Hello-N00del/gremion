@@ -23,6 +23,9 @@ vi.mock('../src/nats-broker.js', () => ({ NatsBroker: { connect: spies.natsConne
 vi.mock('../src/relay-supervisor.js', () => ({ createRelaySupervisor: spies.createRelaySupervisor }))
 vi.mock('../src/migrate-only.js', () => ({ runMigrateOnlyCli: spies.runMigrateOnlyCli }))
 
+// A store opener that must never be reached by these PG-free tests.
+const deps = { openStore: async (): Promise<never> => { throw new Error('openStore is not reachable here') } }
+
 class ExitSignal extends Error {
   constructor(readonly exitCode: number | undefined) {
     super('process.exit')
@@ -70,6 +73,8 @@ describe('index.ts --migrate-only starts nothing', () => {
     expect(err).toBeInstanceOf(ExitSignal)
     expect((err as ExitSignal).exitCode).toBe(0)
     expect(spies.runMigrateOnlyCli).toHaveBeenCalledTimes(1)
+    // The process wiring hands over the leaf's own store opener (the only storeFor call site).
+    expect(spies.runMigrateOnlyCli).toHaveBeenCalledWith({ openStore: expect.any(Function) })
     expect(spies.createServer).not.toHaveBeenCalled()
     expect(spies.startScheduler).not.toHaveBeenCalled()
     expect(spies.natsConnect).not.toHaveBeenCalled()
@@ -104,7 +109,7 @@ describe('the entry itself (real module)', () => {
     const actual = await vi.importActual<typeof import('../src/migrate-only.ts')>('../src/migrate-only.ts')
     const out = vi.spyOn(process.stdout, 'write').mockImplementation((() => true) as never)
     const errOut = vi.spyOn(process.stderr, 'write').mockImplementation((() => true) as never)
-    const code = await actual.runMigrateOnlyCli(['--migrate-only', 'some-customer'])
+    const code = await actual.runMigrateOnlyCli(deps, ['--migrate-only', 'some-customer'])
     expect(code).toBe(2)
     expect(out).not.toHaveBeenCalled()
     // The refusal text names no argument it was given.
@@ -114,19 +119,19 @@ describe('the entry itself (real module)', () => {
   it('a missing CONTENT_PG_URL is exit 2, no localhost fallback, no counts line', async () => {
     const actual = await vi.importActual<typeof import('../src/migrate-only.ts')>('../src/migrate-only.ts')
     delete process.env.CONTENT_PG_URL
-    const result = await actual.runMigrateOnly()
+    const result = await actual.runMigrateOnly(deps)
     expect(result.code).toBe(2)
     expect(result.counts).toEqual({ v: 1, total: 0, migrated: 0, skipped: 0, failed: 0 })
 
     const out = vi.spyOn(process.stdout, 'write').mockImplementation((() => true) as never)
     vi.spyOn(process.stderr, 'write').mockImplementation((() => true) as never)
-    expect(await actual.runMigrateOnlyCli(['--migrate-only'])).toBe(2)
+    expect(await actual.runMigrateOnlyCli(deps, ['--migrate-only'])).toBe(2)
     expect(out).not.toHaveBeenCalled()
   })
 
   it('an unreachable server is exit 3 with a valid counts line (retry later, not a defect of the commit)', async () => {
     const actual = await vi.importActual<typeof import('../src/migrate-only.ts')>('../src/migrate-only.ts')
-    const result = await actual.runMigrateOnly({ pgUrl: 'postgres://postgres@127.0.0.1:1/postgres' })
+    const result = await actual.runMigrateOnly(deps, { pgUrl: 'postgres://postgres@127.0.0.1:1/postgres' })
     expect(result.code).toBe(3)
     expect(result.counts).toEqual({ v: 1, total: 0, migrated: 0, skipped: 0, failed: 0 })
   })

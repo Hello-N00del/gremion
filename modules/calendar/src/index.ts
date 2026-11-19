@@ -31,7 +31,7 @@ import { runMigrateOnlyCli } from './migrate-only.js'
 // exit. Nothing below runs in this mode (the process exits here, and top-level await holds the rest of
 // the module back): no HTTP server, no scheduler, no NATS client, no outbox relay.
 if (process.argv.slice(2).includes('--migrate-only')) {
-  process.exit(await runMigrateOnlyCli())
+  process.exit(await runMigrateOnlyCli({ openStore: storeFor }))
 }
 
 const PORT = Number.parseInt(process.env.PORT ?? '8080', 10)
