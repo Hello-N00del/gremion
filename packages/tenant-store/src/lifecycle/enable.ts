@@ -99,7 +99,7 @@ async function ensureDatabase(admin: Sql, dbName: string, owner: string): Promis
 }
 
 /** DML for the app role on everything the owner has created, and by default on what it creates next. */
-async function grantAppPrivileges(owned: Sql, owner: string, app: string): Promise<void> {
+export async function grantAppPrivileges(owned: Sql, owner: string, app: string): Promise<void> {
   const schemas = await owned<{ nspname: string }[]>`
     SELECT n.nspname FROM pg_namespace n JOIN pg_roles r ON r.oid = n.nspowner
      WHERE (r.rolname = ${owner} OR n.nspname = 'public') AND n.nspname NOT LIKE 'pg\\_%' AND n.nspname <> 'information_schema'
