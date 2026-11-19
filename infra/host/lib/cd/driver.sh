@@ -18,7 +18,7 @@
 # (cd_reconcile_run), the `released` mail (commit step 8), the block and hold of a rollback
 # and its mail (cd_rollback_run).
 #
-# THE LINE (plan section 2). From `switch_started` until `release.committed_at` every
+# THE LINE. From `switch_started` until `release.committed_at` every
 # failure, a crash, a kill and a stage retry included, goes through cd_rollback_run. From
 # `committed_at` on NO failure of any kind does: cd_failure_policy and cd_pipeline_resume ask
 # cd_release_committed before they choose a rollback, and every other path to
@@ -582,8 +582,22 @@ _cd_drv_abort_refused() {
     cd_hostlock_release
 }
 
-_cd_drv_st_host_apply() { cd_adopt_apply_host "$R_TREE"; }
-_cd_drv_st_state_apply() { cd_adopt_apply_state "$R_TREE"; }
+# The two apply stages run with the host lock held by this process, so that a child that takes
+# the lock itself is told (GREMION_HOST_LOCK_HELD) instead of failing on it; the lock is let go
+# when the state apply ends, before the build.
+_cd_drv_st_host_apply() {
+    local rc=0
+    cd_hostlock_take "$(cd_cfg CD_LOCK_WAIT_S)" || return $?
+    cd_adopt_apply_host "$R_TREE" || rc=$?
+    return "$rc"
+}
+_cd_drv_st_state_apply() {
+    local rc=0
+    cd_hostlock_take "$(cd_cfg CD_LOCK_WAIT_S)" || return $?
+    cd_adopt_apply_state "$R_TREE" || rc=$?
+    cd_hostlock_release
+    return "$rc"
+}
 _cd_drv_st_retag() { cd_prepare_retag "$R_TREE" "$R_COL" "$R_TAG" >/dev/null; }
 _cd_drv_st_render() { cd_prepare_render "$R_TREE" "$R_COL" >/dev/null; }
 _cd_drv_st_build() { cd_prepare_build "$R_TREE" "$R_COL" "$R_TAG"; }
@@ -781,6 +795,12 @@ _cd_drv_st_watch() {
 # is idempotent and does only what is left.
 _cd_drv_st_commit() {
     local rc=0 sha12
+    if [[ "$R_MODE" == proof ]]; then
+        # a proof release is never committed: a clean window ends as the rollback `proof_end`
+        # (it writes no block), whatever the watch loop did
+        _cd_drv_rollback_auto proof_end commit
+        return 0
+    fi
     _cd_drv_begin commit $(( $(cd_cfg CD_COMMIT_MAX_MIN) * 60 + 300 ))
     cd_commit_promote || rc=$?
     if ((rc != 0)); then
@@ -973,6 +993,11 @@ _cd_drv_loop() {
         if ((CD_DRV_ROLLED == 1)); then
             return 0
         fi
+        # mail goes out between stages, but not while the new colour serves and the release has
+        # not committed: a relay send then waits on the network with the heartbeat stopped
+        if [[ "$R_SWITCH" != true || -n "$R_COMMIT" ]]; then
+            cd_notify_flush >/dev/null 2>&1 || true
+        fi
         # a reconcile stage that is already started, or any committed release met by the boot
         # unit, is ended instead of run (never run again); it needs no boundary checks
         if [[ -z "$R_COMMIT" ]] || [[ "$R_STAGE" != reconcile ]]; then
@@ -1001,7 +1026,6 @@ _cd_drv_loop() {
         elif ((rc != 0)); then
             return "$rc"
         fi
-        cd_notify_flush >/dev/null 2>&1 || true
     done
 }
 
@@ -1039,7 +1063,7 @@ cd_pipeline_resume() {
         case "$R_STAGE" in
             switch)
                 # the call may have written the edge file and died in its poll: what serves is read
-                # from the file and the Traefik API (U8a), never from our own state
+                # from the file and the Traefik API, never from our own state
                 rc=0
                 _cd_drv_switch_truth || rc=$?
                 if ((rc == 0)); then
@@ -1175,7 +1199,7 @@ _cd_drv_select() {
         --arg s12 "$sha12" --arg n "$now" --arg sha "$sha" --arg c "$colour" --arg root "$CD_ROOT" \
         --arg from "$D_LSHA12" --arg mode "$mode" --argjson ws "$ws" --arg iso "$iso"
     cd_hist release_start sha12="$sha12" mode="$mode" colour="$colour" || true
-    # the baseline of the live colour, taken at the start of the release (section 4)
+    # the baseline of the live colour, taken at the start of the release
     cd_watch_baseline >/dev/null 2>&1 || rc=$?
     if ((rc != 0)); then
         cd_hist baseline_unreadable code="$rc" || true

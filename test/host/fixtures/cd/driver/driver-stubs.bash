@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test/host/fixtures/cd/driver/stubs.sh -- appended to the helper's stub file by cd-driver.bats.
+# test/host/fixtures/cd/driver/driver-stubs.bash -- appended to the helper's stub file by cd-driver.bats.
 #
 # The helper's stubs return one fixed code per process and write no state. A driver test needs
 # more: "fail, then succeed", a kill at a boundary, a commit that writes committed_at, a probe
@@ -10,7 +10,7 @@
 #   - answer from a SEQUENCE: CD_STUB_SEQ_<fn>="4 0" returns 4 the first time and 0 after
 #     (the last word repeats).
 # The hooks do the writes that the real units own (commit step 5, switch_started, ...), so the
-# driver is tested against a stand-in that behaves like the contract in the plan.
+# driver is tested against a stand-in that behaves like the contract of the unit it replaces.
 
 _cd_stub_call() {
     local fn="$1" rcv outv hookv seqv n f

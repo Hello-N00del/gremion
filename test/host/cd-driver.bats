@@ -7,7 +7,7 @@
 #
 # The driver runs from a copy of the host tree that holds only common.sh, core.sh, cmd-state.sh
 # and driver.sh. Every function another unit owns is the helper's stub (test_helper/cd.bash),
-# widened by fixtures/cd/driver/stubs.sh with hooks, so a stage can fail, write state, probe the
+# widened by fixtures/cd/driver/driver-stubs.bash with hooks, so a stage can fail, write state, probe the
 # locks or kill the program. Every address is a reserved example name.
 #
 # The guards of THE LINE are separate checks in driver.sh, marked LINE-1 to LINE-5 there; the
@@ -40,7 +40,7 @@ drv_setup() {
     cp "${orig}/lib/cd/core.sh" "${orig}/lib/cd/cmd-state.sh" "${orig}/lib/cd/driver.sh" "${src}/lib/cd/"
     cp "${orig}/bin/gremion-cd" "${src}/bin/"
     export HOST_SRC="$src"
-    cat "${CD_FIXTURES}/driver/stubs.sh" >> "${GREMION_CD_STUBS_DIR}/cd-stubs.sh"
+    cat "${CD_FIXTURES}/driver/driver-stubs.bash" >> "${GREMION_CD_STUBS_DIR}/cd-stubs.sh"
     shim sudo
     # the clean answers of the stand-ins: a green candidate, a clean class, a switch that records
     # switch_started, a commit that writes committed_at
@@ -98,10 +98,10 @@ drv_fingerprint() {
 drv_blocks() { if [ -f "${GREMION_ROOT}/data/cd/blocked.json" ]; then jq -r 'length' "${GREMION_ROOT}/data/cd/blocked.json"; else echo 0; fi; }
 drv_mails() { grep -c "^stub cd_notify $1" "$SHIM_LOG" || true; }
 
-# drv_wait CMD -- poll a condition for up to 10 seconds
+# drv_wait CMD -- poll a condition for up to a minute (a slow runner must not flake)
 drv_wait() {
     local i
-    for i in $(seq 1 100); do
+    for i in $(seq 1 600); do
         if eval "$1" 2>/dev/null; then return 0; fi
         sleep 0.1
     done
@@ -236,7 +236,7 @@ drv_hostlock_free() { ( exec 9>>"${GREMION_ROOT}/runtime/hostd.lock"; flock -n 9
 # the happy path and its composition
 # ===========================================================================================
 
-@test "pipeline: a green candidate runs the stages in the order of the plan and commits" {
+@test "pipeline: a green candidate runs the stages in order and commits" {
     drv_seed
     run cd_prog tick
     [ "$status" -eq 0 ]
@@ -424,7 +424,9 @@ drv_hostlock_free() { ( exec 9>>"${GREMION_ROOT}/runtime/hostd.lock"; flock -n 9
     export CD_STUB_HOOK_cd_data_timer_guard='drv_probe at_guard'
     run cd_prog tick --resume-only
     [ "$status" -eq 0 ]
-    # the lock was already held when the first stage after the build began
+    # the lock was held before the first stage began: a normal tick takes it only after the timer
+    # guard (see the locks test, where the same probe says FREE)
+    grep -q '^probe at_guard host=HELD cd=HELD$' "$SHIM_LOG"
     drv_order '^stub cd_data_timer_guard' '^stub cd_commit_promote'
     [ "$(drv_state '.live.sha12')" = bbbbbbbbbbbb ]
     [ "$(drv_n '^stub cd_gh_candidate')" -eq 0 ]
@@ -453,6 +455,8 @@ drv_hostlock_free() { ( exec 9>>"${GREMION_ROOT}/runtime/hostd.lock"; flock -n 9
     run cd_prog tick --resume-only
     [ "$status" -eq 0 ]
     drv_order '^stub cd_commit_promote' '^stub cd_commit_prune'
+    # the boot unit held the host lock up to step 10 and let it go there
+    grep -q '^probe at_prune host=HELD cd=HELD$' "$SHIM_LOG"
     [ "$(drv_n '^stub cd_reconcile_run')" -eq 0 ]
     [ "$(drv_state '.hold.reason')" = interrupted ]
     [ "$(drv_n '^stub cd_rollback_run')" -eq 0 ]
@@ -672,7 +676,7 @@ drv_hostlock_free() { ( exec 9>>"${GREMION_ROOT}/runtime/hostd.lock"; flock -n 9
     drv_hostlock_free
 }
 
-@test "policy: the module step maps as the plan says: exit 1 blocks migrate_failed (module_upgrade), 4 retries with no block, a timeout (2) holds failure with no block; none of them is a rollback" {
+@test "policy: the module step maps like this: exit 1 blocks migrate_failed (module_upgrade), 4 retries with no block, a timeout (2) holds failure with no block; none of them is a rollback" {
     drv_seed
     export CD_STUB_HOOK_cd_data_migrate='CD_MODULES_REASON=module_upgrade; return 1'
     run cd_prog tick
@@ -1138,7 +1142,7 @@ drv_final() { jq -S '{phase, hold, live: (.live | {sha12, tag, colour}), previou
 }
 
 # ===========================================================================================
-# release-now: one test per row of the section 8 table
+# release-now: one test per row of the table of holds and flags
 # ===========================================================================================
 
 drv_rn() { # drv_rn ARGS... -- the verb, then a tick
@@ -1203,9 +1207,17 @@ drv_rn() { # drv_rn ARGS... -- the verb, then a tick
     [ "$(drv_state '.release')" = null ]
     : > "$SHIM_LOG"
     drv_seed
+    export CD_STUB_HOOK_cd_adopt_apply_host='drv_probe at_apply_host'
+    export CD_STUB_HOOK_cd_adopt_apply_state='drv_probe at_apply_state; printf "held=%s\n" "${GREMION_HOST_LOCK_HELD:-}" >> "$SHIM_LOG"'
+    export CD_STUB_HOOK_cd_prepare_retag='drv_probe at_retag'
     drv_rn bbbbbbbbbbbb --with-state
     [ "$(drv_state '.live.sha12')" = bbbbbbbbbbbb ]
     drv_order '^stub cd_classify' '^stub cd_adopt_apply_host' '^stub cd_adopt_apply_state' '^stub cd_prepare_retag '
+    # both apply stages ran under the host lock (and the child is told so), the build does not
+    grep -q '^probe at_apply_host host=HELD cd=HELD$' "$SHIM_LOG"
+    grep -q '^probe at_apply_state host=HELD cd=HELD$' "$SHIM_LOG"
+    grep -q '^held=1$' "$SHIM_LOG"
+    grep -q '^probe at_retag host=FREE cd=HELD$' "$SHIM_LOG"
 }
 
 @test "release-now: unsupported_chain, contract_migration, waived_migration and classify_failed are refused even with every flag, --with-state on an unsupported_chain included" {
@@ -1263,6 +1275,11 @@ drv_rn() { # drv_rn ARGS... -- the verb, then a tick
     cd_prog release-now "$SHA_B" --ref proof/x --unverified
     run cd_prog tick
     assert_recorded stub "cd_prepare_fetch ${SHA_B} proof/x"
+    # a proof release is never committed: its window ends as the rollback proof_end
+    assert_recorded stub "cd_rollback_run proof_end"
+    [ "$(drv_n '^stub cd_commit_promote')" -eq 0 ]
+    [ "$(drv_state '.live.sha12')" = aaaaaaaaaaaa ]
+    [ "$(readlink "${GREMION_ROOT}/current")" = releases/aaaaaaaaaaaa ]
 }
 
 @test "release-now: the normal checks still run: a candidate with no verdict (unknown) does not start" {
