@@ -717,7 +717,11 @@ sheet_section() {
 
 @test "run sheet: the second build of the live commit goes under a throwaway tag, and the tag is removed again" {
     assert_present '^IMAGE_TAG=proof-twice docker compose --env-file .* build --no-cache gremion-ui$' "$SHEET"
-    assert_present '^docker image rm gremion-ui:proof-twice$' "$SHEET"
+    # the image name is the one the running container carries (it has a registry prefix), never a guessed one
+    grep -qxF 'THROW="${LIVE_TAG%:*}:proof-twice"' "$SHEET"
+    grep -qxF 'docker image rm "$THROW"' "$SHEET"
+    run grep -nE "gremion-ui:proof-twice" "$SHEET"
+    [ "$status" -eq 1 ]
     run grep -nE 'docker compose .*build' "$SHEET"
     [ "$status" -eq 0 ]
     while IFS= read -r line; do

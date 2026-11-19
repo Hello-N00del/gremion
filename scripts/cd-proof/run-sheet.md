@@ -192,16 +192,19 @@ rollback would start, is never touched), read the new image's ID, and remove the
 ```
 cd "$ROOT/current"
 LIVE_TAG="$(docker inspect --format '{{.Config.Image}}' "$(cid "app-$(active)" gremion-ui)")"
+THROW="${LIVE_TAG%:*}:proof-twice"
 BEFORE_ID="$(docker image inspect --format '{{.Id}}' "$LIVE_TAG")"
 IMAGE_TAG=proof-twice docker compose --env-file "$ROOT/etc/env/app-$(active).env" build --no-cache gremion-ui
-docker image inspect --format '{{.Id}}' gremion-ui:proof-twice
-docker image rm gremion-ui:proof-twice
+docker image inspect --format '{{.Id}}' "$THROW"
+docker image rm "$THROW"
 [ "$BEFORE_ID" = "$(docker image inspect --format '{{.Id}}' "$LIVE_TAG")" ] && echo live-tag-unchanged
 ```
 
-Passed when: the build exits 0, `docker image inspect gremion-ui:proof-twice` fails afterwards
-(the throwaway tag is gone), and `live-tag-unchanged` is printed (the live tag still names the
-image it named before). Write down whether the two image IDs are equal.
+The throwaway name is the image name of the running container (it carries the registry
+prefix) with the tag `proof-twice`, never a name written out here. Passed when: the build
+exits 0, `docker image inspect "$THROW"` fails afterwards (the throwaway tag is gone), and
+`live-tag-unchanged` is printed (the live tag still names the image it named before). Write
+down whether the two image IDs are equal.
 
 The next elapse of the backup, purge and Karenz timers against the lock span:
 
@@ -428,9 +431,9 @@ Passed when:
 [ "$(active)" = "$FROM_COLOUR" ] && echo old-colour-serves
 # the switch back is read from the history
 jq -r --arg t "$T1" 'select(.at >= $t) | [.at, .event] | @tsv' "$HIST"
-# the old colour serves through the edge and both of its app services run, the new colour project is stopped
+# the old colour serves through the edge and its three app services run, the new colour project is stopped
 curl -s "https://${CUSTOMER_HOST}/healthz" | jq -r .colour
-for S in gremion-ui gremion-public; do docker inspect --format '{{.State.Running}}' "$(cid "app-${FROM_COLOUR}" "$S")"; done
+for S in gremion-ui gremion-public control-panel; do docker inspect --format '{{.State.Running}}' "$(cid "app-${FROM_COLOUR}" "$S")"; done
 docker ps -q --filter "label=com.docker.compose.project=${STACK}-app-${TO_COLOUR}" | wc -l
 # blocked with watch_readiness, and the live release never moved
 jq -r --arg s "$SHA" '.[] | select(.sha == $s) | .rule' "$BL"
@@ -440,7 +443,7 @@ jq -r '.live.sha12' "$ST"
 `old-colour-serves` is printed; the first rollback line in the history is at most 60 seconds
 after `$T1` (`secs`: the watch takes a sample every 15 seconds by default and needs three bad
 ones in a row, about 45 seconds, and the 60 leaves 15 for the sample's own time and the
-switch back); `healthz` names `$FROM_COLOUR`; both services print `true`; the new project
+switch back); `healthz` names `$FROM_COLOUR`; all three print `true`; the new project
 count is `0`; the rule is
 `watch_readiness`; the live SHA is the one from before. The `rolled_back` mail arrives. Then
 clear the block as at the end of scenario 1.
