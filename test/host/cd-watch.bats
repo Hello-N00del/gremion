@@ -1223,7 +1223,7 @@ BAD='.public.ok = false | .public.readyz = "503"'
     ev '.containers.restarts = 5 | .fivexx = 90'
     [ "${lines[0]}" = bad ]
     adv 15
-    ev '.containers.restarts = 5 | .fivexx = 90'
+    ev '.containers.restarts = 7 | .fivexx = 90'
     [ "${lines[0]}" = trigger:watch_crash ]
 }
 
@@ -1336,6 +1336,180 @@ BAD='.public.ok = false | .public.readyz = "503"'
     [ "$(sw samples)" = 0 ]
     [ "$(sw last_sample_epoch)" = 0 ]
     [ "$(sw baseline_not_ready)" = 0 ]
+}
+
+# ============================================================ review round: the guards
+
+@test "eval restarts: a sample where docker was silent never moves the restart baseline" {
+    seed
+    ev '.containers.restarts = 5'
+    [ "${lines[0]}" = ok ]
+    adv
+    ev '.containers.known = false | .containers.restarts = 0 | .shared.docker_ok = false'
+    [ "${lines[0]}" = paused ]
+    # the stored baseline is still the 5 of the first sample
+    [ "$(jq -r '.restarts' "${GREMION_ROOT}/data/cd/watch-eval.json")" = 5 ]
+    adv
+    ev '.containers.restarts = 5'
+    [ "${lines[0]}" = ok ]
+    adv
+    ev '.containers.restarts = 6'
+    [ "${lines[0]}" = ok ]
+}
+
+@test "eval restarts: a first sample with docker silent leaves the baseline open, the next known sample takes it" {
+    seed
+    ev '.containers.known = false | .containers.restarts = 0 | .shared.docker_ok = false'
+    [ "${lines[0]}" = paused ]
+    [ "$(jq -r '.restarts' "${GREMION_ROOT}/data/cd/watch-eval.json")" = null ]
+    adv
+    ev '.containers.restarts = 3'
+    [ "${lines[0]}" = ok ]
+    [ "$(jq -r '.restarts' "${GREMION_ROOT}/data/cd/watch-eval.json")" = 3 ]
+    adv
+    ev '.containers.restarts = 4'
+    [ "${lines[0]}" = ok ]
+    adv
+    ev '.containers.restarts = 5'
+    [ "${lines[0]}" = trigger:watch_crash ]
+}
+
+@test "eval restarts: restarts the outage caused are not held against the release when the outage ends" {
+    seed
+    ev '(.)'
+    adv
+    ev '.shared.state_ok = false | .containers.restarts = 3'
+    [ "${lines[0]}" = paused ]
+    adv
+    ev "$BAD | .shared.state_ok = false | .containers.restarts = 4"
+    [ "${lines[0]}" = paused ]
+    # the outage is over and nothing restarted since the last paused sample
+    adv
+    ev '.containers.restarts = 4'
+    [ "${lines[0]}" = ok ]
+    adv
+    ev '.containers.restarts = 5'
+    [ "${lines[0]}" = ok ]
+    # but two new restarts with the shared services healthy are the release's
+    adv
+    ev '.containers.restarts = 7'
+    [ "${lines[0]}" = trigger:watch_crash ]
+}
+
+@test "eval restarts: restarts inside the grace window after a resume are not held against the release" {
+    seed '{"last_sample_epoch":'"$(cd_clock)"'}'
+    ev '.containers.restarts = 0'
+    adv 900
+    ev '.containers.restarts = 4'
+    [ "${lines[0]}" = ok ]
+    adv
+    ev '.containers.restarts = 5'
+    [ "${lines[0]}" = ok ]
+    adv
+    ev '.containers.restarts = 5'
+    [ "${lines[0]}" = ok ]
+    adv
+    ev '.containers.restarts = 7'
+    [ "${lines[0]}" = trigger:watch_crash ]
+}
+
+@test "eval pause cap: inside the grace window after a resume the cap is neither a trigger nor a park" {
+    cd_write_cfg CD_PAUSE_MAX_MIN=15
+    seed '{"paused_s":895,"last_sample_epoch":'"$(cd_clock)"'}'
+    adv 1000
+    ev "$BAD | .shared.state_ok = false"
+    [ "${lines[0]}" = paused ]
+    adv
+    ev "$BAD | .shared.state_ok = false"
+    [ "${lines[0]}" = paused ]
+    # the grace is over: the cap now applies
+    adv
+    ev "$BAD | .shared.state_ok = false"
+    [ "${lines[0]}" = trigger:watch_pause_cap ]
+}
+
+@test "eval timeout: a timed-out sample is a failed sample, never a pass" {
+    seed
+    ev '(.)'
+    adv
+    ev '.timed_out = true'
+    [ "${lines[0]}" = bad ]
+    [ "$(sw bad_streak)" = 1 ]
+    adv
+    ev '.timed_out = true'
+    adv
+    ev '.timed_out = true'
+    [ "${lines[0]}" = trigger:watch_readiness ]
+}
+
+@test "sample: a hung old-colour probe spends the budget, the sample is bad and docker is not blamed" {
+    world_good
+    seed
+    printf '20' > "${DK}/old.readyz.advance"
+    run --separate-stderr wl 'cd_watch_sample'
+    [ "$status" -eq 0 ]
+    local s="$output"
+    [ "$(jq -r '.timed_out' <<<"$s")" = true ]
+    [ "$(jq -r '.containers.known' <<<"$s")" = false ]
+    [ "$(jq -r '.shared.docker_ok' <<<"$s")" = true ]
+    [ "$(jq -r '.shared.traefik_ok' <<<"$s")" = true ]
+    [ "$(jq -r '.shared.state_ok' <<<"$s")" = true ]
+    export S="$s"
+    run --separate-stderr wl 'cd_watch_eval "$S"'
+    [ "${lines[0]}" = bad ]
+}
+
+@test "eval timeout: a hung old-colour probe, repeated, does not pause or park a healthy release" {
+    cd_write_cfg CD_PAUSE_MAX_MIN=1
+    world_good
+    seed
+    printf '20' > "${DK}/old.readyz.advance"
+    local i
+    for i in 1 2 3 4 5; do
+        run --separate-stderr wl 'cd_watch_sample'
+        export S="$output"
+        run --separate-stderr wl 'cd_watch_eval "$S"'
+        [ "${lines[0]}" != paused ]
+        [ "${lines[0]}" != parked ]
+    done
+}
+
+@test "accesslog_count: lines of app and public that carry no readable time make the log unreadable, not zero" {
+    world_good
+    local i
+    for i in $(seq 1 12); do
+        printf '{"ServiceName":"app@file","RouterName":"r@file","DownstreamStatus":502,"StartUTC":"not-a-time"}\n' >> "${DK}/access.log"
+    done
+    run --separate-stderr wl 'cd_watch_accesslog_count $(( $(cd_now) - 300 ))'
+    [ "$status" -ne 0 ]
+    [ -z "$output" ]
+    # a line of another service without a time is of no concern
+    : > "${DK}/access.log"
+    printf '{"ServiceName":"keycloak@docker","DownstreamStatus":502}\n' >> "${DK}/access.log"
+    logl app@file r@file 502 60 2
+    run --separate-stderr wl 'cd_watch_accesslog_count $(( $(cd_now) - 300 ))'
+    [ "$status" -eq 0 ]
+    [ "$output" = 2 ]
+    # one untimed public line among good ones is enough
+    printf '{"ServiceName":"public@file","RouterName":"r@file","DownstreamStatus":500}\n' >> "${DK}/access.log"
+    run --separate-stderr wl 'cd_watch_accesslog_count $(( $(cd_now) - 300 ))'
+    [ "$status" -ne 0 ]
+}
+
+@test "accesslog_count: a sample whose log has untimed lines carries a null count, not a zero" {
+    world_good
+    seed
+    printf '{"ServiceName":"app@file","RouterName":"r@file","DownstreamStatus":502,"StartUTC":"x"}\n' >> "${DK}/access.log"
+    run --separate-stderr wl 'cd_watch_sample'
+    [ "$(jq -r '.fivexx' <<<"$output")" = null ]
+}
+
+@test "accesslog_count: a failing docker exec is unreadable even in a shell without pipefail" {
+    world_good
+    touch "${DK}/log.fail"
+    run --separate-stderr wl 'set +o pipefail; cd_watch_accesslog_count $(( $(cd_now) - 300 ))'
+    [ "$status" -ne 0 ]
+    [ -z "$output" ]
 }
 
 # ============================================================ the edge log proof script

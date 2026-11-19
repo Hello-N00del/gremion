@@ -179,7 +179,10 @@ cd_watch_probe_public() {
 # every other service are not counted. 1 when the log cannot be read or the read does not
 # reach back to SINCE; 2 on a bad argument.
 _cd_watch_scan() {
-    local since="${1:-}" cid t out n req first lines
+    local since="${1:-}" cid t out n req first lines untimed
+    # a failing docker exec or tail must not read as an empty log, whatever the caller's options
+    local -
+    set -o pipefail
     [[ "$since" =~ ^[0-9]{1,12}$ ]] || { _cd_watch_err "the access log count needs an epoch"; return 2; }
     t="$(_cd_watch_ct)" || return 1
     cid="$(cd_svc_cid state traefik 2>/dev/null)" || return 1
@@ -187,9 +190,10 @@ _cd_watch_scan() {
     out="$(timeout -k 2 "$t" docker exec "$cid" tail -n "$_CD_WATCH_TAIL_LINES" "$_CD_WATCH_LOG_PATH" </dev/null 2>/dev/null \
         | jq -R -n -r --argjson since "$since" '
             def ts: (.StartUTC // .time // "") | tostring | sub("\\.[0-9]+"; "") | (try fromdateiso8601 catch null);
-            reduce (inputs | fromjson? | select(type == "object")) as $l ({n: 0, r: 0, first: 0, lines: 0};
+            reduce (inputs | fromjson? | select(type == "object")) as $l ({n: 0, r: 0, first: 0, lines: 0, untimed: 0};
                 ($l | ts) as $t
                 | .lines += 1
+                | (if $t == null and ($l.ServiceName | IN("app@file", "public@file")) then .untimed += 1 else (.) end)
                 | (if .first == 0 and $t != null then .first = $t else (.) end)
                 | (if $t != null and $t >= $since
                        and ($l.ServiceName | IN("app@file", "public@file"))
@@ -198,9 +202,16 @@ _cd_watch_scan() {
                         | (if ($l.DownstreamStatus | type) == "number" and $l.DownstreamStatus >= 500 and $l.DownstreamStatus <= 599
                            then .n += 1 else (.) end)
                    else (.) end))
-            | "\(.n) \(.r) \(.first) \(.lines)"' 2>/dev/null)" || return 1
-    read -r n req first lines <<<"$out"
-    [[ "$n" =~ ^[0-9]{1,9}$ && "$req" =~ ^[0-9]{1,9}$ && "$first" =~ ^[0-9]{1,12}$ && "$lines" =~ ^[0-9]{1,9}$ ]] || return 1
+            | "\(.n) \(.r) \(.first) \(.lines) \(.untimed)"' 2>/dev/null)" || return 1
+    read -r n req first lines untimed <<<"$out"
+    [[ "$n" =~ ^[0-9]{1,9}$ && "$req" =~ ^[0-9]{1,9}$ && "$first" =~ ^[0-9]{1,12}$ && "$lines" =~ ^[0-9]{1,9}$ && "$untimed" =~ ^[0-9]{1,9}$ ]] || return 1
+    # a line of the two services whose time cannot be read cannot be placed in the window: the
+    # count would be too low, so the read is unreadable (a changed time field must not switch
+    # the 5xx rule off silently)
+    if ((10#$untimed > 0)); then
+        _cd_watch_err "the access log has lines whose time cannot be read"
+        return 1
+    fi
     # a read that filled the tail and still starts after SINCE has lost the older lines
     if ((10#$lines >= _CD_WATCH_TAIL_LINES)) && { ((10#$first == 0)) || ((10#$first > since)); }; then
         _cd_watch_err "the access log read does not reach back to the start of the window"
@@ -333,7 +344,7 @@ _cd_watch_sample_run() {
     local ans portal_rc=0 ident_rc=0 w_new w_old route_ok=false route_known=true r1 r2
     local cont known total bad restarts since window n req old_ok=false timed_out=false
     local int_json='{"answered":false,"ready":false,"colour":"","release":"","not_ready":null}'
-    local iw f_col f_tag f_sw
+    local iw f_col f_tag f_sw docker_down=false
     t="$(_cd_watch_int CD_SAMPLE_TIMEOUT_S)" || return 2
     start="$(cd_now)" || return 2
     at="$start"
@@ -363,12 +374,26 @@ _cd_watch_sample_run() {
     if [[ -n "$live_tree" && -d "$live_tree" ]] && t="$(_cd_watch_ct)"; then
         if CD_DC_TIMEOUT="$t" cd_wait_healthy state 0 "$live_tree" >/dev/null 2>&1; then st_ok=true; fi
     fi
-    if _cd_watch_api_up; then api_ok=true; fi
+    # A shared service that was not asked because the budget was spent is no outage (shared_*
+    # says "not known to be down"): the sample is bad through its timeout, never paused by it.
+    if ! _cd_watch_ct >/dev/null; then
+        api_ok=true
+    elif _cd_watch_api_up; then
+        api_ok=true
+    fi
     _cd_watch_old_ready "$old" && old_ok=true
     # 2. the containers of the colour
-    cont="$(_cd_watch_containers "$colour")"
-    read -r known total bad restarts <<<"$cont"
-    [[ "$known" == 1 ]] && docker_ok=true
+    docker_down=false
+    if _cd_watch_ct >/dev/null; then
+        cont="$(_cd_watch_containers "$colour")"
+        read -r known total bad restarts <<<"$cont"
+        [[ "$known" == 1 ]] && docker_ok=true
+        [[ "$docker_ok" == true ]] || docker_down=true
+    else
+        total=0
+        bad=0
+        restarts=0
+    fi
     # 3. the probes: the public one through the edge, the internal one inside the container.
     # A probe that has no budget left is not made: it is no answer.
     pub_out="$(cd_watch_probe_public)" || pub_rc=$?
@@ -426,7 +451,7 @@ _cd_watch_sample_run() {
         --arg ready "$ready" --arg login "$login" --argjson pub_ok "$pub_ok" --argjson internal "$int_json" \
         --argjson route_known "$route_known" --argjson route_ok "$route_ok" \
         --argjson ident_ok "$(_cd_watch_rcb "$ident_rc")" --argjson portal_ok "$(_cd_watch_rcb "$portal_rc")" \
-        --argjson known "$docker_ok" --argjson total "${total:-0}" --argjson bad "${bad:-0}" --argjson restarts "${restarts:-0}" \
+        --argjson known "$docker_ok" --argjson docker_down "$docker_down" --argjson total "${total:-0}" --argjson bad "${bad:-0}" --argjson restarts "${restarts:-0}" \
         --argjson n "$n" --argjson req "$req" --argjson window "$window" \
         --arg w_new "$w_new" --arg w_old "$w_old" --argjson old_ok "$old_ok" \
         --argjson st_ok "$st_ok" --argjson api_ok "$api_ok" --argjson timed_out "$timed_out" '
@@ -440,7 +465,7 @@ _cd_watch_sample_run() {
          fivexx: $n, requests: $req, window_s: $window,
          workers: {new: $w_new, old: $w_old},
          old_ready: $old_ok,
-         shared: {state_ok: $st_ok, traefik_ok: $api_ok, docker_ok: $known},
+         shared: {state_ok: $st_ok, traefik_ok: $api_ok, docker_ok: ($docker_down | not)},
          timed_out: $timed_out}'
 }
 
@@ -503,6 +528,8 @@ cd_watch_eval() {
     [[ "$cont_known" == true && "$cont_bad" -eq 0 ]] || ready_fail=true
     [[ "$pub_ok" == true && "$int_ok" == true && "$route_ok" == true && "$ident_ok" == true && "$portal_ok" == true ]] || ready_fail=true
     [[ "$pub_ok" == true && "$int_ok" == true ]] || new_not_ready=true
+    # a sample that ran out of its time is a failed sample, never a gap and never a pass
+    [[ "$timed_out" == true ]] && ready_fail=true
     printf '%s' "$sample" | jq -e '.shared.state_ok == true and .shared.traefik_ok == true and .shared.docker_ok == true' >/dev/null 2>&1 || shared_ok=false
 
     # -- the sidecar: the restart baseline, the grace after a resume, the last duration
@@ -535,13 +562,19 @@ cd_watch_eval() {
     fi
 
     # -- what failed
-    if [[ -z "$restarts_base" ]]; then
-        restarts_base=$cont_restarts
-    elif ((cont_restarts < restarts_base)); then
-        restarts_base=$cont_restarts
+    # The restart baseline only ever moves on a sample where docker answered (an unknown sample
+    # carries a count of 0 that is no fact). It is taken at the first known sample, lowered when
+    # the count falls (a recreated container), and re-based on every known sample of the grace
+    # window after a resume (restarts of a reboot are nobody's fault); a paused sample re-bases
+    # it below, after the verdict.
+    delta=0
+    if [[ "$cont_known" == true ]]; then
+        if [[ -z "$restarts_base" ]] || ((cont_restarts < restarts_base)) || ((grace > 0)); then
+            restarts_base=$cont_restarts
+        fi
+        delta=$((cont_restarts - restarts_base))
+        ((delta >= 2)) && crash=true
     fi
-    delta=$((cont_restarts - restarts_base))
-    [[ "$cont_known" == true ]] && ((delta >= 2)) && crash=true
     if [[ "$n" == null ]]; then
         blind=$((blind + 1))
         extra+=$'\nblind'
@@ -565,7 +598,10 @@ cd_watch_eval() {
         # observed clock stops and the paused clock runs, up to the cap
         ((paused == 0)) && first_pause=true
         paused=$((paused + counted))
-        if ((paused >= cap_s)); then
+        # the cap is judged only outside the grace window after a resume (the reboot rule: the
+        # first samples after a resume are never a trigger, and a reboot's own outage is not
+        # a reason to park either)
+        if ((paused >= cap_s && grace == 0)); then
             if [[ "$old_ready" == true && "$new_not_ready" == true ]]; then
                 verdict=trigger:watch_pause_cap
             else
@@ -589,6 +625,9 @@ cd_watch_eval() {
             if ((streak >= failn)); then verdict=trigger:watch_readiness; else verdict=bad; fi
         fi
     fi
+    # restarts that happened while a shared service was down are the outage's, not the
+    # release's: re-base on every paused sample so the end of the outage does not blame them
+    if [[ "$verdict" == paused && "$cont_known" == true ]]; then restarts_base=$cont_restarts; fi
     ((grace > 0)) && grace=$((grace - 1))
     samples=$((samples + 1))
 
@@ -605,7 +644,7 @@ cd_watch_eval() {
         --argjson o "$observed" --argjson s "$samples" --argjson b "$streak" --argjson p "$paused" --argjson bl "$blind" \
         --argjson rq "$requests" --argjson at "$at" || return 2
     cd_mkdir "$CD_DATA" || return 2
-    jq -cn --arg r "$rid" --argjson g "$grace" --argjson rs "$restarts_base" --argjson d "$(printf '%s' "$sample" | jq -r '.duration_s // 0 | floor')" \
+    jq -cn --arg r "$rid" --argjson g "$grace" --argjson rs "${restarts_base:-null}" --argjson d "$(printf '%s' "$sample" | jq -r '.duration_s // 0 | floor')" \
         '{v: 1, release: $r, grace: $g, restarts: $rs, last_duration_s: $d}' | cd_atomic_write "$sc" 600 || return 2
 
     case "$verdict" in
