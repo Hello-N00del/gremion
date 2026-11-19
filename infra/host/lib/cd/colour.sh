@@ -15,8 +15,8 @@
 #   0 ok - 1 an assertion about the colour failed (attributable to the release) -
 #   2 a usage error or a missing precondition (an env file or key, a tool, the
 #   baseline, a tree) - 3 blocked (a child program reports a leftover of an earlier
-#   killed run: retry later, never a verdict on the commit; isolation run, isolation
-#   record and an enforced verify only) - 4 an infrastructure answer is missing
+#   killed run: retry later, never a verdict on the commit; isolation run and isolation
+#   record only: gremion-verify documents no such code) - 4 an infrastructure answer is missing
 #   (docker, the Traefik API, the test router or a child program did not answer or
 #   ran out of time, so nothing can be said about the colour).
 # Unknown is never success. A failed readiness layer leaves one short code in
@@ -255,15 +255,21 @@ _cd_colour_guard() {
 # cd_colour_down TREE COLOUR - `compose down` of that colour's project alone, never
 # the other one, never with -v. REFUSES (1, one line, no compose call) a colour that
 # runtime/active-colour or the Traefik API names, and a colour for which that cannot
-# be read (2, 4).
+# be read (2, 4). A compose down that fails or times out is 2 (a precondition of cd_dc)
+# or 4 (docker did not answer), never 1: 1 means "refused, it serves".
 cd_colour_down() {
     local tree="${1:-}" colour="${2:-}" rc=0
     [[ "$#" -eq 2 ]] || { _cd_colour_err "cd_colour_down: usage: TREE COLOUR"; return 2; }
     _cd_colour_check_colour "$colour" cd_colour_down || return 2
     _cd_colour_guard "$colour" cd_colour_down || return $?
     cd_dc "$tree" "app-${colour}" down || rc=$?
-    [[ "$rc" -eq 0 ]] || { _cd_colour_err "cd_colour_down: compose down of the ${colour} colour failed"; return 1; }
-    return 0
+    [[ "$rc" -eq 0 ]] && return 0
+    # 1 is the answer of a refusal (the colour serves). A down that failed or ran out of
+    # time says only that docker did not answer, as in cd_colour_start: 2 stays cd_dc's
+    # own precondition, anything else is 4
+    [[ "$rc" -eq 2 ]] || rc=4
+    _cd_colour_fail down_failed "$rc" "cd_colour_down: compose down of the ${colour} colour failed"
+    return "$rc"
 }
 
 # -- stack isolation (a port of gremion-deploy assert_stack_isolation) ---------
@@ -403,7 +409,7 @@ cd_colour_start() {
 # image ID equals the other colour's is not a failure: an unchanged service builds to
 # the same image. At least one first-party container must exist.
 cd_colour_identity() {
-    local colour="${1:-}" tag="${2:-}" cids cid line ref id t want first=0 rc
+    local colour="${1:-}" tag="${2:-}" cids cid line ref id t want first=0 pinned=0 rc
     CD_COLOUR_REASON=''
     _cd_colour_check_colour "$colour" cd_colour_identity || return 2
     _cd_colour_check_tag "$tag" cd_colour_identity || return 2
@@ -413,7 +419,14 @@ cd_colour_identity() {
         line="$(docker inspect --format '{{.Config.Image}} {{.Image}}' "$cid" </dev/null 2>/dev/null)" || return 4
         ref="${line%% *}"
         id="${line#* }"
-        [[ "$ref" == *@* ]] && continue
+        if [[ "$ref" == *@* ]]; then
+            # pinned by digest: no release tag to compare. Counted when it is a gremion-*
+            # image, to say so below when nothing else was found
+            t="${ref%%@*}"
+            t="${t##*/}"
+            [[ "$t" == gremion-* ]] && pinned=$((pinned + 1))
+            continue
+        fi
         t="${ref##*/}"
         [[ "$t" == *:* ]] || continue
         t="${t##*:}"
@@ -434,6 +447,12 @@ cd_colour_identity() {
             return 1
         }
     done <<<"$cids"
+    if [[ "$first" -lt 1 && "$pinned" -ge 1 ]]; then
+        # an install that pins its images by digest (the release pins layer) has no tag
+        # to prove; stage 1 is host-build only. Not a verdict on the commit.
+        _cd_colour_fail pinned_install 2 "identity: the first-party images of the ${colour} colour are pinned by digest, which this program cannot prove against a release tag (host-build installs only)"
+        return 2
+    fi
     [[ "$first" -ge 1 ]] || { _cd_colour_fail identity 1 "identity: no first-party container in the ${colour} colour"; return 1; }
     return 0
 }
@@ -547,12 +566,31 @@ _cd_colour_baseline() {
 }
 
 # Layer 1: containers.
+
+# _cd_colour_wait_unanswered - 0 when everything CD_WAIT_BAD lists is a read that docker
+# did not answer (docker_error, inspect_failed): nothing can be said about the colour. A
+# service that really was not healthy (absent, starting, unhealthy, exited) is a verdict
+# and makes this 1, whatever else failed to read.
+_cd_colour_wait_unanswered() {
+    local rest
+    [[ "${CD_WAIT_BAD:-}" == *'(docker_error)'* || "${CD_WAIT_BAD:-}" == *'(inspect_failed)'* ]] || return 1
+    rest="$(printf '%s' "${CD_WAIT_BAD:-}" | sed -E 's/ [^ (]+\((docker_error|inspect_failed)\)//g')" || return 1
+    [[ -z "${rest//[[:space:]]/}" ]]
+}
+
 _cd_colour_l1_healthy() { # COLOUR TREE
     local rc=0
     cd_wait_healthy "app-${1}" "$(_cd_colour_int "${CD_COLOUR_HEALTHY_S:-}" 180)" "$2" || rc=$?
     case "$rc" in
         0) return 0 ;;
-        3) _cd_colour_fail unhealthy 1 "layer 1: the ${1} colour is not healthy:${CD_WAIT_BAD:-}"; return 1 ;;
+        3)
+            if _cd_colour_wait_unanswered; then
+                _cd_colour_fail docker_none 4 "layer 1: docker did not answer while the health of the ${1} colour was read:${CD_WAIT_BAD:-}"
+                return 4
+            fi
+            _cd_colour_fail unhealthy 1 "layer 1: the ${1} colour is not healthy:${CD_WAIT_BAD:-}"
+            return 1
+            ;;
         *) _cd_colour_fail unhealthy 2 "layer 1: the health of the ${1} colour could not be read"; return 2 ;;
     esac
 }
@@ -592,21 +630,33 @@ _cd_colour_l1_stable() { # COLOUR TREE
     cd_wait_healthy "app-${1}" 0 "$2" || rc=$?
     case "$rc" in
         0) return 0 ;;
-        3) _cd_colour_fail restart 1 "layer 1: the ${1} colour is not healthy at the end of the stable window"; return 1 ;;
+        3)
+            if _cd_colour_wait_unanswered; then
+                _cd_colour_fail docker_none 4 "layer 1: docker did not answer at the end of the stable window of the ${1} colour:${CD_WAIT_BAD:-}"
+                return 4
+            fi
+            _cd_colour_fail restart 1 "layer 1: the ${1} colour is not healthy at the end of the stable window"
+            return 1
+            ;;
         *) _cd_colour_fail unhealthy 2 "layer 1: the health of the ${1} colour could not be read at the end of the stable window"; return 2 ;;
     esac
 }
 
 # Layer 2: the edge's next route (app-next@file and public-next@file name the target).
 _cd_colour_l2_route_once() { # COLOUR
-    local pair name svc url st urls
+    local pair name svc url st urls rc
     for pair in app-next@file:gremion-ui public-next@file:gremion-public; do
         name="${pair%%:*}"
-        # cd_traefik_service says curl's own reason on stderr; it is left visible
-        svc="$(cd_traefik_service "$name")" || {
-            _cd_colour_fail next_route_down 1 "layer 2: ${name} is not reported by the Traefik API"
-            return 1
-        }
+        # cd_traefik_service says curl's own reason on stderr; it is left visible. It cannot
+        # tell a refused connection from a 404 (the switch file not loaded yet): neither is
+        # a statement about the colour, so it is the edge's (4), never the commit's
+        rc=0
+        svc="$(cd_traefik_service "$name")" || rc=$?
+        if [[ "$rc" -ne 0 ]]; then
+            [[ "$rc" -eq 2 ]] || rc=4
+            _cd_colour_fail next_route_none "$rc" "layer 2: the Traefik API gave no answer for ${name}"
+            return "$rc"
+        fi
         urls="$(printf '%s' "$svc" | jq -r '.loadBalancer.servers[]?.url // empty' 2>/dev/null)" || urls=''
         [[ -n "$urls" ]] || { _cd_colour_fail next_route_colour 1 "layer 2: ${name} has no server"; return 1; }
         while IFS= read -r url; do
@@ -624,8 +674,10 @@ _cd_colour_l2_route_once() { # COLOUR
 }
 
 # The Traefik health check runs every ten seconds, so a fresh server is first not UP:
-# the wait is for the status only; a wrong colour fails at once; an API that does not
-# answer is 4.
+# the wait is for the status only; a wrong colour fails at once. An API that does not
+# answer is 4: at once when it does not answer at all, and after the same window when it
+# stops answering later (an edge restart inside the window comes back; a service the
+# switch file does not report yet is read again).
 _cd_colour_l2_route() { # COLOUR
     local api deadline rc why
     api="$(cd_traefik_api)" || return 2
@@ -639,7 +691,11 @@ _cd_colour_l2_route() { # COLOUR
         rc=0
         _cd_colour_l2_route_once "$1" || rc=$?
         [[ "$rc" -eq 0 ]] && return 0
-        [[ "$CD_COLOUR_REASON" == next_route_down && "$(_cd_colour_now)" -lt "$deadline" ]] || return "$rc"
+        case "$CD_COLOUR_REASON:$rc" in
+            next_route_down:1 | next_route_none:4) : ;;
+            *) return "$rc" ;;
+        esac
+        [[ "$(_cd_colour_now)" -lt "$deadline" ]] || return "$rc"
         _cd_colour_sleep 2
     done
 }
@@ -756,30 +812,31 @@ cd_colour_ready() {
 
 # -- isolation evidence and verify -----------------------------------------------
 
-# _cd_colour_child_rc REASON EXIT MESSAGE - say why and return the code that a
-# non-zero exit of a family program (gremion-isolation, gremion-verify) stands for: its 1
+# _cd_colour_child_rc REASON EXIT MESSAGE [DOCUMENTED] - say why and return the code that
+# a non-zero exit of a family program (gremion-isolation, gremion-verify) stands for: its 1
 # is a failed assertion (1); its 2 is a missing precondition, such as an unclean tree (2);
 # its 3 is "blocked", such as a leftover container of an earlier killed run (3, retry
 # later, never a verdict on the commit); a timeout or a kill (124, 137) and anything the
-# program does not document are infrastructure (4).
+# program does not document are infrastructure (4). DOCUMENTED lists the exit codes the
+# program documents (default 123): gremion-isolation documents 3, gremion-verify only 1
+# and 2, so its 3 is no "blocked" but an undocumented code, hence infrastructure.
 _cd_colour_child_rc() {
-    local reason="$1" code="$2" msg="$3" rc
+    local reason="$1" code="$2" msg="$3" documented="${4:-123}" rc
     case "$code" in
-        1) rc=1 ;;
-        2) rc=2 ;;
-        3) rc=3 ;;
+        1 | 2 | 3) [[ "$documented" == *"$code"* ]] && rc="$code" || rc=4 ;;
         *) rc=4 ;;
     esac
     _cd_colour_fail "$reason" "$rc" "$msg"
 }
 
-# _cd_colour_tip TREE - the full commit of the release tree; 2 when it has none.
+# _cd_colour_tip TREE - the full commit of the release tree (40 hex, or 64 in a SHA-256
+# repository, as release_tip of gremion-isolation accepts it); 2 when it has none.
 _cd_colour_tip() {
     local sha=''
     if [[ -e "${1}/.git" ]] && command -v git >/dev/null 2>&1; then
         sha="$(git -C "$1" rev-parse --verify 'HEAD^{commit}' </dev/null 2>/dev/null)" || sha=''
     fi
-    [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || return 2
+    [[ "$sha" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]] || return 2
     printf '%s' "$sha"
 }
 
@@ -837,7 +894,7 @@ cd_colour_isolation_record() {
 # cd_colour_verify COLOUR TREE - gremion-verify --colour COLOUR, with the waiver ledger
 # of TREE. REPORT-ONLY until CD_VERIFY_ENFORCE=1: with 0 a failure is logged (history
 # event verify_report, counts only) and 0 is returned; with 1 the exit of the program
-# is told apart as in _cd_colour_child_rc (1, 2, 3 or 4). The program's output goes to a
+# is told apart as in _cd_colour_child_rc (1, 2 or 4: the program documents 0, 1 and 2). The program's output goes to a
 # 0600 file under logs/.
 cd_colour_verify() {
     local colour="${1:-}" tree="${2:-}" prog log ledger enf rc=0
@@ -859,7 +916,7 @@ cd_colour_verify() {
         cd_hist verify_report "enforce=${enf}" "code=${rc}" "colour=${colour}" || true
     fi
     if [[ "$enf" == 1 ]]; then
-        _cd_colour_child_rc verify "$rc" "gremion-verify failed (exit ${rc}); output in logs/${log##*/}"
+        _cd_colour_child_rc verify "$rc" "gremion-verify failed (exit ${rc}); output in logs/${log##*/}" 12
         return $?
     fi
     _cd_colour_err "gremion-verify failed (exit ${rc}), reported only (CD_VERIFY_ENFORCE=0); output in logs/${log##*/}"

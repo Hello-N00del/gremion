@@ -182,6 +182,13 @@ case "$url" in
     echo '{"Version":"3"}' ;;
   */api/http/services/*)
     [ -f "$DK/traefik.down" ] && { echo "curl: (7) Failed to connect" >&2; exit 7; }
+    # traefik.svcfail: the API answered /api/version, then stops answering the service
+    # reads: N calls fail (a number of calls), or every call while the file is empty
+    if [ -f "$DK/traefik.svcfail" ]; then
+      left=$(cat "$DK/traefik.svcfail")
+      if [ -z "$left" ]; then echo "curl: (7) Failed to connect" >&2; exit 7; fi
+      if [ "$left" -gt 0 ]; then echo $((left - 1)) > "$DK/traefik.svcfail"; echo "curl: (7) Failed to connect" >&2; exit 7; fi
+    fi
     name="${url##*/api/http/services/}"
     [ -f "$DK/traefik.$name" ] || { echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; }
     cat "$DK/traefik.$name" ;;
@@ -582,6 +589,17 @@ ready_green() { call "cd_colour_ready green ${TAG_NEW} \"\$TREE\""; }
     [[ "$output" == *"rc=1 reason=identity"* ]]
 }
 
+@test "identity: an install that pins its first-party images by digest is told apart from a colour with none (2, not 1)" {
+    happy
+    local d
+    d="$(printf 'e%.0s' $(seq 1 64))"
+    printf '%s %s\n' "ghcr.io/example/gremion-ui@sha256:${d}" "$IMG_NEW" > "$DK/imgline.c-ui"
+    printf '%s %s\n' "ghcr.io/example/gremion-public@sha256:${d}" "$IMG_NEW" > "$DK/imgline.c-pub"
+    run --separate-stderr colour_lib "cd_colour_identity green ${TAG_NEW}; echo \"rc=\$? reason=\${CD_COLOUR_REASON:-}\""
+    [[ "$output" == *"rc=2 reason=pinned_install"* ]]
+    [[ "$stderr" == *"digest"* ]]
+}
+
 @test "identity: a tag that does not resolve, or a docker that does not answer, is not a pass" {
     happy
     rm -f "$DK/image.ghcr.io_example_gremion-ui_${TAG_NEW}"
@@ -629,6 +647,35 @@ ready_green() { call "cd_colour_ready green ${TAG_NEW} \"\$TREE\""; }
         cd_colour_ready green '"${TAG_NEW}"' "$TREE"'
     [[ "$output" == *"rc=2 reason=unhealthy"* ]]
     # the second call is the one at the end of the window
+    [ "$(cat "$DK/w.n")" -eq 2 ]
+}
+
+@test "ready: layer 1, a docker daemon that does not answer during the health wait is infrastructure (4), not a verdict on the commit" {
+    happy
+    touch "$DK/ps.fail"
+    ready_green
+    [[ "$output" == *"rc=4 reason=docker_none"* ]]
+    rm -f "$DK/ps.fail"
+    # an inspect that fails is the same
+    rm -f "$DK/status.c-ui" "$DK/status.c-ui.n"
+    ready_green
+    [[ "$output" == *"rc=4 reason=docker_none"* ]]
+}
+
+@test "ready: layer 1, a service that is really not healthy stays a verdict (1) even when another read failed" {
+    happy
+    rm -f "$DK/status.c-ui" "$DK/status.c-ui.n"
+    printf 'running starting\n' > "$DK/status.c-pub"
+    ready_green
+    [[ "$output" == *"rc=1 reason=unhealthy"* ]]
+}
+
+@test "ready: layer 1, a docker that stops answering at the end of the stable window is infrastructure (4)" {
+    happy
+    rm -f "$DK/w.n"
+    call 'cd_wait_healthy() { local n; n=$(cat "$DK/w.n" 2>/dev/null || echo 0); echo $((n + 1)) > "$DK/w.n"; [ "$n" -ge 1 ] && { CD_WAIT_BAD=" gremion-ui(docker_error) gremion-public(inspect_failed)"; return 3; }; return 0; }
+        cd_colour_ready green '"${TAG_NEW}"' "$TREE"'
+    [[ "$output" == *"rc=4 reason=docker_none"* ]]
     [ "$(cat "$DK/w.n")" -eq 2 ]
 }
 
@@ -696,6 +743,29 @@ ready_green() { call "cd_colour_ready green ${TAG_NEW} \"\$TREE\""; }
     run --separate-stderr colour_lib "cd_colour_ready green ${TAG_NEW} \"\$TREE\"; echo \"rc=\$?\""
     [[ "$output" == *"rc=4"* ]]
     [[ "$stderr" == *"the Traefik API does not answer: curl: (7) Failed to connect"* ]]
+}
+
+@test "ready: layer 2, a Traefik API that stops answering AFTER the first check is infrastructure (4), not a verdict on the commit" {
+    happy
+    # /api/version answers, the service reads do not (an edge restart inside the window)
+    : > "$DK/traefik.svcfail"
+    ready_green
+    [[ "$output" == *"rc=4 reason=next_route_none"* ]]
+}
+
+@test "ready: layer 2, a service that the Traefik API answers 404 for (the switch file is not loaded) is infrastructure (4)" {
+    happy
+    rm -f "$DK/traefik.app-next@file"
+    ready_green
+    [[ "$output" == *"rc=4 reason=next_route_none"* ]]
+}
+
+@test "ready: layer 2, an edge that comes back inside the route window passes" {
+    happy
+    # the first service read fails, the retry two seconds later answers
+    echo 1 > "$DK/traefik.svcfail"
+    ready_green
+    [[ "$output" == *"rc=0 reason="* ]]
 }
 
 @test "ready: layer 2, a public probe that gets no answer at all is infrastructure (4), not a verdict on the commit" {
@@ -1088,6 +1158,24 @@ EOF
     [[ "$output" == *"rc=3 reason=isolation_record"* ]]
 }
 
+@test "isolation run and record: the tip of a SHA-256 repository (64 hex) is accepted, as the program's own release tip accepts it" {
+    local tip64
+    tip64="$(printf 'f%.0s' $(seq 1 64))"
+    shim git "case \"\$*\" in *rev-parse*) printf '%s\n' '${tip64}' ;; esac"
+    shim_isolation
+    export ISO_TIP="$tip64"
+    call 'cd_colour_isolation_run "$TREE"'
+    [[ "$output" == *"rc=0"* ]]
+    [[ "$output" == *"/${tip64}.json"* ]]
+    call 'cd_colour_isolation_record "$TREE"'
+    [[ "$output" == *"rc=0"* ]]
+    assert_present "record ${GREMION_ROOT}/data/isolation-evidence/${tip64}.json$" "$DK/iso.log" "the record did not name the evidence of the 64 hex tip"
+    # a tip of any other length is still no tip
+    shim git "case \"\$*\" in *rev-parse*) printf '%s\n' '${tip64}ff' ;; esac"
+    call 'cd_colour_isolation_run "$TREE"'
+    [[ "$output" == *"rc=2"* ]]
+}
+
 @test "isolation record: a failing record is 1" {
     shim_isolation
     mkdir -p "${GREMION_ROOT}/data/isolation-evidence"
@@ -1158,6 +1246,14 @@ EOF
     [[ "$output" == *"rc=2 reason=verify"* ]]
     # a program cut off by the time limit is infrastructure, not a verdict on the commit
     echo 124 > "$DK/verify.rc"
+    call 'cd_colour_verify green "$TREE"'
+    [[ "$output" == *"rc=4 reason=verify"* ]]
+}
+
+@test "verify: an exit code that gremion-verify does not document (3) is infrastructure (4), never a blocked retry" {
+    shim_verify
+    cd_write_cfg CD_VERIFY_ENFORCE=1
+    echo 3 > "$DK/verify.rc"
     call 'cd_colour_verify green "$TREE"'
     [[ "$output" == *"rc=4 reason=verify"* ]]
 }
@@ -1261,6 +1357,22 @@ EOF
     happy
     call 'cd_colour_down "$OLD_TREE" green'
     [[ "$output" == *"rc=0"* ]]
+}
+
+@test "down: a compose down that fails or times out is infrastructure (4), not the answer of a refusal (1)" {
+    happy
+    touch "$DK/down.fail"
+    call 'cd_colour_down "$TREE" green'
+    [[ "$output" == *"rc=4"* ]]
+    rm -f "$DK/down.fail"
+    touch "$DK/down.timeout"
+    call 'cd_colour_down "$TREE" green'
+    [[ "$output" == *"rc=4"* ]]
+    # and the refusal stays 1
+    rm -f "$DK/down.timeout"
+    printf 'green\n' > "${GREMION_ROOT}/runtime/active-colour"
+    call 'cd_colour_down "$TREE" green'
+    [[ "$output" == *"rc=1"* ]]
 }
 
 # ================================================================== the family
