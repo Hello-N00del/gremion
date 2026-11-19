@@ -203,6 +203,17 @@ assert_set_is_backup() {
     [ "$(set_digest)" = "$before" ]
 }
 
+@test "a release tree edited after the checkout is refused: root would run a file that is not the commit" {
+    make_backup
+    printf '# edited after the checkout\n' >> "${GREMION_ROOT}/releases/${RELEASE_SHA12}/infra/host/bootstrap.sh"
+    local before; before="$(set_digest)"
+    apply
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"not clean"* ]]
+    refute_recorded bootstrap "cd"
+    [ "$(set_digest)" = "$before" ]
+}
+
 @test "a pending backup that lies outside data/cd is refused before anything is touched" {
     make_backup
     mkdir -p "${BATS_TEST_TMPDIR}/elsewhere"

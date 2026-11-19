@@ -7,8 +7,8 @@ set -euo pipefail
 # never sourced by the dispatcher (gremion-cd skips this file name) and never run from a tick.
 #
 #   1. refuse unless root, the instance is ^[0-9a-f]{12}$, releases/<sha12> is a real work tree
-#      whose HEAD is that commit (read as the deploy user: root must not run git over a tree the
-#      deploy user controls), and the pending backup is sound. Nothing is touched before all of
+#      whose HEAD is that commit and which is clean (read as the deploy user: root must not run
+#      git over a tree the deploy user controls), and the pending backup is sound. Nothing is touched before all of
 #      that holds.
 #   2. run `bootstrap.sh cd` of THAT tree, `systemctl daemon-reload` if a unit file changed, then
 #      the self-test of the NEW installed program as the deploy user (--post-apply: the caller
@@ -50,6 +50,10 @@ TREE="${ROOT}/releases/${SHA}"
 HEAD_SHA="$(runuser -u "$DEPLOY_USER" -- env -i "PATH=${PATH}" git -C "$TREE" rev-parse HEAD </dev/null 2>/dev/null)" \
     || fail "cannot read HEAD of releases/${SHA}" 2
 [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ && "${HEAD_SHA:0:12}" == "$SHA" ]] || fail "HEAD of releases/${SHA} is not ${SHA}" 2
+# root runs the bootstrap of this tree: a file edited after the checkout is not that commit
+DIRTY="$(runuser -u "$DEPLOY_USER" -- env -i "PATH=${PATH}" git -C "$TREE" --no-optional-locks status --porcelain </dev/null 2>/dev/null)" \
+    || fail "cannot read the state of releases/${SHA}" 2
+[[ -z "$DIRTY" ]] || fail "the work tree of releases/${SHA} is not clean" 2
 [[ -f "${TREE}/infra/host/bootstrap.sh" && ! -L "${TREE}/infra/host/bootstrap.sh" ]] \
     || fail "releases/${SHA} has no infra/host/bootstrap.sh" 2
 
