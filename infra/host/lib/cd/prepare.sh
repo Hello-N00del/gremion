@@ -67,6 +67,16 @@ _CD_PREP_ONESHOT_REPOS=(gremion-migrate gremion-kernel-api)
 
 _cd_prep_err() { printf 'cd-prepare: %s\n' "$*" >&2; }
 
+# _cd_prep_docker SECONDS ARGS... -- one docker call that cannot hang the stage: a wedged
+# daemon answers nothing, and a call with no limit would hold the cd lock for good. A call
+# that ran out of time fails (124), which every caller reads as "could not be asked".
+# CD_PREPARE_DOCKER_LIMIT (whole seconds) replaces SECONDS: the tests use it.
+_cd_prep_docker() {
+    local t="${CD_PREPARE_DOCKER_LIMIT:-$1}"
+    shift
+    timeout -k 5 "$t" docker "$@"
+}
+
 # _cd_prep_refuse WHY TEXT... -- record the code word and say it once.
 _cd_prep_refuse() {
     CD_PREPARE_WHY="$1"
@@ -214,7 +224,7 @@ _cd_prep_free_gb() {
 _cd_prep_disk_gb() {
     local a b droot
     a="$(_cd_prep_free_gb "$CD_ROOT")" || return 1
-    droot="$(docker info --format '{{.DockerRootDir}}' </dev/null 2>/dev/null)" || return 1
+    droot="$(_cd_prep_docker 60 info --format '{{.DockerRootDir}}' </dev/null 2>/dev/null)" || return 1
     [[ "$droot" == /* ]] || return 1
     b="$(_cd_prep_free_gb "$droot")" || return 1
     if ((a < b)); then printf '%s\n' "$a"; else printf '%s\n' "$b"; fi
@@ -320,7 +330,7 @@ cd_prepare_precheck() {
     if ((10#$min > 0)); then
         free="$(_cd_prep_disk_gb)" || { _cd_prep_refuse disk "the free disk space cannot be read"; return 4; }
         if ((free < 10#$min)); then
-            docker builder prune -f --keep-storage "$(cd_cfg CD_BUILD_CACHE_KEEP_GB)GB" </dev/null >/dev/null 2>&1 \
+            _cd_prep_docker 300 builder prune -f --keep-storage "$(cd_cfg CD_BUILD_CACHE_KEEP_GB)GB" </dev/null >/dev/null 2>&1 \
                 || _cd_prep_err "precheck: the builder cache prune failed"
             free="$(_cd_prep_disk_gb)" || { _cd_prep_refuse disk "the free disk space cannot be read"; return 4; }
         fi
@@ -466,7 +476,7 @@ _cd_prep_active_colour() {
 
 # _cd_prep_retag_locked TREE COLOUR TAG -- the body of cd_prepare_retag, under the lock.
 _cd_prep_retag_locked() {
-    local tree="$1" colour="$2" tag="$3" proj envf live_colour live_env live_tag active cids prev saved has_release
+    local tree="$1" colour="$2" tag="$3" proj envf live_colour live_env live_tag active cids prev saved has_release rel_ct
     proj="app-${colour}"
     envf="$(cd_envfile "$proj")" || return 2
     if ! _cd_prep_tree_tag "$tree" "$tag"; then
@@ -518,6 +528,12 @@ _cd_prep_retag_locked() {
         _cd_prep_err "retag: no release is recorded, the replaced tag could not be restored"
         return 2
     fi
+    # the restore acts on the release record's colour and tag, so the retag must be for them
+    rel_ct="$(cd_state_get '(.release.colour // "") + " " + (.release.tag // "")')" || return 2
+    if [[ "$rel_ct" != "${colour} ${tag}" ]]; then
+        _cd_prep_err "retag: the colour and tag are not the ones of the recorded release"
+        return 2
+    fi
     saved="$(cd_state_get '.release.retag_prev // empty')" || return 2
     if [[ "$prev" == "$tag" ]]; then
         # a re-run after a crash: the env already carries the tag, the first run saved the
@@ -548,7 +564,8 @@ _cd_prep_retag_locked() {
 # else, nothing in any other file. Prints the tag it replaced and saves it as
 # release.retag_prev; previous.startable becomes false when previous is on that colour
 # (its env file no longer names it). Refuses (2) when the tree is not the tag's commit,
-# when the target is the live or the active colour, when the live colour's env already
+# when COLOUR and TAG are not the recorded release's, when the target is the live or the
+# active colour, when the live colour's env already
 # carries the tag, and when the target project is running. The host lock is held for the
 # edit (3 when it stays busy), then released. Safe to run again after a crash.
 cd_prepare_retag() {
@@ -562,10 +579,14 @@ cd_prepare_retag() {
 
 # _cd_prep_restore_locked -- the body of cd_prepare_retag_restore, under the lock.
 _cd_prep_restore_locked() {
-    local colour="$1" prev="$2" envf cur live_colour active
+    local colour="$1" prev="$2" envf cur live_colour active changed=0 flipped
     envf="$(cd_envfile "app-${colour}")" || return 2
     live_colour="$(cd_state_get '.live.colour // empty')" || return 2
-    active="$(_cd_prep_active_colour)" || active=''
+    # fail closed like retag: an active colour that cannot be read is not "none"
+    active="$(_cd_prep_active_colour)" || {
+        _cd_prep_err "retag restore: the active colour cannot be read; refusing to touch an env file"
+        return 2
+    }
     if [[ "$colour" == "$live_colour" || "$colour" == "$active" ]]; then
         _cd_prep_err "retag restore: the colour is the live or the active one; refusing to touch its env file"
         return 2
@@ -579,14 +600,18 @@ _cd_prep_restore_locked() {
             _cd_prep_err "retag restore: the env file could not be restored; previous stays not startable"
             return 1
         }
+        changed=1
     fi
+    flipped="$(cd_state_get ".previous != null and .previous.colour == \"${colour}\" and .previous.tag == \"${prev}\" and .previous.startable != true")" || return 2
+    if [[ "$flipped" == true ]]; then changed=1; fi
     cd_state_set '(if (.previous != null and .previous.colour == $c and .previous.tag == $p)
                    then .previous.startable = true else . end)' \
         --arg p "$prev" --arg c "$colour" || {
         _cd_prep_err "retag restore: the state could not be written"
         return 1
     }
-    cd_hist retag_restored colour="$colour" || true
+    # a second call changes nothing, so it records nothing
+    if ((changed == 1)); then cd_hist retag_restored colour="$colour" || true; fi
     return 0
 }
 
@@ -627,6 +652,14 @@ cd_prepare_render() {
     render="${tree}/infra/host/bin/gremion-render"
     if [[ ! -f "$render" || ! -x "$render" ]]; then
         _cd_prep_err "render: the tree has no gremion-render"
+        return 2
+    fi
+    # gremion-render drops a live control-panel router when the tree it runs from has no
+    # template for it, even with --defer-control-panel; the router must outlive this stage
+    # (it is rewritten only after the switch), so a tree that cannot re-render it is refused
+    # before the render runs
+    if [[ -e "${CD_ROOT}/etc/edge/control-panel.yml" && ! -f "${tree}/infra/host/templates/edge/control-panel.yml.tmpl" ]]; then
+        _cd_prep_err "render: the host serves the control panel but the tree has no router template; refusing before the render could drop the live router"
         return 2
     fi
     sha12="$(_cd_prep_git "$tree" rev-parse --short=12 HEAD 2>/dev/null)" || sha12=unknown
@@ -743,7 +776,7 @@ _cd_prep_live_images() {
     fi
     while IFS= read -r cid; do
         [[ -n "$cid" ]] || continue
-        line="$(docker inspect -f '{{.Image}} {{.Config.Image}}' "$cid" </dev/null 2>/dev/null)" || return 2
+        line="$(_cd_prep_docker 60 inspect -f '{{.Image}} {{.Config.Image}}' "$cid" </dev/null 2>/dev/null)" || return 2
         read -r img ref <<<"$line" || true
         [[ "$img" =~ ^sha256:[0-9a-f]{64}$ && -n "$ref" ]] || return 2
         rid="$(cd_image_id "$ref" 2>/dev/null)" || return 2
@@ -801,7 +834,7 @@ cd_prepare_build() {
     live_proj="app-${live_colour}"
 
     # the image list, computed with the profile star (cd_dc adds it for `config`)
-    refs="$(cd_dc "$tree" "$proj" config --images 2>/dev/null </dev/null)" || {
+    refs="$(CD_DC_TIMEOUT=120 cd_dc "$tree" "$proj" config --images 2>/dev/null </dev/null)" || {
         _cd_prep_err "build: the image list could not be computed"
         return 2
     }
@@ -861,17 +894,21 @@ cd_prepare_build() {
             fi
         fi
         if ((rc == 0 && outoftime == 0)); then break; fi
-        _cd_prep_log_keep "$log" || true
         if ((rc == 124 || rc == 137 || outoftime == 1)); then
+            _cd_prep_log_keep "$log" || true
             _cd_prep_err "build: the build timed out; log kept as ${log##*/}"
             return 3
         fi
         if ((rc == 2)); then
+            _cd_prep_log_keep "$log" || true
             _cd_prep_err "build: compose was refused; log kept as ${log##*/}"
             return 2
         fi
-        # only the failing call's own error tail: the log also holds the calls before it
+        # only the failing call's own error tail: the log also holds the calls before it.
+        # Classified BEFORE the log is trimmed: callstart is a byte offset into the whole
+        # log, and a trim to the last 500 lines moves every offset.
         kind="$(cd_prepare_classify_build_failure "$log" "$callstart" "$_CD_PREP_CLASSIFY_TAIL")" || kind=commit
+        _cd_prep_log_keep "$log" || true
         if [[ "$kind" == commit ]]; then
             _cd_prep_err "build: the build failed (a failure of the commit); log kept as ${log##*/}"
             cd_hist build_failed kind=commit attempts=$((attempt + 1)) || true

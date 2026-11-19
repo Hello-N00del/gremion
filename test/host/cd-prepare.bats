@@ -138,7 +138,7 @@ case "$1" in
   inspect)
     cid="${@: -1}"
     case " $* " in
-      *".Config.Image"*) [ -f "$DK/ctr.$cid" ] || exit 1; cat "$DK/ctr.$cid"; exit 0 ;;
+      *".Config.Image"*) [ -f "$DK/inspect.hang" ] && sleep 20; [ -f "$DK/ctr.$cid" ] || exit 1; cat "$DK/ctr.$cid"; exit 0 ;;
     esac
     [ -f "$DK/status.$cid" ] || exit 1
     tail -n 1 "$DK/status.$cid"
@@ -149,6 +149,7 @@ case "$1" in
     cat "$DK/image.$key"
     exit 0 ;;
   info)
+    [ -f "$DK/info.hang" ] && sleep 20
     cat "$DK/rootdir"
     exit 0 ;;
   builder)
@@ -390,6 +391,14 @@ precheck() {
     refute_stub_recorded cd_commit_prune
     refute_recorded docker 'rmi'
     refute_recorded docker 'image prune'
+}
+
+@test "precheck: a docker that never answers is not waited for: refused as disk (4) (guard)" {
+    touch "$DK/info.hang"
+    export CD_PREPARE_DOCKER_LIMIT=1
+    precheck
+    [ "$status" -eq 4 ]
+    has_in 'why=disk' "$output"
 }
 
 @test "precheck: the docker root directory is measured, not only the host root" {
@@ -975,6 +984,62 @@ if ( exec 7>>"${GREMION_ROOT}/runtime/hostd.lock" && flock -n 7 ); then echo FRE
     grep -qx "IMAGE_TAG=pilot-aaaaaaaaaaaa" "${GREMION_ROOT}/etc/env/app-blue.env"
 }
 
+@test "retag_restore: an active colour that cannot be read is refused (2), the env file stays as it is (guard)" {
+    mk_tree
+    seed_release
+    run prep 'cd_lock_take; cd_prepare_retag "$TREE" green "$TAG"'
+    [ "$status" -eq 0 ]
+    cp "${GREMION_ROOT}/etc/env/app-green.env" "$DK/green.retagged"
+    rm -f "${GREMION_ROOT}/runtime/active-colour"
+    run prep 'cd_lock_take; cd_prepare_retag_restore'
+    [ "$status" -eq 2 ]
+    cmp "${GREMION_ROOT}/etc/env/app-green.env" "$DK/green.retagged"
+    run jq -r '.previous.startable' "${GREMION_ROOT}/data/cd/state.json"
+    [ "$output" = "false" ]
+}
+
+@test "retag_restore takes the host lock for the edit (guard)" {
+    cd_need_flock
+    mk_tree
+    seed_release
+    run prep 'cd_lock_take; cd_prepare_retag "$TREE" green "$TAG" >/dev/null || exit 1'
+    [ "$status" -eq 0 ]
+    run prep 'eval "$(declare -f cd_set_env_key | sed "1s/^cd_set_env_key/orig_set_env_key/")"
+cd_set_env_key() {
+    if ( exec 7>>"${GREMION_ROOT}/runtime/hostd.lock" && flock -n 7 ); then echo FREE >"$DK/during"; else echo HELD >"$DK/during"; fi
+    orig_set_env_key "$@"
+}
+cd_lock_take; cd_prepare_retag_restore || exit 1'
+    [ "$status" -eq 0 ]
+    [ "$(cat "$DK/during")" = "HELD" ]
+}
+
+@test "retag_restore: a second call records nothing in the history (guard)" {
+    mk_tree
+    seed_release
+    run prep 'cd_lock_take; cd_prepare_retag "$TREE" green "$TAG" >/dev/null || exit 1'
+    [ "$status" -eq 0 ]
+    run prep 'cd_lock_take; cd_prepare_retag_restore'
+    [ "$status" -eq 0 ]
+    [ "$(grep -c retag_restored "${GREMION_ROOT}/data/cd/history.jsonl")" -eq 1 ]
+    run prep 'cd_lock_take; cd_prepare_retag_restore'
+    [ "$status" -eq 0 ]
+    [ "$(grep -c retag_restored "${GREMION_ROOT}/data/cd/history.jsonl")" -eq 1 ]
+}
+
+@test "retag refuses a colour or a tag that is not the recorded release's, and changes nothing (guard)" {
+    mk_tree
+    seed_release '.release.colour = "blue"'
+    cp "${GREMION_ROOT}/etc/env/app-green.env" "$DK/green.before"
+    run prep 'cd_lock_take; cd_prepare_retag "$TREE" green "$TAG"'
+    [ "$status" -eq 2 ]
+    cmp "${GREMION_ROOT}/etc/env/app-green.env" "$DK/green.before"
+    seed_release '.release.tag = "pilot-dddddddddddd"'
+    run prep 'cd_lock_take; cd_prepare_retag "$TREE" green "$TAG"'
+    [ "$status" -eq 2 ]
+    cmp "${GREMION_ROOT}/etc/env/app-green.env" "$DK/green.before"
+}
+
 # ==================================================================== render
 
 @test "render: gremion-render runs from the new tree, with the control-panel edge file left alone" {
@@ -984,6 +1049,26 @@ if ( exec 7>>"${GREMION_ROOT}/runtime/hostd.lock" && flock -n 7 ); then echo FRE
     grep -qF -- "--release ${TREE} --defer-control-panel" "$DK/render.log"
     grep -qF -- "root=${GREMION_ROOT}" "$DK/render.log"
     [ -f "${TREE}/rendered.out" ]
+}
+
+@test "render: a live control-panel router and a tree with no router template are refused before the render runs (guard)" {
+    mk_tree
+    mkdir -p "${GREMION_ROOT}/etc/edge"
+    echo 'http: {}' >"${GREMION_ROOT}/etc/edge/control-panel.yml"
+    run prep 'cd_prepare_render "$TREE" green'
+    [ "$status" -eq 2 ]
+    has_in 'no router template' "$output"
+    [ -f "${GREMION_ROOT}/etc/edge/control-panel.yml" ]
+    [ ! -e "$DK/render.log" ]
+}
+
+@test "render: a live control-panel router and a tree that has the template still render" {
+    mk_tree
+    mkdir -p "${GREMION_ROOT}/etc/edge" "${TREE}/infra/host/templates/edge"
+    echo 'http: {}' >"${GREMION_ROOT}/etc/edge/control-panel.yml"
+    echo 'tmpl' >"${TREE}/infra/host/templates/edge/control-panel.yml.tmpl"
+    run prep 'cd_prepare_render "$TREE" green'
+    [ -f "$DK/render.log" ]
 }
 
 @test "render: the ipcrypt key is hard-linked into the tree (one inode)" {
@@ -1366,6 +1451,30 @@ HOOK
     [ "$status" -eq 4 ]
 }
 
+@test "build: a log past 500 lines is classified before it is trimmed: three long infra failures still return 4 after 60 and 300 seconds (guard)" {
+    retagged
+    {
+        for i in $(seq 1 600); do echo "#${i} pulling layer"; done
+        echo 'ERROR: failed to solve: no space left on device'
+    } >"$DK/long.out"
+    printf '%s\n' '1 @long.out' '1 @long.out' '1 @long.out' >"$DK/build.script"
+    run prep 't0=$(cd_now); rc=0; cd_prepare_build "$TREE" green "$TAG" || rc=$?; echo "elapsed=$(( $(cd_now) - t0 ))"; exit "$rc"'
+    [ "$status" -eq 4 ]
+    has_in 'elapsed=360' "$output"
+    [ "$(grep -c -- '|build' "$DK/argv.log")" -eq 3 ]
+}
+
+@test "build: a long pull before a short failing build is classified by the build's own tail (guard)" {
+    retagged
+    cd_write_cfg CD_BUILD_RETRIES=0
+    for i in $(seq 1 700); do echo "#${i} pulling layer"; done >"$DK/long.out"
+    echo '0 @long.out' >"$DK/pull.script"
+    echo '1 ERROR: failed to fetch oauth token: TLS handshake timeout' >"$DK/build.script"
+    run prep 'rc=0; cd_prepare_build "$TREE" green "$TAG" || rc=$?; exit "$rc"'
+    [ "$status" -eq 4 ]
+    [ "$(grep -c -- '|build' "$DK/argv.log")" -eq 1 ]
+}
+
 @test "build: the timeout returns 3" {
     retagged
     printf '%s\n' '124' >"$DK/build.script"
@@ -1449,6 +1558,36 @@ HOOK
     [ "$status" -eq 2 ]
     run prep 'cd_prepare_build "$TREE" green pilot-cccccccccccc'
     [ "$status" -eq 2 ]
+}
+
+@test "build: a docker that never answers an inspect is not waited for: refused (2) (guard)" {
+    retagged
+    touch "$DK/inspect.hang"
+    export CD_PREPARE_DOCKER_LIMIT=1
+    run prep 'cd_prepare_build "$TREE" green "$TAG"'
+    [ "$status" -eq 2 ]
+    has_in 'could not be read' "$output"
+    [ "$(dk_count "|build")" = "0" ]
+}
+
+@test "build: a tree that is not the tag's commit is refused although the env file carries the tag (guard)" {
+    retagged
+    git -C "$TREE" -c user.name=t -c user.email=t@example.org commit -q --allow-empty -m moved
+    run prep 'cd_prepare_build "$TREE" green "$TAG"'
+    [ "$status" -eq 2 ]
+    has_in 'not the commit the tag names' "$output"
+    [ "$(dk_count "|build")" = "0" ]
+}
+
+@test "build: the log of a running build is already private, even over an older log of a wider mode (guard)" {
+    retagged
+    mkdir -p "${GREMION_ROOT}/logs"
+    : >"${GREMION_ROOT}/logs/cd-build-${TAG}.log"
+    chmod 644 "${GREMION_ROOT}/logs/cd-build-${TAG}.log"
+    echo 'stat -c %a "${GREMION_ROOT}"/logs/cd-build-*.log >"$DK/inflight.mode"' >"$DK/build.hook"
+    run prep 'cd_prepare_build "$TREE" green "$TAG"'
+    [ "$status" -eq 0 ]
+    [ "$(cat "$DK/inflight.mode")" = "600" ]
 }
 
 @test "build: compose refusing the shape (a bad env file) is code 2, not a block" {
