@@ -163,6 +163,13 @@ export const ALLOWLIST = [
       'false positive of the member-write pattern: `sock.write(verb)` sends one line down the hostd UNIX socket; no filesystem write happens in this file',
     residual: 'the pin makes any real fs write added to this file fail the guard until it is reviewed',
   },
+  {
+    path: 'gremion-ui/src/lib/server/tenant/worker-gate.ts',
+    sites: 2,
+    reason:
+      'false positive of the write-capable-open pattern: `open(file, \'r\')` reads the first bytes of the host\'s one-per-colour worker gate file (a read-only bind mount, `off` stops the background ticks); nothing is written, and the file is not a tenant file/draft/media object',
+    residual: 'the pin makes any real fs write added to this file fail the guard until it is reviewed',
+  },
   ...['board', 'calendar', 'content', 'finance', 'publishing', 'vault'].map((m) => ({
     path: `modules/${m}/scripts/build-migration-manifest.mjs`,
     sites: 2,
@@ -241,16 +248,23 @@ export const ALLOWLIST = [
   },
   {
     path: 'packages/tenant-store/src/dump/ledger.ts',
-    sites: 7,
+    sites: 8,
     reason:
-      'TASK-075: the append-only, fsynced ledger.jsonl and its lock file in the operator-owned migration-dump directory (mode 0600). The 7 sites include a read-only directory open (`openSync(dir, \'r\')`, used to fsync the directory entry) — platform migration bookkeeping, not tenant files',
+      'TASK-075: the append-only, fsynced ledger.jsonl and its lock file in the operator-owned migration-dump directory (mode 0600). The 8 sites include a read-only directory open (`openSync(dir, \'r\')`, used to fsync the directory entry) and the append-open probe that proves the ledger takes an append before a dump is unlinked — platform migration bookkeeping, not tenant files',
     residual: 'dump bookkeeping lives in the dump directory, outside the storage seam; revisit if the ledger moves into the database (TASK-086 imports it)',
   },
   {
-    path: 'packages/tenant-store/src/dump/take.ts',
-    sites: 7,
+    path: 'packages/tenant-store/src/dump/retire.ts',
+    sites: 5,
     reason:
-      'TASK-075: takes one pg_dump per migration into the operator-owned dump directory (0700 directory, 0600 file), verifies and fsyncs it, and removes a failed one. Includes a read-only-intent `openSync(file, \'r+\')` for fsync — a database dump, not a tenant file/draft/media object',
+      'CD stage 1 (U6g): retires one database\'s live dump from the operator-owned migration-dump directory under the ledger lock — unlinks the dump file and its sidecar files, then removes the release directory when empty. It deletes DATABASE dumps (the clear-text copy must really be gone), never a tenant file/draft/media object',
+    residual: 'dumps live in the dump directory, outside the storage seam, until the release that needed them has switched',
+  },
+  {
+    path: 'packages/tenant-store/src/dump/take.ts',
+    sites: 10,
+    reason:
+      'TASK-075: takes one pg_dump per migration into the operator-owned dump directory (0700 directory, 0600 file), verifies and fsyncs it, and removes a failed one. Includes a read-only-intent `openSync(file, \'r+\')` for fsync and the owner hand-over (`chownSync` plus the mode re-assertion) a root process applies to everything it writes so the deploy user can read and retire it — a database dump, not a tenant file/draft/media object',
     residual: 'dumps live in the dump directory, outside the storage seam, until the release that needed them has switched',
   },
   {
