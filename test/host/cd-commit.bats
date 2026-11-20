@@ -583,6 +583,26 @@ EOF
     [ "$(st '.release.committed_at')" != null ]
 }
 
+@test "a step 5 write that landed but reported an error is a committed release: no retry from step 1, no rollback, previous stays the old release" {
+    seed_state 60
+    cat > "$GREMION_ROOT/.wrap.sh" <<'EOF'
+eval "_orig_$(declare -f cd_state_set)"
+cd_state_set() {
+    local rc=0
+    _orig_cd_state_set "$@" || rc=$?
+    if [[ "$1" == *committed_at* ]]; then return 1; fi
+    return "$rc"
+}
+EOF
+    run cdc_lib ". '${GREMION_ROOT}/.wrap.sh'; cd_commit_promote; echo \"rc=\$?\""
+    [[ "$output" == *"rc=0"* ]]
+    [ "$(calls 'fake cd_colour_isolation_record')" -eq 1 ]
+    [ "$(calls 'fake cd_rollback_run')" -eq 0 ]
+    [ "$(st '.previous.sha12')" = "$OLD12" ]
+    [ "$(st '.live.sha12')" = "$NEW12" ]
+    [ "$(calls 'fake cd_colour_down')" -eq 1 ]
+}
+
 @test "step 6: switched is called for the release label and its failure is retried every 60 seconds with the lock held, a mail after three failures" {
     echo 4 > "$FK/cd_data_dumpset_retire.fails"
     seed_state 60

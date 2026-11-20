@@ -63,6 +63,14 @@
 # THE LINE. Nothing here calls cd_rollback_run for a committed release except the operator's
 # `rollback` request (manual_rollback). The functions that follow step 5 never name another rule.
 #
+# WHAT THIS FILE DOES NOT OWN. The observed time, the two samples after a resume that may not
+# trigger, and the worker-gate verdicts are cd_watch_eval's (watch.sh): the loop reads
+# release.watch.observed_s and applies the `flip <colour> on|off` lines the evaluation prints.
+# The moment the host lock was taken is the driver's: it may set CD_HOSTLOCK_SINCE (an epoch) after
+# cd_hostlock_take, and the `released` mail then carries hostlock_min and, past CD_LOCK_SPAN_MIN,
+# the note lock_span_over; without it those two are left out. Moving `current` and the tag files
+# back after a rollback at the cap (commit_stuck) is cd_rollback_run's step, not this file's.
+#
 # THE REAL-DATA BOUNDARY. Names of components and stages, colours, tags, codes and counts only.
 # Image references are never printed; the release trees and logs are named by their short SHA.
 
@@ -620,6 +628,14 @@ _cd_commit_precommit() {
             failed=5
         fi
         if [[ -z "$failed" ]]; then return 0; fi
+        # a step 5 that reported an error may still have landed: the state is the truth, and a
+        # committed release is never retried from step 1 (it would overwrite `previous` with the
+        # new release) and never rolled back
+        _cd_commit_load || return 2
+        if [[ -n "$CM_COMMITTED" ]]; then
+            cd_hist commit_step_reported_failed_but_landed step="$failed" || true
+            return 0
+        fi
         fails=$((fails + 1))
         cd_hist commit_step_failed step="$failed" attempt="$fails" || true
         if ((fails == 3)); then
