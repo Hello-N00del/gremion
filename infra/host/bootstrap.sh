@@ -86,6 +86,10 @@ Stages:
                + gremion-purge.timer (daily, TRD-144/145)
                + gremion-access-purge.timer (daily, TRD-092)
                + gremion-karenz.timer (hourly, module Karenz finalization)
+  cd           the continuous-deployment programs: bin/*, lib/common.sh and lib/cd/*.sh
+               as real files, the six gremion-cd units and etc/cd.env (only if absent);
+               enables nothing, starts nothing   (installs from a release checkout,
+               not part of 'all'; also what gremion-cd-apply@.service re-runs)
   harden-ssh   key-only SSH   (RUN LAST, gated, not part of 'all')
   trust        pinned cosign + the release public key       (not part of 'all')
   signers      the release-tag signers file (allowed_signers) (not part of 'all')
@@ -1098,6 +1102,176 @@ stage_timers() {
 }
 
 # ──────────────────────────────────────────────────────────────────────────
+# cd — the host programs of continuous deployment (gremion-cd)
+#
+# Installs from THIS source tree (a release checkout) as real files: every program of bin/,
+# lib/common.sh and lib/cd/*.sh (lib/cd/apply-root.sh, the one script that runs as root, is
+# root-owned in a root-owned directory; see the note at the directories on what that is worth), renders the six gremion-cd units, makes the data and
+# runtime directories and writes etc/cd.env from the template when it is absent. It ENABLES and
+# STARTS nothing: that is the operator's step (docs/ops/continuous-deployment.md).
+#
+# It is run twice in a host's life: by hand at the first adoption, and by
+# lib/cd/apply-root.sh (the unit gremion-cd-apply@<sha12>.service) at every later apply of
+# host programs, which is why a replaced file always gets a NEW inode: a script bash is running
+# from the installed set is never rewritten in place.
+# ──────────────────────────────────────────────────────────────────────────
+
+CD_UNITS=(gremion-cd.service gremion-cd.timer gremion-cd-watchdog.service gremion-cd-watchdog.timer
+    gremion-cd-resume.service 'gremion-cd-apply@.service')
+
+# install_cd_file <mode> <uid:gid> <src> <dest>
+# A temp file beside <dest>, then rename: the inode a running bash holds is never changed.
+install_cd_file() {
+    local mode="$1" owner="$2" src="$3" dest="$4" tmp
+    tmp="${dest}.cd-new.$$"
+    rm -f -- "$tmp"
+    if ! install -m "$mode" -- "$src" "$tmp"; then
+        rm -f -- "$tmp"
+        die "cannot write ${tmp}" 1
+    fi
+    if ! chown "$owner" -- "$tmp"; then
+        rm -f -- "$tmp"
+        die "cannot hand ${dest} to ${owner}" 1
+    fi
+    if ! mv -f -T -- "$tmp" "$dest"; then
+        rm -f -- "$tmp"
+        die "cannot replace ${dest}" 1
+    fi
+}
+
+# ensure_cd_dir <mode> <uid:gid> <dir>
+# Created when missing, and mode and owner put right when it exists (a bind source docker made
+# root-owned is corrected). The post-condition is read back from the filesystem.
+ensure_cd_dir() {
+    local mode="$1" owner="$2" dir="$3"
+    [[ ! -L "$dir" ]] || die "${dir} is a symlink" 1
+    mkdir -p -- "$dir" || die "cannot create ${dir}" 1
+    chmod "$mode" -- "$dir" || die "cannot set the mode of ${dir}" 1
+    chown "$owner" -- "$dir" || die "cannot hand ${dir} to ${owner}" 1
+    [[ "$(stat -c '%a %u:%g' "$dir")" == "${mode} ${owner}" ]] \
+        || die "${dir} is $(stat -c '%a %u:%g' "$dir"), expected ${mode} ${owner}" 1
+}
+
+stage_cd() {
+    require_root
+    local root; root="$(gremion_root)"
+    local udir="${GREMION_SYSTEMD_DIR:-/etc/systemd/system}"
+    local sbin="$SCRIPT_DIR/bin" slib="$SCRIPT_DIR/lib" tmpl="${TEMPLATE_DIR}/env/cd.env.tmpl"
+    local f u base n
+
+    # Preconditions come from the SOURCE tree and the host, and are all checked before anything
+    # on the host is touched.
+    for f in "$sbin/gremion-cd" "$slib/common.sh" "$slib/cd/core.sh" "$slib/cd/apply-root.sh" "$tmpl"; do
+        [[ -f "$f" ]] || die "precondition: ${f} is missing from the source tree" 2
+    done
+    for u in "${CD_UNITS[@]}"; do
+        [[ -f "${TEMPLATE_DIR}/systemd/${u}" ]] \
+            || die "precondition: the unit template ${u} is missing from the source tree" 2
+    done
+    [[ -d "$udir" ]] || die "precondition: ${udir} does not exist" 2
+    [[ -d "${root}/etc" ]] || die "precondition: ${root}/etc absent - run the 'user' stage first" 2
+    command -v runuser >/dev/null 2>&1 || die "precondition: runuser is not installed" 2
+    local du dg dep me
+    du="$(id -u "$DEPLOY_USER" 2>/dev/null)" && dg="$(id -g "$DEPLOY_USER" 2>/dev/null)" \
+        || die "precondition: the deploy user '${DEPLOY_USER}' does not exist (run the 'user' stage first)" 2
+    dep="${du}:${dg}"
+    # root on a host: the owner of the one script that runs as root and of its directory
+    me="$(id -u):$(id -g)"
+
+    # The directories. bin/ and lib/ are the deploy user's like every other stage makes them;
+    # lib/cd and the apply script are root's, so no process of the deploy user without sudo edits
+    # the one script that runs as root in place. That is all this buys: the deploy user owns lib/
+    # (it can rename lib/cd) and holds sudo NOPASSWD:ALL (stage user) and the docker group, so it
+    # is root-equivalent on this host and the apply script is no barrier against it.
+    ensure_cd_dir 755 "$dep" "${root}/bin"
+    ensure_cd_dir 755 "$dep" "${root}/lib"
+    ensure_cd_dir 755 "$me" "${root}/lib/cd"
+    [[ -d "${root}/data" ]] || ensure_cd_dir 755 "$dep" "${root}/data"
+    [[ -d "${root}/runtime" ]] || ensure_cd_dir 755 "$dep" "${root}/runtime"
+    ensure_cd_dir 700 "$dep" "${root}/data/cd"
+    ensure_cd_dir 700 "$dep" "${root}/runtime/cd"
+    # The worker gate files the serving colours read through a read-only bind mount: the
+    # containers need to traverse it, and a bind source that is missing is made root-owned by
+    # the docker daemon, so it is made here, and corrected here.
+    ensure_cd_dir 755 "$dep" "${root}/runtime/workers"
+
+    # The programs and libraries.
+    n=0
+    for f in "$sbin"/*; do
+        [[ -f "$f" ]] || continue
+        install_cd_file 0755 "$dep" "$f" "${root}/bin/${f##*/}"
+        n=$((n + 1))
+    done
+    install_cd_file 0644 "$dep" "$slib/common.sh" "${root}/lib/common.sh"
+    for f in "$slib"/cd/*.sh; do
+        [[ -f "$f" ]] || continue
+        base="${f##*/}"
+        if [[ "$base" == apply-root.sh ]]; then
+            install_cd_file 0755 "$me" "$f" "${root}/lib/cd/${base}"
+        else
+            install_cd_file 0644 "$dep" "$f" "${root}/lib/cd/${base}"
+        fi
+        n=$((n + 1))
+    done
+    # The dispatcher sources every file of lib/cd: one the tree no longer has must not stay.
+    for f in "${root}"/lib/cd/*.sh; do
+        [[ -e "$f" || -L "$f" ]] || continue
+        [[ -f "$slib/cd/${f##*/}" ]] || { rm -f -- "$f" && ok "removed ${f}, the tree no longer has it"; }
+    done
+
+    # The units.
+    for u in "${CD_UNITS[@]}"; do
+        render_unit "$u" "${udir}/${u}" || die "rendering ${u} failed" 2
+    done
+    systemctl daemon-reload || die "systemctl daemon-reload failed" 1
+
+    # etc/cd.env is the operator's: written once, from the template, never again.
+    local cfg="${root}/etc/cd.env"
+    if [[ -e "$cfg" || -L "$cfg" ]]; then
+        [[ -f "$cfg" && ! -L "$cfg" ]] || die "${cfg} exists and is not a regular file" 1
+        ok "etc/cd.env exists and is left as it is"
+    else
+        install_cd_file 0640 "$dep" "$tmpl" "$cfg"
+        ok "etc/cd.env written from the template (fill the CHANGE_ME_OPERATOR_ values)"
+    fi
+
+    # POST-CONDITIONS, read back from the host.
+    [[ "$n" -ge 2 ]] || die "only ${n} files were installed" 1
+    for f in "$sbin"/*; do
+        [[ -f "$f" ]] || continue
+        [[ -f "${root}/bin/${f##*/}" && ! -L "${root}/bin/${f##*/}" ]] || die "${root}/bin/${f##*/} is not a real file" 1
+        cmp -s "$f" "${root}/bin/${f##*/}" || die "${root}/bin/${f##*/} differs from the tree" 1
+    done
+    cmp -s "$slib/common.sh" "${root}/lib/common.sh" || die "${root}/lib/common.sh differs from the tree" 1
+    for f in "$slib"/cd/*.sh; do
+        [[ -f "$f" ]] || continue
+        [[ -f "${root}/lib/cd/${f##*/}" && ! -L "${root}/lib/cd/${f##*/}" ]] || die "${root}/lib/cd/${f##*/} is not a real file" 1
+        cmp -s "$f" "${root}/lib/cd/${f##*/}" || die "${root}/lib/cd/${f##*/} differs from the tree" 1
+    done
+    [[ "$(stat -c '%a %u:%g' "${root}/lib/cd/apply-root.sh")" == "755 ${me}" ]] \
+        || die "${root}/lib/cd/apply-root.sh is not 755 ${me}" 1
+    [[ "$(stat -c '%a' "${root}/bin/gremion-cd")" == 755 ]] || die "${root}/bin/gremion-cd is not mode 755" 1
+    for u in "${CD_UNITS[@]}"; do
+        [[ -s "${udir}/${u}" ]] || die "${udir}/${u} was not written" 1
+        # the token searched for, not an expansion that failed
+        # shellcheck disable=SC2016
+        if grep -qF '${' "${udir}/${u}"; then die "${udir}/${u} still holds a \${...} token" 1; fi
+    done
+    local out rc=0
+    out="$(runuser -u "${DEPLOY_USER}" -- env "GREMION_ROOT=${root}" "${root}/bin/gremion-cd" status </dev/null 2>&1)" || rc=$?
+    if [[ "$rc" -eq 0 ]]; then
+        ok "gremion-cd status runs as ${DEPLOY_USER}"
+    elif [[ "$rc" -eq 2 && "$out" == *"gremion-cd: config:"* && "$out" != *"library did not load"* ]]; then
+        # Every verb but help and version parses etc/cd.env first: on a fresh install the
+        # placeholders are the refusal, and it proves the libraries all loaded.
+        ok "gremion-cd status runs as ${DEPLOY_USER} (and refuses the unfilled etc/cd.env, as it must)"
+    else
+        die "gremion-cd status failed (exit ${rc}): $(printf '%s' "$out" | head -c 300)" 1
+    fi
+    ok "continuous-deployment programs installed under ${root}; nothing is enabled (see docs/ops/continuous-deployment.md)"
+}
+
+# ──────────────────────────────────────────────────────────────────────────
 # harden-ssh — key-only, no root login. GATED.
 # ──────────────────────────────────────────────────────────────────────────
 stage_harden_ssh() {
@@ -1340,6 +1514,7 @@ main() {
         agent)       stage_agent ;;
         executor)    stage_executor ;;
         timers)      stage_timers ;;
+        cd)          stage_cd ;;
         harden-ssh)  stage_harden_ssh ;;
         trust)       stage_trust ;;
         signers)     stage_signers ;;
