@@ -139,17 +139,20 @@ test('GREEN: no leaf file redefines a function, trigger or view an earlier file 
 const FN = (body) => `CREATE OR REPLACE FUNCTION public.bump() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN ${body} RETURN NEW; END; $$;\n`
 const FIRST = { name: '001_init.sql', text: FN('NEW.a := 1;') }
 
-for (const [label, later] of [
-  ['CREATE OR REPLACE FUNCTION again', FN('NEW.a := 2;')],
-  ['CREATE OR REPLACE FUNCTION, other case and a quoted schema', 'create or replace function "public"."BUMP"() returns trigger language sql as $$ select 1 $$;'],
-  ['DROP FUNCTION IF EXISTS', 'DROP FUNCTION IF EXISTS bump();'],
-  ['ALTER FUNCTION', 'ALTER FUNCTION bump() RENAME TO bump_old;'],
-])
-  test(`RED: a later file with ${label} is a problem`, () => {
-    const problems = lintFiles([FIRST, { name: '002_next.sql', text: later }])
-    assert.equal(problems.length, 1, problems.join('\n'))
-    assert.match(problems[0], /^002_next\.sql: redefines function bump that 001_init\.sql creates/)
-  })
+// One explicit test() per case: the verify guard counts test( declarations in the source and
+// fails a file whose collected count differs, so a loop that registers tests reads as broken.
+const redFunctionCase = (later) => () => {
+  const problems = lintFiles([FIRST, { name: '002_next.sql', text: later }])
+  assert.equal(problems.length, 1, problems.join('\n'))
+  assert.match(problems[0], /^002_next\.sql: redefines function bump that 001_init\.sql creates/)
+}
+test('RED: a later file with CREATE OR REPLACE FUNCTION again is a problem', redFunctionCase(FN('NEW.a := 2;')))
+test(
+  'RED: a later file with CREATE OR REPLACE FUNCTION, other case and a quoted schema is a problem',
+  redFunctionCase('create or replace function "public"."BUMP"() returns trigger language sql as $$ select 1 $$;'),
+)
+test('RED: a later file with DROP FUNCTION IF EXISTS is a problem', redFunctionCase('DROP FUNCTION IF EXISTS bump();'))
+test('RED: a later file with ALTER FUNCTION is a problem', redFunctionCase('ALTER FUNCTION bump() RENAME TO bump_old;'))
 
 test('RED: a trigger dropped or recreated, and a view replaced or altered, by a later file', () => {
   const base = {
