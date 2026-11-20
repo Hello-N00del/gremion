@@ -233,6 +233,22 @@
       "reason": "test of the calendar module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
+      "path": "modules/calendar/src/migrate-only.ts",
+      "calls": 1,
+      "imports": 1,
+      "adoptedBy": "TASK-021",
+      "since": "2026-11-20",
+      "reason": "the calendar leaf's continuous-deployment migrate-only entry (node dist/index.js --migrate-only): one admin connection per catalogued customer database, held for a session advisory lock while the leaf's own runner migrates it, and the existence and catalogue probes before that; it never creates a database and starts no server; retires with the leaf's per-tenant store when TASK-021 moves the module onto openTenantDb and the one runner"
+    },
+    {
+      "path": "modules/calendar/test/migrate-only.integration.test.ts",
+      "calls": 2,
+      "imports": 1,
+      "adoptedBy": "TASK-021",
+      "since": "2026-11-20",
+      "reason": "test of the calendar leaf's migrate-only entry against a scratch Postgres (direct admin/test connections, fixture databases created and dropped); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner"
+    },
+    {
       "path": "modules/content/scripts/backfill.ts",
       "calls": 1,
       "imports": 1,
@@ -335,6 +351,22 @@
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
       "reason": "test of the content module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
+    },
+    {
+      "path": "modules/content/src/migrate-only.ts",
+      "calls": 1,
+      "imports": 1,
+      "adoptedBy": "TASK-021",
+      "since": "2026-11-20",
+      "reason": "the content leaf's continuous-deployment migrate-only entry (node dist/index.js --migrate-only): one admin connection per catalogued customer database, held for a session advisory lock while the leaf's own runner migrates it, and the existence and catalogue probes before that; it never creates a database and starts no server; retires with the leaf's per-tenant store when TASK-021 moves the module onto openTenantDb and the one runner"
+    },
+    {
+      "path": "modules/content/test/migrate-only.integration.test.ts",
+      "calls": 2,
+      "imports": 1,
+      "adoptedBy": "TASK-021",
+      "since": "2026-11-20",
+      "reason": "test of the content leaf's migrate-only entry against a scratch Postgres (direct admin/test connections, fixture databases created and dropped); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner"
     },
     {
       "path": "modules/finance/scripts/backfill.ts",
@@ -455,6 +487,22 @@
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
       "reason": "test of the publishing module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
+    },
+    {
+      "path": "modules/publishing/src/migrate-only.ts",
+      "calls": 1,
+      "imports": 1,
+      "adoptedBy": "TASK-021",
+      "since": "2026-11-20",
+      "reason": "the publishing leaf's continuous-deployment migrate-only entry (node dist/index.js --migrate-only): one admin connection per catalogued customer database, held for a session advisory lock while the leaf's own runner migrates it, and the existence and catalogue probes before that; it never creates a database and starts no server; retires with the leaf's per-tenant store when TASK-021 moves the module onto openTenantDb and the one runner"
+    },
+    {
+      "path": "modules/publishing/test/migrate-only.integration.test.ts",
+      "calls": 2,
+      "imports": 1,
+      "adoptedBy": "TASK-021",
+      "since": "2026-11-20",
+      "reason": "test of the publishing leaf's migrate-only entry against a scratch Postgres (direct admin/test connections, fixture databases created and dropped); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner"
     },
     {
       "path": "modules/vault/src/migrations.ts",
