@@ -1653,6 +1653,145 @@ drv_rn() { # drv_rn ARGS... -- the verb, then a tick
 }
 
 # ===========================================================================================
+# review round: a crash inside a refusal, a second rollback, the commit stage's rollback, the
+# hold of a failed promote, a request left by the reconcile stage, a busy host lock
+# ===========================================================================================
+
+drv_pending() {
+    local n=0 f
+    for f in "${GREMION_ROOT}/runtime/cd/requests/"*.json; do
+        if [ -f "$f" ]; then n=$((n + 1)); fi
+    done
+    echo "$n"
+}
+
+@test "classify refusal: a kill between the refusal and the end of the release never lets the next tick deploy the refused candidate (auto hold, manual refusal, proof migration)" {
+    local mode
+    for mode in auto manual proof; do
+        drv_seed_rel fetch ok ".release.mode = \"${mode}\""
+        if [ "$mode" = proof ]; then
+            cd_stub_set cd_classify 0 '{"v":1,"holds":[],"hold":null,"migrations":{"total":2}}'
+        else
+            cd_stub_set cd_classify 0 '{"v":1,"holds":[{"kind":"contract_migration","reason":"x"}],"hold":{"kind":"contract_migration","reason":"x"},"migrations":{"total":0}}'
+        fi
+        : > "$SHIM_LOG"
+        export CD_DRV_HOOK_HIST='[[ "$1" == release_not_started ]] && drv_killme'
+        run cd_prog tick
+        [ "$status" -eq 137 ] || { echo "${mode}: ${status}" >&2; return 1; }
+        unset CD_DRV_HOOK_HIST
+        run cd_prog tick
+        [ "$status" -eq 0 ] || { echo "${mode}: resume ${status} ${output}" >&2; return 1; }
+        [ "$(drv_n '^stub cd_prepare_retag')" -eq 0 ] || { echo "${mode}: the refused candidate went on" >&2; return 1; }
+        [ "$(drv_n '^stub cd_prepare_build')" -eq 0 ]
+        [ "$(drv_n '^stub cd_commit_promote')" -eq 0 ]
+        [ "$(drv_state '.live.sha12')" = aaaaaaaaaaaa ]
+        [ "$(drv_state '.release')" = null ]
+        [ "$(drv_state '.phase')" = idle ]
+        if [ "$mode" = auto ]; then
+            [ "$(drv_state '.hold.kind')" = contract_migration ]
+        fi
+    done
+}
+
+@test "classify refusal: a kill after the held mail was queued leaves the refusal standing at the next tick (the hold is not erased by a release that goes on)" {
+    drv_seed_rel fetch ok
+    cd_stub_set cd_classify 0 '{"v":1,"holds":[{"kind":"contract_migration","reason":"x"}],"hold":{"kind":"contract_migration","reason":"x"},"migrations":{"total":0}}'
+    export CD_STUB_HOOK_cd_notify='[[ "$1" == held ]] && drv_killme'
+    run cd_prog tick
+    [ "$status" -eq 137 ]
+    unset CD_STUB_HOOK_cd_notify
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    [ "$(drv_n '^stub cd_prepare_build')" -eq 0 ]
+    [ "$(drv_state '.live.sha12')" = aaaaaaaaaaaa ]
+    [ "$(drv_state '.hold.kind')" = contract_migration ]
+}
+
+@test "rollback: two requests queued for one release roll back once, the second is refused in the history (it would take the live release back past what the operator meant)" {
+    drv_seed_sw watch ok
+    run cd_prog rollback
+    [ "$status" -eq 0 ]
+    run cd_prog rollback
+    [ "$status" -eq 0 ]
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    [ "$(drv_n '^stub cd_rollback_run manual_rollback')" -eq 1 ]
+    [ "$(drv_hist rollback_refused)" -eq 1 ]
+    [ "$(drv_pending)" -eq 0 ]
+    [ "$(drv_state '.phase')" = idle ]
+}
+
+@test "rollback: a request left over after the watch loop ended the release with a rollback of its own is refused, not run against the old live release" {
+    drv_seed_sw watch started
+    # the loop took the first request and ended the release; the second arrived while it ran
+    export CD_STUB_HOOK_cd_commit_watch_loop='cd_request_put rollback "{\"reason\":\"\"}"; cd_hold_set blocked watch_5xx bbbbbbbbbbbb; cd_state_set ".phase = \"idle\" | .release = null"; return 0'
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    [ "$(drv_n '^stub cd_rollback_run')" -eq 0 ]
+    [ "$(drv_hist rollback_refused)" -eq 1 ]
+    [ "$(drv_pending)" -eq 0 ]
+}
+
+@test "commit stage: a promote that ran the rollback itself and returned non-zero is not rolled back a second time" {
+    drv_seed_sw watch ok
+    export CD_STUB_HOOK_cd_commit_promote='cd_rollback_run commit_stuck; cd_state_set ".phase = \"idle\" | .release = null"; return 1'
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    [ "$(drv_n '^stub cd_rollback_run commit_stuck')" -eq 1 ]
+    [ "$(drv_state '.phase')" = idle ]
+    [ "$(drv_state '.release')" = null ]
+    [ "$(drv_blocks)" -eq 0 ]
+}
+
+@test "commit stage: the hold a failed promote wrote after commit step 5 (post_commit_<n>) stands, with no second hold and no second mail from the driver" {
+    drv_seed_sw watch ok
+    export CD_STUB_HOOK_cd_commit_promote='drv_step5; cd_hold_set failure post_commit_6 bbbbbbbbbbbb; return 1'
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    drv_assert_untouched
+    [ "$(drv_state '.hold.kind')" = failure ]
+    [ "$(drv_state '.hold.reason')" = post_commit_6 ]
+    [ "$(drv_mails stopped)" -eq 0 ]
+    [ "$(drv_state '.phase')" = idle ]
+    [ "$(drv_state '.release')" = null ]
+}
+
+@test "tick: a rollback request that the reconcile stage left is taken by the tick that started the release, not by the next one" {
+    drv_seed
+    export CD_STUB_HOOK_cd_reconcile_run='cd_request_put rollback "{\"reason\":\"\"}"; cd_hold_set reconcile_failed rollback_request bbbbbbbbbbbb; return 1'
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    [ "$(drv_n '^stub cd_rollback_run manual_rollback')" -eq 1 ]
+    [ "$(drv_pending)" -eq 0 ]
+}
+
+@test "host_apply: a busy host lock is waiting, not a failure: no teardown, no mail, no backoff, and the release goes on at a later tick" {
+    cd_need_flock
+    cd_write_cfg CD_LOCK_WAIT_S=1
+    drv_seed_rel classify ok '.release.with_state = true'
+    hold_host_lock 30
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    [ "$(drv_n '^stub cd_adopt_apply_host')" -eq 0 ]
+    [ "$(drv_n '^stub cd_colour_down')" -eq 0 ]
+    [ "$(drv_n '^stub cd_notify ')" -eq 0 ]
+    [ ! -e "${GREMION_ROOT}/data/cd/retry" ]
+    [ "$(drv_state '.hold')" = null ]
+    [ "$(drv_state '.release.stage')" = classify ]
+    [ "$(drv_state '.release.stage_status')" = ok ]
+    # three waits in a row are not a stuck stage
+    run cd_prog tick
+    run cd_prog tick
+    [ "$(drv_hist stuck_stage)" -eq 0 ]
+    [ "$(drv_state '.release.stage')" = classify ]
+    release_host_lock
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    [ "$(drv_n '^stub cd_adopt_apply_host')" -eq 1 ]
+    [ "$(drv_state '.live.sha12')" = bbbbbbbbbbbb ]
+}
+
+# ===========================================================================================
 # the real-data boundary
 # ===========================================================================================
 

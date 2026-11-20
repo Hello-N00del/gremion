@@ -67,3 +67,17 @@ drv_step5() {
 
 # drv_killme -- kill -9 of the whole program, from inside a stub.
 drv_killme() { kill -9 $$; }
+
+# -- a hook on the history writer ------------------------------------------------------------
+# CD_DRV_HOOK_HIST is a string of shell evaluated before the history line is written, with the
+# event in $1 (`[[ "$1" == release_not_started ]] && drv_killme` kills the program between two
+# state writes that no stand-in sits between). Unset, cd_hist is exactly core.sh's.
+if declare -F cd_hist >/dev/null 2>&1 && ! declare -F _drv_real_cd_hist >/dev/null 2>&1; then
+    eval "_drv_real_$(declare -f cd_hist)"
+    cd_hist() {
+        if [[ -n "${CD_DRV_HOOK_HIST:-}" ]]; then
+            eval "${CD_DRV_HOOK_HIST}" || true
+        fi
+        _drv_real_cd_hist "$@"
+    }
+fi

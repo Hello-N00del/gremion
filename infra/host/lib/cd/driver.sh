@@ -374,6 +374,10 @@ _cd_drv_policy_committed() {
         cd_hold_set reconcile_failed "$code" "$sha12" || true
         _cd_drv_mail reconcile_failed sha12="$sha12" colour="$colour" reason="$code" \
             command="gremion-cd reconcile" key="reconcile_failed.${sha12}"
+    elif [[ "$D_HOLD" == failure && "$D_HOLDSHA" == "$sha12" ]]; then
+        # the failing unit (commit steps 6 to 8) wrote its own hold, with the step in its
+        # reason, and queued its own mail: neither is replaced or doubled
+        hk=failure
     else
         hk=failure
         code="$(_cd_drv_code "post_commit_${stage}" post_commit)"
@@ -574,7 +578,9 @@ _cd_drv_st_classify() {
         if [[ "$migs" != 0 ]]; then
             cd_hist release_refused reason=proof_migration sha12="$R_SHA12" || true
             _cd_drv_say "refused: a proof release may not add a migration file, and its migration count must be known"
-            cd_stage_ok classify || true
+            # the stage is NOT recorded ok: a kill before the end of the release below would
+            # leave "classify ok" behind, and the next tick would build what was refused. Left
+            # `started`, the resume judges the candidate again (the third attempt is stuck_stage).
             _cd_drv_abort_refused proof_migration
             return 0
         fi
@@ -588,7 +594,7 @@ _cd_drv_st_classify() {
     if ((blocking > 0)); then
         first_kind="$(printf '%s' "$holds" | jq -r --arg w "$waived" '[.[] | select(.kind as $k | ($w | split(" ") | index($k)) | not)][0].kind')"
         first_reason="$(printf '%s' "$holds" | jq -r --arg w "$waived" '[.[] | select(.kind as $k | ($w | split(" ") | index($k)) | not)][0].reason')"
-        cd_stage_ok classify || true
+        # not recorded ok, as above: a refused candidate never reads as a classified one
         if [[ "$R_MODE" == auto ]]; then
             _cd_drv_hold_candidate "$first_kind" "$first_reason" "$R_SHA12"
             _cd_drv_abort_refused held
@@ -624,16 +630,33 @@ _cd_drv_abort_refused() {
 # when the state apply ends, before the build.
 _cd_drv_st_host_apply() {
     local rc=0
-    cd_hostlock_take "$(cd_cfg CD_LOCK_WAIT_S)" || return $?
     cd_adopt_apply_host "$R_TREE" || rc=$?
     return "$rc"
 }
 _cd_drv_st_state_apply() {
     local rc=0
-    cd_hostlock_take "$(cd_cfg CD_LOCK_WAIT_S)" || return $?
     cd_adopt_apply_state "$R_TREE" || rc=$?
     cd_hostlock_release
     return "$rc"
+}
+
+# _cd_drv_apply_stage STAGE -- the lock first, then the stage. A host lock that is busy is
+# waiting (return 3, the stage record untouched, no mail, no backoff), like the snapshot stage:
+# another holder (a backup, the purge) is no failure of this release. Any other refusal is.
+_cd_drv_apply_stage() {
+    local stage="$1" rc=0
+    cd_hostlock_take "$(cd_cfg CD_LOCK_WAIT_S)" || rc=$?
+    if ((rc == 3)); then
+        cd_hist apply_waiting why=host_lock stage="$stage" sha12="$R_SHA12" || true
+        _cd_drv_say "waiting: the host lock is held"
+        return 3
+    elif ((rc != 0)); then
+        _cd_drv_begin "$stage" 900
+        cd_heartbeat_stop
+        _cd_drv_fail "$stage" "$rc" host_lock
+        return 0
+    fi
+    _cd_drv_run "$stage" 900 "_cd_drv_st_${stage}"
 }
 _cd_drv_st_retag() { cd_prepare_retag "$R_TREE" "$R_COL" "$R_TAG" >/dev/null; }
 _cd_drv_st_render() { cd_prepare_render "$R_TREE" "$R_COL" >/dev/null; }
@@ -842,10 +865,19 @@ _cd_drv_st_commit() {
     cd_commit_promote || rc=$?
     if ((rc != 0)); then
         cd_heartbeat_stop
+        _cd_drv_load
         # LINE-1: after commit step 5 nothing goes back, whatever the step that failed
         if cd_release_committed; then
             cd_stage_fail commit host post_commit || true
             _cd_drv_policy_committed commit host post_commit
+        elif [[ -z "$R_ID" || "$D_PHASE" == idle ]]; then
+            # promote ran the rollback itself (commit.sh at CD_COMMIT_MAX_MIN) and ended the
+            # release: a second sequence would meet a release that is over
+            CD_DRV_ROLLED=1
+            cd_hostlock_release
+        elif [[ "$D_PHASE" == rolling_back ]]; then
+            CD_DRV_ROLLED=1
+            _cd_drv_after_rollback "$rc" commit_stuck
         else
             _cd_drv_rollback_auto commit_stuck commit
         fi
@@ -952,8 +984,7 @@ _cd_drv_dispatch() {
     case "$stage" in
         fetch) _cd_drv_run fetch 900 _cd_drv_st_fetch ;;
         classify) _cd_drv_st_classify ;;
-        host_apply) _cd_drv_run host_apply 900 _cd_drv_st_host_apply ;;
-        state_apply) _cd_drv_run state_apply 900 _cd_drv_st_state_apply ;;
+        host_apply | state_apply) _cd_drv_apply_stage "$stage" ;;
         retag) _cd_drv_run retag 300 _cd_drv_st_retag ;;
         render) _cd_drv_run render 600 _cd_drv_st_render ;;
         build) _cd_drv_run build $(( $(cd_cfg CD_BUILD_TIMEOUT_MIN) * 60 * 3 + 1500 )) _cd_drv_st_build ;;
@@ -1358,11 +1389,21 @@ _cd_drv_drain() {
         case "$verb" in
             hold) _cd_drv_do_hold "$args" ;;
             resume) _cd_drv_do_resume "$args" ;;
-            rollback) _cd_drv_do_rollback "$args" ;;
+            rollback)
+                # one rollback per release: a second request meets a release that is already
+                # over (and an idle host), where the same verb would take the LIVE release back
+                # to `previous`, which was never proven against the schema of the one just
+                # rolled back. The request is consumed and said so; the operator may ask again.
+                if ((CD_DRV_ROLLED == 1)); then
+                    cd_hist rollback_refused why=already_rolled_back || true
+                    _cd_drv_say "rollback refused: this release was already rolled back"
+                else
+                    _cd_drv_do_rollback "$args"
+                fi
+                ;;
             release-now) _cd_drv_do_release_now "$args" ;;
             *) cd_hist request_ignored verb="$verb" || true ;;
         esac
-        ((CD_DRV_ROLLED == 1)) && [[ "$verb" == rollback ]] && continue
     done
     return 0
 }
@@ -1897,6 +1938,14 @@ cd_cmd_tick() {
             _cd_drv_drain
         else
             _cd_drv_tick_idle || rc=$?
+            if ((rc == 0 && CD_DRV_STARTED == 1)); then
+                # a request the release itself left (the reconcile stage's failure path says "the
+                # request is left for the driver") waits for no next tick; no new candidate is asked
+                _cd_drv_load
+                if [[ "$D_PHASE" == idle ]]; then
+                    _cd_drv_drain
+                fi
+            fi
         fi
     fi
     if ! cd_killswitch_active; then
