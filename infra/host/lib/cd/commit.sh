@@ -22,7 +22,10 @@
 #                           kill switch parks IN PLACE: the process stays alive with the cd lock
 #                           and the host lock, stops evaluating triggers, keeps writing its own
 #                           heartbeat and polls every 15 seconds for the file to be gone (the watch
-#                           goes on with the same observed time) or for a `rollback` request.
+#                           goes on with the same observed time) or for a `rollback` request. It is
+#                           looked at again AFTER each sample: no verdict of a sample during which the
+#                           file appeared is acted on (a trigger and a parked verdict included); the
+#                           sample is dropped and the next one judges.
 #                           A `parked` verdict (the pause cap) sets phase parked and the hold
 #                           `failure`, queues a mail and releases the HOST lock; entering the loop
 #                           again at phase `parked` is the resume: the host lock is taken again, the
@@ -67,8 +70,10 @@
 #                         OPERATOR asks for and that is refused is never a 4: it is mailed and the
 #                         watch goes on (in the kill switch park too). A trigger on a release whose
 #                         rollback target is unusable leaves the process waiting in place, both
-#                         locks held, for that operator rollback (it never returns 3: the host lock
-#                         is handed back only by the pause cap and by a complete rollback).
+#                         locks held, for that operator rollback, and mails again every hour (it never
+#                         returns 3: the host lock is handed back only by the pause cap and by a
+#                         complete rollback). It has no time limit of its own: that is a decision of
+#                         the plan and of the driver (unit U14a).
 #   cd_commit_promote     0 committed and steps 6 to 8 done; 1 not done: a rollback ran (the
 #                         operator's request, or commit_stuck at the cap; cd_rollback_run owns the
 #                         state and the hold it leaves, and after a complete one there is no release
@@ -300,17 +305,26 @@ _cd_commit_park() {
     return 0
 }
 
-# _cd_commit_wait_operator STAGE - a watch trigger met a release whose old colour cannot be
+# _cd_commit_wait_operator STAGE RULE - a watch trigger met a release whose old colour cannot be
 # switched back to (rollback_target unusable): the process stays alive holding both locks, judges
-# nothing further, writes its own heartbeat and polls for the operator's `rollback` request. It
-# returns only when that sequence ran (the state says how it ended); a request the rollback
-# refuses with nothing touched is consumed, mailed, and the wait goes on. Leaving by killing the
-# process leaves the phase as it is (watching): the resume path of the next tick takes the locks
-# again and the next trigger lands here again.
+# nothing further, writes its own heartbeat and polls for the operator's `rollback` request. The
+# critical mail (rollback_failed, reason rollback_target_unusable) is offered at every pass: the
+# notify rate limit (every=3600) lets it out once an hour, so a wait that goes on is said again and
+# the operator is never left with one mail from long ago. It returns only when that sequence ran
+# (the state says how it ended); a request the rollback refuses with nothing touched is consumed,
+# mailed, and the wait goes on. Leaving by killing the process leaves the phase as it is
+# (watching): the resume path of the next tick takes the locks again and the next trigger lands
+# here again. There is no time limit here on purpose: what the program does with a release that
+# nobody can roll back and nobody has rolled back (hand the host lock back with the new colour
+# serving a migrated schema and `current` on the old tree, or hold it) is a decision of the plan
+# and of the driver, not of this file; the hourly mail and the operator's `rollback` are the ways out.
 _cd_commit_wait_operator() {
-    local stage="$1" now
+    local stage="$1" rule="$2" now
     cd_heartbeat_stop
     while :; do
+        cd_notify rollback_failed "key=${CM_ID}" every=3600 "sha12=${CM_SHA12}" "prev_sha12=${CM_LIVE_SHA12}" \
+            "tag=${CM_TAG}" "colour=${CM_COLOUR}" "prev_colour=${CM_LIVE_COLOUR}" "stage=${stage}" "rule=${rule}" \
+            reason=rollback_target_unusable command="gremion-cd status" || true
         if _cd_commit_take_rollback_request; then
             if _cd_commit_run_requested "$stage" unusable; then return 0; fi
         fi
@@ -494,6 +508,16 @@ cd_commit_watch_loop() {
             out="$(cd_watch_eval "$sample")" || rc=$?
             if ((rc == 0)); then _cd_commit_parse_eval "$out"; fi
         fi
+        # the kill switch is looked at AGAIN after the sample: the file may have appeared during it
+        # (a sample takes as long as CD_SAMPLE_TIMEOUT_S) and no verdict of that sample is acted on
+        # while it exists, a trigger and a parked verdict included. The sample is dropped (the
+        # observed time the evaluation kept stays); the next one judges, once the file is gone
+        if cd_killswitch_active; then
+            rc=0
+            _cd_commit_park watch || rc=$?
+            if ((rc == 10)); then return 1; fi
+            continue
+        fi
         if [[ -z "$CM_VERDICT" ]]; then
             # unknown is never green and never a trigger: after eight of them the loop returns 4 (see the header)
             broken=$((broken + 1))
@@ -510,16 +534,14 @@ cd_commit_watch_loop() {
                     rule="${CM_VERDICT#trigger:}"
                     _cd_commit_load || return 2
                     if [[ "$CM_TARGET" == unusable ]]; then
-                        # there is nothing to go back to: the new colour stays and the operator is told.
-                        # The host lock is NOT handed back (the new colour serves the migrated schema,
-                        # `current` is the old tree and the old colour is known to fail on that schema;
-                        # the one early release of the lock is the pause cap): the process waits in
-                        # place for the operator's `rollback`
-                        cd_notify rollback_failed "key=${CM_ID}" every=3600 "sha12=${CM_SHA12}" "prev_sha12=${CM_LIVE_SHA12}" \
-                            "tag=${CM_TAG}" "colour=${CM_COLOUR}" "prev_colour=${CM_LIVE_COLOUR}" stage=watch "rule=${rule}" \
-                            reason=rollback_target_unusable command="gremion-cd status" || true
+                        # there is nothing to go back to: the new colour stays and the operator is told
+                        # (by the wait, which says it again every hour). The host lock is NOT handed
+                        # back (the new colour serves the migrated schema, `current` is the old tree
+                        # and the old colour is known to fail on that schema; the one early release
+                        # of the lock is the pause cap): the process waits in place for the
+                        # operator's `rollback`
                         cd_hist rollback_skipped rule="$rule" reason=target_unusable || true
-                        _cd_commit_wait_operator watch
+                        _cd_commit_wait_operator watch "$rule"
                         return 1
                     fi
                     rc=0
@@ -785,6 +807,12 @@ _cd_commit_precommit() {
             cd_notify stopped "key=${CM_ID}-commit-retry" "sha12=${CM_SHA12}" "prev_sha12=${CM_LIVE_SHA12}" "tag=${CM_TAG}" \
                 "colour=${CM_COLOUR}" stage=commit rule=none "reason=commit_step_${failed}" command="gremion-cd status" || true
         fi
+        # the kill switch is looked at before the cap decides: a file that appeared during the failed
+        # step (a long one) holds the automatic rollback back, and the time spent under it is no part
+        # of the cap (the elapsed time is read after the park)
+        rc=0
+        _cd_commit_gate commit || rc=$?
+        if ((rc == 10)); then return 1; fi
         now="$(cd_now)" || return 2
         elapsed=$((now - start - _CD_COMMIT_PARKED_S))
         if ((elapsed >= cap)); then

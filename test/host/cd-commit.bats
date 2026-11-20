@@ -369,6 +369,90 @@ verdicts() { printf '%s\n' "$@" > "$FK/verdicts"; }
     [ "$output" = 0 ]
 }
 
+@test "rollback_target unusable: the wait says it again every hour, with the rate limit of the mail, and never hands a lock back" {
+    seed_state 0 auto '.release.rollback_target = "unusable"'
+    verdicts ok trigger:watch_crash
+    cdc_bg 'echo ready; rc=0; cd_commit_watch_loop || rc=$?; echo "rc=$rc"'
+    wait_for "ls '${GREMION_ROOT}'/data/cd/outbox/*-rollback_failed*.eml"
+    sleep 0.5
+    [ "$(mails rollback_failed)" -eq 1 ]
+    # an hour later the same wait mails again (the key is the release, the rate limit is the hour)
+    cd_advance 3700
+    wait_for '[ "$(mails rollback_failed)" -ge 2 ]' 100
+    run cd_lib 'cd_hostlock_take'
+    [ "$status" -eq 3 ]
+    run grep -c '^rc=' "$CD_BG_OUT"
+    [ "$output" = 0 ]
+    run refute_recorded fake cd_rollback_run
+    [ "$status" -eq 0 ]
+}
+
+@test "kill switch that appears DURING a sample: a trigger of that sample is not acted on while the file exists, and the dropped sample is not read again" {
+    cd_write_cfg CD_WATCH_MINUTES=2 CD_COMMIT_MAX_MIN=3
+    seed_state 0
+    echo 2 > "$FK/killat"
+    verdicts ok trigger:watch_readiness ok
+    cdc_bg 'echo ready; rc=0; cd_commit_watch_loop || rc=$?; echo "rc=$rc"'
+    wait_for "ls '${GREMION_ROOT}'/data/cd/outbox/*-killswitch*.eml"
+    sleep 0.5
+    # parked with both locks, and the automatic rollback has not run
+    run cd_lib 'cd_hostlock_take'
+    [ "$status" -eq 3 ]
+    run cd_lib 'cd_lock_take'
+    [ "$status" -eq 3 ]
+    [ "$(calls 'fake cd_rollback_run')" -eq 0 ]
+    run grep -c '^rc=' "$CD_BG_OUT"
+    [ "$output" = 0 ]
+    [ -e "${GREMION_ROOT}/etc/cd.disabled" ]
+    rm -f "${GREMION_ROOT}/etc/cd.disabled"
+    wait_for "grep -q '^rc=' '$CD_BG_OUT'" 150
+    grep -q '^rc=0' "$CD_BG_OUT"
+    [ "$(calls 'fake cd_rollback_run')" -eq 0 ]
+    run grep -c 'lock=free' "$SHIM_LOG"
+    [ "$output" = 0 ]
+}
+
+@test "kill switch that appears during a sample whose verdict is parked: the pause cap does not release the host lock while the file exists" {
+    cd_write_cfg CD_WATCH_MINUTES=2 CD_COMMIT_MAX_MIN=3
+    seed_state 0
+    echo 1 > "$FK/killat"
+    verdicts parked
+    cdc_bg 'echo ready; rc=0; cd_commit_watch_loop || rc=$?; echo "rc=$rc"'
+    wait_for "ls '${GREMION_ROOT}'/data/cd/outbox/*-killswitch*.eml"
+    sleep 0.5
+    run cd_lib 'cd_hostlock_take'
+    [ "$status" -eq 3 ]
+    [ "$(st '.phase')" = watching ]
+    [ "$(st '.hold')" = null ]
+    run grep -c '^rc=' "$CD_BG_OUT"
+    [ "$output" = 0 ]
+}
+
+@test "kill switch that appears during a failed step 1 at the cap: no commit_stuck rollback while the file exists, and the time under it is no part of the cap" {
+    seed_state 60
+    cdc_bg 'cd_colour_isolation_record() { cd_sleep 200; : > "$CD_KILLSWITCH_FILE"; return 1; }
+echo ready; rc=0; cd_commit_promote || rc=$?; echo "rc=$rc"'
+    wait_for "ls '${GREMION_ROOT}'/data/cd/outbox/*-killswitch*.eml"
+    sleep 0.5
+    run cd_lib 'cd_hostlock_take'
+    [ "$status" -eq 3 ]
+    run cd_lib 'cd_lock_take'
+    [ "$status" -eq 3 ]
+    [ "$(calls 'fake cd_rollback_run')" -eq 0 ]
+    run grep -c '^rc=' "$CD_BG_OUT"
+    [ "$output" = 0 ]
+    [ -e "${GREMION_ROOT}/etc/cd.disabled" ]
+    [ "$(readlink "${GREMION_ROOT}/current")" = "${GREMION_ROOT}/releases/${OLD12}" ]
+    # the file goes away: the cap (already run out by the long step) decides, with the file gone
+    rm -f "${GREMION_ROOT}/etc/cd.disabled"
+    wait_for "grep -q '^rc=' '$CD_BG_OUT'" 150
+    grep -q '^rc=1' "$CD_BG_OUT"
+    [ "$(cat "$FK/rollback.rules")" = commit_stuck ]
+    [ ! -e "${GREMION_ROOT}/etc/cd.disabled" ]
+    run grep -c 'lock=free' "$SHIM_LOG"
+    [ "$output" = 0 ]
+}
+
 # ------------------------------------------------------------------ the pause cap and parked
 
 @test "a parked verdict sets the phase and the hold failure, queues a critical mail and releases the host lock" {
@@ -477,6 +561,9 @@ verdicts() { printf '%s\n' "$@" > "$FK/verdicts"; }
     run cd_lib 'cd_lock_take'
     [ "$status" -eq 3 ]
     [ "$(st '.release.committed_at')" = null ]
+    # the gate at the start of the sequence holds step 1 back: with only the wait between the retries
+    # (which a failed first attempt would reach) step 1 would already have run once
+    [ "$(calls 'fake cd_colour_isolation_record')" -eq 0 ]
     # an hour under the switch is far past the 3 minute cap and takes nothing from it
     cd_advance 3600
     rm -f "${GREMION_ROOT}/etc/cd.disabled"
