@@ -401,6 +401,7 @@ verdicts() { printf '%s\n' "$@" > "$FK/verdicts"; }
     sleep 0.6
     [ "$(calls 'fake cd_watch_eval')" -eq "$n" ]
     grep -q '^notes: rollback_off_lock_held' "${GREMION_ROOT}"/data/cd/outbox/*-killswitch*.eml
+    [ "$(st '.notified | keys | map(select(startswith("killswitch"))) | .[0]')" = "killswitch:killswitch.bbbbbbbbbbbb-1" ]
     # the heartbeat is rewritten while it waits
     cd_fake_now 1700000999
     wait_for "grep -q '^1700000999 ' '${GREMION_ROOT}/runtime/cd/heartbeat'"
@@ -612,6 +613,7 @@ EOF
     assert_recorded fake "cd_data_dumpset_retire pilot-${NEW12}"
     [ "$(mails stopped)" -eq 1 ]
     grep -q '^reason: post_commit_6' "${GREMION_ROOT}"/data/cd/outbox/*-stopped*.eml
+    grep -q "^prev_sha12: ${OLD12}" "${GREMION_ROOT}"/data/cd/outbox/*-stopped*.eml
     run grep -c 'lock=free' "$SHIM_LOG"
     [ "$output" = 0 ]
     [ "$(readlink "${GREMION_ROOT}/current")" = "${GREMION_ROOT}/releases/${NEW12}" ]
@@ -701,6 +703,8 @@ EOF
     [[ "$body" == *"modules_total: 2"* ]]
     [[ "$body" == *"observed_min: 1"* ]]
     [[ "$body" == *"dump_label: pilot-${NEW12}"* ]]
+    [[ "$body" == *"prev_sha12: ${OLD12}"* ]]
+    [[ "$body" == *"prev_colour: blue"* ]]
     [[ "$body" != *"@"* ]]
 }
 
@@ -742,12 +746,31 @@ EOF
     [ "$(calls 'fake cd_colour_isolation_record')" -eq 0 ]
 }
 
-@test "under set -euo pipefail the watch, the commit and the prune finish without tripping errexit" {
+@test "under set -euo pipefail the watch and the commit finish without tripping errexit" {
     seed_state 0
     run cdc_strict 'cd_commit_watch_loop; cd_commit_promote; echo done'
     [ "$status" -eq 0 ]
     [[ "$output" == *done* ]]
     [ "$(st '.live.sha12')" = "$NEW12" ]
+}
+
+@test "under set -euo pipefail the prune finishes without tripping errexit" {
+    seed_prune
+    run cdc_strict '. "${HOST_SRC}/lib/cd/docker.sh"; cd_commit_prune; echo done'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *done* ]]
+    [ "$(removed_refs | wc -l)" -eq 3 ]
+}
+
+@test "steps 6 and 7 share ONE window of CD_COMMIT_MAX_MIN, so the lock is held that long after the commit point, not once per step" {
+    echo 2 > "$FK/cd_data_dumpset_retire.fails"
+    echo 999 > "$FK/cd_colour_down.fails"
+    seed_state 60
+    run cdc_lib 'cd_commit_promote; echo "rc=$? t=$(cd_now)"'
+    # step 6 took two minutes, step 7 gets the minute that is left of the three
+    [[ "$output" == *"rc=1 t=$((1700000000 + 180))"* ]]
+    [ "$(st '.hold.reason')" = post_commit_7 ]
+    [ "$(calls 'fake cd_rollback_run')" -eq 0 ]
 }
 
 # ------------------------------------------------------------------ the F1 trio

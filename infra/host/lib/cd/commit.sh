@@ -50,7 +50,8 @@
 #                         release, a committed release, a phase that is not watching, a lock not
 #                         held); 3 the release is parked (phase parked, host lock released); 4 the
 #                         loop could not judge (the samples were unusable, or a rollback was
-#                         refused with nothing touched: the release is still watching).
+#                         refused with nothing touched: the release is still watching). The
+#                         driver then rolls it back with commit_stuck (no block).
 #   cd_commit_promote     0 committed and steps 6 to 8 done; 1 not done: the release was rolled
 #                         back (commit_stuck, or the operator's request) or, after step 5, a
 #                         step 6 or 7 was given up with the hold `failure`. A caller tells the two
@@ -84,10 +85,14 @@ _cd_commit_err() { printf 'cd-commit: %s\n' "$*" >&2; }
 # parked process does not move the fake clock.
 _CD_COMMIT_POLL_S=15
 _CD_COMMIT_RETRY_S=60
-# Samples in a row that give no verdict: the loop gives up (4) and leaves the release as it is.
+# Samples in a row that give no verdict: the loop gives up (4). The release stays in flight; the
+# driver reads a non-zero code with the phase still watching as a loop that failed on its own and
+# rolls the release back with commit_stuck (no block): unknown is never green.
 _CD_COMMIT_UNUSABLE_MAX=8
 # Seconds that a kill switch park has taken from the retry cap of the sequence that is waiting.
 _CD_COMMIT_PARKED_S=0
+# The epoch at which the window of the steps after the commit point (6 and 7) began.
+_CD_COMMIT_FWD_START=""
 
 # _cd_commit_int KEY - the config value as a whole number; 2 when it is not one.
 _cd_commit_int() {
@@ -205,7 +210,7 @@ _cd_commit_park() {
     # would stop, and a heartbeat that stops is the dead-man's signal for a stuck release
     cd_heartbeat_stop
     while cd_killswitch_active; do
-        cd_notify killswitch "key=${CM_ID}" every=3600 "phase=${CM_PHASE}" "sha12=${CM_SHA12}" "stage=${stage}" \
+        cd_notify killswitch "key=killswitch.${CM_ID}" every=3600 "phase=${CM_PHASE}" "sha12=${CM_SHA12}" "stage=${stage}" \
             notes=rollback_off_lock_held command="gremion-cd status" || true
         if _cd_commit_take_rollback_request; then
             cd_hist rollback_requested during=killswitch stage="$stage" || true
@@ -403,7 +408,7 @@ cd_commit_watch_loop() {
             if ((rc == 0)); then _cd_commit_parse_eval "$out"; fi
         fi
         if [[ -z "$CM_VERDICT" ]]; then
-            # unknown is never green, and never a trigger either: the release is left as it is
+            # unknown is never green and never a trigger: after eight of them the loop returns 4 (see the header)
             broken=$((broken + 1))
             cd_hist watch_sample_unusable count="$broken" || true
             if ((broken >= _CD_COMMIT_UNUSABLE_MAX)); then
@@ -543,7 +548,7 @@ _cd_commit_step8() {
         | join("|")')" || line=""
     local om rq mt mu mf lt lm ls lf ss ms
     IFS='|' read -r om rq mt mu mf lt lm ls lf ss ms <<<"$line"
-    args=("sha12=${CM_SHA12}" "prev_sha12=${CM_LIVE_SHA12}" "tag=${CM_TAG}" "colour=${CM_COLOUR}")
+    args=("sha12=${CM_SHA12}" "prev_sha12=${CM_PREV_SHA12}" "tag=${CM_TAG}" "colour=${CM_COLOUR}" "prev_colour=${CM_PREV_COLOUR}")
     [[ -n "$om" ]] && args+=("observed_min=${om}")
     [[ -n "$rq" ]] && args+=("requests=${rq}")
     [[ -n "$mt" ]] && args+=("modules_total=${mt}" "modules_upgraded=${mu}" "modules_failed=${mf}")
@@ -576,8 +581,10 @@ _cd_commit_forward() {
     local n="$1" fn="$2" cap start now fails=0 rc elapsed
     cap="$(_cd_commit_int CD_COMMIT_MAX_MIN)" || return 1
     cap=$((cap * 60))
-    start="$(cd_now)" || return 1
-    _CD_COMMIT_PARKED_S=0
+    # one window for steps 6 and 7 together (cd_commit_promote starts it), so the host lock is held
+    # for at most CD_COMMIT_MAX_MIN after the commit point, not once per step
+    start="$_CD_COMMIT_FWD_START"
+    [[ "$start" =~ ^[0-9]+$ ]] || return 1
     while :; do
         _cd_commit_load || return 1
         rc=0
@@ -586,14 +593,14 @@ _cd_commit_forward() {
         fails=$((fails + 1))
         cd_hist commit_forward_failed step="$n" attempt="$fails" code="$rc" || true
         if ((fails == 3)); then
-            cd_notify stopped "key=${CM_ID}-post-commit-${n}-retry" "sha12=${CM_SHA12}" "prev_sha12=${CM_LIVE_SHA12}" "tag=${CM_TAG}" \
+            cd_notify stopped "key=${CM_ID}-post-commit-${n}-retry" "sha12=${CM_SHA12}" "prev_sha12=${CM_PREV_SHA12}" "tag=${CM_TAG}" \
                 "colour=${CM_COLOUR}" stage=commit rule=none "reason=post_commit_${n}" command="gremion-cd status" || true
         fi
         now="$(cd_now)" || return 1
         elapsed=$((now - start - _CD_COMMIT_PARKED_S))
         if ((elapsed >= cap)); then
             cd_hold_set failure "post_commit_${n}" "$CM_SHA12" || true
-            cd_notify stopped "key=${CM_ID}-post-commit-${n}-cap" "sha12=${CM_SHA12}" "prev_sha12=${CM_LIVE_SHA12}" "tag=${CM_TAG}" \
+            cd_notify stopped "key=${CM_ID}-post-commit-${n}-cap" "sha12=${CM_SHA12}" "prev_sha12=${CM_PREV_SHA12}" "tag=${CM_TAG}" \
                 "colour=${CM_COLOUR}" stage=commit rule=none "reason=post_commit_${n}" command="gremion-cd status" || true
             cd_hist commit_forward_given_up step="$n" sha12="$CM_SHA12" || true
             return 1
@@ -692,6 +699,8 @@ cd_commit_promote() {
     fi
     # from here the release is committed: nothing below can reach cd_rollback_run, except the
     # operator's own request that _cd_commit_nap takes
+    _CD_COMMIT_FWD_START="$(cd_now)" || return 1
+    _CD_COMMIT_PARKED_S=0
     rc=0
     _cd_commit_forward 6 _cd_commit_step6 || rc=$?
     if ((rc != 0)); then return 1; fi
