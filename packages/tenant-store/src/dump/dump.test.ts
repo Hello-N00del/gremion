@@ -277,6 +277,11 @@ describe('small parts', () => {
     expect(await runCli(['migrate', '--chain'], {}, io)).toBe(2)
     expect(await runCli(['migrate', '--chain', 'kernel-data', '--release', 'dist-v1.0.0'], {}, io)).toBe(2)
     expect(io.lines.join('\n')).toMatch(/class legacy-boot, not tenant-store/)
+    // U6d: the refusal names the module-upgrade class and says who applies it
+    io.lines.length = 0
+    expect(await runCli(['migrate', '--chain', 'module-calendar', '--release', 'dist-v1.0.0'], {}, io)).toBe(2)
+    expect(io.lines.join('\n')).toMatch(/class module-upgrade, not tenant-store/)
+    expect(io.lines.join('\n')).toMatch(/module-upgrade: [^;)]*module-upgrade --all/)
     expect(await runCli(['migrate', '--chain', 'platform', '--release', 'dist-v1.0.0'], {}, io)).toBe(2)
     expect(io.lines.join('\n')).toMatch(/GREMION_MIGRATE_URL is not set/)
   })

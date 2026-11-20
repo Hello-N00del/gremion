@@ -56,6 +56,20 @@ export interface Exporter {
 
 export type LifecycleStep = 'enabling' | 'roles' | 'created' | 'unblocked' | 'migrated' | 'enabled' | 'disabling' | 'exported' | 'blocked' | 'dropped'
 
+/** The hooks of a migration run on an existing database; the function form is called once per enable with the module's own server. */
+export type UpgradeHooks = RunMigrationsHooks | ((moduleId: string, postgresService: string) => RunMigrationsHooks | undefined)
+
+/**
+ * Retires live migration dumps of one database. Both calls are no-ops when there is none (idempotent: a retry
+ * after a crash, an enable that took no dump).
+ */
+export interface DumpRetirer {
+  /** The enable of `database` committed: retire the live dump of `release` for it. */
+  afterEnable(release: string, database: string): void | Promise<void>
+  /** The Karenz job dropped (or found dropped) `database`: retire every live dump of it, whatever release took it. */
+  afterDrop(database: string): void | Promise<void>
+}
+
 export interface LifecycleDeps {
   /** A connection to gremion_platform (asserted by name before anything else). */
   platform: Sql
@@ -84,8 +98,19 @@ export interface LifecycleDeps {
    * TASK-075 (TRD-206): hooks for a migration run on a database that ALREADY
    * existed (an upgrade or a resumed enable): the pre-migration dump. A
    * database this enable just created gets none (nothing to lose, README).
+   * CD stage 1 (U6g): may be a function of (moduleId, postgresService), which
+   * enableModule calls with the module's own server, so the dump hook and its
+   * exporter are bound to the right server (a static object cannot know it).
    */
-  upgradeHooks?: RunMigrationsHooks
+  upgradeHooks?: UpgradeHooks
+  /**
+   * CD stage 1 (U6g): retires the dump that `upgradeHooks` took. Called only
+   * after an enable has COMMITTED (never before: a failed commit re-blocks the
+   * database, and the dump is then its restore point), and by the day-30 job
+   * for a database it dropped. Optional: without it a dump taken at enable
+   * stays live until the operator discards it.
+   */
+  dumpRetire?: DumpRetirer
   /** Test seam: called after each step's state is written (crash injection). */
   hooks?: { afterStep?(step: LifecycleStep, ctx: { tenantId: string; moduleId: string; database: string | null }): void | Promise<void> }
   log?: (line: string) => void

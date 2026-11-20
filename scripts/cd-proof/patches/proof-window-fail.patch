@@ -1,0 +1,20 @@
+diff --git a/gremion-ui/src/routes/readyz/+server.ts b/gremion-ui/src/routes/readyz/+server.ts
+index eccc16a8..6965e577 100644
+--- a/gremion-ui/src/routes/readyz/+server.ts
++++ b/gremion-ui/src/routes/readyz/+server.ts
+@@ -1,4 +1,5 @@
+ import type { RequestHandler } from './$types'
++import { existsSync } from 'node:fs'
+ import { env } from '$env/dynamic/private'
+ import { getBootStatus } from '../../hooks.server'
+ import { getControlDb } from '$lib/server/tenant/control-db'
+@@ -91,7 +92,8 @@ function answer(body: Record<string, unknown>, ready: boolean): Response {
+ export const GET: RequestHandler = async ({ request }) => {
+   try {
+     const bootComplete = getBootStatus().complete
+-    const controlOk = bootComplete ? await controlPing() : false
++    // CD PROOF ONLY (never merged): the flag file turns the answer to not ready.
++    const controlOk = bootComplete ? (await controlPing()) && !existsSync('/tmp/cd-proof-fail') : false
+     const ready = bootComplete && controlOk
+     if (!isInternalCaller(request)) return answer({ ready }, ready)
+ 

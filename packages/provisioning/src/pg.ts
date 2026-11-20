@@ -59,6 +59,7 @@ export function pgModules(opts: {
       return { noop: r.noop, dropped: r.dropped, blocked: r.blocked, finalAt: r.karenz?.finalAt ?? null, database: r.database, export: r.export }
     },
     async finalizeDue(o: { finalDeletion: boolean; deadlineMs: number }) {
+      const dumpRetire = opts.lifecycle.dumpRetire
       return finalizeDueKarenz({
         platform: opts.platform,
         server: opts.lifecycle.server,
@@ -68,6 +69,8 @@ export function pgModules(opts: {
         finalDeletion: o.finalDeletion,
         deadlineMs: o.deadlineMs,
         exportHold,
+        // CD stage 1 (U6g): a live pre-migration dump of a database the job drops goes with it (any release's)
+        ...(dumpRetire ? { afterDrop: (_tenantId: string, _moduleKey: string, dbName: string) => Promise.resolve(dumpRetire.afterDrop(dbName)) } : {}),
         ...(opts.lifecycle.log ? { log: opts.lifecycle.log } : {}),
       })
     },

@@ -63,6 +63,16 @@ export interface FinalizeDeps {
   exportHold?: (tenantId: string, moduleId: string, context: ExportHoldContext) => Promise<Date | null> | Date | null
   /** Modules (catalogue ids) whose database may not be dropped before retained_ok_at is set. */
   retentionRequired?: ReadonlySet<string>
+  /**
+   * CD stage 1 (U6g): called for a row whose module database row is `dropped` (dropped by this run, or found
+   * `dropped` when the row was read), with the database name, so a live pre-migration dump of a database that no
+   * longer exists is retired with it. Driven from the ROW, not from what this run did: a run that crashed between
+   * the drop's state write and this call is repeated by the next hourly run with a `dropped` row, and must still
+   * call it. Called before the export step, on every pass of such a row, so it must be idempotent (a no-op when
+   * no dump is live). A throw is logged with the Karenz id and never stops the finalize; the dump is left for the
+   * operator (the blocked database was unchanged since its verified export, which is an equivalent restore point).
+   */
+  afterDrop?: (tenantId: string, moduleKey: string, dbName: string) => Promise<void> | void
   log?: (line: string) => void
   hooks?: { afterStep?: (step: FinalizeStep) => void | Promise<void> }
 }
@@ -272,6 +282,16 @@ async function finalizeRow(
     databaseDropped = true
     await hook('cas-dropped')
     log(`dropped ${blockedDb.dbName} (Karenz ${r.karenz_id})`)
+  }
+
+  // From the row: `databaseDropped` is true for a database this run dropped and for one that was `dropped` when the
+  // row was read (a crash after the state write, an earlier run). `md` is non-null whenever it is true.
+  if (databaseDropped && md && deps.afterDrop) {
+    try {
+      await deps.afterDrop(tenantId, moduleKey, md.dbName)
+    } catch (err) {
+      log(`the pre-migration dump of a dropped module database could not be retired for Karenz ${r.karenz_id} (${describeError(err)}); it is left for the operator: gremion-migration-dump status, then discard`)
+    }
   }
 
   let kept = false

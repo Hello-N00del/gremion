@@ -5,13 +5,13 @@
 // marker. Plus the wiring: verify registers it and requires it.
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, describe, test } from 'node:test'
 import { loadRequiredSuites, SUITE_REGISTRY } from '../../verify/verify.mjs'
 import { baselineDigest, PINNED_FILE, renderPinned } from './baseline.mjs'
-import { loadCanaries, runExpandContractSuite } from './suite.mjs'
+import { CLASSES, loadCanaries, MANUAL_DUMP_CLASSES, runExpandContractSuite } from './suite.mjs'
 
 const TMP_ROOT = process.env.GREMION_TEST_TMPDIR || tmpdir()
 const roots = []
@@ -149,6 +149,22 @@ describe('expand-contract suite (TDD 3)', () => {
     assert.equal(good.failed, 0, good.detail)
   })
 
+  // U6d: the module chains are applied by the module-upgrade step of a release, but a hand upgrade, the
+  // deploy script and a hold of the classifier never run it, so the marker is still the runbook step for those paths.
+  test('a module-upgrade chain still needs the manual-dump marker on a new file (guard)', () => {
+    const runners = { alpha: 'tenant-store', beta: 'module-upgrade' }
+    const bad = run(fixture({ runners, files: { 'db/beta/001_b.sql': HEADERED } }))
+    assert.equal(bad.failed, 1, bad.detail)
+    assert.match(bad.detail, /db\/beta\/001_b\.sql: statement 0: manual-dump-marker-missing/)
+    const good = run(fixture({ runners, files: { 'db/beta/001_b.sql': HEADERED.replace('\n', '\n-- gremion:manual-dump runbook upgrade.md step 3\n') } }))
+    assert.equal(good.failed, 0, good.detail)
+  })
+
+  test('the marker rule is keyed on exactly the unadopted and module-upgrade classes', () => {
+    assert.deepEqual([...MANUAL_DUMP_CLASSES].sort(), ['module-upgrade', 'unadopted'])
+    for (const c of MANUAL_DUMP_CLASSES) assert.ok(CLASSES.includes(c), `${c} is not a known class`)
+  })
+
   test('a fresh-only chain needs no manual-dump marker on a new file; an unknown class is still refused', () => {
     const f = fixture({ runners: { alpha: 'tenant-store', beta: 'fresh-only' }, files: { 'db/beta/001_b.sql': HEADERED } })
     const good = run(f)
@@ -217,6 +233,52 @@ describe('expand-contract suite (TDD 3)', () => {
       assert.match(run(waived({ waiver: { reason: 'short' } })).detail, /reason of at least 40/)
       assert.match(run(waived({ waiver: { rules: ['phase-header-missing'] } })).detail, /rules must be a non-empty subset/)
     })
+  })
+})
+
+describe('chain classes (U6d): the suite, chain-runners.json and the README agree', () => {
+  const RUNNER_DIR = import.meta.dirname
+  const runners = JSON.parse(readFileSync(join(RUNNER_DIR, 'chain-runners.json'), 'utf8'))
+  const readme = readFileSync(join(RUNNER_DIR, 'README.md'), 'utf8').replace(/\r\n/g, '\n')
+
+  /** The class column of the README table under "Which runner takes the dump". */
+  function readmeClasses() {
+    const section = readme.split(/^## Which runner takes the dump.*$/m)[1]?.split(/^## /m)[0] ?? ''
+    return [...section.matchAll(/^\| `([a-z-]+)` \|/gm)].map((m) => m[1])
+  }
+
+  test('the class list of suite.mjs is the five classes, in the order the docs use', () => {
+    assert.deepEqual(CLASSES, ['tenant-store', 'legacy-boot', 'module-upgrade', 'unadopted', 'fresh-only'])
+  })
+
+  test('the described classes of chain-runners.json are exactly the suite classes', () => {
+    assert.deepEqual(Object.keys(runners.classes).sort(), [...CLASSES].sort())
+    for (const [c, text] of Object.entries(runners.classes)) assert.ok(typeof text === 'string' && text.length > 20, `class ${c} has no description`)
+  })
+
+  test('the README table lists exactly the suite classes', () => {
+    assert.deepEqual(readmeClasses().sort(), [...CLASSES].sort())
+    assert.match(readme, /Five classes/)
+  })
+
+  test('every chain uses a described class, and the module chains map as decided', () => {
+    for (const [chain, cls] of Object.entries(runners.chains)) assert.ok(CLASSES.includes(cls), `${chain}: ${cls}`)
+    for (const m of ['calendar', 'content', 'finance', 'publishing', 'vault']) assert.equal(runners.chains[`module-${m}`], 'module-upgrade', `module-${m}`)
+    assert.equal(runners.chains['module-board'], 'unadopted')
+    assert.equal(runners.chains.mail, 'unadopted')
+    assert.equal(runners.chains.governance, 'fresh-only')
+    assert.equal(runners.chains.platform, 'tenant-store')
+    assert.equal(runners.chains['kernel-api'], 'tenant-store')
+    assert.equal(runners.chains.control, 'legacy-boot')
+    assert.equal(runners.chains['kernel-data'], 'legacy-boot')
+  })
+
+  test('the description of module-upgrade names the verb, the dump set, the marker and the leaf caveat', () => {
+    const d = runners.classes['module-upgrade']
+    assert.match(d, /module-upgrade --all/)
+    assert.match(d, /dump/)
+    assert.match(d, /manual-dump/)
+    assert.match(d, /leaf/)
   })
 })
 

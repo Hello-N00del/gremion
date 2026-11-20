@@ -73,9 +73,14 @@ export {
 } from './purge.js'
 export type { PurgeBatchLimit, PurgeDeps, PurgeError, PurgeResult, PurgeRule, PurgeServer, PurgeSkip, PurgeTableShape } from './purge.js'
 export { scramSha256Verifier } from './scram.js'
+// CD stage 1 (U6g): the enable path's dump of one blocked database. Exported HERE and not from ./dump: the tenant-create
+// image carries no root scripts/ directory, and the ./dump entry loads cli.ts, which imports one (import-graph test).
+export { catchupDump, localPgDumpMajor, pgDumpMajorOf } from '../dump/catchup.js'
+export type { CatchupDump, CatchupDumpOptions } from '../dump/catchup.js'
 export type {
   Actor,
   DisableResult,
+  DumpRetirer,
   EnableGate,
   EnableResult,
   Exporter,
@@ -85,4 +90,5 @@ export type {
   LifecycleModule,
   LifecycleStep,
   ModuleServer,
+  UpgradeHooks,
 } from './types.js'

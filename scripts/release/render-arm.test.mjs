@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os'
 
 import {
   TEMPLATE_MAP,
+  NON_COMPOSE_TEMPLATES,
   PINS_FIXTURE_DIR,
   RENDER_ENV,
   planRenders,
@@ -66,6 +67,15 @@ test('the committed templates map: state, app (blue and green), ops, mail -- fiv
   assert.deepEqual(problems, [])
   assert.deepEqual(plans.map((p) => p.id).sort(cmp), ['app-blue', 'app-green', 'mail', 'ops', 'state'])
   assert.deepEqual(Object.keys(TEMPLATE_MAP).sort(cmp), ['app', 'mail', 'ops', 'state'])
+})
+
+test('cd.env.tmpl configures a host program: the default discovery skips it, a listing that names it still reports it unmapped', () => {
+  assert.deepEqual(NON_COMPOSE_TEMPLATES, ['cd.env.tmpl'])
+  assert.ok(existsSync(join(REPO_ROOT, 'infra/host/templates/env/cd.env.tmpl')), 'the exemption must name a file that exists')
+  const { plans } = planRenders()
+  assert.equal(plans.some((p) => p.project === 'cd'), false)
+  const res = arm({ listTemplates: () => [...TEMPLATES, 'cd.env.tmpl'] })
+  assert.deepEqual(codes(res.problems), ['unmapped-template'])
 })
 
 test('a clean set of renders passes', () => {

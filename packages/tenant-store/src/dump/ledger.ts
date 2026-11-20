@@ -45,6 +45,7 @@ export type DumpErrorCode =
   | 'DUMP_SCOPE'
   | 'LEDGER_LOCKED'
   | 'LEDGER_CORRUPT'
+  | 'LEDGER_UNWRITABLE'
 
 export class DumpError extends Error {
   override name = 'DumpError'
@@ -78,7 +79,21 @@ export interface DumpEvent {
   restored?: boolean
   /** deleted: 'switched' or the operator's discard reason; restored: the accepted loss window. */
   reason?: string
+  /**
+   * created, a database on a module server only: the compose service and the login role it was dumped as. The
+   * host's `restore` reads the server and the role of a dump from its line and takes no option, so a line
+   * without them can only be restored on the main server. Written together or not at all (valid_pg_service and
+   * valid_pg_role of infra/host/bin/gremion-migration-dump).
+   */
+  pg_service?: string
+  pg_user?: string
 }
+
+/**
+ * Hands a path that a ROOT process has just written to the owner of the dump directory and sets its mode.
+ * undefined for every process that is not root: it never changes ownership and behaves as it always did.
+ */
+export type HandOver = (path: string, mode: number) => void
 
 /** Release refs name a directory: 1-64 of [A-Za-z0-9._-], starting alphanumeric. */
 export const RELEASE_REF = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
@@ -141,15 +156,31 @@ export function liveDumps(events: readonly DumpEvent[]): DumpEvent[] {
 }
 
 /** Appends one event and fsyncs the file and its directory before returning. */
-export function appendEvent(dir: string, event: DumpEvent): void {
-  const fd = openSync(join(dir, LEDGER_FILE), 'a', 0o600)
+export function appendEvent(dir: string, event: DumpEvent, handOver?: HandOver): void {
+  const file = join(dir, LEDGER_FILE)
+  const fd = openSync(file, 'a', 0o600)
   try {
     writeSync(fd, `${JSON.stringify(event)}\n`)
     fsyncSync(fd)
   } finally {
     closeSync(fd)
   }
+  handOver?.(file, 0o600)
   fsyncDir(dir)
+}
+
+/**
+ * Proves the ledger can take an append, before anything it describes is destroyed. The host's delete_release checks
+ * the same first (`-w` and an open for append): a dump file unlinked before a failed append leaves a live ledger line
+ * with no file. Call it only while the ledger exists (a live dump is in it); it never creates the file.
+ */
+export function assertLedgerWritable(dir: string): void {
+  const file = join(dir, LEDGER_FILE)
+  try {
+    closeSync(openSync(file, 'a', 0o600))
+  } catch (err) {
+    throw new DumpError('LEDGER_UNWRITABLE', `${file} cannot be opened for append: ${err instanceof Error ? err.message : 'unknown error'}; nothing was unlinked`, { cause: err })
+  }
 }
 
 /** The one stdout audit line per event (TRD-143): ids, never content. */
@@ -166,7 +197,7 @@ export function auditLine(e: DumpEvent): string {
  * another writer is running, or one died and left it (a stale lock) -- the
  * operator removes it after checking, nothing here breaks it.
  */
-export async function withLedgerLock<T>(dir: string, fn: () => Promise<T>): Promise<T> {
+export async function withLedgerLock<T>(dir: string, fn: () => Promise<T>, handOver?: HandOver): Promise<T> {
   const lock = join(dir, LEDGER_LOCK)
   let fd: number
   try {
@@ -183,6 +214,7 @@ export async function withLedgerLock<T>(dir: string, fn: () => Promise<T>): Prom
     closeSync(fd)
   }
   try {
+    handOver?.(lock, 0o600)
     return await fn()
   } finally {
     unlinkSync(lock)

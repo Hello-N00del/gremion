@@ -60,7 +60,16 @@ export const TEMPLATE_MAP = Object.freeze({
 
 const PINNED_RE = /^[a-z0-9][a-z0-9._/:-]*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?@sha256:[0-9a-f]{64}$/
 
-const listTemplateDir = (root) => readdirSync(join(root, TEMPLATE_DIR)).filter((f) => f.endsWith('.env.tmpl'))
+/**
+ * Templates in TEMPLATE_DIR that configure a host program, not a compose project: gremion-cd's etc/cd.env
+ * parses its own KEY=VALUE file and names no COMPOSE_FILE, so nothing can be rendered from it. This list
+ * is the one exemption from "every discovered template is mapped"; a new compose project still fails as
+ * unmapped until TEMPLATE_MAP names it.
+ */
+export const NON_COMPOSE_TEMPLATES = Object.freeze(['cd.env.tmpl'])
+
+const listTemplateDir = (root) =>
+  readdirSync(join(root, TEMPLATE_DIR)).filter((f) => f.endsWith('.env.tmpl') && !NON_COMPOSE_TEMPLATES.includes(f))
 
 /**
  * One plan per render: {id, project, dir, files, argv, env}. `pinsOverride`

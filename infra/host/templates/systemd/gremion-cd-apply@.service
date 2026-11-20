@@ -1,0 +1,20 @@
+[Unit]
+Description=Gremion continuous deployment: apply the host programs of release %i (root)
+Documentation=https://github.com/Hello-N00del/gremion/blob/main/docs/ops/host-tooling.md
+
+[Service]
+# THE ONE ROOT UNIT of the program, started only by `sudo -n systemctl start --wait
+# gremion-cd-apply@<sha12>.service` from the deploy user's release-now. It runs ONE script and
+# nothing else. No [Install] section: nothing enables or pulls it in.
+#
+# No User= (root), and deliberately NO ProtectSystem: the apply renders units into
+# /etc/systemd/system, and ProtectSystem=full makes /etc read-only even for root, which is why
+# the apply cannot run inside gremion-cd.service.
+Type=oneshot
+Environment=GREMION_ROOT=${GREMION_ROOT}
+Environment=DEPLOY_USER=${DEPLOY_USER}
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=${GREMION_ROOT}/lib/cd/apply-root.sh %i
+# The bootstrap stage, a reload and the program's own self-test (no test mail is sent, but a
+# git ls-remote and the docker checks run).
+TimeoutStartSec=15min

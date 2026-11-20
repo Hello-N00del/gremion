@@ -1,0 +1,3 @@
+# Everything under this folder is LF on every checkout: the patches are applied by git apply on
+# Linux, where a CRLF copy fails the context match, and the run sheet is read in a terminal.
+* text eol=lf

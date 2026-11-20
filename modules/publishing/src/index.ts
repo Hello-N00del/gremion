@@ -25,6 +25,14 @@ import type { MailTransport } from './dispatch.js'
 import type { TenantRef, Sql } from './tenant-store.js'
 import { makeLogTracer, noopTracer, type TracerPort } from '@gremion/ports/tracer'
 import { STREAMS } from '@gremion/ports/broker'
+import { runMigrateOnlyCli } from './migrate-only.js'
+
+// CD leaf step (`node dist/index.js --migrate-only`): migrate every catalogued customer database and
+// exit. Nothing below runs in this mode (the process exits here, and top-level await holds the rest of
+// the module back): no HTTP server, no scheduler, no NATS client, no outbox relay.
+if (process.argv.slice(2).includes('--migrate-only')) {
+  process.exit(await runMigrateOnlyCli({ openStore: storeFor }))
+}
 
 /**
  * INTEGRATION-DELTA §1 (Option B2): production MailTransport is a thin adapter

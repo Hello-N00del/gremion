@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# A stand-in for infra/host/bootstrap.sh of a release tree, for cd-apply-root.bats. It does what
+# the stage `cd` does to the installed set (replaces programs and libraries, adds files, rewrites
+# units) and then ends the way $GREMION_ROOT/.boot-mode says:
+#   ok           replace the set, rewrite the six units, exit 0
+#   no-units     replace the set, leave the units alone, exit 0
+#   fail-midway  replace the set and add files, exit 1 BEFORE any unit is rendered
+#   term         replace the set, send TERM to the caller, keep working for a second (a late write
+#                to a library and a late new file), then exit 0: a caller that restores without
+#                waiting for its child is restored over by this tail
+set -u
+mode="$(cat "${GREMION_ROOT}/.boot-mode")"
+printf 'bootstrap %s mode=%s tree=%s\n' "$*" "$mode" "$(basename "$(cd "$(dirname "$0")/../.." && pwd)")" >> "${SHIM_LOG}"
+[ "${1-}" = cd ] || exit 9
+
+new_content() {
+    # a file replaced by a temp copy and a rename, as the real stage does
+    local f="$1"
+    { cat "$f"; printf '# new content of the release\n'; } > "${f}.new"
+    chmod --reference="$f" "${f}.new"
+    mv -f "${f}.new" "$f"
+}
+for f in "${GREMION_ROOT}"/bin/gremion-cd "${GREMION_ROOT}"/bin/gremion-other "${GREMION_ROOT}"/lib/common.sh \
+    "${GREMION_ROOT}"/lib/cd/core.sh "${GREMION_ROOT}"/lib/cd/apply-root.sh; do
+    new_content "$f"
+done
+printf '#!/bin/sh\necho added by the release\n' > "${GREMION_ROOT}/bin/gremion-added"
+chmod 755 "${GREMION_ROOT}/bin/gremion-added"
+printf '# added by the release\n' > "${GREMION_ROOT}/lib/cd/zz-added.sh"
+
+case "$mode" in
+    fail-midway) exit 1 ;;
+    term)
+        kill -TERM "$PPID"
+        sleep 1
+        new_content "${GREMION_ROOT}/lib/cd/core.sh"
+        printf '# written late by the release\n' > "${GREMION_ROOT}/lib/cd/zz-late.sh"
+        exit 0
+        ;;
+esac
+if [ "$mode" = ok ]; then
+    for u in "${GREMION_SYSTEMD_DIR}"/gremion-cd*; do
+        printf '[Unit]\nDescription=new %s\n' "${u##*/}" > "${u}.new"
+        mv -f "${u}.new" "$u"
+    done
+fi
+exit 0

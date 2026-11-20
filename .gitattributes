@@ -114,3 +114,7 @@ docs/compliance/tom-annex.md text eol=lf
 # passing in CI. test/host/no-host-literals.bats fails if a text fixture is
 # left without this attribute.
 test/host/fixtures/** text eol=lf
+
+# gremion-cd (U13): the apply-root fixtures are scripts that carry no .sh extension (make lint-sh must not
+# be asked to cover stand-ins), so no other rule gives them LF.
+test/host/fixtures/cd/units/* text eol=lf
