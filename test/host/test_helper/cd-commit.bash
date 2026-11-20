@@ -18,7 +18,12 @@
 #   sample.advance    seconds the fake clock moves during one sample
 #   killat            the sample number at which the fake sample creates the kill switch file
 #   eval.rc           the return code of cd_watch_eval
+#   <name>.setphase   when the file exists, a call of <name> moves the phase of the state to rolling_back (a
+#                     sequence that started, or any other change of the state under the caller's feet)
+#   <name>.hang       when the file exists, a call of <name> does not return for 30 seconds
 #   cd_rollback_run.rc  the return code of cd_rollback_run (0 and 1 end the release in the state, 2 and 3 are a refusal)
+#   cd_rollback_run.touch  when the file exists, whatever the code, the call has begun the sequence: the phase of
+#                     the state is rolling_back (a code 4 is an infrastructure failure of a sequence that ran)
 
 _fk_lockstate() {
     if ( exec 7>>"${GREMION_ROOT}/runtime/hostd.lock" && flock -n 7 ) 2>/dev/null </dev/null; then
@@ -40,6 +45,8 @@ _fk() {
     shift
     printf 'fake %s %s | lock=%s cur=%s\n' "$name" "$*" "$(_fk_lockstate)" "$(_fk_cur)" >> "$SHIM_LOG"
     if [[ -f "$FK/$name.kill" ]]; then : > "$CD_KILLSWITCH_FILE"; fi
+    if [[ -f "$FK/$name.setphase" ]]; then cd_state_set '.phase = "rolling_back"' || true; fi
+    if [[ -f "$FK/$name.hang" ]]; then sleep 30; fi
     if [[ -f "$FK/$name.fails" ]]; then
         n="$(cat "$FK/$name.fails")"
         if ((n > 0)); then
@@ -111,6 +118,8 @@ cd_rollback_run() {
     echo "$1" >> "$FK/rollback.rules"
     if ((rc == 0 || rc == 1)); then
         cd_state_set '.phase = "idle" | .release = null' || true
+    elif [[ -f "$FK/cd_rollback_run.touch" ]]; then
+        cd_state_set '.phase = "rolling_back"' || true
     fi
     return "$rc"
 }

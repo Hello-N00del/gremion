@@ -57,12 +57,18 @@
 #                         point); 1 the release was rolled back here (a trigger, the operator's
 #                         request or proof_end; the state says how it ended); 2 a precondition (no
 #                         release, a committed release, a phase that is not watching, a lock not
-#                         held); 3 the release is parked (phase parked, host lock released); 4 the
-#                         loop could not judge (the samples were unusable, or a rollback was
-#                         refused with nothing touched: the release is still watching). The
-#                         driver then rolls it back with commit_stuck (no block). A rollback that
-#                         the operator asks for while the kill switch holds the process parked is
-#                         never a 4: the process stays parked (see cd_commit_promote).
+#                         held); 3 the release is parked (the pause cap: phase parked, host lock
+#                         released); 4 the loop could not judge (eight samples in a row gave no
+#                         verdict) or the rollback that a TRIGGER asked for was refused or busy with
+#                         nothing touched: the release is still watching, in flight, with both locks
+#                         held. The plan gives the driver no rule for it (commit_stuck is defined for
+#                         the commit steps 1 to 5 only), so what it does with a 4 is the driver's
+#                         decision (unit U14a); this file promises nothing. A rollback that the
+#                         OPERATOR asks for and that is refused is never a 4: it is mailed and the
+#                         watch goes on (in the kill switch park too). A trigger on a release whose
+#                         rollback target is unusable leaves the process waiting in place, both
+#                         locks held, for that operator rollback (it never returns 3: the host lock
+#                         is handed back only by the pause cap and by a complete rollback).
 #   cd_commit_promote     0 committed and steps 6 to 8 done; 1 not done: a rollback ran (the
 #                         operator's request, or commit_stuck at the cap; cd_rollback_run owns the
 #                         state and the hold it leaves, and after a complete one there is no release
@@ -71,8 +77,10 @@
 #                         cd_release_committed and the hold. 2 a precondition (nothing is touched):
 #                         no release, a proof release, a phase that is not watching, a window that
 #                         is not complete, a lock not held. 4 the rollback at the cap (commit_stuck)
-#                         was refused or busy with nothing touched: the release is still in flight
-#                         and the driver decides.
+#                         was refused or busy with nothing touched (a code 2 or 3 AND a state that
+#                         did not move): the release is still in flight and the driver decides. A
+#                         rollback that began (any code 0, 1 or 4, or a phase that is no longer
+#                         watching) is a 1 whatever it answered, and the state says how it stands.
 #   cd_commit_prune       0 done (a removal that failed is a history line); 2 no live release;
 #                         4 the keep set could not be computed (nothing was removed).
 #
@@ -100,9 +108,8 @@ _cd_commit_err() { printf 'cd-commit: %s\n' "$*" >&2; }
 # parked process does not move the fake clock.
 _CD_COMMIT_POLL_S=15
 _CD_COMMIT_RETRY_S=60
-# Samples in a row that give no verdict: the loop gives up (4). The release stays in flight; the
-# driver reads a non-zero code with the phase still watching as a loop that failed on its own and
-# rolls the release back with commit_stuck (no block): unknown is never green.
+# Samples in a row that give no verdict: the loop gives up (4). The release stays in flight and the
+# driver decides: unknown is never green, and this file never reads it as a trigger.
 _CD_COMMIT_UNUSABLE_MAX=8
 # Seconds that a kill switch park has taken from the retry cap of the sequence that is waiting.
 _CD_COMMIT_PARKED_S=0
@@ -184,19 +191,31 @@ _cd_commit_take_rollback_request() {
 }
 
 # _cd_commit_rollback RULE - cd_rollback_run, and what the caller must return. 1 when the
-# sequence ran (code 0 rolled back, code 1 did not complete: the state says which); 4 when it
-# was refused or busy with nothing touched (the release is still in flight).
+# sequence ran (code 0 rolled back, code 1 did not complete, code 4 an infrastructure failure of
+# a sequence that is resumable and may have run in part: the state says which); 4 when it was
+# refused or busy with nothing touched (the release is still in flight). Only a code the sequence
+# gives for a refusal (2 a precondition, 3 busy, or a code it does not define) AND a state that is
+# still the one of the call (the same release, still watching or releasing) is a refusal: a
+# sequence that began is never reported as one, because the caller would go on with the commit.
 _cd_commit_rollback() {
-    local rule="$1" rc=0
+    local rule="$1" rc=0 id0 phase0
+    _cd_commit_load || true
+    id0="$CM_ID"
+    phase0="$CM_PHASE"
     cd_hist rollback_call rule="$rule" || true
     cd_rollback_run "$rule" || rc=$?
     case "$rc" in
-        0 | 1) return 1 ;;
-        *)
-            _cd_commit_err "the rollback (${rule}) was refused or is busy (code ${rc}); nothing was touched"
-            return 4
-            ;;
+        0 | 1 | 4) return 1 ;;
     esac
+    # a state that cannot be read, or one that moved, proves nothing about "nothing was touched"
+    _cd_commit_load || return 1
+    if [[ "$CM_ID" != "$id0" || "$CM_PHASE" != "$phase0" ]]; then return 1; fi
+    case "$CM_PHASE" in
+        watching | releasing) ;;
+        *) return 1 ;;
+    esac
+    _cd_commit_err "the rollback (${rule}) was refused or is busy (code ${rc}); nothing was touched"
+    return 4
 }
 
 # _cd_commit_run_requested STAGE DURING - the operator's `rollback` request was taken: the
@@ -250,7 +269,9 @@ _cd_commit_poll() {
 # sequence that is waiting does not run out while the operator holds the switch.
 _cd_commit_park() {
     local stage="$1" t0 now rearm=0
-    _cd_commit_load || return 10
+    # an unreadable state is no reason to leave the park (10 would say "a rollback ran"): the
+    # variables of the last good read name the release for the mails
+    _cd_commit_load || _cd_commit_err "park: the state could not be read; the process parks with what it knew"
     cd_hist killswitch_park stage="$stage" sha12="$CM_SHA12" || true
     t0="$(cd_now)" || t0=0
     if [[ -n "${CD_HB_PID:-}" ]]; then rearm=1; fi
@@ -277,6 +298,26 @@ _cd_commit_park() {
         cd_heartbeat_start "$stage" "$(_cd_commit_hb_budget "$stage")" || true
     fi
     return 0
+}
+
+# _cd_commit_wait_operator STAGE - a watch trigger met a release whose old colour cannot be
+# switched back to (rollback_target unusable): the process stays alive holding both locks, judges
+# nothing further, writes its own heartbeat and polls for the operator's `rollback` request. It
+# returns only when that sequence ran (the state says how it ended); a request the rollback
+# refuses with nothing touched is consumed, mailed, and the wait goes on. Leaving by killing the
+# process leaves the phase as it is (watching): the resume path of the next tick takes the locks
+# again and the next trigger lands here again.
+_cd_commit_wait_operator() {
+    local stage="$1" now
+    cd_heartbeat_stop
+    while :; do
+        if _cd_commit_take_rollback_request; then
+            if _cd_commit_run_requested "$stage" unusable; then return 0; fi
+        fi
+        now="$(cd_now)" || now=0
+        cd_hb_write "$stage" "$now" 300 "$$" || true
+        _cd_commit_poll
+    done
 }
 
 # _cd_commit_nap SECONDS STAGE - a wait that stays responsive: it looks for the kill switch and
@@ -352,7 +393,7 @@ _cd_commit_apply_flips() {
 # _cd_commit_enter_parked REASON MAILKIND - the park of the watch: phase parked and the hold
 # `failure` first, then the mail, and the host lock LAST, so the lock is never free while the
 # state still says the release is being watched. The new colour keeps serving and `current` is
-# still the old tree. MAILKIND is `parked` or `none` (the caller sent its own mail).
+# still the old tree. MAILKIND is `parked` (the mail of the pause cap) or `none`.
 _cd_commit_enter_parked() {
     local reason="$1" mailkind="$2" observed paused
     cd_state_set '.phase = "parked"' || return 1
@@ -384,7 +425,7 @@ _cd_commit_unpark() {
         fi
     fi
     cd_state_set '.phase = "watching" | .release.watch.paused_s = 0' || return 2
-    if [[ "$CM_HOLD_KIND" == failure && ( "$CM_HOLD_REASON" == watch_pause_cap || "$CM_HOLD_REASON" == rollback_target_unusable ) ]]; then
+    if [[ "$CM_HOLD_KIND" == failure && "$CM_HOLD_REASON" == watch_pause_cap ]]; then
         cd_hold_clear || true
     fi
     cd_hist unparked sha12="$CM_SHA12" || true
@@ -424,10 +465,9 @@ cd_commit_watch_loop() {
             if ((rc == 10)); then return 1; fi
         fi
         if _cd_commit_take_rollback_request; then
-            cd_hist rollback_requested during=watch || true
-            rc=0
-            _cd_commit_rollback manual_rollback || rc=$?
-            return "$rc"
+            # the sequence ran (the state says how it ended): the loop is over. A rollback that was
+            # refused with nothing touched is mailed and ends nothing: the watch goes on
+            if _cd_commit_run_requested watch watch; then return 1; fi
         fi
         _cd_commit_load || return 2
         if [[ -z "$CM_ID" || "$CM_PHASE" == idle ]]; then
@@ -470,14 +510,17 @@ cd_commit_watch_loop() {
                     rule="${CM_VERDICT#trigger:}"
                     _cd_commit_load || return 2
                     if [[ "$CM_TARGET" == unusable ]]; then
-                        # there is nothing to go back to: the new colour stays, the operator is told,
-                        # and the release is parked so the host lock does not starve the executor
+                        # there is nothing to go back to: the new colour stays and the operator is told.
+                        # The host lock is NOT handed back (the new colour serves the migrated schema,
+                        # `current` is the old tree and the old colour is known to fail on that schema;
+                        # the one early release of the lock is the pause cap): the process waits in
+                        # place for the operator's `rollback`
                         cd_notify rollback_failed "key=${CM_ID}" every=3600 "sha12=${CM_SHA12}" "prev_sha12=${CM_LIVE_SHA12}" \
                             "tag=${CM_TAG}" "colour=${CM_COLOUR}" "prev_colour=${CM_LIVE_COLOUR}" stage=watch "rule=${rule}" \
                             reason=rollback_target_unusable command="gremion-cd status" || true
                         cd_hist rollback_skipped rule="$rule" reason=target_unusable || true
-                        _cd_commit_enter_parked rollback_target_unusable none || return 4
-                        return 3
+                        _cd_commit_wait_operator watch
+                        return 1
                     fi
                     rc=0
                     _cd_commit_rollback "$rule" || rc=$?
@@ -533,10 +576,42 @@ _cd_commit_step3() {
     return 0
 }
 
-# step 4: the executor re-reads its handlers from current/. A warning, never a failure.
+# _cd_commit_timed SECONDS CMD ARGS... - a shell function (which `timeout` cannot run) with a time
+# limit and no stdin. It runs in a subshell that has let go of both lock descriptors, so a command
+# that outlives its limit cannot keep a lock of this process alive; at the limit the subshell and
+# its children are terminated (killed five seconds later). Returns the code of the command (143 or
+# 137 when the limit ran out).
+_cd_commit_timed() {
+    local t="$1" pid wd rc=0
+    shift
+    ( exec 8>&- 9>&-; "$@" ) </dev/null &
+    pid=$!
+    (
+        exec 8>&- 9>&-
+        sleep "$t"
+        pkill -TERM -P "$pid" 2>/dev/null
+        kill -TERM "$pid" 2>/dev/null
+        sleep 5
+        pkill -KILL -P "$pid" 2>/dev/null
+        kill -KILL "$pid" 2>/dev/null
+    ) >/dev/null 2>&1 &
+    wd=$!
+    wait "$pid" 2>/dev/null || rc=$?
+    pkill -TERM -P "$wd" 2>/dev/null
+    kill -TERM "$wd" 2>/dev/null
+    { wait "$wd"; } 2>/dev/null || true
+    return "$rc"
+}
+
+# step 4: the executor re-reads its handlers from current/. A warning, never a failure, and never
+# longer than a minute: a synchronous systemctl that hangs would hold the host lock for as long.
 _cd_commit_step4() {
+    local t=60
+    if [[ "${GREMION_CD_TESTING:-}" == 1 && "${GREMION_CD_EXEC_TIMEOUT_S:-}" =~ ^[0-9]{1,4}$ ]]; then
+        t="$GREMION_CD_EXEC_TIMEOUT_S"
+    fi
     if declare -F executor_unit_action >/dev/null 2>&1; then
-        executor_unit_action try-restart </dev/null || _cd_commit_err "step 4: the executor could not be restarted (a warning)"
+        _cd_commit_timed "$t" executor_unit_action try-restart || _cd_commit_err "step 4: the executor could not be restarted (a warning)"
     fi
     return 0
 }
@@ -671,6 +746,20 @@ _cd_commit_precommit() {
     _CD_COMMIT_PARKED_S=0
     while :; do
         _cd_commit_load || return 2
+        # every attempt starts only while the release is still the one being watched: a phase that
+        # moved (a rollback that began, whatever it answered) ends the sequence, the state is its
+        # owner now
+        if [[ -z "$CM_ID" ]]; then
+            _cd_commit_err "commit: the release is gone from the state"
+            return 1
+        fi
+        case "$CM_PHASE" in
+            watching | releasing) ;;
+            *)
+                _cd_commit_err "commit: the phase is ${CM_PHASE}; the commit sequence stops"
+                return 1
+                ;;
+        esac
         cd_state_set '.release.commit_attempts = ((.release.commit_attempts // 0) + 1)' || true
         failed=""
         for n in 1 2 3 4 5; do

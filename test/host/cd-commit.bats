@@ -325,18 +325,48 @@ verdicts() { printf '%s\n' "$@" > "$FK/verdicts"; }
     [ "$(calls 'fake cd_colour_isolation_record')" -eq 0 ]
 }
 
-@test "rollback_target unusable: a trigger mails, does not call the rollback and parks the release" {
+@test "rollback_target unusable: a trigger mails, does not call the rollback, and the process waits in place with both locks held" {
     seed_state 0 auto '.release.rollback_target = "unusable"'
     verdicts ok trigger:watch_crash
-    run cdc_lib 'cd_commit_watch_loop; echo "rc=$? lock=$(_fk_lockstate)"'
-    [[ "$output" == *"rc=3 lock=free"* ]]
+    cdc_bg 'echo ready; rc=0; cd_commit_watch_loop || rc=$?; echo "rc=$rc"'
+    wait_for "ls '${GREMION_ROOT}'/data/cd/outbox/*-rollback_failed*.eml"
+    sleep 0.5
+    # the release is not parked: the host lock is not handed back while the new colour serves the
+    # migrated schema and current is still the old tree
+    run grep -c '^rc=' "$CD_BG_OUT"
+    [ "$output" = 0 ]
+    run cd_lib 'cd_hostlock_take'
+    [ "$status" -eq 3 ]
+    run cd_lib 'cd_lock_take'
+    [ "$status" -eq 3 ]
     run refute_recorded fake cd_rollback_run
     [ "$status" -eq 0 ]
-    [ "$(st '.phase')" = parked ]
-    [ "$(st '.hold.kind')" = failure ]
-    [ "$(st '.hold.reason')" = rollback_target_unusable ]
-    [ "$(mails rollback_failed)" -ge 1 ]
+    [ "$(st '.phase')" = watching ]
+    [ "$(st '.hold')" = null ]
+    [ "$(calls 'fake cd_watch_eval')" -eq 2 ]
+    [ "$(mails rollback_failed)" -eq 1 ]
     [ ! -e "${GREMION_ROOT}/data/cd/blocked.json" ]
+    # it keeps its own heartbeat while it waits
+    cd_fake_now 1700000999
+    wait_for "grep -q '^1700000999 ' '${GREMION_ROOT}/runtime/cd/heartbeat'"
+    # a refused operator rollback ends nothing: the request is consumed, the operator is told, the wait goes on
+    echo 2 > "$FK/cd_rollback_run.rc"
+    run cd_lib 'cd_request_put rollback "{}"'
+    wait_for "grep -q 'fake cd_rollback_run manual_rollback' '$SHIM_LOG'"
+    wait_for '[ "$(mails rollback_failed)" -ge 2 ]'
+    sleep 0.5
+    run grep -c '^rc=' "$CD_BG_OUT"
+    [ "$output" = 0 ]
+    run cd_lib 'cd_hostlock_take'
+    [ "$status" -eq 3 ]
+    # the operator's rollback that runs ends the wait, with the lock held while it ran
+    rm -f "$FK/cd_rollback_run.rc"
+    run cd_lib 'cd_request_put rollback "{}"'
+    wait_for "grep -q '^rc=' '$CD_BG_OUT'" 150
+    grep -q '^rc=1' "$CD_BG_OUT"
+    [ "$(calls 'fake cd_rollback_run')" -eq 2 ]
+    run grep -c 'lock=free' "$SHIM_LOG"
+    [ "$output" = 0 ]
 }
 
 # ------------------------------------------------------------------ the pause cap and parked
@@ -607,6 +637,86 @@ verdicts() { printf '%s\n' "$@" > "$FK/verdicts"; }
     [ "$(readlink "${GREMION_ROOT}/current")" = "${GREMION_ROOT}/releases/${NEW12}" ]
 }
 
+@test "a rollback that began is never read as a refusal: a request during the commit retries ends the commit whatever code it returned (2, 3 and 4)" {
+    local code
+    for code in 2 3 4; do
+        rm -rf "${GREMION_ROOT}/data/cd/outbox" "${GREMION_ROOT}/runtime/cd/requests"
+        rm -f "$FK/cd_rollback_run.rules" "$FK/rollback.rules"
+        : > "$SHIM_LOG"
+        seed_state 60
+        cd_write_cfg CD_WATCH_MINUTES=1 CD_COMMIT_MAX_MIN=30
+        echo 4 > "$FK/cd_colour_isolation_record.fails"
+        echo "$code" > "$FK/cd_rollback_run.rc"
+        : > "$FK/cd_rollback_run.touch"
+        run cd_lib 'cd_request_put rollback "{}"'
+        run cdc_lib 'cd_commit_promote; echo "rc=$?"'
+        [[ "$output" == *"rc=1"* ]]
+        [ "$(calls 'fake cd_rollback_run')" -eq 1 ]
+        [ "$(st '.release.committed_at')" = null ]
+        [ "$(st '.phase')" = rolling_back ]
+        [ "$(readlink "${GREMION_ROOT}/current")" = "${GREMION_ROOT}/releases/${OLD12}" ]
+        [ "$(calls 'fake cd_colour_isolation_record')" -eq 1 ]
+        [ "$(mails rollback_failed)" -eq 0 ]
+        [ "$(st '.live.sha12')" = "$OLD12" ]
+    done
+}
+
+@test "the retry cap with a rollback that began and failed with code 4 is not a refusal: the state says rolling_back and the caller gets 1" {
+    echo 99 > "$FK/cd_colour_isolation_record.fails"
+    echo 4 > "$FK/cd_rollback_run.rc"
+    : > "$FK/cd_rollback_run.touch"
+    seed_state 60
+    run cdc_lib 'cd_commit_promote; echo "rc=$?"'
+    [[ "$output" == *"rc=1"* ]]
+    [ "$(cat "$FK/rollback.rules")" = commit_stuck ]
+    [ "$(st '.phase')" = rolling_back ]
+    [ "$(st '.release.committed_at')" = null ]
+}
+
+@test "the retry cap with a rollback that is refused with nothing touched is still 4: the release is in flight and the driver decides" {
+    echo 99 > "$FK/cd_colour_isolation_record.fails"
+    echo 3 > "$FK/cd_rollback_run.rc"
+    seed_state 60
+    run cdc_lib 'cd_commit_promote; echo "rc=$?"'
+    [[ "$output" == *"rc=4"* ]]
+    [ "$(st '.phase')" = watching ]
+    [ "$(st '.release.committed_at')" = null ]
+}
+
+@test "a retry of the commit sequence starts only while the release is still being watched: a phase that changed during an attempt ends it" {
+    echo 1 > "$FK/cd_colour_isolation_record.fails"
+    : > "$FK/cd_colour_isolation_record.setphase"
+    seed_state 60
+    run cdc_lib 'cd_commit_promote; echo "rc=$?"'
+    [[ "$output" == *"rc=1"* ]]
+    [ "$(calls 'fake cd_colour_isolation_record')" -eq 1 ]
+    [ "$(st '.release.committed_at')" = null ]
+    [ "$(st '.phase')" = rolling_back ]
+    [ "$(readlink "${GREMION_ROOT}/current")" = "${GREMION_ROOT}/releases/${OLD12}" ]
+}
+
+@test "a rollback request in the plain watch that began and failed with code 4 ends the loop with 1, one that is refused leaves the loop running to the end of its window" {
+    echo 4 > "$FK/cd_rollback_run.rc"
+    : > "$FK/cd_rollback_run.touch"
+    run cd_lib 'cd_request_put rollback "{}"'
+    run cdc_lib 'cd_commit_watch_loop; echo "rc=$?"'
+    [[ "$output" == *"rc=1"* ]]
+    [ "$(st '.phase')" = rolling_back ]
+    rm -f "$FK/cd_rollback_run.touch"
+    rm -rf "${GREMION_ROOT}/runtime/cd/requests" "${GREMION_ROOT}/data/cd/outbox"
+    echo 3 > "$FK/cd_rollback_run.rc"
+    : > "$SHIM_LOG"
+    seed_state 0
+    run cd_lib 'cd_request_put rollback "{}"'
+    run cdc_lib 'cd_commit_watch_loop; echo "rc=$?"'
+    # a refused request ends nothing (nothing was touched): the window runs out clean
+    [[ "$output" == *"rc=0"* ]]
+    [ "$(calls 'fake cd_rollback_run')" -eq 1 ]
+    [ "$(mails rollback_failed)" -eq 1 ]
+    [ "$(st '.release.watch.observed_s')" = 60 ]
+    [ "$(st '.phase')" = watching ]
+}
+
 # ================================================================== the commit point
 
 @test "commit point, one pass: the steps run in order and the state moves in ONE write" {
@@ -722,6 +832,17 @@ EOF
     run cdc_lib 'cd_commit_promote; echo "rc=$?"'
     [[ "$output" == *"rc=0"* ]]
     [ "$(st '.release.committed_at')" != null ]
+}
+
+@test "step 4: an executor restart that hangs is cut off after its time limit and the commit goes on" {
+    : > "$FK/executor_unit_action.hang"
+    export GREMION_CD_EXEC_TIMEOUT_S=1
+    seed_state 60
+    local t0=$SECONDS
+    run cdc_lib 'cd_commit_promote; echo "rc=$?"'
+    [[ "$output" == *"rc=0"* ]]
+    [ "$(st '.release.committed_at')" != null ]
+    [ "$((SECONDS - t0))" -lt 20 ]
 }
 
 @test "a state write that fails at step 5 leaves the commit pending: the retry runs the whole sequence again" {
