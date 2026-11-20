@@ -14,7 +14,7 @@
 # when they exist, and curl, jq, timeout and coreutils.
 #
 # WHAT IS HERE
-#   cd_rollback_run RULE   the sequence of section 4 of the plan, in this order:
+#   cd_rollback_run RULE   the rollback sequence, in this order:
 #       record   the rule and the time (a 0600 sidecar, data/cd/rollback.json, and the history),
 #                phase rolling_back. Nothing waits for mail.
 #       old      the old colour is started from ITS OWN tree, env file and tag when its project
@@ -196,6 +196,11 @@ _cd_rb_plan() {
                 _cd_rb_err "a rollback with rule ${srule} is in progress; it is resumed with that rule"
             fi
             _cd_rb_load "$ctx" || return 2
+            # the same line as in _cd_rb_derive: a committed rollback is only ever a manual one
+            if [[ "$RB_COMMITTED" == 1 && "$RB_RULE" != manual_rollback ]]; then
+                _cd_rb_err "refusing the recorded rule ${RB_RULE}: the release is committed; only manual_rollback goes back (nothing was touched)"
+                return 2
+            fi
             RB_RESUMING=1
             return 0
         fi
@@ -416,9 +421,10 @@ _cd_rb_5xx_hit() {
 # CD_FAIL_SAMPLES samples ends it. A sample is bad when the probes, the route, the identity, the
 # portal or the containers fail or it ran out of time, or the 5xx rule hits since the confirm.
 # While a shared service is down a bad sample neither counts nor resets the streak (the outage is
-# not what the rollback did). It judges the samples itself and writes none of the release's counters.
+# not what the rollback did), but a window with NOT ONE good sample is a failure (old_colour_unproven,
+# nothing is stopped). It judges the samples itself and writes none of the release's counters.
 _cd_rb_s_watch() {
-    local c="$RB_OLD_COLOUR" tag="$RB_OLD_TAG" window interval failn start end now streak=0 sample bad shared t0 dur base
+    local c="$RB_OLD_COLOUR" tag="$RB_OLD_TAG" window interval failn start end now streak=0 good=0 sample bad shared t0 dur base
     window="$(_cd_rb_cfg_int CD_POST_ROLLBACK_S 180)"
     interval="$(_cd_rb_cfg_int CD_WATCH_INTERVAL_S 15)"
     failn="$(_cd_rb_cfg_int CD_FAIL_SAMPLES 3)"
@@ -443,6 +449,7 @@ _cd_rb_s_watch() {
         fi
         if [[ "$bad" -eq 0 ]]; then
             streak=0
+            good=$((good + 1))
         elif [[ "$shared" -eq 1 ]]; then
             streak=$((streak + 1))
         fi
@@ -458,6 +465,12 @@ _cd_rb_s_watch() {
         now="$(cd_now)" || return 1
         [[ "$now" -lt "$end" ]] || break
     done
+    # unknown is never green: a window in which not one sample was good (every sample was set aside
+    # because a shared service was down or unreadable) proves nothing about the old colour
+    if [[ "$good" -lt 1 ]]; then
+        _cd_rb_why old_colour_unproven "no sample of the ${c} colour was good in the window after the switch back; nothing was stopped"
+        return 1
+    fi
     return 0
 }
 
@@ -628,12 +641,20 @@ _cd_rb_fail() {
     reason="${reason//[^a-z0-9_]/_}"
     cd_hist rollback_failed reason="$reason" rule="$RB_RULE" || true
     cd_hold_set rollback_failed "$reason" "$RB_NEW_SHA12" || true
-    cd_state_set '.phase = "idle"' || true
+    if [[ "$RB_SYNTH" == 1 ]]; then
+        # the record was made for this rollback (nothing was in flight): a failed rollback must not
+        # leave it behind, a reader could take it for a commit with steps pending
+        cd_state_set '.phase = "idle" | .release = null' || true
+    else
+        cd_state_set '.phase = "idle"' || true
+    fi
     rm -f -- "$(_cd_rb_sidecar)" 2>/dev/null || true
     mapfile -t f < <(_cd_rb_mail_fields)
     f+=("stage=${RB_STAGE:-none}" "reason=${reason}" "command=gremion-cd status")
     if [[ -n "$notes" ]]; then f+=("notes=${notes}"); fi
-    cd_notify rollback_failed "key=${RB_ID}-rollback_failed" "${f[@]}" || true
+    # no dedupe key: every failed attempt is a critical mail of its own (a retry on the same release
+    # record must not be silenced)
+    cd_notify rollback_failed "${f[@]}" || true
     CD_ROLLBACK_REASON="$reason"
     return 1
 }

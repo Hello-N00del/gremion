@@ -617,12 +617,35 @@ fingerprint() {
     [[ "$output" == *"rc=0 "* ]]
 }
 
-@test "window: a bad sample while a shared service is down neither counts nor resets" {
+@test "window: a bad sample while a shared service is down does not COUNT toward the streak" {
+    cd_write_cfg CD_POST_ROLLBACK_S=90
+    sim_on
+    # two bad, one set aside, then good: counted, the streak would have been 3
+    printf 'bad\nbad\nshared\nok\n' > "$DK/sample.seq"
+    run rb watch_readiness
+    [[ "$output" == *"rc=0 "* ]]
+}
+
+@test "window: a sample set aside because a shared service is down does not RESET the streak" {
+    cd_write_cfg CD_POST_ROLLBACK_S=90
+    sim_on
+    # two bad, one set aside, one bad: a reset would have left the streak at 1
+    printf 'bad\nbad\nshared\nbad\n' > "$DK/sample.seq"
+    run rb watch_readiness
+    [[ "$output" == *"rc=1 reason=unhealthy_after_rollback"* ]]
+    assert_absent '^sim (workers|down)' "$SHIM_LOG"
+}
+
+@test "window: a window in which NOT ONE sample was good fails (every sample set aside), and nothing is stopped" {
     cd_write_cfg CD_POST_ROLLBACK_S=60
     sim_on
     printf 'shared\n' > "$DK/sample.seq"
     run rb watch_readiness
-    [[ "$output" == *"rc=0 "* ]]
+    [[ "$output" == *"rc=1 reason=old_colour_unproven"* ]]
+    assert_absent '^sim (workers|down)' "$SHIM_LOG"
+    [ -e "$DK/running.green" ]
+    [ "$(sj .hold.kind)" = rollback_failed ]
+    [ "$(sj .hold.reason)" = old_colour_unproven ]
 }
 
 @test "window: the 5xx rule counts from the confirm, with the minimum alone when the baseline is null" {
@@ -916,6 +939,49 @@ fingerprint() {
     [ "$(sj .previous)" = null ]
     [ "$(blocks '.[0].sha')" = "$SHA_NEW" ]
     [ "$(readlink "${GREMION_ROOT}/current")" = "$OLD_TREE" ]
+}
+
+@test "a failed manual rollback of an idle host leaves no record behind: the one made for it is removed, only the hold stays" {
+    sim_on
+    seed_idle
+    printf 'fail\n' > "$DK/switch.mode"
+    run rb manual_rollback
+    [[ "$output" == *"rc=1 reason=switch_failed"* ]]
+    [ "$(sj .release)" = null ]
+    [ "$(sj .phase)" = idle ]
+    [ "$(sj .hold.kind)" = rollback_failed ]
+    [ "$(sj .live.tag)" = "$NEW_TAG" ]
+    [ "$(sj .previous.tag)" = "$OLD_TAG" ]
+    [ ! -e "${GREMION_ROOT}/data/cd/rollback.json" ]
+    [ -e "$DK/running.green" ]
+}
+
+@test "a failed rollback of a real committed record keeps the record, and a second failed attempt mails again (no dedupe key)" {
+    export RL_LIBS="docker notify" RL_REAL_NOTIFY=1
+    sim_on
+    seed_post
+    printf 'fail\n' > "$DK/switch.mode"
+    run rb manual_rollback
+    [[ "$output" == *"rc=1 reason=switch_failed"* ]]
+    [ "$(sj .release.id)" = bbbbbbbbbbbb-1 ]
+    [ "$(sj .phase)" = idle ]
+    run rb manual_rollback
+    [[ "$output" == *"rc=1 reason=switch_failed"* ]]
+    [ "$(ls "${GREMION_ROOT}"/data/cd/outbox/*rollback_failed*.eml | wc -l)" = 2 ]
+}
+
+@test "resume: a recorded committed rollback with a rule other than manual_rollback is refused with 2 and nothing is touched" {
+    sim_on
+    seed_post '.phase = "rolling_back"'
+    jq -cn --arg nt "$NEW_TREE" --arg ot "$OLD_TREE" --arg sn "$SHA_NEW" --arg so "$SHA_OLD" '
+        {v: 1, steps: ["record"], ctx: {rule: "watch_5xx", committed: true, release_id: "bbbbbbbbbbbb-1", stage: "reconcile", synth: false, prev_tag: "",
+         new: {sha: $sn, sha12: "bbbbbbbbbbbb", tag: "pilot-bbbbbbbbbbbb", colour: "green", tree: $nt},
+         old: {sha: $so, sha12: "aaaaaaaaaaaa", tag: "pilot-aaaaaaaaaaaa", colour: "blue", tree: $ot}}}' \
+        > "${GREMION_ROOT}/data/cd/rollback.json"
+    before_fp="$(fingerprint)"
+    run rb watch_5xx
+    [[ "$output" == *"rc=2 "* ]]
+    [ "$(fingerprint)" = "$before_fp" ]
 }
 
 @test "a manual rollback with nothing to go back to is refused with 2" {
