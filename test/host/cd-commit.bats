@@ -8,7 +8,7 @@
 # Nothing here touches a real docker, curl, Traefik or network. core.sh, cmd-state.sh and notify.sh
 # are the REAL libraries (the mails are read from the outbox, so a kind or a field the allow-list
 # refuses shows); docker.sh is the real one in the prune tests, where docker is one recording shim.
-# Every function another unit owns is a scripted fake (fixtures/cd/commit/fakes.sh) that records the
+# Every function another unit owns is a scripted fake (fixtures/cd/commit/fakes.bash) that records the
 # state of the host lock at the moment it is called. The clock is the fake clock of test_helper/cd
 # (cd_sleep moves it), a parked process polls in real time (GREMION_CD_PARK_POLL_S) so the clock
 # stands still while it waits. Every name is a reserved example name.
@@ -106,7 +106,7 @@ cdc_prelude() {
 . "${HOST_SRC}/lib/cd/notify.sh"
 if [ -n "${CDC_REAL_DOCKER:-}" ]; then . "${HOST_SRC}/lib/cd/docker.sh"; fi
 . "${HOST_SRC}/lib/cd/commit.sh"
-. "${FIX}/fakes.sh"
+. "${FIX}/fakes.bash"
 . "${GREMION_CD_STUBS_DIR}/cd-stubs.sh"
 cd_paths_init
 cd_cfg_load

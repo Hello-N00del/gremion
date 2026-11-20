@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test/host/fixtures/cd/commit/fakes.sh -- scripted stand-ins for the functions that other units
+# test/host/fixtures/cd/commit/fakes.bash -- scripted stand-ins for the functions that other units
 # of the continuous deployment program own, sourced by cd-commit.bats AFTER commit.sh and BEFORE
 # the helper's stub file (the stub file defines a stub only when no function of that name exists).
 #
