@@ -83,6 +83,12 @@ seed_state() {
     cd_seed_state ".phase = \"watching\" | .live = $(live_json) | .release = $(release_json "$obs" "$mode") | ${extra}"
 }
 
+# seed_committed -- the state after commit step 5: live = the new release (green), previous = the old
+# one (blue), release.committed_at set.
+seed_committed() {
+    seed_state 60 auto ".live = (.release | {sha, sha12, tag, colour, tree, since: \"2026-11-17T02:00:00Z\", proof: false, modules: null, leaves: null, reconcile: null}) | .previous = {sha: (\"a\" * 40), sha12: \"aaaaaaaaaaaa\", tag: \"pilot-aaaaaaaaaaaa\", colour: \"blue\", tree: \"${GREMION_ROOT}/releases/aaaaaaaaaaaa\", startable: true} | .release.committed_at = \"2026-11-17T02:00:00Z\""
+}
+
 st() { jq -r "$1" "${GREMION_ROOT}/data/cd/state.json"; }
 
 # fp -- a fingerprint of what a release must not move before the commit point: the `current`
@@ -328,7 +334,7 @@ verdicts() { printf '%s\n' "$@" > "$FK/verdicts"; }
     [ "$status" -eq 0 ]
     [ "$(st '.phase')" = parked ]
     [ "$(st '.hold.kind')" = failure ]
-    [ "$(st '.hold.reason')" = rollback_unusable ]
+    [ "$(st '.hold.reason')" = rollback_target_unusable ]
     [ "$(mails rollback_failed)" -ge 1 ]
     [ ! -e "${GREMION_ROOT}/data/cd/blocked.json" ]
 }
@@ -450,6 +456,155 @@ verdicts() { printf '%s\n' "$@" > "$FK/verdicts"; }
     [ "$(calls 'fake cd_rollback_run')" -eq 0 ]
     run grep -c 'lock=free' "$SHIM_LOG"
     [ "$output" = 0 ]
+}
+
+@test "kill switch at the start of the commit stage with every step succeeding: nothing moves while it is on, both locks stay held, then the commit goes on" {
+    : > "${GREMION_ROOT}/etc/cd.disabled"
+    seed_state 60
+    cdc_bg 'echo ready; rc=0; cd_commit_promote || rc=$?; echo "rc=$rc"'
+    wait_for "ls '${GREMION_ROOT}'/data/cd/outbox/*-killswitch*.eml"
+    run cd_lib 'cd_hostlock_take'
+    [ "$status" -eq 3 ]
+    run cd_lib 'cd_lock_take'
+    [ "$status" -eq 3 ]
+    sleep 0.5
+    run grep -c '^rc=' "$CD_BG_OUT"
+    [ "$output" = 0 ]
+    [ "$(readlink "${GREMION_ROOT}/current")" = "${GREMION_ROOT}/releases/${OLD12}" ]
+    [ "$(st '.release.committed_at')" = null ]
+    [ "$(st '.live.sha12')" = "$OLD12" ]
+    [ "$(calls 'fake cd_colour_isolation_record')" -eq 0 ]
+    rm -f "${GREMION_ROOT}/etc/cd.disabled"
+    wait_for "grep -q '^rc=' '$CD_BG_OUT'" 150
+    grep -q '^rc=0' "$CD_BG_OUT"
+    [ "$(st '.release.committed_at')" != null ]
+    [ "$(calls 'fake cd_colour_isolation_record')" -eq 1 ]
+    [ "$(calls 'fake cd_rollback_run')" -eq 0 ]
+    run grep -c 'lock=free' "$SHIM_LOG"
+    [ "$output" = 0 ]
+}
+
+@test "kill switch at a resume into the steps after the commit point: steps 6 and 7 wait for the file to be gone" {
+    : > "${GREMION_ROOT}/etc/cd.disabled"
+    seed_committed
+    cdc_bg 'echo ready; rc=0; cd_commit_promote || rc=$?; echo "rc=$rc"'
+    wait_for "ls '${GREMION_ROOT}'/data/cd/outbox/*-killswitch*.eml"
+    run cd_lib 'cd_hostlock_take'
+    [ "$status" -eq 3 ]
+    sleep 0.5
+    [ "$(calls 'fake cd_data_dumpset_retire')" -eq 0 ]
+    [ "$(calls 'fake cd_colour_down')" -eq 0 ]
+    [ "$(mails released)" -eq 0 ]
+    rm -f "${GREMION_ROOT}/etc/cd.disabled"
+    wait_for "grep -q '^rc=' '$CD_BG_OUT'" 150
+    grep -q '^rc=0' "$CD_BG_OUT"
+    [ "$(calls 'fake cd_data_dumpset_retire')" -eq 1 ]
+    [ "$(calls 'fake cd_colour_down')" -eq 1 ]
+    [ "$(mails released)" -eq 1 ]
+    [ "$(calls 'fake cd_rollback_run')" -eq 0 ]
+}
+
+@test "kill switch that appears during step 1 holds step 2 back, and one that appears during step 6 holds step 7 back" {
+    seed_state 60
+    : > "$FK/cd_colour_isolation_record.kill"
+    : > "$FK/cd_data_dumpset_retire.kill"
+    cdc_bg 'echo ready; rc=0; cd_commit_promote || rc=$?; echo "rc=$rc"'
+    wait_for "ls '${GREMION_ROOT}'/data/cd/outbox/*-killswitch*.eml"
+    sleep 0.5
+    # step 1 ran and created the file: step 2 has not moved current
+    [ "$(calls 'fake cd_colour_isolation_record')" -eq 1 ]
+    [ "$(readlink "${GREMION_ROOT}/current")" = "${GREMION_ROOT}/releases/${OLD12}" ]
+    [ "$(st '.release.committed_at')" = null ]
+    rm -f "$FK/cd_colour_isolation_record.kill" "${GREMION_ROOT}/etc/cd.disabled"
+    # step 6 runs and creates the file again: step 7 waits
+    wait_for "[ \"\$(grep -c 'fake cd_data_dumpset_retire' '$SHIM_LOG')\" -ge 1 ]" 150
+    wait_for "ls '${GREMION_ROOT}/etc/cd.disabled'" 50
+    sleep 0.5
+    [ "$(calls 'fake cd_colour_down')" -eq 0 ]
+    [ "$(st '.release.committed_at')" != null ]
+    rm -f "$FK/cd_data_dumpset_retire.kill" "${GREMION_ROOT}/etc/cd.disabled"
+    wait_for "grep -q '^rc=' '$CD_BG_OUT'" 150
+    grep -q '^rc=0' "$CD_BG_OUT"
+    [ "$(calls 'fake cd_colour_down')" -eq 1 ]
+    [ "$(calls 'fake cd_rollback_run')" -eq 0 ]
+}
+
+@test "kill switch that appears during step 7 holds the released mail back" {
+    seed_state 60
+    : > "$FK/cd_colour_down.kill"
+    cdc_bg 'echo ready; rc=0; cd_commit_promote || rc=$?; echo "rc=$rc"'
+    wait_for "ls '${GREMION_ROOT}'/data/cd/outbox/*-killswitch*.eml"
+    sleep 0.5
+    [ "$(calls 'fake cd_colour_down')" -eq 1 ]
+    [ "$(mails released)" -eq 0 ]
+    rm -f "$FK/cd_colour_down.kill" "${GREMION_ROOT}/etc/cd.disabled"
+    wait_for "grep -q '^rc=' '$CD_BG_OUT'" 150
+    grep -q '^rc=0' "$CD_BG_OUT"
+    [ "$(mails released)" -eq 1 ]
+}
+
+@test "kill switch in the watch: an operator rollback that is refused (2, 3) leaves the process parked, the lock held, the request consumed and a mail sent" {
+    local code body
+    for code in 2 3; do
+        rm -rf "${GREMION_ROOT}/data/cd/outbox" "${GREMION_ROOT}/runtime/cd/requests" "$FK/sample.n" "$FK/eval.n" "${GREMION_ROOT}/etc/cd.disabled"
+        : > "$SHIM_LOG"
+        seed_state 0
+        echo 2 > "$FK/killat"
+        echo "$code" > "$FK/cd_rollback_run.rc"
+        cdc_bg 'echo ready; rc=0; cd_commit_watch_loop || rc=$?; echo "rc=$rc"'
+        wait_for "ls '${GREMION_ROOT}'/data/cd/outbox/*-killswitch*.eml"
+        run cd_lib 'cd_request_put rollback "{}"'
+        wait_for "grep -q 'fake cd_rollback_run manual_rollback' '$SHIM_LOG'"
+        wait_for "ls '${GREMION_ROOT}'/data/cd/outbox/*-rollback_failed*.eml"
+        sleep 0.5
+        run grep -c '^rc=' "$CD_BG_OUT"
+        [ "$output" = 0 ]
+        run cd_lib 'cd_hostlock_take'
+        [ "$status" -eq 3 ]
+        [ "$(calls 'fake cd_rollback_run')" -eq 1 ]
+        run bash -c "ls '${GREMION_ROOT}/runtime/cd/requests/' 2>/dev/null | grep -c -- '-rollback.json'"
+        [ "$output" = 0 ]
+        body="$(sed '1,/^$/d' "${GREMION_ROOT}"/data/cd/outbox/*-rollback_failed*.eml)"
+        [[ "$body" == *"rule: manual_rollback"* ]]
+        [[ "$body" == *"reason: rollback_refused"* ]]
+        [[ "$body" == *"stage: watch"* ]]
+        [ "$(st '.phase')" = watching ]
+        rm -f "${GREMION_ROOT}/etc/cd.disabled" "$FK/killat"
+        wait_for "grep -q '^rc=' '$CD_BG_OUT'" 150
+        grep -q '^rc=0' "$CD_BG_OUT"
+        [ "$(st '.release.watch.observed_s')" = 60 ]
+    done
+}
+
+@test "an operator rollback that is refused while the commit sequence retries does not end it: the retries go on and the release commits" {
+    echo 4 > "$FK/cd_colour_isolation_record.fails"
+    echo 3 > "$FK/cd_rollback_run.rc"
+    seed_state 60
+    cd_write_cfg CD_WATCH_MINUTES=1 CD_COMMIT_MAX_MIN=30
+    run cd_lib 'cd_request_put rollback "{}"'
+    run cdc_lib 'cd_commit_promote; echo "rc=$?"'
+    [[ "$output" == *"rc=0"* ]]
+    [ "$(calls 'fake cd_rollback_run')" -eq 1 ]
+    [ "$(calls 'fake cd_colour_isolation_record')" -eq 5 ]
+    [ "$(st '.release.committed_at')" != null ]
+    [ "$(mails rollback_failed)" -eq 1 ]
+    [ "$(mails released)" -eq 1 ]
+}
+
+@test "an operator rollback that is refused after the commit point does not abandon steps 6 and 7: they finish and the released mail is queued" {
+    echo 2 > "$FK/cd_data_dumpset_retire.fails"
+    echo 2 > "$FK/cd_rollback_run.rc"
+    seed_state 60
+    cd_write_cfg CD_WATCH_MINUTES=1 CD_COMMIT_MAX_MIN=30
+    run cd_lib 'cd_request_put rollback "{}"'
+    run cdc_lib 'cd_commit_promote; echo "rc=$?"'
+    [[ "$output" == *"rc=0"* ]]
+    [ "$(calls 'fake cd_rollback_run')" -eq 1 ]
+    [ "$(calls 'fake cd_colour_down')" -eq 1 ]
+    [ "$(mails released)" -eq 1 ]
+    [ "$(mails rollback_failed)" -eq 1 ]
+    [ "$(st '.hold')" = null ]
+    [ "$(readlink "${GREMION_ROOT}/current")" = "${GREMION_ROOT}/releases/${NEW12}" ]
 }
 
 # ================================================================== the commit point
@@ -773,7 +928,7 @@ EOF
     [ "$(calls 'fake cd_rollback_run')" -eq 0 ]
 }
 
-# ------------------------------------------------------------------ the F1 trio
+# ------------------------------------------------------------------ a whole release
 
 @test "a whole release against a fake root: current, the host programs and state.env are byte-identical until the commit step, the programs and state.env after it as well" {
     local before progs
@@ -857,7 +1012,7 @@ seed_prune() {
     shim_docker_prune
     export STACK=teststack
     # after the commit point: live = new (green), previous = old (blue)
-    seed_state 60 auto ".live = (.release | {sha, sha12, tag, colour, tree, since: \"2026-11-17T02:00:00Z\", proof: false, modules: null, leaves: null, reconcile: null}) | .previous = {sha: (\"a\" * 40), sha12: \"aaaaaaaaaaaa\", tag: \"pilot-aaaaaaaaaaaa\", colour: \"blue\", tree: \"${GREMION_ROOT}/releases/aaaaaaaaaaaa\", startable: true} | .release.committed_at = \"2026-11-17T02:00:00Z\""
+    seed_committed
     sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=pilot-${NEW12}/" "${GREMION_ROOT}/etc/env/app-green.env"
     echo c1 > "$DK/running"
     echo "gremion-ui:pilot-${NEW12} sha256:$(printf 'b%.0s' $(seq 1 64))" > "$DK/ctr.c1"
@@ -1006,6 +1161,58 @@ removed_refs() { grep '^docker rmi ' "$SHIM_LOG" | cut -d' ' -f3; }
     [ ! -e "${GREMION_ROOT}/logs/cd-rollback-pilot-${NEW12}-1690000000.log" ]
     [ -e "$recent" ]
     [ -e "${GREMION_ROOT}/logs/isolation.log" ]
+}
+
+@test "prune: the logs the other libraries write under their own names (cd-<name>.log) are removed after 14 days, other files and links stay" {
+    seed_prune
+    local now=1700000000 n l
+    local -a old=(
+        "cd-isolation-record-1690000000.log" "cd-isolation-1690000000.log" "cd-verify-1690000000.log" "cd-data-dump.log"
+        "cd-data-retire.log" "cd-data-gremion-ui.log" "cd-modules-run-1690000000-123456.log" "cd-render-${NEW12}.log"
+        "cd-build-pilot-${NEW12}.log"
+    )
+    for n in "${old[@]}"; do
+        : > "${GREMION_ROOT}/logs/${n}"
+        touch -d "@$((now - 15 * 86400))" "${GREMION_ROOT}/logs/${n}"
+    done
+    : > "${GREMION_ROOT}/logs/cd-data-dump-recent.log"
+    touch -d "@$((now - 13 * 86400))" "${GREMION_ROOT}/logs/cd-data-dump-recent.log"
+    : > "${GREMION_ROOT}/logs/cd-notes.txt"
+    touch -d "@$((now - 15 * 86400))" "${GREMION_ROOT}/logs/cd-notes.txt"
+    : > "${GREMION_ROOT}/outside.log"
+    ln -s "${GREMION_ROOT}/outside.log" "${GREMION_ROOT}/logs/cd-link.log"
+    run cdc_lib '. "${HOST_SRC}/lib/cd/docker.sh"; cd_commit_prune; echo "rc=$?"'
+    [[ "$output" == *"rc=0"* ]]
+    for n in "${old[@]}"; do
+        [ ! -e "${GREMION_ROOT}/logs/${n}" ]
+    done
+    [ -e "${GREMION_ROOT}/logs/cd-data-dump-recent.log" ]
+    [ -e "${GREMION_ROOT}/logs/cd-notes.txt" ]
+    [ -L "${GREMION_ROOT}/logs/cd-link.log" ]
+    l="$(grep prune_done "${GREMION_ROOT}/data/cd/history.jsonl" | jq -r '.logs')"
+    [ "$l" = "${#old[@]}" ]
+}
+
+@test "prune: a release tree that a running container mounts from is kept, whatever else says it can go" {
+    seed_prune
+    mkdir -p "${GREMION_ROOT}/releases/cccccccccccc/infra" "${GREMION_ROOT}/releases/123456789abc/infra"
+    printf '%s\n%s\n%s\n' "gremion-ui:pilot-${NEW12} sha256:$(printf 'b%.0s' $(seq 1 64))" \
+        "${GREMION_ROOT}/releases/cccccccccccc/infra" "/var/lib/docker/volumes/x/_data" > "$DK/ctr.c1"
+    run cdc_lib '. "${HOST_SRC}/lib/cd/docker.sh"; cd_commit_prune; echo "rc=$?"'
+    [[ "$output" == *"rc=0"* ]]
+    [ -d "${GREMION_ROOT}/releases/cccccccccccc/infra" ]
+    [ ! -e "${GREMION_ROOT}/releases/123456789abc" ]
+    # the images are still judged on the first line of the answer only
+    run removed_refs
+    [[ "$output" == *"pilot-eeeeeeeeeeee"* ]]
+}
+
+@test "prune: the three compose config calls carry a time limit" {
+    seed_prune
+    run cdc_lib '. "${HOST_SRC}/lib/cd/docker.sh"; eval "_o_$(declare -f cd_dc)"; cd_dc() { echo "dct=${CD_DC_TIMEOUT:-none} $2 $3" >> "$SHIM_LOG"; _o_cd_dc "$@"; }; cd_commit_prune; echo "rc=$?"'
+    [[ "$output" == *"rc=0"* ]]
+    [ "$(grep -c '^dct=120 .* config' "$SHIM_LOG")" -eq 3 ]
+    [ "$(grep -c '^dct=none' "$SHIM_LOG")" -eq 0 ]
 }
 
 @test "prune writes counts to the history and names no image reference" {

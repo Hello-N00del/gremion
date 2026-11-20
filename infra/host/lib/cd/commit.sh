@@ -28,7 +28,7 @@
 #                           again at phase `parked` is the resume: the host lock is taken again, the
 #                           pause budget starts fresh. A proof release whose window ends clean is
 #                           rolled back with the rule proof_end (no block) and is never committed.
-#   cd_commit_promote       the commit point, steps 1 to 8 (section 4 of the plan). Steps 1 to 5
+#   cd_commit_promote       the commit point, steps 1 to 8. Steps 1 to 5
 #                           retry as ONE sequence inside this process every 60 seconds with the
 #                           host lock never released, for at most CD_COMMIT_MAX_MIN; at the cap the
 #                           release is rolled back with the rule commit_stuck (no block). Step 5 is
@@ -38,9 +38,18 @@
 #                           to 8 retry per step every 60 seconds; at the cap the hold `failure`
 #                           (reason post_commit_<n>) and a mail are written and the release stays
 #                           committed. It releases no lock: the driver runs the prune and step 10.
-#   cd_commit_prune         section 9: the builder cache when the disk is low, the images of
-#                           pilot-<12 hex> tags outside the keep set, the release trees outside
-#                           live, previous and in flight, and old failed-release logs.
+#                           The kill switch is looked at at every boundary of the stage: before each
+#                           of steps 1 to 5, before step 6, 7 and 8 and so on a resume into the stage
+#                           too. While the file exists the process parks in place as the watch does
+#                           (both locks held, nothing further moves) and the time spent there is not
+#                           counted against CD_COMMIT_MAX_MIN. An operator `rollback` request that
+#                           the rollback refuses (nothing touched) is consumed, mailed
+#                           (rollback_failed, reason rollback_refused) and ends nothing: the park
+#                           goes on, the retries go on, steps 6 to 8 finish or reach their hold.
+#   cd_commit_prune         the builder cache when the disk is low, the images of pilot-<12 hex>
+#                           tags outside the keep set, the release trees outside live, previous, in
+#                           flight, what `current` names and what a running container mounts from,
+#                           and the logs of the program (logs/cd-<name>.log) older than 14 days.
 #
 # RETURN CODES (stage functions: 0 ok - 1 failure attributable to the commit - 2 usage or a
 # missing precondition - 3 waiting - 4 infrastructure, retryable)
@@ -51,13 +60,19 @@
 #                         held); 3 the release is parked (phase parked, host lock released); 4 the
 #                         loop could not judge (the samples were unusable, or a rollback was
 #                         refused with nothing touched: the release is still watching). The
-#                         driver then rolls it back with commit_stuck (no block).
-#   cd_commit_promote     0 committed and steps 6 to 8 done; 1 not done: the release was rolled
-#                         back (commit_stuck, or the operator's request) or, after step 5, a
-#                         step 6 or 7 was given up with the hold `failure`. A caller tells the two
-#                         apart with cd_release_committed. 2 a precondition (nothing is touched):
+#                         driver then rolls it back with commit_stuck (no block). A rollback that
+#                         the operator asks for while the kill switch holds the process parked is
+#                         never a 4: the process stays parked (see cd_commit_promote).
+#   cd_commit_promote     0 committed and steps 6 to 8 done; 1 not done: a rollback ran (the
+#                         operator's request, or commit_stuck at the cap; cd_rollback_run owns the
+#                         state and the hold it leaves, and after a complete one there is no release
+#                         any more) or, after step 5, step 6 or 7 was given up with the hold
+#                         `failure` (post_commit_<n>). A caller tells the cases apart with
+#                         cd_release_committed and the hold. 2 a precondition (nothing is touched):
 #                         no release, a proof release, a phase that is not watching, a window that
-#                         is not complete, a lock not held.
+#                         is not complete, a lock not held. 4 the rollback at the cap (commit_stuck)
+#                         was refused or busy with nothing touched: the release is still in flight
+#                         and the driver decides.
 #   cd_commit_prune       0 done (a removal that failed is a history line); 2 no live release;
 #                         4 the keep set could not be computed (nothing was removed).
 #
@@ -184,6 +199,39 @@ _cd_commit_rollback() {
     esac
 }
 
+# _cd_commit_run_requested STAGE DURING - the operator's `rollback` request was taken: the
+# sequence runs. 0 it ran (the state says how it ended; the caller returns), 1 it was refused or
+# busy with nothing touched: the request is consumed, a history line and a critical mail say so,
+# and the caller goes on as if the request had not come (the release is still what it was).
+_cd_commit_run_requested() {
+    local stage="$1" during="$2" rc=0 prev_sha prev_colour
+    cd_hist rollback_requested during="$during" stage="$stage" || true
+    _cd_commit_rollback manual_rollback || rc=$?
+    if ((rc != 4)); then return 0; fi
+    cd_hist rollback_refused during="$during" stage="$stage" || true
+    prev_sha="$CM_LIVE_SHA12"
+    prev_colour="$CM_LIVE_COLOUR"
+    if [[ -n "$CM_COMMITTED" ]]; then
+        prev_sha="$CM_PREV_SHA12"
+        prev_colour="$CM_PREV_COLOUR"
+    fi
+    cd_notify rollback_failed "key=${CM_ID}-manual-refused" every=3600 "sha12=${CM_SHA12}" "prev_sha12=${prev_sha}" \
+        "tag=${CM_TAG}" "colour=${CM_COLOUR}" "prev_colour=${prev_colour}" "stage=${stage}" rule=manual_rollback \
+        reason=rollback_refused command="gremion-cd status" || true
+    return 1
+}
+
+# _cd_commit_gate STAGE - the kill switch at a boundary of the commit stage (its start, between
+# its steps, before step 6, 7 and 8): while the file exists the process parks in place, as the
+# watch does. 0 go on, 10 a rollback the operator asked for ran (the caller returns 1).
+_cd_commit_gate() {
+    local rc=0
+    cd_killswitch_active || return 0
+    _cd_commit_park "$1" || rc=$?
+    if ((rc == 10)); then return 10; fi
+    return 0
+}
+
 # -- the kill switch ----------------------------------------------------------------------
 # _cd_commit_poll - the wait between two looks of a parked process.
 _cd_commit_poll() {
@@ -201,7 +249,7 @@ _cd_commit_poll() {
 # lock is held. The time spent here is added to _CD_COMMIT_PARKED_S, so the retry cap of the
 # sequence that is waiting does not run out while the operator holds the switch.
 _cd_commit_park() {
-    local stage="$1" t0 now rearm=0 rc
+    local stage="$1" t0 now rearm=0
     _cd_commit_load || return 10
     cd_hist killswitch_park stage="$stage" sha12="$CM_SHA12" || true
     t0="$(cd_now)" || t0=0
@@ -213,10 +261,10 @@ _cd_commit_park() {
         cd_notify killswitch "key=killswitch.${CM_ID}" every=3600 "phase=${CM_PHASE}" "sha12=${CM_SHA12}" "stage=${stage}" \
             notes=rollback_off_lock_held command="gremion-cd status" || true
         if _cd_commit_take_rollback_request; then
-            cd_hist rollback_requested during=killswitch stage="$stage" || true
-            rc=0
-            _cd_commit_rollback manual_rollback || rc=$?
-            return 10
+            # the sequence ran (return 10), or it was refused with nothing touched: the process
+            # stays parked, because leaving the park with the switch still on would hand the
+            # release back to a caller that answers with an automatic rollback
+            if _cd_commit_run_requested "$stage" killswitch; then return 10; fi
         fi
         now="$(cd_now)" || now=0
         cd_hb_write "$stage" "$now" 300 "$$" || true
@@ -243,9 +291,8 @@ _cd_commit_nap() {
             if ((rc == 10)); then return 10; fi
         fi
         if _cd_commit_take_rollback_request; then
-            cd_hist rollback_requested during=retry stage="$stage" || true
-            _cd_commit_rollback manual_rollback || true
-            return 10
+            # a refused rollback ends nothing: the retries go on, the operator has been told
+            if _cd_commit_run_requested "$stage" retry; then return 10; fi
         fi
         step="$_CD_COMMIT_POLL_S"
         if ((rem < step)); then step="$rem"; fi
@@ -337,7 +384,7 @@ _cd_commit_unpark() {
         fi
     fi
     cd_state_set '.phase = "watching" | .release.watch.paused_s = 0' || return 2
-    if [[ "$CM_HOLD_KIND" == failure && ( "$CM_HOLD_REASON" == watch_pause_cap || "$CM_HOLD_REASON" == rollback_unusable ) ]]; then
+    if [[ "$CM_HOLD_KIND" == failure && ( "$CM_HOLD_REASON" == watch_pause_cap || "$CM_HOLD_REASON" == rollback_target_unusable ) ]]; then
         cd_hold_clear || true
     fi
     cd_hist unparked sha12="$CM_SHA12" || true
@@ -429,7 +476,7 @@ cd_commit_watch_loop() {
                             "tag=${CM_TAG}" "colour=${CM_COLOUR}" "prev_colour=${CM_LIVE_COLOUR}" stage=watch "rule=${rule}" \
                             reason=rollback_target_unusable command="gremion-cd status" || true
                         cd_hist rollback_skipped rule="$rule" reason=target_unusable || true
-                        _cd_commit_enter_parked rollback_unusable none || return 4
+                        _cd_commit_enter_parked rollback_target_unusable none || return 4
                         return 3
                     fi
                     rc=0
@@ -453,7 +500,7 @@ cd_commit_watch_loop() {
 
 # -- the commit point -------------------------------------------------------------------------
 
-# step 1: the isolation record of the new tip (the enable gate refuses a stale tip, F13).
+# step 1: the isolation record of the new tip (the enable gate refuses a stale tip).
 _cd_commit_step1() {
     cd_colour_isolation_record "$CM_TREE"
 }
@@ -588,6 +635,9 @@ _cd_commit_forward() {
     while :; do
         _cd_commit_load || return 1
         rc=0
+        _cd_commit_gate commit || rc=$?
+        if ((rc == 10)); then return 1; fi
+        rc=0
         "$fn" || rc=$?
         if ((rc == 0)); then return 0; fi
         fails=$((fails + 1))
@@ -614,7 +664,7 @@ _cd_commit_forward() {
 # _cd_commit_precommit - steps 1 to 5 as one retried sequence. 0 committed, 1 rolled back
 # (commit_stuck or the operator's request), 4 the rollback at the cap was refused.
 _cd_commit_precommit() {
-    local cap start now fails=0 failed rc elapsed
+    local cap start now fails=0 failed rc elapsed n
     cap="$(_cd_commit_int CD_COMMIT_MAX_MIN)" || return 2
     cap=$((cap * 60))
     start="$(cd_now)" || return 2
@@ -623,17 +673,14 @@ _cd_commit_precommit() {
         _cd_commit_load || return 2
         cd_state_set '.release.commit_attempts = ((.release.commit_attempts // 0) + 1)' || true
         failed=""
-        if ! _cd_commit_step1; then
-            failed=1
-        elif ! _cd_commit_step2; then
-            failed=2
-        elif ! _cd_commit_step3; then
-            failed=3
-        elif ! _cd_commit_step4; then
-            failed=4
-        elif ! _cd_commit_step5; then
-            failed=5
-        fi
+        for n in 1 2 3 4 5; do
+            # the kill switch is looked at before every step: a release that is parked here keeps
+            # both locks and moves nothing further (a rollback the operator asks for still runs)
+            rc=0
+            _cd_commit_gate commit || rc=$?
+            if ((rc == 10)); then return 1; fi
+            "_cd_commit_step${n}" || { failed="$n"; break; }
+        done
         if [[ -z "$failed" ]]; then return 0; fi
         # a step 5 that reported an error may still have landed: the state is the truth, and a
         # committed release is never retried from step 1 (it would overwrite `previous` with the
@@ -708,6 +755,9 @@ cd_commit_promote() {
     _cd_commit_forward 7 _cd_commit_step7 || rc=$?
     if ((rc != 0)); then return 1; fi
     _cd_commit_load || return 1
+    rc=0
+    _cd_commit_gate commit || rc=$?
+    if ((rc == 10)); then return 1; fi
     _cd_commit_step8
     return 0
 }
@@ -747,6 +797,8 @@ cd_commit_prune() {
     local -A keep_refs=()
     local -A run_ids=()
     local -A keep_trees=()
+    local -a mount_srcs=()
+    local m mounted
     _cd_commit_load || return 2
     if [[ -z "$CM_LIVE_TAG" || -z "$CM_LIVE_TREE" ]]; then
         _cd_commit_err "prune: the state names no live release"
@@ -779,7 +831,7 @@ cd_commit_prune() {
     if [[ -n "$CM_PREV_TAG" ]]; then keep_tags[$CM_PREV_TAG]=1; fi
     if [[ -n "$CM_TAG" ]]; then keep_tags[$CM_TAG]=1; fi
     for proj in state app-blue app-green; do
-        out="$(cd_dc "$CM_LIVE_TREE" "$proj" config --images)" || {
+        out="$(CD_DC_TIMEOUT=120 cd_dc "$CM_LIVE_TREE" "$proj" config --images </dev/null)" || {
             _cd_commit_err "prune: the images of the ${proj} project could not be listed; nothing was removed"
             return 4
         }
@@ -797,11 +849,17 @@ cd_commit_prune() {
     cids="$(_cd_commit_docker 60 ps -q)" || { _cd_commit_err "prune: the running containers could not be listed; nothing was removed"; return 4; }
     n=0
     for cid in $cids; do
-        info="$(_cd_commit_docker 60 inspect --format '{{.Config.Image}} {{.Image}}' "$cid")" || {
+        # line 1: the image reference and ID; every further line: the source of a mount
+        info="$(_cd_commit_docker 60 inspect --format '{{.Config.Image}} {{.Image}}{{range .Mounts}}{{"\n"}}{{.Source}}{{end}}' "$cid")" || {
             _cd_commit_err "prune: a running container could not be inspected; nothing was removed"
             return 4
         }
-        read -r cref img <<<"$info"
+        read -r cref img <<<"${info%%$'\n'*}"
+        while IFS= read -r line; do
+            [[ "$line" == /* ]] || continue
+            line="$(readlink -m -- "$line" 2>/dev/null)" || continue
+            mount_srcs+=("$line")
+        done < <(printf '%s\n' "$info" | tail -n +2)
         n=$((n + 1))
         keep_refs[$(_cd_commit_ref_norm "$cref")]=1
         img="${img#sha256:}"
@@ -847,6 +905,12 @@ cd_commit_prune() {
             [[ "$name" =~ ^[0-9a-f]{12}$ ]] || continue
             resolved="$(readlink -m -- "$d" 2>/dev/null)" || continue
             [[ -z "${keep_trees[$resolved]:-}" ]] || continue
+            # a tree that a running container mounts from stays, whichever project it belongs to
+            mounted=0
+            for m in ${mount_srcs[@]+"${mount_srcs[@]}"}; do
+                if [[ "$m" == "$resolved" || "$m" == "$resolved"/* ]]; then mounted=1; break; fi
+            done
+            ((mounted == 0)) || continue
             if rm -rf -- "$d"; then
                 removed_trees=$((removed_trees + 1))
             else
@@ -854,13 +918,15 @@ cd_commit_prune() {
             fi
         done
     fi
-    # 5. failed-release logs older than 14 days, measured against cd_now
+    # 5. the logs of the program (every library of it names its logs cd-<name>.log: the one-shot
+    # and dump logs of data and modules, the isolation, verify, render and build logs, a rollback's
+    # log) older than 14 days, measured against cd_now. Regular files only, no link is followed.
     now="$(cd_now)" || now=0
     if [[ -d "${CD_ROOT}/logs" ]]; then
-        for f in "${CD_ROOT}/logs/"cd-failed-*.log "${CD_ROOT}/logs/"cd-rollback-*.log; do
+        for f in "${CD_ROOT}/logs/"cd-*.log; do
             [[ -f "$f" && ! -L "$f" ]] || continue
             name="${f##*/}"
-            [[ "$name" =~ ^cd-(failed-[0-9a-f]{12}|rollback-pilot-[0-9a-f]{12}-[0-9]+)\.log$ ]] || continue
+            [[ "$name" =~ ^cd-[A-Za-z0-9][A-Za-z0-9._-]{0,120}\.log$ ]] || continue
             age="$(stat -c %Y -- "$f" 2>/dev/null)" || continue
             [[ "$age" =~ ^[0-9]+$ ]] || continue
             if ((now - age > 14 * 86400)); then

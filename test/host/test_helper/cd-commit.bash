@@ -11,13 +11,14 @@
 # The scripts live in files under $FK (a directory of the fake root):
 #   <name>.fails      a number: the next that many calls of <name> fail (return 1)
 #   <name>.rc         the return code of <name> once the failures are used up
+#   <name>.kill       when the file exists, a call of <name> creates the kill switch file
 #   verdicts          one line per sample for cd_watch_eval, "word[;flip c on|off]...", the last
 #                     line sticks, `ok` when the file is empty
 #   sample.rc         the return code of cd_watch_sample
 #   sample.advance    seconds the fake clock moves during one sample
 #   killat            the sample number at which the fake sample creates the kill switch file
 #   eval.rc           the return code of cd_watch_eval
-#   rollback.rc       the return code of cd_rollback_run (0 and 1 end the release in the state)
+#   cd_rollback_run.rc  the return code of cd_rollback_run (0 and 1 end the release in the state, 2 and 3 are a refusal)
 
 _fk_lockstate() {
     if ( exec 7>>"${GREMION_ROOT}/runtime/hostd.lock" && flock -n 7 ) 2>/dev/null </dev/null; then
@@ -38,6 +39,7 @@ _fk() {
     local name="$1" n rc=0
     shift
     printf 'fake %s %s | lock=%s cur=%s\n' "$name" "$*" "$(_fk_lockstate)" "$(_fk_cur)" >> "$SHIM_LOG"
+    if [[ -f "$FK/$name.kill" ]]; then : > "$CD_KILLSWITCH_FILE"; fi
     if [[ -f "$FK/$name.fails" ]]; then
         n="$(cat "$FK/$name.fails")"
         if ((n > 0)); then
