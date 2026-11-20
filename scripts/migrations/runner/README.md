@@ -24,7 +24,7 @@ The first line of every new migration file:
 -- gremion:phase migrate           -- data moves, after the tenant context is set
 -- gremion:phase contract          -- removes what an older release still read
 -- gremion:contract-after dist-vX.Y.Z   (contract only)
--- gremion:manual-dump <runbook step>   (unadopted chains only, see below)
+-- gremion:manual-dump <runbook step>   (unadopted and module-upgrade chains, see below)
 ```
 
 Files locked before the header existed are never re-hashed to gain one: their
@@ -89,24 +89,33 @@ parse fails, naming the file, the statement number and the rule.
 ## Which runner takes the dump (`chain-runners.json`)
 
 It covers `ranges.json` exactly (the suite fails on a gap, an extra chain or an
-unknown class). Four classes:
+unknown class). Five classes:
 
 | class | chains | who dumps |
 |---|---|---|
 | `tenant-store` | `platform`, `kernel-api` | `platform`: `packages/tenant-store/src/dump/cli.ts migrate --chain <id> --release <R>`: `composePreApply(chainPreApply, dumpHook)`. `kernel-api`: its own migrate runner (`services/kernel-api/src/migrate/migrate.ts`) composes the same `chainPreApply` and dump hook once per customer database |
 | `legacy-boot` | `kernel-data`, `control` | `gremion-migration-dump preflight --release <T>` (gremion-deploy step 5) takes the host-side dump when a chain's `dirs[]` gains a file (Q11) |
-| `unadopted` | `module-*`, `mail` | nobody yet: a new file must carry `-- gremion:manual-dump <runbook step>` |
+| `module-upgrade` | `module-calendar`, `module-content`, `module-finance`, `module-publishing`, `module-vault` | the `module-upgrade --all` verb of the tenant-create one-shot (`upgradeModuleDatabase`), applied to the enable-gate database of every customer that has the module enabled, after a host dump set of the same release and before the new colour starts. A leaf-backed module's own databases are migrated by the leaf, not by this verb. A new file still must carry `-- gremion:manual-dump <runbook step>`: gremion-deploy, upgrade.sh and a hand upgrade run no module step and take no module dump |
+| `unadopted` | `module-board`, `mail` | nobody: `module-board` has no customer database and `mail` has no chain files; a new file must carry `-- gremion:manual-dump <runbook step>` |
 | `fresh-only` | `governance` | applied by the tenant-store runner through `migrateGovernanceDatabase`, only on a database created in the same step: nothing to lose, no dump, no marker. Flips to `tenant-store` together with the `governance-migrate` runner, before any `0002`: the suite refuses a second file in a `fresh-only` chain (TASK-084-a) |
 
-An adopter flips its chain's class. A `module-*` database is migrated by
+An adopter flips its chain's class. A `module-*` database is created by
 `enableModule` (the tenant-store runner; since R29 the board leaf never
 migrates, B21). Enabling a module for a customer creates a fresh database,
 which has nothing to lose, so `enableModule` passes no dump hook there; an
 existing database (a resumed enable or an upgrade) runs `deps.upgradeHooks`.
-`gremion-tenant` (tenant-provision's `pgModules`) passes no `upgradeHooks`
-yet, so the `module-*` chains stay `unadopted` until a caller wires the dump
-hook (TASK-077/084); `init` and phase B record `release_ref` from
-`GREMION_RELEASE_REF` (the colour's `IMAGE_TAG`).
+An enabled database is brought up to date by the `module-upgrade --all` verb
+(`tenant-provision-modules.ts`, built on `upgradeModuleDatabase`), so the
+calendar, content, finance, publishing and vault chains are `module-upgrade`.
+The verb takes no dump itself: it relies on the host's dump set of the same
+release, which exists only on the continuous-delivery path. The deploy script,
+`upgrade.sh` and a hand upgrade never run it, which is why `module-upgrade`
+keeps the `-- gremion:manual-dump` marker (`MANUAL_DUMP_CLASSES` in
+`suite.mjs`: `unadopted` and `module-upgrade`). The class is read from the live
+tree by the release classifier, so flipping a chain's class is itself a held
+change. `init` and phase B record `release_ref` from `GREMION_RELEASE_REF` (the
+colour's `IMAGE_TAG`). The suite, `chain-runners.json` and the table above must
+name the same five classes (a drift test in `suite.test.mjs`).
 
 ## The dump
 
