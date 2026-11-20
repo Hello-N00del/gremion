@@ -253,7 +253,7 @@ _cd_rb_begin() {
     cd_state_set '.phase = "rolling_back"
         | (if $synth == 1 then .release = {id: $id, sha: $sha, sha12: $s12, tag: $tag, colour: $col, tree: $tree,
               mode: "manual", stage: "switch", stage_status: "started", switch_started: false, committed_at: $at, attempt: 1}
-           else . end)' \
+           else (.) end)' \
         --argjson synth "$RB_SYNTH" --arg id "$RB_ID" --arg sha "$RB_NEW_SHA" --arg s12 "$RB_NEW_SHA12" \
         --arg tag "$RB_NEW_TAG" --arg col "$RB_NEW_COLOUR" --arg tree "$RB_NEW_TREE" --arg at "$at" || {
         _cd_rb_err "the state could not be written"
