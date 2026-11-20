@@ -112,3 +112,11 @@ cd_rollback_run() {
     fi
     return "$rc"
 }
+
+# cd_sleep -- logs the state of the host lock at every wait (the fake clock still moves), so a test
+# can read that the lock was never free while a retry sequence waited.
+eval "_fk_orig_$(declare -f cd_sleep)"
+cd_sleep() {
+    printf 'fake cd_sleep %s | lock=%s\n' "$1" "$(_fk_lockstate)" >> "$SHIM_LOG"
+    _fk_orig_cd_sleep "$@"
+}

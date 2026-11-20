@@ -428,7 +428,7 @@ verdicts() { printf '%s\n' "$@" > "$FK/verdicts"; }
 }
 
 @test "kill switch at the commit stage: it waits in place with both locks, then the commit goes on" {
-    echo 1 > "$FK/cd_colour_isolation_record.fails"
+    echo 2 > "$FK/cd_colour_isolation_record.fails"
     : > "${GREMION_ROOT}/etc/cd.disabled"
     seed_state 60
     cdc_bg 'echo ready; rc=0; cd_commit_promote || rc=$?; echo "rc=$rc"'
@@ -438,10 +438,13 @@ verdicts() { printf '%s\n' "$@" > "$FK/verdicts"; }
     run cd_lib 'cd_lock_take'
     [ "$status" -eq 3 ]
     [ "$(st '.release.committed_at')" = null ]
+    # an hour under the switch is far past the 3 minute cap and takes nothing from it
+    cd_advance 3600
     rm -f "${GREMION_ROOT}/etc/cd.disabled"
     wait_for "grep -q '^rc=' '$CD_BG_OUT'" 150
     grep -q '^rc=0' "$CD_BG_OUT"
     [ "$(st '.release.committed_at')" != null ]
+    [ "$(calls 'fake cd_rollback_run')" -eq 0 ]
     run grep -c 'lock=free' "$SHIM_LOG"
     [ "$output" = 0 ]
 }
@@ -523,6 +526,23 @@ EOF
     # the rollback here is a fake: current stays where step 2 put it, which is what the real
     # sequence moves back (its step 7); the fake proves step 2 ran and 3 to 5 did not
     [ "$(readlink "${GREMION_ROOT}/current")" = "${GREMION_ROOT}/releases/${NEW12}" ]
+}
+
+@test "step 2 reads the link back: a swap that did not happen is a failed step, and no later step runs" {
+    seed_state 60
+    cd_write_cfg CD_WATCH_MINUTES=1 CD_COMMIT_MAX_MIN=1
+    local real_mv
+    real_mv="$(command -v mv)"
+    printf '#!/bin/sh\nfor a in "$@"; do last="$a"; done\ncase "$last" in */current) exit 0 ;; esac\nexec %s "$@"\n' "$real_mv" > "${SHIM_DIR}/mv"
+    chmod +x "${SHIM_DIR}/mv"
+    run cdc_lib 'cd_commit_promote; echo "rc=$?"'
+    [[ "$output" == *"rc=1"* ]]
+    [ "$(cat "$FK/rollback.rules")" = commit_stuck ]
+    [ "$(readlink "${GREMION_ROOT}/current")" = "${GREMION_ROOT}/releases/${OLD12}" ]
+    [ "$(cat "${GREMION_ROOT}/runtime/current-tag")" = "pilot-${OLD12}" ]
+    [ "$(st '.release.committed_at')" = null ]
+    run refute_recorded fake executor_unit_action
+    [ "$status" -eq 0 ]
 }
 
 @test "a retry after steps 2 to 4 ran writes the previous tag from the state, never the new tag from the file" {
