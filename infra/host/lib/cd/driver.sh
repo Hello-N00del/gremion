@@ -48,6 +48,7 @@ CD_DRV_RESUME_HOLDS=" operator failure proof rollback_failed killswitch stuck_st
 CD_DRV_RESUME_ONLY=0   # 1 in `tick --resume-only` (the boot unit)
 CD_DRV_ROLLED=0        # 1 once a rollback has ended the release in this process
 CD_DRV_STARTED=0       # 1 once this process has started a release (an idle tick does one thing)
+CD_DRV_STALE_RB=0      # how many pending rollback requests were made for a release that is over (see _cd_drv_mark_over)
 CD_DRV_ATT=1           # the attempt number of the stage about to run
 CD_DRV_SWITCH_DONE=0   # 1 when a resumed switch stage found the new colour already serving
 CD_DRV_RETRY_BACKOFF=(60 300 900)
@@ -139,6 +140,25 @@ _cd_drv_next_stage() {
 _cd_drv_end_release() {
     _cd_drv_set '.phase = "idle" | .release = null'
     rm -f "${CD_DATA}/release-ref" 2>/dev/null || true
+}
+
+# _cd_drv_mark_over -- a release that never committed has just ended in this process on its own
+# (an abort or a refusal; a rollback and the operator's abort are covered by CD_DRV_ROLLED, which
+# a release-now resets). Every rollback request that is pending NOW was made while it ran, for
+# it: taken later as the verb of an idle host it would take the LIVE release back to `previous`,
+# which nobody asked for. The drain refuses that many rollback requests (they go in the order
+# they were made, so the ones made after this moment are not among them), says so, and the
+# operator may ask again. A release that committed is not marked: its rollback request is
+# the operator's way back from it.
+_cd_drv_mark_over() {
+    local f n=0
+    for f in "${CD_REQUEST_DIR}/"*-rollback.json; do
+        if [[ -f "$f" && ! -L "$f" ]]; then
+            n=$((n + 1))
+        fi
+    done
+    CD_DRV_STALE_RB="$n"
+    return 0
 }
 
 # _cd_drv_keep_log COLOUR -- the last 500 lines of the failed colour's gremion-ui into a 0600
@@ -257,6 +277,11 @@ _cd_drv_abort() {
     cd_hist release_aborted kind="$kind" stage="$stage" sha12="$sha12" || true
     _cd_drv_end_release
     cd_hostlock_release
+    # the operator's own rollback is the request that asked for this end (a second one meets
+    # CD_DRV_ROLLED); every other end was not asked for by a request that is waiting
+    if [[ "$kind" != operator ]]; then
+        _cd_drv_mark_over
+    fi
     return 0
 }
 
@@ -623,6 +648,28 @@ _cd_drv_abort_refused() {
     cd_hist release_not_started why="$1" sha12="${R_SHA12:-}" || true
     _cd_drv_end_release
     cd_hostlock_release
+    _cd_drv_mark_over
+}
+
+# _cd_drv_hostlock_wait BEAT -- cd_hostlock_take for up to CD_LOCK_WAIT_S, under a heartbeat when
+# this process has none running (a stage stops its own, and the wait is longer than the 180 s
+# after which the watchdog calls a silent holder of the cd lock a stuck release). A beat that is
+# running (the tick's own) is left alone. BEAT is the name in the heartbeat file.
+_cd_drv_hostlock_wait() {
+    local name="$1" rc=0 beat=0 span
+    span="$(cd_cfg CD_LOCK_WAIT_S)"
+    if [[ -z "${CD_HB_PID:-}" ]]; then
+        if cd_heartbeat_start "$name" $((span + 60)); then
+            beat=1
+        else
+            cd_err "driver: the heartbeat did not start"
+        fi
+    fi
+    cd_hostlock_take "$span" || rc=$?
+    if ((beat == 1)); then
+        cd_heartbeat_stop
+    fi
+    return "$rc"
 }
 
 # The two apply stages run with the host lock held by this process, so that a child that takes
@@ -645,7 +692,7 @@ _cd_drv_st_state_apply() {
 # another holder (a backup, the purge) is no failure of this release. Any other refusal is.
 _cd_drv_apply_stage() {
     local stage="$1" rc=0
-    cd_hostlock_take "$(cd_cfg CD_LOCK_WAIT_S)" || rc=$?
+    _cd_drv_hostlock_wait "$stage" || rc=$?
     if ((rc == 3)); then
         cd_hist apply_waiting why=host_lock stage="$stage" sha12="$R_SHA12" || true
         _cd_drv_say "waiting: the host lock is held"
@@ -1390,11 +1437,17 @@ _cd_drv_drain() {
             hold) _cd_drv_do_hold "$args" ;;
             resume) _cd_drv_do_resume "$args" ;;
             rollback)
+                # a request made for a release that has ended without committing (see
+                # _cd_drv_mark_over) is consumed and said so, never run as the verb of an idle host
+                if ((CD_DRV_STALE_RB > 0)); then
+                    CD_DRV_STALE_RB=$((CD_DRV_STALE_RB - 1))
+                    cd_hist rollback_refused why=release_over || true
+                    _cd_drv_say "rollback refused: the release it was made for is already over"
                 # one rollback per release: a second request meets a release that is already
                 # over (and an idle host), where the same verb would take the LIVE release back
                 # to `previous`, which was never proven against the schema of the one just
                 # rolled back. The request is consumed and said so; the operator may ask again.
-                if ((CD_DRV_ROLLED == 1)); then
+                elif ((CD_DRV_ROLLED == 1)); then
                     cd_hist rollback_refused why=already_rolled_back || true
                     _cd_drv_say "rollback refused: this release was already rolled back"
                 else
@@ -1405,6 +1458,8 @@ _cd_drv_drain() {
             *) cd_hist request_ignored verb="$verb" || true ;;
         esac
     done
+    # the queue is empty: a count left over was a request that never came out as one
+    CD_DRV_STALE_RB=0
     return 0
 }
 
@@ -1433,7 +1488,7 @@ _cd_drv_do_resume() {
     _cd_drv_load
     if [[ "$D_PHASE" == parked ]]; then
         rc=0
-        cd_hostlock_take "$(cd_cfg CD_LOCK_WAIT_S)" || rc=$?
+        _cd_drv_hostlock_wait lock_wait || rc=$?
         if ((rc != 0)); then
             cd_hist resume_refused why=host_lock || true
             _cd_drv_say "resume refused: the host lock is busy"
@@ -1510,7 +1565,7 @@ _cd_drv_do_rollback() {
             fi
             # the process holds the locks (the host lock only until the commit point): a
             # committed release goes one release back, and takes the host lock first
-            cd_hostlock_take "$(cd_cfg CD_LOCK_WAIT_S)" || rc=$?
+            _cd_drv_hostlock_wait lock_wait || rc=$?
             if ((rc != 0)); then
                 _cd_drv_say "rollback not run: the host lock is busy"
                 cd_hist rollback_refused why=host_lock || true
@@ -1528,7 +1583,7 @@ _cd_drv_do_rollback() {
                 cd_hist rollback_refused why=not_startable || true
                 return 0
             fi
-            cd_hostlock_take "$(cd_cfg CD_LOCK_WAIT_S)" || rc=$?
+            _cd_drv_hostlock_wait lock_wait || rc=$?
             if ((rc != 0)); then
                 _cd_drv_say "rollback not run: the host lock is busy"
                 cd_hist rollback_refused why=host_lock || true
@@ -1537,7 +1592,7 @@ _cd_drv_do_rollback() {
             _cd_drv_manual_rollback
             ;;
         parked)
-            cd_hostlock_take "$(cd_cfg CD_LOCK_WAIT_S)" || rc=$?
+            _cd_drv_hostlock_wait lock_wait || rc=$?
             if ((rc != 0)); then
                 _cd_drv_say "rollback not run: the host lock is busy"
                 return 0
@@ -1608,6 +1663,7 @@ _cd_drv_do_release_now() {
             return 0
         }
         _cd_drv_start_gate || return 0
+        CD_DRV_ROLLED=0
         _cd_drv_select "$target" proof false "$ref"
         return 0
     fi
@@ -1628,6 +1684,10 @@ _cd_drv_do_release_now() {
     fi
     [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || return 0
     _cd_drv_start_gate || return 0
+    # a new release is not rolled back yet, whatever ended the one before it in this tick: it
+    # runs now (its loop stops at once for a process that has rolled back), and a rollback
+    # request that meets it is for it
+    CD_DRV_ROLLED=0
     _cd_drv_select "$sha" manual "$ws"
 }
 
@@ -1820,7 +1880,7 @@ _cd_drv_inflight_locks() {
         ((idx >= snap)) && need=1
     fi
     ((need == 1)) || return 0
-    cd_hostlock_take "$(cd_cfg CD_LOCK_WAIT_S)" || rc=$?
+    _cd_drv_hostlock_wait lock_wait || rc=$?
     if ((rc != 0)); then
         _cd_drv_say "the host lock is busy; the release waits"
         return "$rc"
@@ -1886,6 +1946,7 @@ cd_cmd_tick() {
     done
     CD_DRV_ROLLED=0
     CD_DRV_STARTED=0
+    CD_DRV_STALE_RB=0
     if [[ ! -f "$CD_STATE_FILE" ]]; then
         cd_alert "no state file: gremion-cd adopt has not run"
         cd_die 2 "no state file (gremion-cd adopt has not run)"

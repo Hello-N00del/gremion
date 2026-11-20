@@ -110,6 +110,6 @@ docs/compliance/tom-annex.md text eol=lf
 # file and sourced by bash, so a CRLF copy fails every test with a carriage-return
 # command-not-found. `.bash` matches no rule above, and the rule for test_helper reaches
 # that directory only (measured: `git check-attr eol` answered "unspecified" and
-# `git ls-files --eol` reported w/crlf under core.autocrlf=true). The glob covers a
-# future fixture of the same kind.
-test/host/fixtures/cd/**/*.bash text eol=lf
+# `git ls-files --eol` reported w/crlf under core.autocrlf=true). The glob covers the
+# fixtures of this one directory and no other unit's.
+test/host/fixtures/cd/driver/*.bash text eol=lf

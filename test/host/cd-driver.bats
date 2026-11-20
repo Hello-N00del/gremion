@@ -1805,3 +1805,108 @@ drv_pending() {
     run grep -c 'ops@example.org' "${GREMION_ROOT}/data/cd/history.jsonl" "${GREMION_ROOT}/data/cd/state.json"
     [[ "$output" != *":1"* ]]
 }
+
+# ===========================================================================================
+# review round 5: a rollback asked for a release that ended on its own, the lock wait of an
+# apply stage, a release-now after a rollback
+# ===========================================================================================
+
+DRV_RN_B='{"target":"bbbbbbbbbbbb","with_state":false,"force_blocked":false,"accept_range":false,"reason":"","ref":"","unverified":false}'
+
+@test "rollback: a request queued while a release was in flight is refused when that release then ends on its own before its switch (an idle rollback would take the LIVE release back to previous)" {
+    drv_seed_rel render ok
+    cd_stub_set cd_prepare_build 1
+    # the operator asks for the rollback while the build runs; the build then fails
+    export CD_STUB_HOOK_cd_prepare_build='cd_request_put rollback "{\"reason\":\"\"}"'
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    [ "$(drv_n '^stub cd_rollback_run')" -eq 0 ]
+    [ "$(drv_hist release_aborted)" -eq 1 ]
+    [ "$(drv_hist rollback_requested)" -eq 0 ]
+    [ "$(drv_hist rollback_refused)" -eq 1 ]
+    [ "$(drv_pending)" -eq 0 ]
+    [ "$(drv_state '.phase')" = idle ]
+    [ "$(drv_state '.live.sha12')" = aaaaaaaaaaaa ]
+    [ "$(drv_state '.previous.sha12')" = dddddddddddd ]
+}
+
+@test "rollback: the same request queued during a release that the idle tick started itself is refused when the release ends before its switch" {
+    drv_seed
+    cd_stub_set cd_prepare_build 1
+    export CD_STUB_HOOK_cd_prepare_build='cd_request_put rollback "{\"reason\":\"\"}"'
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    [ "$(drv_n '^stub cd_prepare_build')" -eq 1 ]
+    [ "$(drv_n '^stub cd_rollback_run')" -eq 0 ]
+    [ "$(drv_hist rollback_refused)" -eq 1 ]
+    [ "$(drv_pending)" -eq 0 ]
+    [ "$(drv_state '.live.sha12')" = aaaaaaaaaaaa ]
+}
+
+@test "rollback: a request for a release that ended before its switch does not eat the request an operator makes after it" {
+    drv_seed
+    cd_stub_set cd_prepare_build 1
+    export CD_STUB_HOOK_cd_prepare_build='cd_request_put rollback "{\"reason\":\"\"}"'
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    [ "$(drv_n '^stub cd_rollback_run')" -eq 0 ]
+    # a request made at an idle host, after the release is over, is the operator's rollback of the live release
+    unset CD_STUB_HOOK_cd_prepare_build
+    cd_stub_set cd_prepare_build 0
+    run cd_prog rollback
+    [ "$status" -eq 0 ]
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    [ "$(drv_n '^stub cd_rollback_run manual_rollback')" -eq 1 ]
+}
+
+@test "apply stages: a tick that waits for the host lock beats under the name of the stage, so the watchdog does not call a wait a stuck release" {
+    cd_need_flock
+    cd_write_cfg CD_LOCK_WAIT_S=6
+    drv_seed_rel fetch ok '.release.with_state = true'
+    hold_host_lock 30
+    drv_bg_tick
+    local i seen=0
+    for i in $(seq 1 150); do
+        if grep -q '^[0-9]* [a-z_]* host_apply ' "${GREMION_ROOT}/runtime/cd/heartbeat" 2>/dev/null; then
+            seen=1
+            break
+        fi
+        kill -0 "$DRV_BG_PID" 2>/dev/null || break
+        sleep 0.1
+    done
+    cat "${GREMION_ROOT}/runtime/cd/heartbeat" >&2 || true
+    [ "$seen" -eq 1 ]
+    # the wait ends (6 s) before the holder lets go: the release waits for a later tick
+    drv_wait "! kill -0 ${DRV_BG_PID} 2>/dev/null"
+    release_host_lock
+    [ "$(drv_n '^stub cd_adopt_apply_host')" -eq 0 ]
+    [ "$(drv_state '.release.stage')" = classify ]
+}
+
+@test "release-now: a request drained after a rollback in the same tick starts its release and runs it, not at the next tick" {
+    drv_seed_sw watch started
+    run cd_prog rollback
+    [ "$status" -eq 0 ]
+    cd_lib "cd_request_put release-now '${DRV_RN_B}'"
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    [ "$(drv_n '^stub cd_rollback_run manual_rollback')" -eq 1 ]
+    assert_recorded stub "cd_commit_promote"
+    [ "$(drv_state '.phase')" = idle ]
+    [ "$(drv_state '.live.sha12')" = bbbbbbbbbbbb ]
+}
+
+@test "rollback: a rollback request that meets the release a release-now started after a rollback is not refused as already rolled back" {
+    drv_seed_sw watch started
+    run cd_prog rollback
+    [ "$status" -eq 0 ]
+    cd_lib "cd_request_put release-now '${DRV_RN_B}'"
+    cd_lib 'cd_request_put rollback "{\"reason\":\"\"}"'
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    [ "$(drv_hist rollback_refused)" -eq 0 ]
+    [ "$(drv_hist release_aborted)" -eq 1 ]
+    [ "$(drv_n '^stub cd_commit_promote')" -eq 0 ]
+    [ "$(drv_pending)" -eq 0 ]
+}
