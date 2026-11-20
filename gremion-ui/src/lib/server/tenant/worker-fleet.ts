@@ -18,6 +18,8 @@
 //   - fail-safe per tick: a control-plane listing failure logs and RESOLVES —
 //     a worker tick must never crash/reject on it (unlike the boot fleet in
 //     fleet.ts, where a control-plane failure is a process-wide boot failure).
+//   - worker gate: a colour whose gate file says `off` runs no tick at all —
+//     read per tick at the very top, see worker-gate.ts.
 //   - D-READY readiness gate (adversarial-review fix, als-worker): workers are
 //     the OTHER traffic source besides HTTP and their ticks WRITE to tenant
 //     DBs, so they honor the SAME per-tenant readiness gate as the resolution
@@ -26,6 +28,7 @@ import { runWithTenant, type TenantContext } from './context'
 import { listActiveTenants, resolveTenantBySlug } from './registry'
 import { getTenantReadiness, isFleetPopulated } from './readiness'
 import { tlog } from '$lib/server/observability/tenant-log'
+import { isWorkerGateOff } from './worker-gate'
 
 /** In-flight (label, tenantId) pairs — the per-tenant single-flight registry. */
 const _inFlight = new Set<string>()
@@ -40,6 +43,22 @@ export async function forEachActiveTenant(
   label: string,
   fn: (ctx: TenantContext) => unknown,
 ): Promise<void> {
+  // The worker gate: the release tooling switches the workers of one colour off by
+  // writing `off` into a file this colour sees read-only (worker-gate.ts). It is read on EVERY
+  // tick, before anything else, so a gated tick costs one tiny file read: it does not list the
+  // tenants, resolve them or run `fn`. Only the content `off` stops the tick; an absent,
+  // unreadable or any other file means ON, so an install without the tooling loses no worker.
+  // A tick already running when the file turns `off` finishes (named residual); this gates
+  // background work, never requests.
+  let gateOff = false
+  try {
+    gateOff = await isWorkerGateOff()
+  } catch {
+    // isWorkerGateOff never rejects; if it ever does, the answer is ON, never a stopped fleet.
+    gateOff = false
+  }
+  if (gateOff) return
+
   // D-READY on the WORKER plane (adversarial-review fix): the readiness gate
   // at the HTTP seam (resolve.ts) alone does NOT hold G-014's "no traffic
   // against a half-migrated DB" per tenant — cron/interval ticks write to
