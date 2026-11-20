@@ -1910,3 +1910,34 @@ DRV_RN_B='{"target":"bbbbbbbbbbbb","with_state":false,"force_blocked":false,"acc
     [ "$(drv_n '^stub cd_commit_promote')" -eq 0 ]
     [ "$(drv_pending)" -eq 0 ]
 }
+
+@test "rollback: a request made for a release that the boot unit's resume then ended before its switch does not outlive that process (the next tick is not asked to roll the live release back)" {
+    drv_seed_rel render ok
+    cd_stub_set cd_prepare_build 1
+    export CD_STUB_HOOK_cd_prepare_build='cd_request_put rollback "{\"reason\":\"\"}"'
+    run cd_prog tick --resume-only
+    [ "$status" -eq 0 ]
+    [ "$(drv_n '^stub cd_prepare_build')" -eq 1 ]
+    [ "$(drv_pending)" -eq 0 ]
+    unset CD_STUB_HOOK_cd_prepare_build
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    [ "$(drv_n '^stub cd_rollback_run')" -eq 0 ]
+    [ "$(drv_hist rollback_refused)" -eq 1 ]
+    [ "$(drv_state '.live.sha12')" = aaaaaaaaaaaa ]
+    [ "$(drv_state '.previous.sha12')" = dddddddddddd ]
+}
+
+@test "rollback: a request made for a release that the boot unit's resume rolled back does not outlive that process either" {
+    drv_seed_sw watch ok
+    export CD_STUB_HOOK_cd_commit_promote='cd_request_put rollback "{\"reason\":\"\"}"; return 1'
+    run cd_prog tick --resume-only
+    [ "$status" -eq 0 ]
+    [ "$(drv_n '^stub cd_rollback_run commit_stuck')" -eq 1 ]
+    [ "$(drv_pending)" -eq 0 ]
+    unset CD_STUB_HOOK_cd_commit_promote
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    [ "$(drv_n '^stub cd_rollback_run manual_rollback')" -eq 0 ]
+    [ "$(drv_hist rollback_refused)" -eq 1 ]
+}
