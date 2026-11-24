@@ -244,8 +244,9 @@ check_secondary_tenant_hosts() {
         fail "SECONDARY_TENANT_HOSTS is set but PILOT_TENANT_HOST is empty: a secondary host is an addition to the install's customer host"
         return 0
     fi
-    control="${CONTROL_PANEL_HOST-}"
-    if [[ -z "$control" && -n "${PLATFORM_DOMAIN-}" ]]; then control="control.${PLATFORM_DOMAIN}"; fi
+    # the control host is THE resolver's answer; when CONTROL_PANEL_HOST is itself refused (gremion-render says
+    # so), the raw value still must not be reused as a customer host
+    control="$(resolve_control_panel_host)" || control="${CONTROL_PANEL_HOST-}"
     if ! why="$(secondary_hosts_problem "$list" "${PLATFORM_DOMAIN-}" "${PILOT_TENANT_HOST-}" "$control")"; then
         fail "SECONDARY_TENANT_HOSTS is refused: ${why}"
         return 0

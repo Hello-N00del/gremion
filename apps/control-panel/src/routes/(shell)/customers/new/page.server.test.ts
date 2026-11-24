@@ -67,6 +67,7 @@ function failed(r: Awaited<ReturnType<typeof post>>) {
 beforeEach(() => {
   submitCreate.mockClear()
   delete ENV.PILOT_TENANT_HOST
+  delete ENV.SECONDARY_TENANT_HOSTS
   delete ENV.PLATFORM_DOMAIN
   delete ENV.CONTROL_PANEL_HOST
 })
@@ -222,5 +223,45 @@ describe('Neuer Mandant: the slug typed twice and the expected host', () => {
     expect((await run()).expectedHost).toBeNull()
     ENV.PILOT_TENANT_HOST = 'Rat.Proof.Example'
     expect((await run()).expectedHost).toBe('rat.proof.example')
+  })
+})
+
+describe('Neuer Mandant: the secondary customer hosts (SECONDARY_TENANT_HOSTS, passed in like PILOT_TENANT_HOST)', () => {
+  const secondary = async () => (await (load as unknown as (e: unknown) => Promise<{ secondaryHosts: string[] }>)({})).secondaryHosts
+
+  it('S1: unset or empty: no secondary hosts', async () => {
+    expect(await secondary()).toEqual([])
+    ENV.SECONDARY_TENANT_HOSTS = ''
+    expect(await secondary()).toEqual([])
+    ENV.SECONDARY_TENANT_HOSTS = '  ,  '
+    expect(await secondary()).toEqual([])
+  })
+
+  it('S2: the load names the listed hosts, lower case, in the order of the list', async () => {
+    ENV.PILOT_TENANT_HOST = 'rat.proof.example'
+    ENV.SECONDARY_TENANT_HOSTS = 'canary.example.org,Test.Example.Net'
+    expect(await secondary()).toEqual(['canary.example.org', 'test.example.net'])
+  })
+
+  it('S3: an entry that is no host name, a repeated entry and the customer host itself are not shown', async () => {
+    ENV.PILOT_TENANT_HOST = 'rat.proof.example'
+    ENV.SECONDARY_TENANT_HOSTS = 'https://evil.example.org,canary.example.org,canary.example.org,rat.proof.example,*.example.org,x'
+    expect(await secondary()).toEqual(['canary.example.org'])
+  })
+
+  it('S4: the panel does not enforce the list: the form is validated as before and the host-side create decides', async () => {
+    ENV.SECONDARY_TENANT_HOSTS = 'canary.example.org'
+    await post({ ...GOOD, host: 'canary.example.org' })
+    expect(submitCreate).toHaveBeenCalledTimes(1)
+    submitCreate.mockClear()
+    await post({ ...GOOD, host: 'other.example.org' })
+    expect(submitCreate).toHaveBeenCalledTimes(1)
+  })
+
+  it('S5: the list is read from the panel environment only, never from the posted form', async () => {
+    ENV.PILOT_TENANT_HOST = 'rat.proof.example'
+    const run = (load as unknown as (e: unknown) => Promise<{ secondaryHosts: string[] }>)
+    const r = await run({ url: new URL('http://127.0.0.1:3043/customers/new?SECONDARY_TENANT_HOSTS=evil.example.org') })
+    expect(r.secondaryHosts).toEqual([])
   })
 })

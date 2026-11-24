@@ -56,12 +56,29 @@ function expectedHost(): string | null {
   return /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?\.[a-z]{2,}$/.test(v) ? v : null
 }
 
+/**
+ * The further customer hosts this install allows (SECONDARY_TENANT_HOSTS, passed to the panel by the app compose file
+ * like PILOT_TENANT_HOST), each for a core-only customer. Shown on the form only: the host-side create reads the
+ * list from state.env and decides, and the panel enforces nothing. Entries are lower-cased; one that is not a host
+ * name, a repeat and the customer host itself are left out. Empty when unset.
+ */
+function secondaryHosts(): string[] {
+  const own = expectedHost()
+  const out: string[] = []
+  for (const part of (env.SECONDARY_TENANT_HOSTS ?? '').split(',')) {
+    const h = part.trim().toLowerCase()
+    if (!/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?\.[a-z]{2,}$/.test(h) || h === own || out.includes(h)) continue
+    out.push(h)
+  }
+  return out
+}
+
 export const load: PageServerLoad = async () => {
   const r = loadConfig(env)
   if (!r.ok) error(503, 'the control panel is not configured')
   const s = await situation(r.config)
   // the idempotency key of THIS form: a re-post of it never writes a second row
-  return { disabled: s.disabled, modules: s.modules, key: randomUUID(), expectedHost: expectedHost() }
+  return { disabled: s.disabled, modules: s.modules, key: randomUUID(), expectedHost: expectedHost(), secondaryHosts: secondaryHosts() }
 }
 
 export const actions: Actions = {

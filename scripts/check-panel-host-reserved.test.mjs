@@ -55,6 +55,24 @@ test('COMPOSE: the control panel gets PLATFORM_DOMAIN and CONTROL_PANEL_HOST for
   assert.match(asText(e.CONTROL_PANEL_HOST), /\$\{CONTROL_PANEL_HOST(:-)?\}/)
 })
 
+test('COMPOSE: the control panel alone gets SECONDARY_TENANT_HOSTS (empty by default) for the "Neuer Mandant" note', () => {
+  const e = envOf('control-panel')
+  assert.match(asText(e.SECONDARY_TENANT_HOSTS), /^\$\{SECONDARY_TENANT_HOSTS:-\}$/)
+  // no other service of the app project reads the allow-list: the host-side create takes it from state.env alone
+  for (const [name, svc] of Object.entries(SERVICES)) {
+    if (name === 'control-panel') continue
+    assert.ok(!JSON.stringify(svc.environment ?? {}).includes('SECONDARY_TENANT_HOSTS'), `${name} must not receive SECONDARY_TENANT_HOSTS`)
+  }
+})
+
+test('SCRIPTS: the host-side create reads the secondary host list from state.env only, never from the request args', () => {
+  const src = read('infra/host/lib/executor/handlers/create.sh')
+  assert.equal(count(src, 'env_key "${ROOT}/etc/env/state.env" SECONDARY_TENANT_HOSTS'), 1, 'create.sh reads the list once, from state.env')
+  assert.ok(!src.split('\n').some((l) => /secondary/i.test(l) && l.includes('"$args"') && l.includes('jq')), 'no jq read of a secondary list out of the request args')
+  const ops = read('infra/host/lib/customer-ops.sh')
+  assert.equal(count(ops, 'control_panel_key_of "$state" SECONDARY_TENANT_HOSTS'), 1, 'the module guard reads the list from state.env')
+})
+
 test('SCRIPTS: the tenant-create CLI hands the check to the create engine and to the router renderer, from its env seam', () => {
   const src = read('gremion-ui/scripts/tenant-provision.ts')
   assert.equal(count(src, 'isReservedHost: reservedHosts()'), 2, 'liveDeps and render-router both pass the check')
