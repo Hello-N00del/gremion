@@ -1,6 +1,6 @@
 // packages/tenant-store/src/dump/safefs.ts
 //
-// Symlink-safe file access for the dump code (CD stage 1, unit U6g and its must-fix).
+// Symlink-safe file access for the dump code (CD stage 1, unit U6g).
 //
 // Why. The tenant-create one-shot runs as ROOT and writes into the dump directory, which is 0700 and owned by the
 // deploy user (uid 1000). That user can create, rename and replace every entry in the directory, so a root process
@@ -8,14 +8,20 @@
 // somewhere else, to hand a root-owned file to that user, or to read one. Four rules close that, and the
 // dump directory and everything below it is held to them:
 //
-//   1. Nothing is opened by a name that may be a link: every open carries O_NOFOLLOW, so a link at the LAST
-//      component fails (ELOOP) instead of being followed. A refused link is DUMP_PATH_UNSAFE, never skipped.
+//   1. Nothing below the dump directory is opened by a name that may be a link: every open the dump code makes
+//      carries O_NOFOLLOW, so a link at the LAST component fails (ELOOP) instead of being followed, and O_NONBLOCK,
+//      so a FIFO in the place of a file cannot hold the process in open(2). A refused link is DUMP_PATH_UNSAFE,
+//      never skipped. A reader outside this file (the exporter's `pg_restore --list`) is handed the descriptor, never
+//      the name (Exporter.list, `fd`).
 //   2. What was opened is checked on the descriptor, not on the name: fstat says regular file with one link (a
-//      hard link to a root-owned file is refused) or directory, owned by a uid the dump code may meet.
-//   3. Ownership and mode are changed on the descriptor (fchown, fchmod), never by path, and only on the very
-//      descriptor that created the node (O_EXCL; or a directory made in this call and found empty, fresh and this
-//      process's own; or the dump file the exporter wrote, found fresh and this process's own). A node that already
-//      stands in the directory is never handed over, whoever owns it.
+//      hard link to a root-owned file is refused) or directory, owned by a uid the dump code may meet. That holds
+//      for an existing ledger too: it is read and appended to only when it belongs to such a uid.
+//   3. Ownership and mode are changed on the descriptor (fchown, fchmod), never by path, and only on a node this call
+//      made. A file is created with O_EXCL and everything about it (the dump written into it, its table of contents,
+//      its sha256, the hand-over) goes through that one descriptor, never through a reopen by name; the name is only
+//      compared with the descriptor (assertNamed). A directory made in this call is opened right after the mkdir and
+//      handed over when it is this process's own, empty and recent. A node that already stands in the directory is
+//      never handed over, whoever owns it.
 //   4. A directory the code works in is OPENED ONCE (O_DIRECTORY | O_NOFOLLOW) and every name below it is reached
 //      through that descriptor (`/proc/self/fd/<n>/<name>` on Linux), so replacing the directory by a link, or a
 //      parent by a link, after the open changes nothing.
@@ -25,6 +31,7 @@ import { DumpError } from './errors.js'
 
 const O_NOFOLLOW = constants.O_NOFOLLOW ?? 0
 const O_DIRECTORY = constants.O_DIRECTORY ?? 0
+const O_NONBLOCK = constants.O_NONBLOCK ?? 0
 const IS_WINDOWS = process.platform === 'win32'
 const PROC_FD = '/proc/self/fd'
 /** How far back the mtime of a file this call has just made may lie (coarse file system clocks, a clock step). */
@@ -52,9 +59,11 @@ export function allowedOwners(ownerUid: number | undefined, fsUid: number | unde
 }
 
 /**
- * open(2) with O_NOFOLLOW. A link at the last component is DUMP_PATH_UNSAFE (ELOOP, EMLINK); any other error is
- * the caller's (ENOENT, EEXIST, EACCES ...). Where O_NOFOLLOW does not exist (Windows) the same refusal comes from
- * an lstat first.
+ * open(2) with O_NOFOLLOW and O_NONBLOCK. A link at the last component is DUMP_PATH_UNSAFE (ELOOP, EMLINK); so is a
+ * FIFO with no peer (ENXIO on a write-only open); any other error is the caller's (ENOENT, EEXIST, EACCES ...).
+ * O_NONBLOCK makes the open of a FIFO return at once instead of waiting for a peer, and the descriptor check
+ * (assertPlain) then refuses it; it changes nothing for a regular file or a directory. Where O_NOFOLLOW does not
+ * exist (Windows) the link refusal comes from an lstat first.
  */
 export function openNoFollow(path: string, flags: number, mode?: number): number {
   if (O_NOFOLLOW === 0) {
@@ -66,10 +75,11 @@ export function openNoFollow(path: string, flags: number, mode?: number): number
     }
   }
   try {
-    return openSync(path, flags | O_NOFOLLOW, mode)
+    return openSync(path, flags | O_NOFOLLOW | O_NONBLOCK, mode)
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code
     if (code === 'ELOOP' || code === 'EMLINK') throw unsafePath(path, 'is a link', err)
+    if (code === 'ENXIO') throw unsafePath(path, 'is not a regular file', err)
     throw err
   }
 }
@@ -83,7 +93,23 @@ export function assertPlain(fd: number, what: string, kind: 'file' | 'dir', owne
   return st
 }
 
-/** True when a stat is of something made after `sinceMs` (less the slack): evidence it is not an older node put in its place. */
+/**
+ * The name still is the node this descriptor holds: not a link, same device and inode. A node that was created through
+ * the descriptor and was since renamed away, replaced or linked over is refused, so what is recorded under the name is
+ * what was checked on the descriptor.
+ */
+export function assertNamed(fd: number, path: string): void {
+  let named: Stats
+  try {
+    named = lstatSync(path)
+  } catch (err) {
+    throw unsafePath(path, 'was removed or replaced while it was written', err)
+  }
+  const held = fstatSync(fd)
+  if (named.isSymbolicLink() || named.ino !== held.ino || named.dev !== held.dev) throw unsafePath(path, 'is not the file that was created')
+}
+
+/** True when a stat is of something made after `sinceMs` (less the slack): one of the checks on a directory just made by mkdir. */
 export function madeSince(st: { mtimeMs: number }, sinceMs: number): boolean {
   return st.mtimeMs >= sinceMs - FRESH_SLACK_MS
 }
@@ -105,8 +131,11 @@ export function handOverFd(fd: number, path: string, uid: number, mode: number, 
   setMode(fd, path, mode)
 }
 
-/** The text of a plain file, null when it does not exist. A link, a directory or a multiply linked file is refused. */
-export function readTextNoFollow(path: string): string | null {
+/**
+ * The text of a plain file, null when it does not exist. A link, a FIFO, a directory or a multiply linked file is
+ * refused, and so is a file of a uid not in `owners` (when given).
+ */
+export function readTextNoFollow(path: string, owners?: readonly number[]): string | null {
   let fd: number
   try {
     fd = openNoFollow(path, constants.O_RDONLY)
@@ -115,22 +144,13 @@ export function readTextNoFollow(path: string): string | null {
     throw err
   }
   try {
-    assertPlain(fd, path, 'file')
+    assertPlain(fd, path, 'file', owners)
     return readFileSync(fd, 'utf8')
   } finally {
     closeSync(fd)
   }
 }
 
-/** The size of a plain file, read from the descriptor. */
-export function sizeNoFollow(path: string): number {
-  const fd = openNoFollow(path, constants.O_RDONLY)
-  try {
-    return Number(assertPlain(fd, path, 'file').size)
-  } finally {
-    closeSync(fd)
-  }
-}
 
 // ── an anchored directory ─────────────────────────────────────────────────────
 
@@ -190,9 +210,8 @@ export interface ChildDirOptions {
 
 /**
  * The directory `name` below an anchored directory, as an anchor of its own. Never a link, never a directory of
- * another uid. A directory made in this call is checked to be the one mkdir made (this process's own, empty, fresh:
- * not a node that was put in its place) and handed over on its descriptor; one that already stands there is only
- * checked, never handed over.
+ * another uid. A directory made in this call is checked to be this process's own, empty and recent, and handed over on
+ * its descriptor; one that already stands there is only checked, never handed over.
  */
 export function openChildDir(parent: Anchor, name: string, o: ChildDirOptions): Anchor | null {
   const path = join(parent.dir, name)

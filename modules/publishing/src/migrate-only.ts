@@ -104,7 +104,7 @@ export interface MigrateOnlyOptions {
   migrate?: MigrateFn
   /** Test seam: a manifest that replaces manifest.json (a bad hash must fail the customer). */
   manifest?: Record<string, string>
-  /** lock_timeout of the lock connection in ms (0 switches it off). Default DEFAULT_LOCK_TIMEOUT_MS. */
+  /** lock_timeout of the lock connection in ms. 0 turns lock_timeout off, but statement_timeout (by default this plus STATEMENT_TIMEOUT_MARGIN_MS) still bounds the wait. Default DEFAULT_LOCK_TIMEOUT_MS. */
   lockTimeoutMs?: number
   /** statement_timeout of the lock connection in ms. Default lock_timeout + STATEMENT_TIMEOUT_MARGIN_MS. */
   statementTimeoutMs?: number

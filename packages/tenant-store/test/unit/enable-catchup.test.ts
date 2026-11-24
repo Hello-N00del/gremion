@@ -68,11 +68,11 @@ function fakeExporter(over: { failDump?: boolean } = {}): Exporter & { targets: 
   const targets: { service: string; database: string }[] = []
   return {
     targets,
-    async dump(target, file) {
+    async dump(target, file, sink) {
       events.push(`dump:${target.service}`)
       targets.push(target)
       const { writeFileSync } = await import('node:fs')
-      writeFileSync(file, `PGDMP fake dump of ${target.database}`, { flag: 'wx', mode: 0o600 })
+      writeFileSync(sink?.fd ?? file, `PGDMP fake dump of ${target.database}`, sink?.fd !== undefined ? {} : { flag: 'wx', mode: 0o600 })
       if (over.failDump) throw new Error('pg_dump exited 1: connection refused')
     },
     async list(file) {
@@ -264,6 +264,7 @@ describe('enable of a blocked database: the catch-up dump', () => {
     expect(existsSync(other.path)).toBe(true)
     // and it says so, with ids only, so the operator knows which dump holds the next release
     expect(audit.join('\n')).toContain(`premigration-dump left-live id=${other.id} release=${RELEASE} db=${dbName}`)
+    expect(audit.join(' ')).toContain('not recorded as taken by this enable')
   })
 
   it('without upgradeHooks (what every caller did before U6g) the pending file is applied with NO dump', async () => {

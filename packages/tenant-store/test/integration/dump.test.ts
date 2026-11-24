@@ -125,13 +125,13 @@ describe('TASK-075: the pre-migration dump on Postgres 18', () => {
   function hookFor(dumpDir: string, release: string, seen: { ddlAtDump?: number; ledgerAtDump?: string[]; lockHeldByOther?: boolean; calls: number }, chainFiles = ['001_init.sql', '002_item_state.sql', '003_item_state_idx.sql']) {
     const tools = dumpTools(new URL(dbUrl(dbA)), container())
     const exporter = {
-      async dump(target: { service: string; database: string }, file: string) {
+      async dump(target: { service: string; database: string }, file: string, sink?: { fd?: number }) {
         seen.calls++
         seen.ddlAtDump = (await ddlLog(watcher)).length
         seen.ledgerAtDump = await ledgerFiles(watcher)
         const [l] = await watcher<{ n: number }[]>`SELECT count(*)::int AS n FROM pg_locks WHERE locktype = 'advisory' AND granted AND pid <> pg_backend_pid()`
         seen.lockHeldByOther = (l?.n ?? 0) > 0
-        return tools.exporter.dump(target, file)
+        return tools.exporter.dump(target, file, sink)
       },
       list: (file: string) => tools.exporter.list(file),
     }

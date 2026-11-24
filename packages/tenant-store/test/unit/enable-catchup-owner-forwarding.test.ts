@@ -19,8 +19,8 @@ afterAll(() => {
 })
 const DB = 't_0192f0c12b3c7d4e8f00112233445566__finance'
 const exporter: Exporter = {
-  async dump(target, file) {
-    writeFileSync(file, `PGDMP fake dump of ${target.database}`, { flag: 'wx', mode: 0o600 })
+  async dump(target, file, sink) {
+    writeFileSync(sink?.fd ?? file, `PGDMP fake dump of ${target.database}`, sink?.fd !== undefined ? {} : { flag: 'wx', mode: 0o600 })
   },
   async list() {
     return `;\n; Archive created at 2026-11-17 03:00:00 UTC\n;     dbname: ${DB}\n`

@@ -80,9 +80,9 @@ describe('the enable catch-up on the scratch stack', () => {
       throw new Error(`no server for service ${JSON.stringify(service)}`)
     }
     return {
-      dump: (t, file) => {
+      dump: (t, file, sink) => {
         log?.push({ service: t.service, database: t.database })
-        return by(t.service).dump(t, file)
+        return by(t.service).dump(t, file, sink)
       },
       list: (file) => mod.list(file),
     }
@@ -357,8 +357,8 @@ describe('the enable catch-up on the scratch stack', () => {
         scope: 'customer',
         customerId: X,
         moduleId: 'lcfix',
-        exporter: { dump: async (_t, file) => {
-            writeFileSync(file, 'PGDMP fake', { flag: 'wx', mode: 0o600 })
+        exporter: { dump: async (_t, file, sink) => {
+            writeFileSync(sink?.fd ?? file, 'PGDMP fake', sink?.fd !== undefined ? {} : { flag: 'wx', mode: 0o600 })
           }, list: async () => `;\n; Archive created at 2026-11-17 03:00:00 UTC\n;     dbname: ${db}\n` },
         probe: { serverMajor: async () => 18, pgDumpMajor: async () => 18, databaseBytes: async () => 1000 },
         fs: dumpFs(),

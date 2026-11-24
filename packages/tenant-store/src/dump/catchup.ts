@@ -111,7 +111,7 @@ export function catchupDump(o: CatchupDumpOptions): CatchupDump {
         // (the database name is an id, t_<hex>__<module>, never a slug), because it holds the next release's take.
         const r = await retireEnableDumps(dir, release, database, 'enable committed', more)
         for (const id of r.left) {
-          audit(`premigration-dump left-live id=${id} release=${release} db=${database} reason="taken by another writer, not by this enable"`)
+          audit(`premigration-dump left-live id=${id} release=${release} db=${database} reason="not recorded as taken by this enable"`)
         }
       },
       async afterDrop(database) {

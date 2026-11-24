@@ -69,9 +69,9 @@ describe('disableModule on the scratch stack', () => {
     const events: string[] = []
     const real = containerExporter()
     const recording: Exporter = {
-      async dump(t, file) {
+      async dump(t, file, sink) {
         events.push(`dump:${(await databasesOn(server.admin)).includes(t.database) ? 'present' : 'absent'}`)
-        await real.dump(t, file)
+        await real.dump(t, file, sink)
       },
       async list(file) {
         events.push('list')

@@ -40,9 +40,9 @@ function fakeExporter(): Exporter & { services: string[] } {
   const services: string[] = []
   return {
     services,
-    async dump(target, file) {
+    async dump(target, file, sink) {
       services.push(target.service)
-      writeFileSync(file, `PGDMP fake dump of ${target.database}`, { flag: 'wx', mode: 0o600 })
+      writeFileSync(sink?.fd ?? file, `PGDMP fake dump of ${target.database}`, sink?.fd !== undefined ? {} : { flag: 'wx', mode: 0o600 })
     },
     async list(file) {
       const db = /(t_[0-9a-f]{32}__[a-z]+)\./.exec(file)?.[1] ?? 'gremion_platform'
@@ -259,6 +259,28 @@ describe('ownerUid: a root process writes into the deploy user\'s directory, and
     await retireDump(dir, 'dist-v1.0.0', DB_A, 'enable committed', { ownerUid: 1000, fs: fsAs({ uid: 0, owner: 1000 }, chowns), audit: () => {} })
     expect(chowns.map(([p]) => nameOf(p))).toContain(LEDGER_LOCK)
     expect(chowns.every(([, uid]) => uid === 1000)).toBe(true)
+  })
+
+  it('the dump is verified BEFORE it is handed over: the hand-over comes after the table of contents is read, and an unverified dump is never handed over', async () => {
+    const order: string[] = []
+    const nameOf = (p: string): string | undefined => p.replace(/\\/g, '/').split('/').at(-1)
+    const fs: DumpFs = { ...fsAs({ uid: 0, owner: 1000 }), chown: (p) => void order.push(`chown:${nameOf(p)}`) }
+    const exporter: Exporter = {
+      ...fakeExporter(),
+      async list(file) {
+        order.push('list')
+        return fakeExporter().list(file)
+      },
+    }
+    const d = await take(freshDir(), { ownerUid: 1000, fs, exporter })
+    expect(order.indexOf('list')).toBeGreaterThanOrEqual(0)
+    expect(order.indexOf(`chown:${nameOf(d.path)}`)).toBeGreaterThan(order.indexOf('list'))
+
+    // a dump whose table of contents does not name the database: refused, removed, and the file never changed hands
+    const handed: string[] = []
+    const bad: Exporter = { ...fakeExporter(), async list() { return `;\n; Archive created at 2026-11-17 03:00:00 UTC\n;     dbname: some_other_db\n` } }
+    await expect(take(freshDir(), { ownerUid: 1000, fs: { ...fsAs({ uid: 0, owner: 1000 }), chown: (p) => void handed.push(nameOf(p) ?? '') }, exporter: bad })).rejects.toMatchObject({ code: 'DUMP_UNVERIFIED' })
+    expect(handed.filter((n) => n.endsWith('.dump'))).toEqual([])
   })
 
   it('root with a directory owned by uid 1000 and NO ownerUid still fails DUMP_DIR_OWNER (the check is not relaxed for root)', () => {
