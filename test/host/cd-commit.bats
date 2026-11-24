@@ -1208,7 +1208,7 @@ case "$1" in
         [ -f "$DK/config.empty.$proj" ] && exit 0
         printf 'gremion-ui:%s\ngremion-public:%s\n' "$tag" "$tag"
         [ "$star" = yes ] && printf 'gremion-migrate:%s\n' "$tag"
-        [ "$proj" = state ] && echo 'postgres:16'
+        [ "$proj" = state ] && echo 'traefik:v3'
         exit 0 ;;
     esac
     exit 0 ;;
@@ -1258,7 +1258,7 @@ seed_prune() {
         "gremion-ui:pilot-111111111111 111111111111" "gremion-public:pilot-111111111111 111111111111" "gremion-migrate:pilot-111111111111 111111111111" \
         "gremion-ui:pilot-dddddddddddd dddddddddddd" "gremion-migrate:pilot-dddddddddddd dddddddddddd" \
         "gremion-ui:pilot-eeeeeeeeeeee eeeeeeeeeeee" \
-        "gremion-ui:latest cccccccccccc" "postgres:16 ffffffffffff" "gremion-ui:pilot-short 999999999999" > "$DK/images"
+        "gremion-ui:latest cccccccccccc" "traefik:v3 ffffffffffff" "gremion-ui:pilot-short 999999999999" > "$DK/images"
     echo 104857600 > "$DK/df.kb"
 }
 
@@ -1301,7 +1301,7 @@ removed_refs() { grep '^docker rmi ' "$SHIM_LOG" | cut -d' ' -f3; }
     [ "$status" -eq 0 ]
     run removed_refs
     [[ "$output" != *"latest"* ]]
-    [[ "$output" != *"postgres"* ]]
+    [[ "$output" != *"traefik"* ]]
     [[ "$output" != *"pilot-short"* ]]
     [[ "$output" != *"pilot-${NEW12}"* ]]
     [[ "$output" != *"pilot-${OLD12}"* ]]
