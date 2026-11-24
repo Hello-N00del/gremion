@@ -446,8 +446,9 @@ samples after a resume are never a trigger.
    `unhealthy_after_rollback`) and nothing else;
 6. switch the new colour's worker gate off, then the old colour's on;
 7. stop the new colour (keeping a 0600 tail of its log), put the env tag back, write the block and
-   the hold, move `current` and the tag files back when they had moved, and queue the
-   `rolled_back` mail.
+   the hold, move `current` and the tag files back when they had moved, record the isolation
+   evidence of the old tip again when the new tip had been recorded (a committed release, and a
+   `commit_stuck` rollback; a failure there is only a mail), and queue the `rolled_back` mail.
 
 **What it does not undo.** Databases are never restored. A rollback leaves every migration that
 ran in place: the old colour has to live with the new schema, which is what the expand-only rule of
@@ -570,8 +571,7 @@ retried later, no block.
 
 **The lock wait is bounded.** Each customer database is migrated under a session advisory lock on
 its own connection, so two entries on one database run one after the other. The wait for that lock
-is bounded: the connection carries a lock timeout of 60 seconds and a statement timeout 5 seconds
-larger, so a stuck holder ends the wait and the entry exits 3 instead of hanging the step. The
+is bounded: the connection carries a lock timeout of 60 seconds and a statement timeout 5 seconds larger, so a stuck holder ends the wait and the entry exits 3 instead of hanging the step. The
 customers after the stuck one are still migrated. The host also bounds the whole run with
 `CD_LEAF_MIGRATE_TIMEOUT_S`; on a timeout it kills by label and confirms the container gone, and the
 release stops with the hold `failure` and the reason `leaf_timeout` (not a block). A container that
@@ -613,7 +613,9 @@ Whether a duplicate dispatch is prevented, leaf by leaf, read from the code:
   (`modules/publishing/src/store/deliveries.ts`, line 52): a recipient already `sent` is never sent
   again, a live claim is skipped. A crash between send and record leaves a claim that is taken over
   after 15 minutes, so the guarantee is at most once per live claim, at least once after a crash
-  (`modules/publishing/src/dispatch.ts`, lines 33 to 48).
+  (`modules/publishing/src/dispatch.ts`, lines 33 to 48). The pass that loses the newsletter claim
+  returns at once, with no status written and no event queued (`modules/publishing/src/dispatch.ts`,
+  line 531).
 - **Content (scheduled publication): prevented per recipient, not per post.** The scheduler does not use
   the whole-post claim (`claimPostForPublish`, `modules/content/src/store/posts.ts`, lines 199 to 208:
   that belongs to the publish request of the API). It lists the due channels with a plain select
@@ -624,9 +626,19 @@ Whether a duplicate dispatch is prevented, leaf by leaf, read from the code:
   `claimDelivery` (`modules/content/src/store/deliveries.ts`, line 74; used at
   `modules/content/src/publish-channel.ts`, line 305): the pass that loses a recipient skips it as
   already sent or in flight, so no recipient is mailed twice while a claim is live (a claim that is
-  older than 15 minutes is taken over). What the losing pass reports back, and so the channel status
-  it writes, is not examined here. Portal publication is idempotent at the kernel by the post's
-  origin id (`modules/content/src/publish-channel.ts`, header).
+  older than 15 minutes is taken over). No recipient is mailed twice by either pass, but the losing
+  pass does not stay silent. What it reports is read from `publishChannel`
+  (`modules/content/src/publish-channel.ts`). A pass that finds every recipient in flight has
+  delivered nothing, so it takes the all-failed branch (lines 455 to 468): `flagChannelFailed` writes
+  the channel status `failed` and the result says `all sends failed`, although no send failed. If the
+  other pass finishes after that, its own finish writes `sent` again, so the status is wrong for a
+  short time; if the other pass dies, the channel stays `failed` until it is published again. A pass
+  that finds only recipients that are already sent, or already sent and in flight, and has no failure
+  of its own, takes the success branch (lines 488 to 498). The caller then writes the status `sent`
+  and queues a second `channel.email.sent` event, with a delivered count of 0, beside the event of the
+  winning pass (lines 202 to 211). So during the overlap a consumer of that event can see it twice for
+  one post, and a channel can read `failed` for a moment. Portal publication is idempotent at the
+  kernel by the post's origin id (`modules/content/src/publish-channel.ts`, header).
 - **Content (Instagram queue): not prevented, and dormant.** `drainPublishOps` is a plain select
   with no claim (`modules/content/src/store/publish-ops.ts`, lines 128 to 139), so two schedulers can
   read the same pending operation. With no credentials, which is the default, every operation is
@@ -829,7 +841,9 @@ reason.
 The hand procedure, in a window:
 
 1. Hold automation so no tick starts a release while you work: `gremion-cd hold --reason TEXT`.
-   (`touch etc/cd.disabled` does the same and also silences the mails.)
+   (`touch etc/cd.disabled` also stops releases, but it is not quiet: an idle tick still queues the
+   `killswitch` mail and the watchdog still sends its weekly reminder. What the kill switch turns
+   off is the daily digest and the alarms for a poll that grows old and for a red main branch.)
 2. Take a restore point for the platform database by hand: `gremion-migration-dump take --release
    pilot-<sha12> --db gremion_platform`, under the tag the new colour's env file will carry (that is
    the release reference the one-shots dump under). Check `gremion-migration-dump status` first: it
@@ -838,7 +852,12 @@ The hand procedure, in a window:
    adoption, see [Adoption](#adoption) step 2). It must leave the end state that the next step reads:
    the new release is the active colour, the colour's env file names `pilot-<sha12>`, its containers
    run that tag's images, `releases/<sha12>` is a clean checkout whose head is that commit, `current`
-   points at it, and the public `/readyz` answers ready.
+   points at it, and the public `/readyz` answers ready. Between steps 3 and 4 the new release serves
+   traffic on a platform schema that does not yet carry its migration. The order is forced: step 4
+   runs from the image of the active colour, so the new release must be active first. Go to step 4
+   straight after the readiness check, and do not read a failure inside that interval as a verdict on
+   the release. The expand-only rule protects the old release on a new schema; nothing in this
+   repository says what the new release does on the old one.
 4. With the new colour active, apply the platform migration with the call the state tier itself makes
    as its platform step: `gremion-tenant init`, run from the new release tree with
    `GREMION_RELEASE_DIR` naming that tree, so that it starts the one-shot of the active colour and runs
@@ -895,6 +914,15 @@ new live release. Keep the window to one sitting. When a series of changes ends 
 ordinary releases before it, and the one that changes the declaration comes last. The code cannot
 tell the order in which a series is merged: the order is the series' own release note. The hand
 upgrade of the last one takes no CD watch window, so the operator watches it by hand.
+
+**A gap, named as one.** A customer's existing board rows are in its kernel database (the location
+`kernel` of `board_location`), and the board module's README says the step that moves a board is
+reserved: nothing at this base writes the location `moving`, and `gremion-ui/scripts/tenant-provision.ts`
+has no verb that moves board rows. This document therefore names no procedure and no runbook for moving
+existing boards in the hand upgrade of the declaration release. That procedure depends on the board
+plan, which has to supply it; until it does, the hand upgrade of this release is the operator's own
+work, and what it does to boards that already exist is not something this document can say from the
+code.
 
 ### A change of a chain class
 

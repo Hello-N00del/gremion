@@ -19,7 +19,10 @@
 //
 // Every guard here was watched RED: the document was absent, then a key was renamed in the
 // document, a verb was renamed in a library, an address was pasted into the document and a
-// number of the lock span was changed. The canary tests prove the scanners still fire, because
+// number of the lock span was changed. The review rounds added: a flag read per verb (a flag of
+// another verb in a command fails), the leaf lock sentence and the two reminders pinned as whole
+// sentences (each was changed to another number or period and went RED), and the prose claims about
+// code pinned to the code they were read from. The canary tests prove the scanners still fire, because
 // a scan that reaches nothing reports clean.
 //
 // Collection. unit:node counts the declared tests of a file by the lines that start with the
@@ -45,6 +48,11 @@ function docText() {
   return read(DOC)
 }
 
+// A text with every run of white space (a wrapped line) as one space, so a phrase can be pinned whole.
+function flat(text) {
+  return text.replace(/\s+/g, ' ')
+}
+
 function libFiles() {
   const files = globSync('infra/host/lib/cd/*.sh', { cwd: ROOT })
     .map((f) => f.split(path.sep).join('/'))
@@ -52,10 +60,6 @@ function libFiles() {
     .toSorted((a, b) => a.localeCompare(b))
   assert.ok(files.length >= 15, `only ${files.length} libraries matched under infra/host/lib/cd`)
   return files
-}
-
-function programText() {
-  return [...libFiles(), 'infra/host/bin/gremion-cd'].map(read).join('\n')
 }
 
 // ---- reading the document -----------------------------------------------------------------
@@ -216,6 +220,38 @@ const OTHER_PROGRAMS = [
 ]
 const FLAG = /--[a-z][a-z0-9-]*/g
 
+// The flags one verb of gremion-cd takes: the case labels of the option loop inside the verb's own
+// function (`--reason)`, `--json)`, `--a | --b)`). A verb whose function has no such loop passes its
+// arguments on; for it the flags that appear in its body count. Reading one verb and not the whole
+// program matters: a flag that exists for another verb must not pass for this one.
+function flagsOfVerb(verb) {
+  const name = `cd_cmd_${verb.replaceAll('-', '_')}`
+  for (const f of libFiles()) {
+    const lines = read(f).split('\n')
+    const start = lines.findIndex((l) => l.startsWith(`${name}() {`))
+    if (start < 0) continue
+    const end = lines.findIndex((l, i) => i > start && l === '}')
+    assert.ok(end > start, `${f}: the function ${name} does not close`)
+    const body = lines.slice(start, end + 1)
+    const labelled = body.flatMap((l) => {
+      const m = /^\s*((?:--[a-z][a-z0-9-]*(?:=\*)?\s*\|\s*)*--[a-z][a-z0-9-]*(?:=\*)?)\)/.exec(l)
+      return m ? (m[1].match(FLAG) ?? []) : []
+    })
+    return new Set(labelled.length > 0 ? labelled : (body.join('\n').match(FLAG) ?? []))
+  }
+  return assert.fail(`no library defines ${name}`)
+}
+
+// The verb a flag of a code span belongs to: the nearest `gremion-cd <verb>` before it, or the
+// verb a span starts with when the span is written without the program name.
+function verbForFlag(span, flag, verbs) {
+  const before = span.slice(0, span.indexOf(flag))
+  const named = [...before.matchAll(/gremion-cd ([a-z][a-z0-9-]*)/g)].at(-1)
+  if (named) return named[1]
+  const first = span.split(' ')[0]
+  return verbs.has(first) ? first : null
+}
+
 // ---- the tests ----------------------------------------------------------------------------
 
 test('the scanners fire on a bad sample and pass a good one (canary)', () => {
@@ -230,6 +266,11 @@ test('the scanners fire on a bad sample and pass a good one (canary)', () => {
   assert.deepEqual(rows.map((r) => bare(r[0])), ['a', 'b'])
   assert.deepEqual(onlyIn(['x', 'y'], ['y']), ['x'])
   assert.deepEqual(codeSpans('see `gremion-cd status --json` and `x`'), ['gremion-cd status --json', 'x'])
+  // the per-verb flag reader reaches the option loops: hold takes --reason and nothing of release-now
+  assert.deepEqual([...flagsOfVerb('hold')], ['--reason'])
+  assert.ok(flagsOfVerb('release-now').has('--with-state') && !flagsOfVerb('hold').has('--with-state'))
+  assert.equal(verbForFlag('gremion-cd adopt --re-adopt, then gremion-cd hold --reason', '--reason', new Set(['adopt', 'hold'])), 'hold')
+  assert.equal(verbForFlag('release-now <sha12> --with-state', '--with-state', new Set(['release-now'])), 'release-now')
 })
 
 test('the document exists and is long enough to be the operator document', () => {
@@ -281,8 +322,7 @@ test('every gremion-cd command in the document names a verb the program has', ()
   assert.ok(seen.size >= 12, `only ${seen.size} different verbs are shown in commands`)
 })
 
-test('every flag the document shows is a flag of the program that takes it', () => {
-  const ownFlags = new Set(programText().match(FLAG))
+test('every flag the document shows is a flag of the verb or program that takes it', () => {
   const verbs = verbsOfProgram()
   const others = OTHER_PROGRAMS.map((p) => ({ ...p, flags: new Set(p.files.map(read).join(' ').match(FLAG)) }))
   const extra = {
@@ -302,13 +342,15 @@ test('every flag the document shows is a flag of the program that takes it', () 
       const tool = thirdParty.find((t) => span.includes(t.word) && t.flags.includes(flag))
       if (tool) continue
       const other = others.find((p) => span.includes(p.word))
-      if (span.startsWith('gremion-cd ') || verbs.has(span.split(' ')[0])) {
-        assert.ok(ownFlags.has(flag), `"${span}": ${flag} is not a flag of gremion-cd`)
+      const verb = verbForFlag(span, flag, verbs)
+      if (verb) {
+        assert.ok(verbs.has(verb), `"${span}": ${verb} is not a verb of gremion-cd`)
+        assert.ok(flagsOfVerb(verb).has(flag), `"${span}": ${flag} is not a flag of the verb ${verb}`)
       } else if (other) {
         assert.ok(other.flags.has(flag), `"${span}": ${flag} is not a flag of ${other.word}`)
       } else if (span.startsWith('--')) {
         // a span that starts with a flag, in prose or in a table cell: it must exist in the program or in one of the known programs
-        const known = ownFlags.has(flag) || others.some((p) => p.flags.has(flag)) || (extra[flag] ?? []).some((f) => read(f).includes(flag))
+        const known = [...verbs].some((v) => flagsOfVerb(v).has(flag)) || others.some((p) => p.flags.has(flag)) || (extra[flag] ?? []).some((f) => read(f).includes(flag))
         assert.ok(known, `the flag ${flag} is a flag of no program this file knows`)
       } else if (extra[flag]) {
         assert.ok(extra[flag].some((f) => read(f).includes(flag)), `"${span}": ${flag} is in none of ${extra[flag].join(', ')}`)
@@ -409,12 +451,19 @@ test('the numbers the document states are the numbers in the code', () => {
   assert.ok(floor > 100 && floor < Number(defaults.get('CD_LOCK_SPAN_MAX_MIN')), `the floor ${floor} is not below the default span`)
   assert.ok(text.includes(`floor of ${floor} minutes`), `the document does not state "floor of ${floor} minutes" for the lock span`)
   // the leaf entry: how long one customer waits for the advisory lock, and the margin of the statement timeout
+  const leafPhrases = new Set()
   for (const leaf of ['calendar', 'content', 'publishing']) {
     const src = read(`modules/${leaf}/src/migrate-only.ts`)
-    assert.equal((/DEFAULT_LOCK_TIMEOUT_MS = ([\d_]+)/.exec(src) ?? [])[1], '60_000', `${leaf}: the lock wait is no longer 60 seconds`)
-    assert.equal((/STATEMENT_TIMEOUT_MARGIN_MS = ([\d_]+)/.exec(src) ?? [])[1], '5_000', `${leaf}: the statement margin is no longer 5 seconds`)
+    const lock = (/DEFAULT_LOCK_TIMEOUT_MS = ([\d_]+)/.exec(src) ?? [])[1]
+    const margin = (/STATEMENT_TIMEOUT_MARGIN_MS = ([\d_]+)/.exec(src) ?? [])[1]
+    assert.equal(lock, '60_000', `${leaf}: the lock wait is no longer 60 seconds`)
+    assert.equal(margin, '5_000', `${leaf}: the statement margin is no longer 5 seconds`)
+    leafPhrases.add(`a lock timeout of ${Number(lock.replaceAll('_', '')) / 1000} seconds and a statement timeout ${Number(margin.replaceAll('_', '')) / 1000} seconds larger`)
   }
-  assert.ok(text.includes('60 seconds') && text.includes('5 seconds'), 'the document does not state the lock wait and its margin')
+  // the whole sentence, not two numbers: 'every 15 seconds' elsewhere must not satisfy this
+  assert.equal(leafPhrases.size, 1, 'the three leaves no longer share one lock wait and margin')
+  assert.ok(flat(section(text, 'Leaf step')).includes([...leafPhrases][0]), 'the leaf step does not state its lock timeout and the statement margin')
+
   // the access-record sentence that the reconcile verb writes
   const reason = (/CD_RECONCILE_REASON_FMT='([^']*)'/.exec(read('infra/host/lib/cd/reconcile.sh')) ?? [])[1]
   assert.ok(reason, 'reconcile.sh has no reason format')
@@ -426,7 +475,18 @@ test('the numbers the document states are the numbers in the code', () => {
   assert.ok(text.includes(`${hourly} mails an hour`) && text.includes(`${daily} a day`), 'the document does not state the mail caps of the notifier')
   assert.ok(/every=3600/.test(read('infra/host/lib/cd/driver.sh')) && /every=3600/.test(read('infra/host/lib/cd/commit.sh')), 'the kill-switch reminders are no longer hourly')
   assert.ok(/every=604800/.test(read('infra/host/lib/cd/watchdog.sh')), 'the watchdog reminder is no longer weekly')
-  assert.ok(text.includes('every hour') && text.includes('once a week'), 'the document does not state the hourly and weekly reminders')
+  const killswitch = flat(section(text, 'Kill switch'))
+  assert.ok(killswitch.includes('it repeats every hour for as long as the release stays parked'), 'the kill switch section does not state the hourly reminder of a parked release')
+  assert.ok(killswitch.includes('The watchdog reminds once a week while the file exists'), 'the kill switch section does not state the weekly reminder')
+  const mailRow = tableRows(subsection(section(text, 'Mail and dead-man'), 'Mail kinds')).find((r) => bare(r[0]) === 'killswitch')
+  assert.ok(mailRow && flat(mailRow.join(' ')).includes('once when idle, every hour while a release is parked, and weekly from the watchdog'), 'the mail table does not state when the killswitch mail repeats')
+  // what the kill switch silences: the digest and the poll and red alarms, not the mails as such
+  const driver = read('infra/host/lib/cd/driver.sh')
+  assert.match(driver, /if cd_killswitch_active; then\s*\n\s*_cd_drv_mail killswitch phase=idle/, 'an idle tick no longer queues the killswitch mail')
+  assert.match(driver, /if ! cd_killswitch_active; then\s*\n\s*cd_notify_digest/, 'the digest is no longer the thing the kill switch turns off')
+  const hand = flat(section(text, 'Hand procedures'))
+  assert.ok(!hand.includes('silences the mails'), 'the hand procedure says the kill switch silences the mails')
+  assert.ok(hand.includes('it is not quiet') && hand.includes('the daily digest'), 'the hand procedure does not say what the kill switch really turns off')
 })
 
 test('the document names no address, no date, and keeps the two placeholders of the adoption steps', () => {
@@ -439,7 +499,7 @@ test('the document names no address, no date, and keeps the two placeholders of 
   assert.ok(!/https?:\/\/(?!example\.(org|com)\b)/i.test(text), 'a URL of a real host is in the document')
 })
 
-test('every source path the document cites exists, and defines the function it is cited for', () => {
+test('every source path the document cites exists and defines its function, and the prose claims about code still hold', () => {
   const text = docText()
   const cited = [...new Set([...text.matchAll(/`((?:modules|packages|gremion-ui|scripts|infra|docs|test)\/[A-Za-z0-9_./@-]+\.[a-z]+)`/g)].map((m) => m[1]))]
   assert.ok(cited.length >= 12, `only ${cited.length} source paths are cited`)
@@ -462,6 +522,30 @@ test('every source path the document cites exists, and defines the function it i
     assert.ok(text.includes(rel), `the document no longer cites ${rel}`)
     assert.match(read(rel), new RegExp(`function ${name}\\b`), `${rel} does not define ${name}`)
   }
+  // What the document says about the code it cannot cite by a table: each claim is pinned to the
+  // code it was read from, so a change of that code fails here instead of leaving a stale sentence.
+  const leaf = flat(section(text, 'Leaf step'))
+  const publish = read('modules/content/src/publish-channel.ts')
+  assert.match(publish, /if \(delivered === 0\) \{\s*await flagChannelFailed\(sql, postId\)/, 'the all-failed branch of publishChannel changed: the leaf step describes it')
+  assert.match(publish, /detail: 'all sends failed'/, 'the result text of the all-failed branch changed')
+  assert.match(publish, /event: 'channel\.email\.sent'/, 'the success branch no longer finishes with channel.email.sent')
+  assert.match(publish, /if \(outcome\.finish\) \{[^]*?enqueueOutbox\(txSql, finish\.event/, 'the caller no longer co-commits the finish event')
+  for (const phrase of [
+    'flagChannelFailed` writes the channel status `failed`',
+    'queues a second `channel.email.sent` event',
+    'a consumer of that event can see it twice for one post',
+    'The pass that loses the newsletter claim returns at once, with no status written and no event queued',
+  ]) {
+    assert.ok(leaf.includes(phrase), `the leaf step does not say: ${phrase}`)
+  }
+  assert.match(read('modules/publishing/src/dispatch.ts'), /if \(!claimed\) \{\s*console\.info\([^]*?\bspan\.end\(\)\s*return\s*\}/, 'the lost newsletter claim no longer returns without a write')
+  const platform = flat(subsection(section(text, 'Hand procedures'), 'A release that carries a platform migration'))
+  assert.ok(platform.includes('Between steps 3 and 4 the new release serves traffic on a platform schema that does not yet carry its migration'), 'the platform migration procedure does not warn about the interval between steps 3 and 4')
+  assert.match(read('infra/host/lib/cd/adopt.sh'), /the platform step runs from the image of the active colour/, 'the adopt guard no longer refuses a platform migration for the active-colour reason')
+  const board = flat(subsection(section(text, 'Hand procedures'), 'The board declaration release'))
+  assert.ok(board.includes('names no procedure and no runbook for moving existing boards') && board.includes('depends on the board plan'), 'the board section does not name the missing move procedure as a gap')
+  assert.match(read('modules/board/README.md'), /nothing in this release writes it/, 'the board README no longer says the move step is reserved: the gap in the document may be closed')
+  assert.ok(!/board/i.test(read('gremion-ui/scripts/tenant-provision.ts')), 'tenant-provision.ts has a board verb now: replace the gap in the document by the procedure')
 })
 
 test('the pointers lead to the document and the old "in progress" row is gone', () => {
