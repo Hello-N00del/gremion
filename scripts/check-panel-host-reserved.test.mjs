@@ -78,7 +78,7 @@ test('SCRIPTS: every module manifest is either allowed on a secondary host or cr
   const listOf = (name) => (lib.match(new RegExp(`^${name}="([^"]*)"`, 'm'))?.[1] ?? '').split(/\s+/).filter(Boolean)
   const allowed = listOf('SECONDARY_HOST_MODULES')
   const off = listOf('SECONDARY_HOST_MODULES_OFF')
-  assert.ok(allowed.length >= 3 && off.length >= 5, `both lists are found (${allowed}; ${off})`)
+  assert.ok(allowed.length >= 3 && off.length >= 5, `both lists are found (${allowed.join(' ')}; ${off.join(' ')})`)
   // the manifest ids, as the app's own config keys them (modules/*/app/lib/modules/manifests, gremion-ui's core ones)
   const ids = new Set()
   const dirs = ['gremion-ui/src/lib/modules/manifests', ...readdirSync(join(ROOT, 'modules')).map((m) => `modules/${m}/app/lib/modules/manifests`)]
@@ -90,7 +90,7 @@ test('SCRIPTS: every module manifest is either allowed on a secondary host or cr
       if (m) ids.add(m[1])
     }
   }
-  assert.ok(ids.has('board') && ids.has('votes') && ids.has('messages'), `the manifests are found (${[...ids]})`)
+  assert.ok(ids.has('board') && ids.has('votes') && ids.has('messages'), `the manifests are found (${[...ids].join(' ')})`)
   const alwaysOn = new Set(['core', 'governance'])
   const unclassified = [...ids].filter((id) => !alwaysOn.has(id) && !allowed.includes(id) && !off.includes(id))
   assert.deepEqual(unclassified, [], 'a manifest id in neither SECONDARY_HOST_MODULES nor SECONDARY_HOST_MODULES_OFF is switched ON for a secondary-host customer')

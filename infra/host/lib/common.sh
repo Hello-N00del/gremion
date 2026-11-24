@@ -579,6 +579,7 @@ SECONDARY_HOST_MODULES="board calendar content"
 # ON until it says otherwise, whatever the platform enabled, so refusing the enable alone leaves the routes
 # open. scripts/check-panel-host-reserved.test.mjs pins this list and SECONDARY_HOST_MODULES against the
 # manifests under modules/*/app: a manifest id that is in neither fails the check.
+# shellcheck disable=SC2034  # read by infra/host/lib/executor/handlers/create.sh, which sources this file
 SECONDARY_HOST_MODULES_OFF="elections files messages newsletter vault votes"
 
 # secondary_host_module_allowed <module> -> 0 when a customer on a secondary host may enable it.

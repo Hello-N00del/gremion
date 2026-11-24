@@ -50,7 +50,7 @@ handle_create() {
                     || die "create ${id}: the module ${mod} cannot be enabled for a customer on the secondary host ${got_host}: it runs on the shared chat or file services, which stay bound to the customer host ${want_host}; a secondary host is core-only (${SECONDARY_HOST_MODULES// /, }); nothing was created" "$GREMION_EXIT_ASSERT"
             done < <(jq -r '(.enable // [])[]' "$args")
             # a config reads every toggleable module as ON until it says otherwise: switch the others OFF
-            off="$(printf '%s\n' $SECONDARY_HOST_MODULES_OFF | jq -R . | jq -sc 'map({key: ., value: false}) | from_entries')" \
+            off="$(tr ' ' '\n' <<< "$SECONDARY_HOST_MODULES_OFF" | jq -R . | jq -sc 'map({key: ., value: false}) | from_entries')" \
                 || die "create ${id}: could not build the module switches of the secondary-host customer; nothing was created" "$GREMION_EXIT_ASSERT"
         fi
     elif [[ -n "$secondary" ]]; then
