@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[ -f "$DK/hook.sh" ] && . "$DK/hook.sh" && pl_hook "render $*"
 printf 'render %s\n' "$*" >> "$DK/order.log"
 [ -f "$DK/render.fail" ] && exit 1
 exit 0

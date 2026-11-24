@@ -109,6 +109,89 @@ pl_fingerprint() {
 # pl_tick [ARGS] -- one tick of the program, to the end
 pl_tick() { "${HOST_SRC}/bin/gremion-cd" tick "$@" </dev/null; }
 
+# pl_assert_committed -- the end state of a release of C_B on top of C_L0 that committed: live, previous,
+# `current`, the tag files, the colour that serves, the env files, the isolation record, nothing in flight,
+# the locks free and the dump set retired
+pl_assert_committed() {
+    local b12="${C_B:0:12}" l12="${C_L0:0:12}"
+    [ "$(pl_state .live.sha)" = "$C_B" ]
+    [ "$(pl_state .live.colour)" = green ]
+    [ "$(pl_state .previous.sha)" = "$C_L0" ]
+    [ "$(pl_state .previous.colour)" = blue ]
+    [ "$(pl_state .previous.startable)" = true ]
+    [ "$(readlink "${GREMION_ROOT}/current")" = "${GREMION_ROOT}/releases/${b12}" ]
+    [ "$(cat "${GREMION_ROOT}/runtime/current-tag")" = "pilot-${b12}" ]
+    [ "$(cat "${GREMION_ROOT}/runtime/previous-tag")" = "pilot-${l12}" ]
+    [ "$(cat "${GREMION_ROOT}/runtime/active-colour")" = green ]
+    [ "$(jq -r '.loadBalancer.servers[0].url' "$DK/traefik.app@file")" = "http://gremion-ui-green:3000" ]
+    assert_present "^IMAGE_TAG=pilot-${b12}\$" "${GREMION_ROOT}/etc/env/app-green.env"
+    assert_present "^IMAGE_TAG=pilot-${l12}\$" "${GREMION_ROOT}/etc/env/app-blue.env"
+    [ "$(cat "${GREMION_ROOT}/data/isolation-recorded")" = "$C_B" ]
+    [ "$(pl_blocks)" = 0 ]
+    pl_hostlock_free
+    pl_cdlock_free
+    [ ! -s "$DK/live.tsv" ]
+}
+
+# -- kill -9 from outside the libraries ---------------------------------------------------------------
+# Every program of the world calls pl_hook "<program> <args>" first (hook.sh, written by pl_setup).
+# While $DK/kill.at holds an extended regular expression, the NTH (kill.nth, default 1) call whose text
+# matches it kills the program under test with signal 9 and does not return: the call it was is the
+# one the program died in.
+pl_write_hook() {
+    cat >"$DK/hook.sh" <<'HOOK'
+pl_hook() {
+    [ -f "$DK/kill.at" ] || return 0
+    local pat n want
+    pat="$(cat "$DK/kill.at")"
+    printf '%s\n' "$1" | grep -qE -- "$pat" || return 0
+    n=$(( $(cat "$DK/kill.n" 2>/dev/null || echo 0) + 1 ))
+    echo "$n" >"$DK/kill.n"
+    want="$(cat "$DK/kill.nth" 2>/dev/null || echo 1)"
+    [ "$n" -eq "$want" ] || return 0
+    echo "kill-9 in: $1" >>"$DK/order.log"
+    rm -f "$DK/kill.at" "$DK/kill.n" "$DK/kill.nth"
+    kill -9 "$(cat "$DK/tick.pid")"
+    exit 137
+}
+HOOK
+}
+# pl_kill_at REGEX [NTH] -- arm the kill
+pl_kill_at() {
+    printf '%s\n' "$1" >"$DK/kill.at"
+    rm -f "$DK/kill.n"
+    printf '%s\n' "${2:-1}" >"$DK/kill.nth"
+}
+# pl_tick_bg [ARGS] -- a tick in the background; it records its own pid (the pid of the program itself,
+# which `exec` keeps) for the hook; pl_wait sets PL_RC to its exit code
+pl_tick_bg() {
+    bash -c 'echo $$ >"$DK/tick.pid"; exec "${HOST_SRC}/bin/gremion-cd" tick "$@"' pl-tick "$@" \
+        >"${GREMION_ROOT}/.tick.out" 2>&1 3>&- </dev/null &
+    PL_PID=$!
+    CD_BG_PIDS+=("$PL_PID")
+}
+pl_wait() {
+    PL_RC=0
+    wait "$PL_PID" || PL_RC=$?
+}
+# pl_killed_tick REGEX [NTH] [ARGS] -- run a tick that is killed at the call, then return
+pl_killed_tick() {
+    local pat="$1" nth="${2:-1}"
+    shift 2
+    pl_kill_at "$pat" "$nth"
+    pl_tick_bg "$@"
+    pl_wait
+    [ "$PL_RC" -eq 137 ] || { echo "the tick was not killed (exit ${PL_RC})" >&2; cat "${GREMION_ROOT}/.tick.out" >&2; return 1; }
+    # a child of the killed program may still hold a lock for an instant
+    local i
+    for i in $(seq 1 50); do
+        if pl_hostlock_free && pl_cdlock_free; then return 0; fi
+        sleep 0.1
+    done
+    echo "a lock is still held after the kill" >&2
+    return 1
+}
+
 # -- the repository ----------------------------------------------------------------------------------
 # pl_repo_init -- the history of the code host: L0 carries every file the pipeline reads from a release
 # tree (the programs the world shims stand for, the module declarations, the database function).
@@ -132,6 +215,7 @@ pl_repo_init() {
         pl_module "${d}" "${m%%:*}" "${m##*:}"
     done
     pl_module "${d}" messaging null
+    if [ -n "${PL_BOARD:-}" ]; then pl_module "${d}" board board-postgres; fi
     gh_rg -C "$d" add -A
     gh_rg -C "$d" commit -q --amend --no-edit
     C_L0="$(gh_rg -C "$d" rev-parse HEAD)"
@@ -240,6 +324,19 @@ postgres|100
 t_${PL_H1}__publishing|1000
 newsletter_control|1400
 EOF
+    # servers the dump set and the module step must never enter (they answer, so a call shows in exec.log)
+    pl_server messaging-postgres msg_admin <<EOF
+postgres|100
+messaging_main|900
+EOF
+    pl_server governance-postgres gov_admin <<EOF
+postgres|100
+governance_main|900
+EOF
+    pl_server nextcloud-postgres nc_admin <<EOF
+postgres|100
+nextcloud_main|900
+EOF
     printf '%s\n%s\n' "$PL_H1" "$PL_H2" >"$DK/tenants.active"
     printf 'slug-a\nslug-b\nslug-c\n' >"$DK/q.list"
     printf 'active|3\n' >"$DK/q.status"
@@ -265,6 +362,19 @@ EOF
     : "$h"
 }
 
+# pl_board_world -- a board module whose server runs, with one gate database of its own (call it
+# with PL_BOARD=1 exported before pl_scn_green, so the declaration is in the live tree too)
+pl_board_world() {
+    pl_server board-postgres brd_admin <<EOF
+postgres|100
+t_${PL_H1}__board|1000
+board_control|1400
+EOF
+    printf 't_%s__board|enabled\n' "$PL_H1" >>"$DK/rows.module_database"
+    printf 't_%s__board\n' "$PL_H1" >>"$DK/q.module_enabled"
+    printf '{"total":4,"upgraded":0,"unchanged":4,"skipped":0,"failed":0,"files_applied":0}\n' >"$DK/run.tenant-create.out"
+}
+
 # pl_setup -- the host, the repository and the shims. The state is seeded by pl_seed_live.
 pl_setup() {
     gh_setup
@@ -274,6 +384,9 @@ pl_setup() {
     export DK DUMPDIR
     mkdir -p "$DK" "${GREMION_ROOT}/bin"
     : >"$DK/argv.log"
+    pl_write_hook
+    shim git '[ -f "$DK/hook.sh" ] && . "$DK/hook.sh" && pl_hook "git $*"
+exec "$GH_REAL_GIT" "$@"'
     shim docker "$(cat "${PL_FIX}/docker.body")"
     shim curl "$(cat "${PL_FIX}/curl.body")"
     shim logger
@@ -321,6 +434,10 @@ pl_diag() {
         tail -n 60 "$DK/order.log"
         echo "---- journal"
         grep '^logger ' "$SHIM_LOG" | tail -n 20
+        if [ "${PL_DIAG:-}" = calls ]; then
+            echo "---- calls"
+            grep -E '^(git|docker|curl) ' "$SHIM_LOG" | cut -c1-170
+        fi
         echo "---- mail"
         grep '^curl .*upload\|^curl .*-K' "$SHIM_LOG" | tail -n 4
         ls "$DK"/mail.* "${GREMION_ROOT}"/data/cd/outbox/ 2>&1 | tail -n 10

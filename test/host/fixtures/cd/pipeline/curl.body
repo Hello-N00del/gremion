@@ -7,6 +7,7 @@
 #   login.status          the status of /auth/login through the edge (default 302)
 #   traefik.down          the Traefik API does not answer
 #   mail.fail             the relay does not take a message
+[ -f "$DK/hook.sh" ] && . "$DK/hook.sh" && pl_hook "curl $*"
 active="$(cat "$GREMION_ROOT/runtime/active-colour" 2>/dev/null)"
 url="${@: -1}"
 case " $* " in

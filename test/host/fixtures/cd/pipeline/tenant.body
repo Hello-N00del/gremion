@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[ -f "$DK/hook.sh" ] && . "$DK/hook.sh" && pl_hook "tenant $*"
 # gremion-tenant of a fake release tree, called by the reconcile stage as `reconcile <slug> --apply ...`.
 # One line per call: the verb, whether the host lock is declared held, whether a request id was given,
 # the tree this very file lives in, and what the host lock looks like to a second descriptor.

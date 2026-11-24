@@ -158,6 +158,164 @@ teardown() {
     pl_cdlock_free
 }
 
+@test "the switch call writes the edge file for the new colour and exits 1: the old colour serves, the new one stops only after the confirm" {
+    pl_scn_green
+    printf 'write_then_fail\n' >"$DK/switch.mode.green"
+    run pl_tick
+    echo "$output"
+    pl_no_stubs
+    local l12="${C_L0:0:12}"
+    # the end state: the file, active-colour and Traefik agree on the old colour
+    [ "$(cat "${GREMION_ROOT}/runtime/active-colour")" = blue ]
+    assert_present '^active=blue$' "${GREMION_ROOT}/etc/edge/active.yml"
+    [ "$(jq -r '.loadBalancer.servers[0].url' "$DK/traefik.app@file")" = "http://gremion-ui-blue:3000" ]
+    [ "$(jq -r '.loadBalancer.servers[0].url' "$DK/traefik.public@file")" = "http://gremion-public-blue:3000" ]
+    [ "$(readlink "${GREMION_ROOT}/current")" = "${GREMION_ROOT}/releases/${l12}" ]
+    [ "$(pl_state .live.sha)" = "$C_L0" ]
+    # the order of the calls: the new colour goes down only after the switch back, and the old colour never
+    pl_before '^switch green mode=write_then_fail' '^switch blue mode=ok'
+    pl_after '^switch blue mode=ok' '^down green'
+    [ "$(pl_count '^down blue')" -eq 0 ]
+    # nothing before the switch tore anything down: the only `down green` before it is the start's own
+    # leftover clean-up, which comes before `up green`
+    [ "$(awk '/^up green/ { u = NR } /^switch green/ { s = NR } /^down green/ { if (NR > u && u > 0 && (s == 0 || NR < s)) bad++ } END { print bad + 0 }' "$DK/order.log")" -eq 0 ]
+    # the block names the failed switch, the hold stands, the release is over
+    [ "$(pl_blocks)" -eq 1 ]
+    [ "$(jq -r '.[0].rule' "${GREMION_ROOT}/data/cd/blocked.json")" = post_switch_verify ]
+    [ "$(pl_state .hold.kind)" = blocked ]
+    [ "$(pl_state .phase)" = idle ]
+    [ "$(pl_mails rolled_back)" -eq 1 ]
+    pl_hostlock_free
+    pl_cdlock_free
+}
+
+# ===========================================================================================
+# the dump set of a whole release
+# ===========================================================================================
+
+@test "the dump set: a main-server part and a module part, each module take with its own server and role, no other server entered, a blocked database skipped" {
+    export PL_BOARD=1
+    pl_scn_green
+    pl_board_world
+    # a blocked gate database on the calendar server: in the registry, on the server, never dumped
+    printf 't_%s__calendar|1100\n' "$PL_H3" >>"$DK/srv.calendar-postgres.dbs"
+    printf 't_%s__calendar|blocked\n' "$PL_H3" >>"$DK/rows.module_database"
+    run pl_tick
+    echo "$output"
+    [ "$status" -eq 0 ]
+    pl_no_stubs
+    [ "$(pl_state .live.sha)" = "$C_B" ]
+    local label="pilot-${C_B:0:12}" line svc usr n
+    # every take is for this release's label; the main-server takes carry no service, the module takes
+    # carry both the service and the role of THEIR server
+    n=0
+    while read -r cmd rel db sv us; do
+        [ "$cmd" = take ] || continue
+        n=$((n + 1))
+        [ "$rel" = "rel=${label}" ]
+        svc="${sv#svc=}"
+        usr="${us#usr=}"
+        case "$svc" in
+            '') [ -z "$usr" ] ;;
+            calendar-postgres) [ "$usr" = cal_admin ] ;;
+            content-postgres) [ "$usr" = con_admin ] ;;
+            newsletter-postgres) [ "$usr" = nl_admin ] ;;
+            board-postgres) [ "$usr" = brd_admin ] ;;
+            *) echo "a take on an unexpected server: $svc"; return 1 ;;
+        esac
+    done <"$DK/dump.log"
+    [ "$n" -ge 10 ]
+    # board is entered once its declaration is in the tree
+    [ "$(grep -c '^take .*svc=board-postgres' "$DK/dump.log")" -ge 1 ]
+    # the servers of messaging (database: null in its declaration), governance and Nextcloud: never entered
+    assert_absent 'svc=messaging-postgres' "$DK/exec.log"
+    assert_absent 'svc=governance-postgres' "$DK/exec.log"
+    assert_absent 'svc=nextcloud-postgres' "$DK/exec.log"
+    assert_absent 'svc=(messaging|governance|nextcloud)-postgres' "$DK/dump.log"
+    # the blocked gate database was never taken, and the history says one was skipped
+    assert_absent "${PL_H3}" "$DK/dump.log"
+    [ "$(jq -s '[.[] | select(.event == "dumpset_taken")][0].blocked_skipped' "${GREMION_ROOT}/data/cd/history.jsonl")" = 1 ]
+    # the role-enforcing shim saw a role of its own server on every query: no exec on a server with another server's role
+    # (the shim answers 2 to a wrong role and the release would have stopped), and none was refused
+    [ "$(pl_hist stage_failed)" -eq 0 ]
+    # the journal never received the name of a module database
+    [ "$(grep -cE '^logger .*t_[0-9a-f]{32}__(calendar|content|publishing|board)' "$SHIM_LOG")" -eq 0 ]
+}
+
+# ===========================================================================================
+# kill -9 at every stage boundary, then the boot resume
+# ===========================================================================================
+
+# pl_kill_case REGEX NTH -- the tick dies in the call that matches, the boot resume runs, and the end
+# state is the one of the uninterrupted run
+pl_kill_case() {
+    pl_scn_green
+    pl_killed_tick "$1" "$2"
+    # the interrupted state is a release in flight, not an idle host
+    [ "$(pl_state .phase)" != idle ]
+    run pl_tick --resume-only
+    echo "$output"
+    [ "$status" -eq 0 ]
+    pl_no_stubs
+    [ "$(pl_state .phase)" = idle ]
+    [ "$(pl_state .release)" = null ]
+}
+
+@test "kill -9 in the fetch, then the resume: the release commits" {
+    pl_kill_case 'git clone --quiet --no-checkout' 1
+    pl_assert_committed
+}
+
+@test "kill -9 in the classify, then the resume: the release commits" {
+    pl_kill_case 'config --format json --no-env-resolution' 1
+    pl_assert_committed
+}
+
+@test "kill -9 in the render, then the resume: the release commits" {
+    pl_kill_case '^render --release' 1
+    pl_assert_committed
+}
+
+@test "kill -9 in the build, then the resume: the release commits" {
+    pl_kill_case 'app-green.env --profile . build$' 1
+    pl_assert_committed
+}
+
+@test "kill -9 in the snapshot (the first take), then the resume: the release commits" {
+    pl_kill_case '^dump take' 1
+    pl_assert_committed
+}
+
+@test "kill -9 in the snapshot (the fifth take), then the resume: the release commits" {
+    pl_kill_case '^dump take' 5
+    pl_assert_committed
+}
+
+@test "kill -9 in the migrate (the first one-shot), then the resume: the release commits" {
+    pl_kill_case 'gremion.cd=.* migrate$' 1
+    pl_assert_committed
+}
+
+@test "kill -9 in the module step, then the resume: the release commits" {
+    pl_kill_case 'tenant-create module-upgrade' 1
+    pl_assert_committed
+}
+
+@test "kill -9 in the start, then the resume: the release commits" {
+    pl_kill_case 'app-green.env up -d' 1
+    pl_assert_committed
+}
+
+@test "kill -9 in the gates, then the resume: the release commits" {
+    pl_kill_case '^isolation run' 1
+    pl_assert_committed
+}
+
+@test "kill -9 in the watch, then the resume: the window goes on and the release commits" {
+    pl_kill_case '--resolve .* -o /dev/null' 4
+    pl_assert_committed
+}
+
 @test "workers: new off at the start, old off then new on at the switch, new on in the gate file at the commit" {
     pl_scn_green
     run pl_tick

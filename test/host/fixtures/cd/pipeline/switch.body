@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[ -f "$DK/hook.sh" ] && . "$DK/hook.sh" && pl_hook "switch $*"
 # gremion-switch of a fake release tree: writes the edge file, points the fake Traefik at the colour,
 # then active-colour. $DK/switch.mode.<colour> is ok (default), write_then_fail (the edge file and
 # Traefik move, the exit is 1, active-colour stays) or fail (nothing is written, exit 2).

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[ -f "$DK/hook.sh" ] && . "$DK/hook.sh" && pl_hook "isolation $*"
 # gremion-isolation: `run --out DIR` leaves the evidence of the tip of $GREMION_RELEASE_DIR; `record FILE`
 # writes the host's record of that tip.
 cmd="$1"

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[ -f "$DK/hook.sh" ] && . "$DK/hook.sh" && pl_hook "dump $*"
 cmd="${1:-}"
 shift
 rel=''; db=''; svc=''; usr=''; reason=''
