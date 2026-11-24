@@ -101,6 +101,45 @@ teardown() {
     [ "$(pl_hist reconciled)" -eq 1 ]
 }
 
+@test "two releases in a row: the second goes back to the first colour, nothing of the first is left in its way" {
+    pl_scn_green
+    run pl_tick
+    [ "$status" -eq 0 ]
+    pl_assert_committed
+    # a third commit on main, green on the code host, and the clock moves on a little
+    pl_commit C
+    gh_publish
+    gh_route_ci "$C_C"
+    gh_route_pulls "$C_A" "$C_B" "$C_C"
+    cd_advance 600
+    pl_timers
+    run pl_tick
+    echo "$output"
+    [ "$status" -eq 0 ]
+    pl_no_stubs
+    local c12="${C_C:0:12}" b12="${C_B:0:12}"
+    [ "$(pl_state .live.sha)" = "$C_C" ]
+    [ "$(pl_state .live.colour)" = blue ]
+    [ "$(pl_state .previous.sha)" = "$C_B" ]
+    [ "$(pl_state .previous.colour)" = green ]
+    [ "$(pl_state .previous.startable)" = true ]
+    [ "$(readlink "${GREMION_ROOT}/current")" = "${GREMION_ROOT}/releases/${c12}" ]
+    [ "$(cat "${GREMION_ROOT}/runtime/current-tag")" = "pilot-${c12}" ]
+    [ "$(cat "${GREMION_ROOT}/runtime/previous-tag")" = "pilot-${b12}" ]
+    [ "$(cat "${GREMION_ROOT}/runtime/active-colour")" = blue ]
+    assert_present "^IMAGE_TAG=pilot-${c12}\$" "${GREMION_ROOT}/etc/env/app-blue.env"
+    assert_present "^IMAGE_TAG=pilot-${b12}\$" "${GREMION_ROOT}/etc/env/app-green.env"
+    # the dump set of the first release did not stand in the way and none is left
+    [ ! -s "$DK/live.tsv" ]
+    [ "$(cat "${GREMION_ROOT}/runtime/workers/green")" = off ]
+    [ "$(cat "${GREMION_ROOT}/runtime/workers/blue")" = on ]
+    [ "$(pl_state .hold)" = null ]
+    [ "$(pl_mails released)" -eq 2 ]
+    [ "$(pl_hist reconciled)" -eq 2 ]
+    pl_hostlock_free
+    pl_cdlock_free
+}
+
 @test "a release whose readiness fails never writes the switch file" {
     pl_scn_green
     printf 'notready\n' >"$DK/readyz.green"
