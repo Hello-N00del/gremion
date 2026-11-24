@@ -34,7 +34,7 @@ const DB = 't_0192f0c12b3c7d4e8f00112233445566__finance'
 const COMMON = `
 const DB = '${DB}'
 const exporter = {
-  async dump(t, f) { writeFileSync(f, 'PGDMP fake dump of ' + t.database, { flag: 'wx', mode: 0o600 }) },
+  async dump(t, f, sink) { if (sink && sink.fd !== undefined) writeFileSync(sink.fd, 'PGDMP fake dump of ' + t.database); else writeFileSync(f, 'PGDMP fake dump of ' + t.database, { flag: 'wx', mode: 0o600 }) },
   async list() { return ';\\n; Archive created at 2026-11-17 03:00:00 UTC\\n;     dbname: ' + DB + '\\n' },
 }
 const probe = { serverMajor: async () => 18, pgDumpMajor: async () => 18, databaseBytes: async () => 1000 }
@@ -45,7 +45,7 @@ const code = async (p) => p.then(() => 'no error', (e) => e.code ?? String(e.mes
 
 // runs as root
 const SCENARIO = `
-import { chmodSync, chownSync, cpSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, chownSync, cpSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { takeDump } from './take.js'
 import { retireDump } from './retire.js'
@@ -100,7 +100,6 @@ const reset = () => {
   rmSync(ROOTFILE, { force: true })
   writeFileSync(ROOTFILE, 'ROOT OWNED', { mode: 0o644 })
   chmodSync(ROOTFILE, 0o644)
-  utimesSync(ROOTFILE, Date.now() / 1000 - 3600, Date.now() / 1000 - 3600) // an old file of root, not one this call just made
   rmSync(ROOTLEDGER, { force: true })
   writeFileSync(ROOTLEDGER, forged('dist-v9', 'dist-v9/' + DB + '.' + ID + '.dump'), { mode: 0o644 }) // a ledger of root, with a live dump of another release in it
   chmodSync(ROOTLEDGER, 0o644)
@@ -115,7 +114,9 @@ const fresh = () => {
 }
 const plant = (ops) => spawnSync(process.execPath, ['/tmp/app/dump/plant.mjs', JSON.stringify(ops)], { uid: 1000, gid: 1000, encoding: 'utf8' })
 const forged = (rel, file) => JSON.stringify({ v: 1, event: 'created', at: '2026-11-17T03:00:00.000Z', migration_dump_id: ID, release: rel, scope: 'customer', customer_id: '0192f0c1-2b3c-7d4e-8f00-112233445566', module_id: 'finance', database: DB, by_kind: 'system', file, sha256: 'a'.repeat(64), bytes: 9, dump_taken_at: '2026-11-17T03:00:00.000Z' }) + '\\n'
-const swapped = { ...exporter, async dump(t, f) { writeFileSync(f, 'PGDMP', { flag: 'wx', mode: 0o600 }); unlinkSync(f); symlinkSync(VICTIM, f) } }
+const swapped = { ...exporter, async dump(t, f, sink) { if (sink && sink.fd !== undefined) writeFileSync(sink.fd, 'PGDMP'); else writeFileSync(f, 'PGDMP', { flag: 'wx', mode: 0o600 }); unlinkSync(f); symlinkSync(VICTIM, f) } }
+// the exporter writes through the descriptor, then renames the name aside (the node keeps its one link) and plants a link to a root-only file in its place
+const renamedAside = { ...exporter, async dump(t, f, sink) { writeFileSync(sink.fd, 'PGDMP'); renameSync(f, f + '.aside'); symlinkSync(VICTIM, f) } }
 const attack = async (victim, setup, run) => {
   reset()
   writeFileSync(VICTIM_DUMP, 'VICTIM DUMP', { mode: 0o600 })
@@ -148,7 +149,7 @@ const movedLedger = async () => {
     return JSON.stringify({ uid: st.uid, mode: (st.mode & 0o777).toString(8), size: st.size })
   }
   const before = facts()
-  const moved = { ...exporter, async dump(t, f) { writeFileSync(f, 'PGDMP fake dump of ' + t.database, { flag: 'wx', mode: 0o600 }); renameSync(ROOTFILE, d + '/ledger.jsonl') } }
+  const moved = { ...exporter, async dump(t, f, sink) { if (sink && sink.fd !== undefined) writeFileSync(sink.fd, 'PGDMP fake dump of ' + t.database); else writeFileSync(f, 'PGDMP fake dump of ' + t.database, { flag: 'wx', mode: 0o600 }); renameSync(ROOTFILE, d + '/ledger.jsonl') } }
   const c = await code(take1(d, { exporter: moved }))
   return { code: c, unchanged: facts() === before, stillThere: true }
 }
@@ -173,6 +174,7 @@ out.attacks = {
   ledgerLink: await attack(VICTIM, (d) => [{ op: 'symlink', target: VICTIM, path: d + '/ledger.jsonl' }], (d) => take1(d)),
   releaseLink: await attack(RELROOT, (d) => [{ op: 'symlink', target: RELROOT, path: d + '/dist-v1' }], (d) => take1(d)),
   swappedDump: await attack(VICTIM, () => [], (d) => take1(d, { exporter: swapped })),
+  renamedAside: await attack(VICTIM, () => [], (d) => take1(d, { exporter: renamedAside })),
   lockLink: await attack(VICTIM, (d) => [{ op: 'symlink', target: VICTIM, path: d + '/ledger.lock' }], (d) => take1(d)),
   retireLinkedRelease: await attack(
     RELROOT,
@@ -361,6 +363,7 @@ describe('the dump with the real uids (a root process, the deploy user, another 
     expect(a.ledgerLink, JSON.stringify(a)).toEqual(unsafe)
     expect(a.releaseLink, JSON.stringify(a)).toEqual(unsafe)
     expect(a.swappedDump, JSON.stringify(a)).toEqual(unsafe)
+    expect(a.renamedAside, JSON.stringify(a)).toEqual(unsafe)
     expect(a.retireLinkedRelease, JSON.stringify(a)).toEqual(unsafe)
     expect(a.retireLedgerLink, JSON.stringify(a)).toEqual(unsafe)
     // nodes of root that the owner moved into place are never handed over: the existing directory is refused, and a
@@ -375,9 +378,9 @@ describe('the dump with the real uids (a root process, the deploy user, another 
     // a FIFO in the place of the ledger is refused at once, the process is not held in open(2)
     expect(a.ledgerFifo, JSON.stringify(a)).toEqual({ hung: false, code: 'DUMP_PATH_UNSAFE', readByName: false })
     // the table of contents is read from the descriptor that was checked: a name replaced by a link to a root-only file, or by
-    // a FIFO, between the seal and the read is never opened, and the take is not held up
-    expect(a.listLink, JSON.stringify(a)).toEqual({ hung: false, code: 'no error', readByName: false })
-    expect(a.listFifo, JSON.stringify(a)).toEqual({ hung: false, code: 'no error', readByName: false })
+    // a FIFO, while it is read is never opened, the take is not held up, and the replaced name is refused before the ledger line
+    expect(a.listLink, JSON.stringify(a)).toEqual({ hung: false, code: 'DUMP_PATH_UNSAFE', readByName: false })
+    expect(a.listFifo, JSON.stringify(a)).toEqual({ hung: false, code: 'DUMP_PATH_UNSAFE', readByName: false })
     // a ledger line that names a path outside <release>/<name>.<id>.dump is refused as a corrupt ledger, and nothing is removed
     expect(a.retireForgedPath, JSON.stringify(a)).toEqual({ code: 'LEDGER_CORRUPT', unchanged: true, stillThere: true })
     // a lock that a link stands in for was never replaced: the lock refuses, as it always did

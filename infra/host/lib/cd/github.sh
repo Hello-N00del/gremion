@@ -226,7 +226,8 @@ cd_gh_proof_source() {
             return 2
         }
     fi
-    _cd_gh_mirror || return 2
+    # the local-path branch above already made the mirror (it needs CD_DATA for the trust file)
+    [[ -n "$trustfile" ]] || _cd_gh_mirror || return 2
     (
         [[ -z "$trustfile" ]] || export GIT_CONFIG_GLOBAL="$trustfile"
         _cd_gh_git --git-dir="$CD_MIRROR_DIR" fetch --no-tags --quiet "$repo" "+refs/heads/${ref}:refs/proof/${ref}"

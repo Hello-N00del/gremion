@@ -119,6 +119,36 @@ describe('pgDumpExporter list() handed a descriptor: the archive is read from it
   }, 20_000)
 })
 
+describe('pgDumpExporter dump() handed a descriptor: the dump is written into it, the name is never opened', () => {
+  it('writes pg_dump stdout (2 MB) into the descriptor whatever the name is (here: nothing), and leaves the descriptor open', async () => {
+    const file = join(SCRATCH, 'fd-dump.dump')
+    const fd = openSync(file, 'wx', 0o600)
+    try {
+      await exporter({ pgDump: dumpWriting(2 * MB) }).dump(TARGET, join(SCRATCH, 'no-such-name.dump'), { fd })
+      expect(fstatSync(fd).size).toBe(2 * MB)
+      expect(existsSync(join(SCRATCH, 'no-such-name.dump'))).toBe(false)
+      await settle()
+      expect(strays).toEqual([])
+    } finally {
+      closeSync(fd)
+    }
+    expect(statSync(file).size).toBe(2 * MB)
+  }, 20_000)
+
+  it('a pg_dump that exits non-zero rejects with its stderr tail and the descriptor is still open', async () => {
+    const file = join(SCRATCH, 'fd-dump-bad.dump')
+    const fd = openSync(file, 'wx', 0o600)
+    try {
+      await expect(exporter({ pgDump: dumpWriting(1024, 1, 'pg_dump: error: connection refused') }).dump(TARGET, file, { fd })).rejects.toThrow(/exited 1: pg_dump: error: connection refused/)
+      expect(fstatSync(fd).isFile()).toBe(true)
+      await settle()
+      expect(strays).toEqual([])
+    } finally {
+      closeSync(fd)
+    }
+  }, 20_000)
+})
+
 describe('pgDumpExporter dump(): the sink (house finding 2)', () => {
   it('writes pg_dump stdout (2 MB) to the file and resolves on exit 0', async () => {
     const file = join(SCRATCH, 'ok.dump')

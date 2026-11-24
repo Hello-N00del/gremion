@@ -68,11 +68,11 @@ function fakeExporter(over: { failDump?: boolean } = {}): Exporter & { targets: 
   const targets: { service: string; database: string }[] = []
   return {
     targets,
-    async dump(target, file) {
+    async dump(target, file, sink) {
       events.push(`dump:${target.service}`)
       targets.push(target)
       const { writeFileSync } = await import('node:fs')
-      writeFileSync(file, `PGDMP fake dump of ${target.database}`, { flag: 'wx', mode: 0o600 })
+      writeFileSync(sink?.fd ?? file, `PGDMP fake dump of ${target.database}`, sink?.fd !== undefined ? {} : { flag: 'wx', mode: 0o600 })
       if (over.failDump) throw new Error('pg_dump exited 1: connection refused')
     },
     async list(file) {

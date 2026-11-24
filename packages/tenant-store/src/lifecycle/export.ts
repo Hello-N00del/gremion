@@ -13,7 +13,7 @@ import { chmodSync, createReadStream, mkdirSync, statSync, writeFileSync } from 
 import { open } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { pipeline } from 'node:stream/promises'
-import { descriptorStream } from '../fd-stream.js'
+import { descriptorSink, descriptorStream } from '../fd-stream.js'
 import type { Exporter, ExportTarget } from './types.js'
 import { LifecycleError } from './guards.js'
 
@@ -39,12 +39,14 @@ const STOPPED_READING = new Set(['EPIPE', 'EOF', 'ECONNRESET', 'ERR_STREAM_PREMA
  * Runs argv. With `stdout`, the child's stdout goes to that file, which is
  * opened 'wx' 0600 BEFORE the child starts (an existing file, a missing or
  * unwritable directory rejects here and nothing is spawned). With `stdin`,
- * that file is piped into the child; with `stdinFd`, what that open descriptor holds is. Every stream error rejects the returned
+ * that file is piped into the child; with `stdinFd`, what that open descriptor holds is. With `stdoutFd` the child's stdout
+ * is written into that open descriptor (from byte 0; never closed here, its owner closes it) and nothing is opened by
+ * name. Every stream error rejects the returned
  * promise (none escapes as an uncaught exception or unhandled rejection), a
  * sink or input failure kills the child so it cannot block on a full pipe,
  * and the promise settles only once the child has closed.
  */
-async function run(argv: readonly string[], opts: { env?: Record<string, string>; stdin?: string; stdinFd?: number; stdout?: string }): Promise<string> {
+async function run(argv: readonly string[], opts: { env?: Record<string, string>; stdin?: string; stdinFd?: number; stdout?: string; stdoutFd?: number }): Promise<string> {
   const [cmd, ...args] = argv
   if (!cmd) throw new Error('empty command')
   // wx: never overwrite; 0600 from the first byte.
@@ -78,6 +80,8 @@ async function run(argv: readonly string[], opts: { env?: Record<string, string>
   const pumps: Promise<void>[] = []
   if (sinkHandle) {
     pumps.push(pipeline(child.stdout, sinkHandle.createWriteStream()).catch(fail))
+  } else if (opts.stdoutFd !== undefined) {
+    pumps.push(pipeline(child.stdout, descriptorSink(opts.stdoutFd)).catch(fail))
   } else {
     child.stdout.on('data', (c: Buffer) => outChunks.push(c))
   }
@@ -111,9 +115,10 @@ async function run(argv: readonly string[], opts: { env?: Record<string, string>
 /** The production Exporter: pg_dump -Fc to the file (via stdout), pg_restore --list from it (via stdin). */
 export function pgDumpExporter(opts: PgDumpExporterOptions): Exporter {
   return {
-    async dump(target, file) {
+    async dump(target, file, sink) {
       const conn = opts.connection(target)
-      await run([...opts.pgDump, '--format=custom', '--no-password', ...conn.args], { stdout: file, ...(conn.env ? { env: conn.env } : {}) })
+      const where = sink?.fd !== undefined ? { stdoutFd: sink.fd } : { stdout: file }
+      await run([...opts.pgDump, '--format=custom', '--no-password', ...conn.args], { ...where, ...(conn.env ? { env: conn.env } : {}) })
     },
     async list(file, source) {
       return run([...opts.pgRestore, '--list'], source?.fd !== undefined ? { stdinFd: source.fd } : { stdin: file })

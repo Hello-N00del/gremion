@@ -48,8 +48,14 @@ export interface ExportTarget {
 
 /** pg_dump -Fc and pg_restore --list, injected (pgDumpExporter is the implementation). */
 export interface Exporter {
-  /** Writes a custom-format dump of target.database to `file` (which does not exist yet). */
-  dump(target: ExportTarget, file: string): Promise<void>
+  /**
+   * Writes a custom-format dump of target.database to `file`. Without `sink`, `file` does not exist yet and the exporter
+   * creates it (exclusively). With `sink.fd` the caller has already created the file and holds this descriptor of it: the
+   * exporter writes into the descriptor from byte 0 and never opens `file` by name (it only names it for messages), and
+   * leaves the closing to the caller. The dump code uses this so that the node it checks and hands over is the very one
+   * the dump was written to.
+   */
+  dump(target: ExportTarget, file: string, sink?: { fd?: number }): Promise<void>
   /**
    * The archive's table of contents (`pg_restore --list`). Throws when it does not parse. With `source.fd` the archive
    * is read from that open descriptor (from byte 0, positionally, and the descriptor is left open for the caller to

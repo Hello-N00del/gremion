@@ -1,6 +1,6 @@
 // packages/tenant-store/src/dump/safefs.ts
 //
-// Symlink-safe file access for the dump code (CD stage 1, unit U6g and its must-fix).
+// Symlink-safe file access for the dump code (CD stage 1, unit U6g).
 //
 // Why. The tenant-create one-shot runs as ROOT and writes into the dump directory, which is 0700 and owned by the
 // deploy user (uid 1000). That user can create, rename and replace every entry in the directory, so a root process
@@ -16,10 +16,12 @@
 //   2. What was opened is checked on the descriptor, not on the name: fstat says regular file with one link (a
 //      hard link to a root-owned file is refused) or directory, owned by a uid the dump code may meet. That holds
 //      for an existing ledger too: it is read and appended to only when it belongs to such a uid.
-//   3. Ownership and mode are changed on the descriptor (fchown, fchmod), never by path, and only on the very
-//      descriptor that created the node (O_EXCL; or a directory made in this call and found empty, fresh and this
-//      process's own; or the dump file the exporter wrote, found fresh and this process's own). A node that already
-//      stands in the directory is never handed over, whoever owns it.
+//   3. Ownership and mode are changed on the descriptor (fchown, fchmod), never by path, and only on a node this call
+//      made. A file is created with O_EXCL and everything about it (the dump written into it, its table of contents,
+//      its sha256, the hand-over) goes through that one descriptor, never through a reopen by name; the name is only
+//      compared with the descriptor (assertNamed). A directory made in this call is opened right after the mkdir and
+//      handed over when it is this process's own, empty and recent. A node that already stands in the directory is
+//      never handed over, whoever owns it.
 //   4. A directory the code works in is OPENED ONCE (O_DIRECTORY | O_NOFOLLOW) and every name below it is reached
 //      through that descriptor (`/proc/self/fd/<n>/<name>` on Linux), so replacing the directory by a link, or a
 //      parent by a link, after the open changes nothing.
@@ -91,7 +93,23 @@ export function assertPlain(fd: number, what: string, kind: 'file' | 'dir', owne
   return st
 }
 
-/** True when a stat is of something made after `sinceMs` (less the slack): evidence it is not an older node put in its place. */
+/**
+ * The name still is the node this descriptor holds: not a link, same device and inode. A node that was created through
+ * the descriptor and was since renamed away, replaced or linked over is refused, so what is recorded under the name is
+ * what was checked on the descriptor.
+ */
+export function assertNamed(fd: number, path: string): void {
+  let named: Stats
+  try {
+    named = lstatSync(path)
+  } catch (err) {
+    throw unsafePath(path, 'was removed or replaced while it was written', err)
+  }
+  const held = fstatSync(fd)
+  if (named.isSymbolicLink() || named.ino !== held.ino || named.dev !== held.dev) throw unsafePath(path, 'is not the file that was created')
+}
+
+/** True when a stat is of something made after `sinceMs` (less the slack): one of the checks on a directory just made by mkdir. */
 export function madeSince(st: { mtimeMs: number }, sinceMs: number): boolean {
   return st.mtimeMs >= sinceMs - FRESH_SLACK_MS
 }
@@ -192,9 +210,8 @@ export interface ChildDirOptions {
 
 /**
  * The directory `name` below an anchored directory, as an anchor of its own. Never a link, never a directory of
- * another uid. A directory made in this call is checked to be the one mkdir made (this process's own, empty, fresh:
- * not a node that was put in its place) and handed over on its descriptor; one that already stands there is only
- * checked, never handed over.
+ * another uid. A directory made in this call is checked to be this process's own, empty and recent, and handed over on
+ * its descriptor; one that already stands there is only checked, never handed over.
  */
 export function openChildDir(parent: Anchor, name: string, o: ChildDirOptions): Anchor | null {
   const path = join(parent.dir, name)

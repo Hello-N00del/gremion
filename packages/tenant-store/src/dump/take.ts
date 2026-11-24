@@ -13,16 +13,17 @@
 //      (another release -> DUMP_SERIES; this release -> reused);
 //   3. pg_dump major >= the server's major (PG_DUMP_VERSION);
 //   4. free space >= 1.2 x pg_database_size (DUMP_SPACE);
-//   5. pg_dump -Fc (TASK-021's pgDumpExporter) to <dir>/<release>/<db>.<id>.dump,
-//      0600 in a 0700 directory; a non-zero exit removes the partial file;
-//   6. fsync the file and both directories, bytes > 0, pg_restore --list names
-//      the database, sha256;
+//   5. the dump file <dir>/<release>/<db>.<id>.dump is created exclusively (0600, 0700 directory) and
+//      pg_dump -Fc (TASK-021's pgDumpExporter) writes into that descriptor; a non-zero exit removes the file;
+//   6. on the same descriptor: bytes > 0, pg_restore --list names the database, sha256; the name must still be this
+//      node; only then mode 0600, the hand-over to the owner, fsync (and of both directories);
 //   7. append `created` (fsynced) and print one audit line.
 //
 // Links (safefs.ts): the dump directory is opened once, without following a link, and every name below it is reached
 // through that descriptor; the release directory is opened the same way; every file is opened with O_NOFOLLOW and
-// checked on its descriptor; ownership and mode change on the descriptor. A link planted by the owner of the directory
-// is refused (DUMP_PATH_UNSAFE), never followed, so a root process cannot be made to write, chown or read elsewhere.
+// checked on its descriptor; ownership and mode change on the descriptor. The dump file is never reopened by name
+// between its creation and the ledger line. A link planted by the owner of the directory is refused
+// (DUMP_PATH_UNSAFE), never followed, so a root process cannot be made to write, chown or read elsewhere.
 import { randomBytes } from 'node:crypto'
 import { closeSync, constants, fstatSync, fsyncSync, rmSync, statfsSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
@@ -30,7 +31,7 @@ import { descriptorStream } from '../fd-stream.js'
 import { join } from 'node:path'
 import type { Exporter } from '../lifecycle/types.js'
 import { appendEvent, assertRelease, auditLine, DumpError, dumpFileParts, fsyncDir, liveDumps, readEvents, withLedgerLock, type ByKind, type DumpEvent, type DumpScope, type ENABLE_ORIGIN, type HandOver } from './ledger.js'
-import { allowedOwners, anchorDir, assertPlain, handOverFd, madeSince, openChildDir, openNoFollow, SELF_UID, setMode, unsafePath } from './safefs.js'
+import { allowedOwners, anchorDir, assertNamed, assertPlain, handOverFd, openChildDir, openNoFollow, SELF_UID, setMode } from './safefs.js'
 
 /** Free space must be at least this multiple of pg_database_size (brief §1). */
 export const SPACE_FACTOR = 1.2
@@ -178,21 +179,29 @@ async function withDumpFile<T>(path: string, owners: readonly number[], use: (fd
 }
 
 /**
- * What a dump file needs before its ledger line: mode 0600, handed over, fsynced, all on one descriptor that is not a
- * link. The file must be this process's own and written since `startedMs`: the exporter made it a moment ago, so a
- * node of another owner, or an older node that was moved into its place, is refused before anything is changed.
+ * What a dump file needs before its ledger line, all on the descriptor that created it: size, table of contents,
+ * sha256, then (and only then) mode 0600, the hand-over and fsync. The name is compared with the descriptor before and
+ * after, so a name that was moved, replaced or linked over is refused before anything is handed over. Nothing here
+ * reopens the file by name.
  */
-function sealFile(file: string, startedMs: number, handOver: HandOver | undefined): void {
-  const fd = openNoFollow(file, constants.O_RDWR)
-  try {
-    const st = assertPlain(fd, file, 'file', SELF_UID === undefined ? undefined : [SELF_UID])
-    if (!madeSince(st, startedMs)) throw unsafePath(file, 'is not the file the exporter just wrote')
-    setMode(fd, file, 0o600)
-    handOver?.(file, 0o600, fd)
-    fsyncSync(fd)
-  } finally {
-    closeSync(fd)
+async function verifyAndSeal(fd: number, path: string, o: TakeDumpOptions, handOver: HandOver | undefined): Promise<{ bytes: number; sha256: string }> {
+  const st = assertPlain(fd, path, 'file', SELF_UID === undefined ? undefined : [SELF_UID])
+  assertNamed(fd, path)
+  const size = Number(st.size)
+  if (size <= 0) throw new Error('the dump is empty (0 bytes)')
+  const toc = await o.exporter.list(path, { fd })
+  if (!/^; Archive created at /m.test(toc) || !new RegExp(`^;\\s+dbname: ${o.database.replace(/[.]/g, '\\.')}$`, 'm').test(toc)) {
+    throw new Error(`pg_restore --list does not describe a dump of ${o.database}`)
   }
+  const sha256 = await sha256OfFd(fd)
+  // the exporter and the table of contents ran on this descriptor: it must still be a plain file of the size that was hashed
+  const after = assertPlain(fd, path, 'file', SELF_UID === undefined ? undefined : [SELF_UID])
+  if (Number(after.size) !== size) throw new Error('the dump changed while it was verified')
+  setMode(fd, path, 0o600)
+  handOver?.(path, 0o600, fd)
+  fsyncSync(fd)
+  assertNamed(fd, path)
+  return { bytes: size, sha256 }
 }
 
 /** The facts of a directory held to the dump directory rules: set aside from checkDumpDir so a descriptor can be held to them too. */
@@ -318,52 +327,62 @@ async function takeUnder(o: TakeDumpOptions, fs: DumpFs, anchor: ReturnType<type
       const name = `${o.database}.${id}.dump`
       const file = `${o.release}/${name}`
       const path = join(relDir.dir, name)
-      const startedMs = Date.now()
-      try {
-        await o.exporter.dump({ service: o.service ?? 'postgres', database: o.database }, path)
-      } catch (err) {
-        rmSync(path, { force: true })
-        throw new DumpError('PG_DUMP_FAILED', `pg_dump of ${o.database} failed: ${(err as Error).message}; the partial file was removed, nothing was migrated`, { cause: err })
+      // created here, exclusively, and written through this descriptor: the dump never goes through a name
+      const fd = openNoFollow(path, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL, 0o600)
+      const discard = (): void => {
+        try {
+          rmSync(path, { force: true })
+        } catch {
+          // the original failure is the one to report
+        }
       }
       try {
-        sealFile(path, startedMs, handOver)
-        fsyncDir(relDir.dir)
-        fsyncDir(adir)
-        // one descriptor for everything read from the dump: its size, the exporter's table of contents (handed the
-        // descriptor, not the name) and its sha256
-        const { bytes, sha256 } = await withDumpFile(path, owners, async (fd, size) => {
-          if (size <= 0) throw new Error('the dump is empty (0 bytes)')
-          const toc = await o.exporter.list(path, { fd })
-          if (!/^; Archive created at /m.test(toc) || !new RegExp(`^;\\s+dbname: ${o.database.replace(/[.]/g, '\\.')}$`, 'm').test(toc)) {
-            throw new Error(`pg_restore --list does not describe a dump of ${o.database}`)
-          }
-          return { bytes: size, sha256: await sha256OfFd(fd) }
-        })
-        const event: DumpEvent = {
-          v: 1,
-          event: 'created',
-          at: takenAt.toISOString(),
-          migration_dump_id: id,
-          release: o.release,
-          scope: o.scope,
-          customer_id: o.scope === 'customer' ? (o.customerId ?? null) : null,
-          module_id: o.moduleId ?? null,
-          database: o.database,
-          by_kind: o.byKind ?? 'system',
-          file,
-          sha256,
-          bytes,
-          dump_taken_at: takenAt.toISOString(),
-          ...server,
-          ...(o.origin ? { origin: o.origin } : {}),
+        try {
+          await o.exporter.dump({ service: o.service ?? 'postgres', database: o.database }, path, { fd })
+        } catch (err) {
+          discard()
+          throw new DumpError('PG_DUMP_FAILED', `pg_dump of ${o.database} failed: ${(err as Error).message}; the partial file was removed, nothing was migrated`, { cause: err })
         }
-        appendEvent(adir, event, handOver, owners)
-        audit(auditLine(event))
-        return { status: 'created', id, path: join(dir, file), sha256, bytes }
-      } catch (err) {
-        rmSync(path, { force: true })
-        if (err instanceof DumpError) throw err
-        throw new DumpError('DUMP_UNVERIFIED', `the dump of ${o.database} could not be verified: ${(err as Error).message}; it was removed, nothing was migrated`, { cause: err })
+        let verified: { bytes: number; sha256: string }
+        try {
+          verified = await verifyAndSeal(fd, path, o, handOver)
+        } catch (err) {
+          discard()
+          if (err instanceof DumpError) throw err
+          throw new DumpError('DUMP_UNVERIFIED', `the dump of ${o.database} could not be verified: ${(err as Error).message}; it was removed, nothing was migrated`, { cause: err })
+        }
+        const { bytes, sha256 } = verified
+        try {
+          fsyncDir(relDir.dir)
+          fsyncDir(adir)
+          const event: DumpEvent = {
+            v: 1,
+            event: 'created',
+            at: takenAt.toISOString(),
+            migration_dump_id: id,
+            release: o.release,
+            scope: o.scope,
+            customer_id: o.scope === 'customer' ? (o.customerId ?? null) : null,
+            module_id: o.moduleId ?? null,
+            database: o.database,
+            by_kind: o.byKind ?? 'system',
+            file,
+            sha256,
+            bytes,
+            dump_taken_at: takenAt.toISOString(),
+            ...server,
+            ...(o.origin ? { origin: o.origin } : {}),
+          }
+          appendEvent(adir, event, handOver, owners)
+          audit(auditLine(event))
+          return { status: 'created', id, path: join(dir, file), sha256, bytes }
+        } catch (err) {
+          discard()
+          if (err instanceof DumpError) throw err
+          throw new DumpError('DUMP_UNVERIFIED', `the dump of ${o.database} could not be verified: ${(err as Error).message}; it was removed, nothing was migrated`, { cause: err })
+        }
+      } finally {
+        closeSync(fd)
       }
     } finally {
       relDir.close()
