@@ -429,7 +429,7 @@ services:
       # empty: no hint.
       PILOT_TENANT_HOST: ${PILOT_TENANT_HOST:-}
       # Further customer hosts (SECONDARY_TENANT_HOSTS, optional, comma-separated), each for a core-only customer: shown on
-      # "Neuer Mandant" with the note that such a customer has no chat, files, office editing, video or votes. A hint only:
+      # "Neuer Mandant" with the note that such a customer has no chat, files, office editing, video, votes or newsletter. A hint only:
       # the host-side create reads the list from state.env and decides. Empty: no secondary host.
       SECONDARY_TENANT_HOSTS: ${SECONDARY_TENANT_HOSTS:-}
       # "Neuer Mandant" refuses the platform's reserved names and the panel's own host (CONTROL_PANEL_HOST, else

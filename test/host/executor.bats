@@ -762,7 +762,7 @@ create_refused_before_phase_a() {
 
 @test "secondary host: a malformed list refuses a create on any other host, outright (nothing is created)" {
     local bad
-    for bad in 'https://rat.alpha.example' 'rat.alpha.example,' 'Rat.Alpha.Example' 'rat.alpha.example,rat.alpha.example' 'rat.pilot.example,rat.alpha.example' 'plat.example.org,rat.alpha.example'; do
+    for bad in 'https://rat.alpha.example' 'rat.alpha.example,' 'Rat.Alpha.Example' 'rat.alpha.example,rat.alpha.example' 'rat.pilot.example,rat.alpha.example' 'plat.example.org,rat.alpha.example' 'control.plat.example.org,rat.alpha.example'; do
         sed -i '/^PILOT_TENANT_HOST=/d; /^SECONDARY_TENANT_HOSTS=/d; /^PLATFORM_DOMAIN=/d' "${GREMION_ROOT}/etc/env/state.env"
         secondary_install rat.pilot.example "$bad"
         verdict_enable calendar
@@ -792,4 +792,27 @@ create_refused_before_phase_a() {
     grep -q 'is not this install.s customer host rat\.pilot\.example (PILOT_TENANT_HOST); nothing was created\. Request the create again with rat\.pilot\.example' "${GREMION_ROOT}/events.log" || { cat "${GREMION_ROOT}/events.log"; return 1; }
     run grep -c 'SECONDARY_TENANT_HOSTS' "${GREMION_ROOT}/events.log"
     [ "$output" = 0 ]
+}
+
+# A customer's config.json reads every toggleable module as ON until it says otherwise, so refusing the ENABLE of a
+# module is not enough: the create of a secondary-host customer writes the shared-service modules OFF into its
+# tenant config (the manifest ids), and the config of a primary customer stays exactly as before.
+@test "secondary host: the tenant config of a core-only customer carries every non-core module OFF, the primary customer's config stays modules {}" {
+    secondary_install rat.pilot.example 'rat.alpha.example'
+    verdict_enable calendar board
+    queue create
+    run "$EXEC" --once
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; steps; return 1; }
+    run sed -n 2p "${GREMION_ROOT}/config-seen"
+    [ "$output" = '{"brand":{"product":"Ratsportal","org_short":"AR"},"modules":{"elections":false,"files":false,"messages":false,"newsletter":false,"vault":false,"votes":false}}' ] || { echo "$output"; return 1; }
+    # the primary host, the same install: no module is written
+    sed -i '/^PILOT_TENANT_HOST=/d; /^SECONDARY_TENANT_HOSTS=/d; /^PLATFORM_DOMAIN=/d' "${GREMION_ROOT}/etc/env/state.env"
+    secondary_install rat.alpha.example 'canary.example.org'
+    verdict_enable calendar votes
+    : > "$ORDER"
+    queue create
+    run "$EXEC" --once
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; steps; return 1; }
+    run sed -n 2p "${GREMION_ROOT}/config-seen"
+    [ "$output" = '{"brand":{"product":"Ratsportal","org_short":"AR"},"modules":{}}' ] || { echo "$output"; return 1; }
 }

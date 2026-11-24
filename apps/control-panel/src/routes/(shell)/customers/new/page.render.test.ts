@@ -125,7 +125,7 @@ describe('Neuer Mandant host field: the secondary customer hosts', () => {
     expect(text).toContain('Zusätzlich erlaubt: canary.example.org, test.example.net')
     expect(text).toContain('jeder andere Host wird beim Anlegen abgelehnt')
     expect(text).toContain('kein Chat, Dateien, Dokumentbearbeitung und Videokonferenz')
-    expect(text).toContain('Abstimmungen')
+    expect(text).toContain('Abstimmungen und Newsletter')
   })
 
   it('the note is described by the field (aria-describedby names every hint) and the host stays preset to the customer host', () => {

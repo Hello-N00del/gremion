@@ -16,7 +16,7 @@
 #   router, the TRD-440 fingerprint.
 handle_create() {
     local id="$1" slug="$2" operator="$3" args="$4" work="$5"
-    local cfg="${work}/tenant-config.json" dpia="${work}/dpia.json" v want_host got_host secondary why mod
+    local cfg="${work}/tenant-config.json" dpia="${work}/dpia.json" v want_host got_host secondary why mod off='{}' platform panel control
     [[ -f "$args" ]] || die "create ${id}: no verified args" "$GREMION_EXIT_ASSERT"
     jq -e --arg s "$slug" '.slug == $s' "$args" >/dev/null \
         || die "create ${id}: the verified args name another customer than ${slug}" "$GREMION_EXIT_ASSERT"
@@ -37,8 +37,11 @@ handle_create() {
         if [[ "${got_host,,}" != "${want_host,,}" ]]; then
             [[ -n "$secondary" ]] \
                 || die "create ${id}: the host ${got_host} is not this install's customer host ${want_host} (PILOT_TENANT_HOST); nothing was created. Request the create again with ${want_host}" "$GREMION_EXIT_ASSERT"
-            why="$(secondary_hosts_problem "$secondary" "$(env_key "${ROOT}/etc/env/state.env" PLATFORM_DOMAIN)" "$want_host" \
-                "$(env_key "${ROOT}/etc/env/state.env" CONTROL_PANEL_HOST)")" \
+            # the control host is THE resolver's answer, as in gremion-validate-env (CONTROL_PANEL_HOST, else control.<domain>)
+            platform="$(env_key "${ROOT}/etc/env/state.env" PLATFORM_DOMAIN)"
+            panel="$(env_key "${ROOT}/etc/env/state.env" CONTROL_PANEL_HOST)"
+            control="$(CONTROL_PANEL_HOST="$panel" PLATFORM_DOMAIN="$platform" PILOT_TENANT_HOST="$want_host" resolve_control_panel_host)" || control="$panel"
+            why="$(secondary_hosts_problem "$secondary" "$platform" "$want_host" "$control")" \
                 || die "create ${id}: SECONDARY_TENANT_HOSTS in state.env is malformed (${why}); nothing was created" "$GREMION_EXIT_ASSERT"
             secondary_hosts_has "$secondary" "$got_host" \
                 || die "create ${id}: the host ${got_host} is not allowed here: this install's customer host is ${want_host} (PILOT_TENANT_HOST) and the secondary hosts are ${secondary} (SECONDARY_TENANT_HOSTS); nothing was created" "$GREMION_EXIT_ASSERT"
@@ -46,15 +49,18 @@ handle_create() {
                 secondary_host_module_allowed "$mod" \
                     || die "create ${id}: the module ${mod} cannot be enabled for a customer on the secondary host ${got_host}: it runs on the shared chat or file services, which stay bound to the customer host ${want_host}; a secondary host is core-only (${SECONDARY_HOST_MODULES// /, }); nothing was created" "$GREMION_EXIT_ASSERT"
             done < <(jq -r '(.enable // [])[]' "$args")
+            # a config reads every toggleable module as ON until it says otherwise: switch the others OFF
+            off="$(printf '%s\n' $SECONDARY_HOST_MODULES_OFF | jq -R . | jq -sc 'map({key: ., value: false}) | from_entries')" \
+                || die "create ${id}: could not build the module switches of the secondary-host customer; nothing was created" "$GREMION_EXIT_ASSERT"
         fi
     elif [[ -n "$secondary" ]]; then
         die "create ${id}: SECONDARY_TENANT_HOSTS is set but PILOT_TENANT_HOST is not a usable host: a secondary host is an addition to the install's customer host; nothing was created" "$GREMION_EXIT_ASSERT"
     fi
     # brand.termMonths (the two semester start months, optional: an older stored request has none) becomes
     # brand.term_months, the key the app computes its semester label from; the label itself is never written.
-    jq -c '{brand: ({product: .brand.product, org_short: .brand.orgShort}
+    jq -c --argjson off "$off" '{brand: ({product: .brand.product, org_short: .brand.orgShort}
                     + (if .brand.termMonths then {term_months: {winter: .brand.termMonths.winter, summer: .brand.termMonths.summer}} else {} end)),
-            modules: {}}' "$args" | atomic_write "$cfg" 600 \
+            modules: $off}' "$args" | atomic_write "$cfg" 600 \
         || die "create ${id}: could not write the tenant config" "$GREMION_EXIT_ASSERT"
     local -a argv=("$slug"
         --host "$(jq -r '.host' "$args")"

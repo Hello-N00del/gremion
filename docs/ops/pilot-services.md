@@ -319,6 +319,9 @@ enforces this instead of leaving it to the operator:
   host, naming what is allowed; on a secondary host it refuses, before anything is
   created, any module outside `board`, `calendar` and `content` (default deny:
   `SECONDARY_HOST_MODULES` in `infra/host/lib/common.sh`);
+- the customer's tenant config is created with every other module switched off
+  (`SECONDARY_HOST_MODULES_OFF`), because a config reads a module as on until it
+  says otherwise;
 - the module enable (executor, council admin and break-glass alike) refuses the
   same modules for a customer registered on a secondary host;
 - `gremion-services wire <slug>` refuses a customer whose registered host is not
