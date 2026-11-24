@@ -380,6 +380,32 @@ EOF
     : "$h"
 }
 
+# pl_leaf_world -- the three leaf services run in the target colour (their profiles are on), and each
+# leaf entry answers one customer migrated
+pl_leaf_world() {
+    local s
+    printf 'calendar-service\ncontent-service\nnewsletter-service\n' >>"$DK/svc.app"
+    for s in calendar-service content-service newsletter-service; do
+        printf '{"v":1,"total":1,"migrated":1,"skipped":0,"failed":0}\n' >"$DK/run.$s.out"
+    done
+    # the live colour runs them too (its containers are part of what a build must leave alone)
+    docker compose --env-file "${GREMION_ROOT}/etc/env/app-blue.env" build >/dev/null
+    docker compose --env-file "${GREMION_ROOT}/etc/env/app-blue.env" up -d >/dev/null
+    : >"$DK/order.log"
+    : >"$SHIM_LOG"
+}
+
+# pl_no_modules_world -- no module database exists: the servers hold only their own bookkeeping
+pl_no_modules_world() {
+    local s
+    for s in calendar content newsletter; do
+        printf 'postgres|100\n' >"$DK/srv.${s}-postgres.dbs"
+    done
+    : >"$DK/rows.module_database"
+    : >"$DK/q.module_enabled"
+    printf '{"total":0,"upgraded":0,"unchanged":0,"skipped":0,"failed":0,"files_applied":0}\n' >"$DK/run.tenant-create.out"
+}
+
 # pl_board_world -- a board module whose server runs, with one gate database of its own (call it
 # with PL_BOARD=1 exported before pl_scn_green, so the declaration is in the live tree too)
 pl_board_world() {
@@ -439,6 +465,22 @@ done
 cd_paths_init
 cd_cfg_load
 ${snippet}" pl-lib "$@"
+}
+
+# pl_lock_poller -- a second process that tries the host lock every 50 ms while the reconcile stage runs
+# (the first child has started and the stage has not ended) and notes each moment it got it, in $DK/gaps:
+# the moments the lock was free between two children
+pl_lock_poller() {
+    (
+        while [ ! -f "$DK/poller.stop" ]; do
+            if [ -s "$DK/tenant.slugs" ] && ! grep -q '"event":"reconciled"' "${GREMION_ROOT}/data/cd/history.jsonl" 2>/dev/null; then
+                if ( exec 7>>"${GREMION_ROOT}/runtime/hostd.lock"; flock -n 7 ); then echo 1 >>"$DK/gaps"; fi
+            fi
+            sleep 0.05
+        done
+    ) 3>&- >/dev/null 2>&1 </dev/null &
+    PL_POLL=$!
+    CD_BG_PIDS+=("$PL_POLL")
 }
 
 # pl_diag -- what a failed test leaves to read: the state, the history, the order of the world's calls

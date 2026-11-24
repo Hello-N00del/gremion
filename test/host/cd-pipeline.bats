@@ -420,6 +420,186 @@ pl_assert_boot_end() {
 }
 
 # ===========================================================================================
+# the reconcile stage through the real libraries
+# ===========================================================================================
+
+@test "reconcile: every customer once, from the tree of current, with the host lock declared held and a request id of its own, the lock free between two children" {
+    pl_scn_green
+    printf '0.4\n' >"$DK/tenant.sleep"
+    pl_lock_poller
+    run pl_tick
+    touch "$DK/poller.stop"
+    echo "$output"
+    [ "$status" -eq 0 ]
+    pl_no_stubs
+    pl_assert_committed
+    # three customers, once each, in the order the registry listed them
+    [ "$(wc -l <"$DK/tenant.slugs")" -eq 3 ]
+    [ "$(sort "$DK/tenant.slugs" | uniq | wc -l)" -eq 3 ]
+    [ "$(wc -l <"$DK/tenant.log")" -eq 3 ]
+    # every call: the verb, the lock declared held, a request id, the NEW tree, the lock really held by the parent
+    [ "$(grep -c "^tenant verb=reconcile held=1 request=set tree=${C_B:0:12} lockrc=1\$" "$DK/tenant.log")" -eq 3 ]
+    # the lock was free at least twice while the stage ran: between child one and two, and two and three
+    [ "$(wc -l <"$DK/gaps")" -ge 2 ]
+    # the release is done and clean
+    [ "$(pl_state .hold)" = null ]
+    [ "$(pl_state .live.reconcile.ok)" -eq 3 ]
+    [ "$(pl_state .live.reconcile.total)" -eq 3 ]
+}
+
+@test "reconcile: one failing customer holds with reconcile_failed and one mail, and the release stays committed" {
+    pl_scn_green
+    : >"$DK/tenant.fail.slug-b"
+    run pl_tick
+    echo "$output"
+    [ "$status" -eq 0 ]
+    pl_no_stubs
+    pl_assert_committed
+    [ "$(pl_state .hold.kind)" = reconcile_failed ]
+    [ "$(pl_mails reconcile_failed)" -eq 1 ]
+    # the stage went on to the third customer after the failure
+    [ "$(wc -l <"$DK/tenant.slugs")" -eq 3 ]
+    [ "$(pl_state .live.reconcile.failed)" -eq 1 ]
+    [ "$(pl_state .live.reconcile.ok)" -eq 2 ]
+    # nothing of the release moved: no block, no rollback
+    [ ! -f "${GREMION_ROOT}/data/cd/blocked.json" ] || [ "$(pl_blocks)" -eq 0 ]
+    [ "$(pl_hist rollback_started)" -eq 0 ]
+}
+
+@test "reconcile: no customer slug reaches a state, history, outbox, mail, journal or output file" {
+    pl_scn_green
+    : >"$DK/tenant.fail.slug-b"
+    run pl_tick
+    echo "$output" >"${GREMION_ROOT}/.tick.stdout"
+    [ "$status" -eq 0 ]
+    local f n=0
+    for f in "${GREMION_ROOT}/data/cd/state.json" "${GREMION_ROOT}/data/cd/history.jsonl" "${GREMION_ROOT}/.tick.stdout" \
+        "${GREMION_ROOT}"/data/cd/outbox/* "$DK"/mail.*.eml; do
+        [ -f "$f" ] || continue
+        n=$((n + 1))
+        run grep -c 'slug-[abc]' "$f"
+        [ "$output" = 0 ] || { echo "a slug is in $f"; return 1; }
+    done
+    [ "$n" -ge 4 ]
+    [ "$(grep '^logger ' "$SHIM_LOG" | grep -c 'slug-[abc]')" -eq 0 ]
+    # the verb's own output is kept in a 0600 file under logs/, where customer data may go
+    [ "$(stat -c %a "$(ls "${GREMION_ROOT}"/logs/cd-reconcile-*.log | head -n 1)")" = 600 ]
+}
+
+# ===========================================================================================
+# the module step and the leaf step
+# ===========================================================================================
+
+@test "the module step: the one-shot runs once, after the kernel one-shots and before the start" {
+    pl_scn_green
+    run pl_tick
+    [ "$status" -eq 0 ]
+    pl_no_stubs
+    [ "$(pl_count '^run-module ')" -eq 1 ]
+    pl_before '^run green kernel-api-migrate' '^run green tenant-create'
+    pl_before '^run green tenant-create' '^up green'
+    # the module part of the dump set exists, and the one-shot is told the release id, never a database
+    assert_present '^run-module green rid=' "$DK/order.log"
+    assert_absent 't_[0-9a-f]{32}__' "$DK/order.log"
+}
+
+@test "the module step: a failing module database blocks the release as a migrate failure, holds, and leaves the dump set live" {
+    pl_scn_green
+    printf '{"total":3,"upgraded":1,"unchanged":1,"skipped":0,"failed":1,"files_applied":1}\n' >"$DK/run.tenant-create.out"
+    printf '1\n' >"$DK/run.tenant-create.rc"
+    run pl_tick
+    echo "$output"
+    pl_no_stubs
+    # it never got near the new colour
+    [ "$(pl_count '^up green')" -eq 0 ]
+    [ "$(pl_count '^switch ')" -eq 0 ]
+    [ "$(pl_hist switch_started)" -eq 0 ]
+    [ "$(pl_state .live.sha)" = "$C_L0" ]
+    [ "$(pl_blocks)" -eq 1 ]
+    [ "$(jq -r '.[0].rule' "${GREMION_ROOT}/data/cd/blocked.json")" = migrate_failed ]
+    [ "$(pl_state .hold.kind)" = blocked ]
+    [ "$(pl_state .phase)" = idle ]
+    # the dump set of the release stays live, for the operator and for the next release's refusal
+    [ -s "$DK/live.tsv" ]
+    pl_hostlock_free
+    pl_cdlock_free
+}
+
+@test "the module step: with no module database the one-shot is never run" {
+    pl_scn_green
+    pl_no_modules_world
+    run pl_tick
+    [ "$status" -eq 0 ]
+    pl_no_stubs
+    [ "$(pl_state .live.sha)" = "$C_B" ]
+    [ "$(pl_count '^run green tenant-create')" -eq 0 ]
+    # and no module server was entered
+    assert_absent 'svc=(calendar|content|newsletter)-postgres' "$DK/dump.log"
+}
+
+@test "the leaf step: the entry runs once per leaf service of the target colour, between the module step and the start" {
+    pl_scn_green
+    pl_leaf_world
+    run pl_tick
+    echo "$output"
+    [ "$status" -eq 0 ]
+    pl_no_stubs
+    [ "$(pl_state .live.sha)" = "$C_B" ]
+    [ "$(pl_count '^run green (calendar|content|newsletter)-service$')" -eq 3 ]
+    pl_before '^run green tenant-create' '^run green calendar-service'
+    pl_before '^run green newsletter-service' '^up green'
+    # every leaf run carried the label of the release and the migrate-only entry
+    [ "$(grep -c -- '--migrate-only' "$DK/run.log")" -eq 3 ]
+    [ "$(grep -c -- "--label gremion.cd=${C_B:0:12}-" "$DK/run.log")" -ge 5 ]
+    # the journal never received the name of a leaf database
+    [ "$(grep -cE '^logger .*(calendar|content|newsletter)_control' "$SHIM_LOG")" -eq 0 ]
+    [ "$(pl_hist leaves_done)" -ge 1 ]
+}
+
+@test "the leaf step: a failing leaf blocks the release before the switch, tears down and leaves the dump set live" {
+    pl_scn_green
+    pl_leaf_world
+    printf '{"v":1,"total":1,"migrated":0,"skipped":0,"failed":1}\n' >"$DK/run.content-service.out"
+    printf '1\n' >"$DK/run.content-service.rc"
+    run pl_tick
+    echo "$output"
+    pl_no_stubs
+    [ "$(pl_hist switch_started)" -eq 0 ]
+    [ "$(pl_count '^switch ')" -eq 0 ]
+    [ "$(pl_count '^up green')" -eq 0 ]
+    [ "$(pl_state .live.sha)" = "$C_L0" ]
+    [ "$(pl_blocks)" -eq 1 ]
+    [ "$(jq -r '.[0].rule' "${GREMION_ROOT}/data/cd/blocked.json")" = migrate_failed ]
+    grep -q 'leaf_migrate' "${GREMION_ROOT}/data/cd/blocked.json"
+    [ "$(pl_state .hold.kind)" = blocked ]
+    # the calendar leaf ran before it, the newsletter leaf never did
+    [ "$(pl_count '^run green calendar-service')" -eq 1 ]
+    [ "$(pl_count '^run green newsletter-service')" -eq 0 ]
+    [ -s "$DK/live.tsv" ]
+}
+
+@test "the leaf step: with leaf services rendered but no dump of a module server in the set the entry is never run" {
+    pl_scn_green
+    pl_leaf_world
+    # the leaf servers hold nothing but their own bookkeeping: the set has no module part
+    pl_no_modules_world
+    run pl_tick
+    echo "$output"
+    [ "$status" -eq 0 ]
+    pl_no_stubs
+    [ "$(pl_state .live.sha)" = "$C_B" ]
+    [ "$(pl_count '^run green (calendar|content|newsletter)-service$')" -eq 0 ]
+}
+
+@test "the leaf step: with no leaf service rendered the entry is never run" {
+    pl_scn_green
+    run pl_tick
+    [ "$status" -eq 0 ]
+    [ "$(pl_count '^run green (calendar|content|newsletter)-service$')" -eq 0 ]
+    [ "$(pl_hist leaves_done)" -ge 1 ]
+}
+
+# ===========================================================================================
 # a held release, a proof release
 # ===========================================================================================
 
