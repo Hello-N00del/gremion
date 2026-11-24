@@ -2,8 +2,8 @@
 # relay, of the Traefik API and of the application through the edge. State under $DK.
 #   traefik.<name>        the JSON of one Traefik service (app@file, public@file, panel@file, ...)
 #   routers.json          the router list
-#   public.fail.<colour>  while the colour named by runtime/active-colour is <colour>, the public
-#                         /readyz answers 503 (the loopback test router too)
+#   public.fail.<colour>  while runtime/active-colour names <colour>, the public edge answers 503 on /readyz
+#   next.fail.<colour>    while the next route names <colour>, the loopback test router answers 503
 #   login.status          the status of /auth/login through the edge (default 302)
 #   traefik.down          the Traefik API does not answer
 #   mail.fail             the relay does not take a message
@@ -60,7 +60,12 @@ case "$url" in
     [ -n "$hdrfile" ] && printf 'HTTP/1.1 200 OK\r\n\r\n' >"$hdrfile"
     cat "$DK/routers.json"; exit 0 ;;
   */readyz)
-    if [ -f "$DK/public.fail.$active" ]; then body='{"ready":false}'; code=503; else body='{"ready":true}'; code=200; fi
+    # the loopback test router answers for the NEXT colour, the real edge for the serving one
+    flag="public.fail.$active"
+    case "$url" in
+        http://127.0.0.1:*) flag="next.fail.$(jq -r '.loadBalancer.servers[0].url' "$DK/traefik.app-next@file" | sed 's/.*-\(blue\|green\):3000$/\1/')" ;;
+    esac
+    if [ -f "$DK/$flag" ]; then body='{"ready":false}'; code=503; else body='{"ready":true}'; code=200; fi
     case " $* " in
       *" -w "*)
         case "$*" in

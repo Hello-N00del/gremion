@@ -57,15 +57,34 @@ pl_before() {
     [ -n "$b" ] || { echo "pl_before: not in the order log: $2" >&2; cat "$DK/order.log" >&2; return 1; }
     [ "$a" -lt "$b" ] || { echo "pl_before: '$1' ($a) is not before '$2' ($b)" >&2; cat "$DK/order.log" >&2; return 1; }
 }
+# pl_after A B -- the LAST line of the order log that matches B is after the first that matches A
+pl_after() {
+    local a b
+    a="$(grep -n -m1 -E -- "$1" "$DK/order.log" | cut -d: -f1)" || a=''
+    b="$(grep -n -E -- "$2" "$DK/order.log" | tail -n 1 | cut -d: -f1)" || b=''
+    [ -n "$a" ] || { echo "pl_after: not in the order log: $1" >&2; cat "$DK/order.log" >&2; return 1; }
+    [ -n "$b" ] || { echo "pl_after: not in the order log: $2" >&2; cat "$DK/order.log" >&2; return 1; }
+    [ "$b" -gt "$a" ] || { echo "pl_after: '$2' ($b) is not after '$1' ($a)" >&2; cat "$DK/order.log" >&2; return 1; }
+}
 pl_count() { grep -c -E -- "$1" "$DK/order.log" 2>/dev/null || true; }
-pl_mails() { # KIND -- how many mails of the kind were queued
+# pl_mails KIND -- how many mails of the kind left the program: the relay took them (the curl world keeps
+# a copy of each) or they still wait in the outbox
+pl_mails() {
     local n=0 f
-    for f in "${GREMION_ROOT}"/data/cd/outbox/*"-$1.eml" "${GREMION_ROOT}"/data/cd/outbox/sent/*"-$1.eml"; do
-        [ -f "$f" ] && n=$((n + 1))
+    for f in "$DK"/mail.*.eml "${GREMION_ROOT}"/data/cd/outbox/*.eml; do
+        [ -f "$f" ] || continue
+        if grep -q "^kind: $1[[:space:]]*$" "$f"; then n=$((n + 1)); fi
     done
     echo "$n"
 }
-pl_mail_file() { ls "${GREMION_ROOT}"/data/cd/outbox/*"-$1.eml" "${GREMION_ROOT}"/data/cd/outbox/sent/*"-$1.eml" 2>/dev/null | head -n 1; }
+# pl_mail_file KIND -- the first mail of the kind
+pl_mail_file() {
+    local f
+    for f in "$DK"/mail.*.eml "${GREMION_ROOT}"/data/cd/outbox/*.eml; do
+        if [ -f "$f" ] && grep -q "^kind: $1[[:space:]]*$" "$f"; then echo "$f"; return 0; fi
+    done
+    return 1
+}
 pl_hostlock_free() { ( exec 9>>"${GREMION_ROOT}/runtime/hostd.lock"; flock -n 9 ); }
 pl_cdlock_free() { ( exec 8>>"${GREMION_ROOT}/runtime/cd/cd.lock"; flock -n 8 ); }
 # no stand-in of the family was used: the stub file only ever names functions the libraries define
@@ -302,6 +321,9 @@ pl_diag() {
         tail -n 60 "$DK/order.log"
         echo "---- journal"
         grep '^logger ' "$SHIM_LOG" | tail -n 20
+        echo "---- mail"
+        grep '^curl .*upload\|^curl .*-K' "$SHIM_LOG" | tail -n 4
+        ls "$DK"/mail.* "${GREMION_ROOT}"/data/cd/outbox/ 2>&1 | tail -n 10
         echo "---- logs"
         tail -n 8 "${GREMION_ROOT}"/logs/*.log
     } 2>&1 || true
