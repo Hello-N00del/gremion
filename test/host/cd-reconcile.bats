@@ -192,7 +192,7 @@ setup() {
     chmod +x "${TREE}/infra/host/bin/gremion-tenant"
     ln -s "$TREE" "${GREMION_ROOT}/current"
     printf 'blue\n' >"${GREMION_ROOT}/runtime/active-colour"
-    # the installed copy must never be the one that runs (F17)
+    # the installed copy must never be the one that runs
     printf '#!/usr/bin/env bash\necho decoy >>"$DK/decoy.log"\nexit 0\n' >"${GREMION_ROOT}/bin/gremion-tenant"
     chmod +x "${GREMION_ROOT}/bin/gremion-tenant"
     OVR="${GREMION_ROOT}/.ovr.sh"
@@ -585,7 +585,7 @@ fingerprint() {
     release_host_lock
 }
 
-# ------------------------------------------------------------------------ timeout and container (F50)
+# ------------------------------------------------------------------------ timeout and container
 
 @test "after exit 124 the stage kills the containers of that request, polls until two empty answers, and only then frees the host lock" {
     cfg CD_RECONCILE_TIMEOUT_S=1
