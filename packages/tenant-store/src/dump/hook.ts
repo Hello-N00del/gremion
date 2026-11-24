@@ -52,8 +52,8 @@ export interface DumpHookOptions {
   byKind?: ByKind
   now?: () => Date
   audit?: (line: string) => void
-  /** Called with what was taken (tests, the CLI's summary). */
-  onDump?: (d: TakenDump) => void
+  /** Called with what was taken (tests, the CLI's summary) and the database it is of. */
+  onDump?: (d: TakenDump, info: { database: string; release: string }) => void
 }
 
 /**
@@ -88,6 +88,6 @@ export function dumpHook(o: DumpHookOptions): PreApply {
       ...(o.now ? { now: o.now } : {}),
       ...(o.audit ? { audit: o.audit } : {}),
     })
-    o.onDump?.(taken)
+    o.onDump?.(taken, { database: row.db, release: o.release })
   }
 }

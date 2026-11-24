@@ -232,6 +232,40 @@ describe('enable of a blocked database: the catch-up dump', () => {
     expect(readdirSync(dir).filter((f) => f !== 'ledger.jsonl')).toEqual([])
   })
 
+  it('afterEnable retires ONLY a dump this enable took: a live dump of the same release and database that another writer took is reused, never retired, and the enable says so', async () => {
+    const dir = freshDir()
+    const exporter = fakeExporter()
+    const { takeDump } = await import('../../src/dump/take.js')
+    const dbName = tenantModuleDbName(TENANT, 'finance')
+    // another origin: the host's take of this release for this very database, in the same ledger, under the same label
+    const other = await takeDump({
+      dir,
+      release: RELEASE,
+      database: dbName,
+      scope: 'customer',
+      customerId: TENANT,
+      moduleId: 'finance',
+      exporter,
+      probe: { serverMajor: async () => 18, pgDumpMajor: async () => 18, databaseBytes: async () => 1000 },
+      fs: posixFs,
+      audit: () => {},
+    })
+    events = [] // the other writer's dump is not part of this enable's order
+    const audit: string[] = []
+    const c = catchupDump({ env: { GREMION_MIGRATION_DUMP_DIR: dir }, release: RELEASE, exporter, pgUserFor: (service) => service.replace(/-postgres$/, ''), pgDumpMajor: async () => 18, fs: posixFs, audit: (l) => audit.push(l) })
+    const s = setup({ module: 'finance', pending: ['002_a.sql'], upgradeHooks: c.upgradeHooks, dumpRetire: c.retire })
+
+    await enableModule(TENANT, s.m, ACTOR, s.deps)
+
+    // the enable reused the other writer's dump (no new dump) and left it alone: no `deleted` line, still live
+    expect(events).toEqual(['apply:002_a.sql', 'unblock', 'commit'])
+    expect(liveDumps(readEvents(dir)).map((e) => e.migration_dump_id)).toEqual([other.id])
+    expect(readEvents(dir).filter((e) => e.event === 'deleted')).toEqual([])
+    expect(existsSync(other.path)).toBe(true)
+    // and it says so, with ids only, so the operator knows which dump holds the next release
+    expect(audit.join('\n')).toContain(`premigration-dump left-live id=${other.id} release=${RELEASE} db=${dbName}`)
+  })
+
   it('without upgradeHooks (what every caller did before U6g) the pending file is applied with NO dump', async () => {
     const s = setup({ module: 'finance', pending: ['002_a.sql'] })
     await enableModule(TENANT, s.m, ACTOR, s.deps)

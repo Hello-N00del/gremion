@@ -6,7 +6,8 @@
 // dump of the database is live.
 //
 // It mirrors infra/host/bin/gremion-migration-dump delete_release, under the same ledger lock:
-//   1. the live dumps that match (this release and this database; or this database under any release);
+//   1. the live dumps that match (this release and this database; or this database under any release; or exactly
+//      the dump ids named);
 //   1b. the ledger must take an append (LEDGER_UNWRITABLE) BEFORE anything is unlinked, as the host checks first;
 //   2. the dump file and the sidecar files the host writes beside it are unlinked and the directory fsynced,
 //      and a file that is still there fails the retire (the clear-text copy must really be gone);
@@ -14,10 +15,16 @@
 //   4. the release directory goes when it is empty.
 // A missing file is not an error (a retire that died after the unlink is repeated); no live dump is a no-op.
 // A root process hands the ledger to the directory's owner exactly as takeDump does.
-import { existsSync, rmdirSync, rmSync } from 'node:fs'
-import { dirname, isAbsolute, join, sep } from 'node:path'
-import { appendEvent, assertLedgerWritable, assertRelease, auditLine, DumpError, fsyncDir, liveDumps, readEvents, withLedgerLock, type DumpEvent } from './ledger.js'
-import { checkDumpDir, defaultDumpFs, handOverFor, type DumpFs } from './take.js'
+//
+// Links (safefs.ts): the ledger is a file the deploy user can write, and this runs as root. A ledger line is trusted
+// for the shape <release>/<name>.<id>.dump of its own release and id and for nothing else; the dump directory and the
+// release directory are opened without following a link and every unlink goes through those descriptors, so no ledger
+// line and no planted link can make a retire remove a file elsewhere.
+import { lstatSync, rmdirSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
+import { appendEvent, assertLedgerWritable, assertRelease, auditLine, DumpError, dumpFileParts, fsyncDir, liveDumps, readEvents, withLedgerLock, type DumpEvent } from './ledger.js'
+import { allowedOwners, openChildDir } from './safefs.js'
+import { anchorDumpDir, defaultDumpFs, handOverFor, type DumpFs } from './take.js'
 
 export interface RetireOptions {
   /** GREMION_MIGRATION_DUMP_DIR. */
@@ -38,73 +45,90 @@ export interface RetireResult {
   retired: string[]
 }
 
-/** The file named by a ledger line, refused when it would leave the dump directory (a ledger edited by hand). */
-function dumpPath(dir: string, e: DumpEvent): string {
-  const file = e.file
-  if (typeof file !== 'string' || file === '' || isAbsolute(file) || file.split(/[\\/]/).includes('..')) {
-    throw new DumpError('LEDGER_CORRUPT', `the ledger line of dump ${e.migration_dump_id} names a file outside the dump directory; it was not retired`)
-  }
-  return join(dir, file)
-}
-
 async function retireMatching(o: RetireOptions, match: (e: DumpEvent) => boolean): Promise<RetireResult> {
   if (typeof o.reason !== 'string' || o.reason.trim() === '') throw new DumpError('DUMP_SCOPE', 'a retire needs a reason: it is written to the ledger')
   const fs = o.fs ?? defaultDumpFs
-  const dir = checkDumpDir(o.dir, fs, o.ownerUid)
+  const anchor = anchorDumpDir(o.dir, fs, o.ownerUid)
+  const adir = anchor.dir
   const handOver = handOverFor(fs, o.ownerUid)
+  const owners = allowedOwners(o.ownerUid)
   const now = o.now ?? (() => new Date())
   const audit = o.audit ?? ((l: string) => console.log(l))
-  return withLedgerLock(
-    dir,
-    async () => {
-      const mine = liveDumps(readEvents(dir)).filter(match)
-      const retired: string[] = []
-      const releaseDirs = new Set<string>()
-      // the host does this first too: the `deleted` line must be writable BEFORE a file is unlinked
-      if (mine.length > 0) assertLedgerWritable(dir)
-      for (const e of mine) {
-        const path = dumpPath(dir, e)
-        rmSync(path, { force: true })
-        rmSync(`${path.replace(/\.dump$/, '')}.acl.json`, { force: true })
-        rmSync(`${path.replace(/\.dump$/, '')}.acl.json.tmp`, { force: true })
-        fsyncDir(dirname(path))
-        fsyncDir(dir)
-        if (existsSync(path)) throw new DumpError('DUMP_UNVERIFIED', `the dump ${e.migration_dump_id} still exists after the unlink; its ledger line was not closed`)
-        const at = now().toISOString()
-        const event: DumpEvent = {
-          v: 1,
-          event: 'deleted',
-          at,
-          migration_dump_id: e.migration_dump_id,
-          release: e.release,
-          scope: e.scope,
-          customer_id: e.customer_id,
-          module_id: e.module_id,
-          database: e.database,
-          by_kind: 'system',
-          ...(e.file !== undefined ? { file: e.file } : {}),
-          deleted_at: at,
-          reason: o.reason,
-          ...(e.pg_service !== undefined ? { pg_service: e.pg_service } : {}),
-          ...(e.pg_user !== undefined ? { pg_user: e.pg_user } : {}),
+  try {
+    return await withLedgerLock(
+      adir,
+      async () => {
+        const mine = liveDumps(readEvents(adir)).filter(match)
+        const retired: string[] = []
+        const releaseDirs = new Set<string>()
+        // every line is checked before anything is unlinked: a line of another shape refuses the whole retire
+        const parts = mine.map((e) => dumpFileParts(e))
+        // the host does this first too: the `deleted` line must be writable BEFORE a file is unlinked
+        if (mine.length > 0) assertLedgerWritable(adir)
+        for (const [i, e] of mine.entries()) {
+          const { rel, name } = parts[i]!
+          const relDir = openChildDir(anchor, rel, { create: false, owners })
+          if (relDir !== null) {
+            try {
+              const path = join(relDir.dir, name)
+              rmSync(path, { force: true })
+              rmSync(`${path.replace(/\.dump$/, '')}.acl.json`, { force: true })
+              rmSync(`${path.replace(/\.dump$/, '')}.acl.json.tmp`, { force: true })
+              fsyncDir(relDir.dir)
+              fsyncDir(adir)
+              // lstat semantics: whatever now stands at that name (a link included) means the unlink did not do its job
+              if (existsNoFollow(path)) throw new DumpError('DUMP_UNVERIFIED', `the dump ${e.migration_dump_id} still exists after the unlink; its ledger line was not closed`)
+            } finally {
+              relDir.close()
+            }
+          }
+          const at = now().toISOString()
+          const event: DumpEvent = {
+            v: 1,
+            event: 'deleted',
+            at,
+            migration_dump_id: e.migration_dump_id,
+            release: e.release,
+            scope: e.scope,
+            customer_id: e.customer_id,
+            module_id: e.module_id,
+            database: e.database,
+            by_kind: 'system',
+            ...(e.file !== undefined ? { file: e.file } : {}),
+            deleted_at: at,
+            reason: o.reason,
+            ...(e.pg_service !== undefined ? { pg_service: e.pg_service } : {}),
+            ...(e.pg_user !== undefined ? { pg_user: e.pg_user } : {}),
+          }
+          appendEvent(adir, event, handOver)
+          audit(auditLine(event))
+          retired.push(e.migration_dump_id)
+          releaseDirs.add(rel)
         }
-        appendEvent(dir, event, handOver)
-        audit(auditLine(event))
-        retired.push(e.migration_dump_id)
-        releaseDirs.add(dirname(path))
-      }
-      for (const d of releaseDirs) {
-        if (d === dir || !d.startsWith(`${dir}${sep}`)) continue
-        try {
-          rmdirSync(d)
-        } catch {
-          // not empty (another database's dump of that release) or already gone: both are fine
+        for (const rel of releaseDirs) {
+          try {
+            rmdirSync(join(adir, rel))
+          } catch {
+            // not empty (another database's dump of that release) or already gone: both are fine
+          }
         }
-      }
-      return { retired }
-    },
-    handOver,
-  )
+        return { retired }
+      },
+      handOver,
+    )
+  } finally {
+    anchor.close()
+  }
+}
+
+/** True when anything, a link included, stands at `path` (lstat, never the target). */
+function existsNoFollow(path: string): boolean {
+  try {
+    lstatSync(path)
+    return true
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -114,6 +138,17 @@ async function retireMatching(o: RetireOptions, match: (e: DumpEvent) => boolean
 export async function retireDump(dir: string | undefined, release: string, database: string, reason: string, more: Omit<RetireOptions, 'dir' | 'database' | 'reason'> = {}): Promise<RetireResult> {
   assertRelease(release)
   return retireMatching({ dir, database, reason, ...more }, (e) => e.database === database && e.release === release)
+}
+
+/**
+ * Retires exactly the live dumps whose ids are named, and only while each is still a live dump of `database` and
+ * `release`. For a caller that took a dump itself and must retire that one and nothing else: a live dump of the same
+ * database and release that another writer took (the host's `take`, an earlier run) is never touched.
+ */
+export async function retireDumpsById(dir: string | undefined, release: string, database: string, ids: readonly string[], reason: string, more: Omit<RetireOptions, 'dir' | 'database' | 'reason'> = {}): Promise<RetireResult> {
+  assertRelease(release)
+  const wanted = new Set(ids)
+  return retireMatching({ dir, database, reason, ...more }, (e) => wanted.has(e.migration_dump_id) && e.database === database && e.release === release)
 }
 
 /**

@@ -18,7 +18,7 @@ import type { RunMigrationsHooks } from '../runner.js'
 import type { DumpRetirer, Exporter } from '../lifecycle/types.js'
 import { dumpHook, type PreApply } from './hook.js'
 import { DumpError } from './ledger.js'
-import { retireDatabaseDumps, retireDump } from './retire.js'
+import { retireDatabaseDumps, retireDumpsById } from './retire.js'
 import { isOwnerUid, type DumpFs } from './take.js'
 
 /** "pg_dump (PostgreSQL) 18.1 (Debian 18.1-1)" -> 18. */
@@ -80,6 +80,11 @@ export function catchupDump(o: CatchupDumpOptions): CatchupDump {
   const more = { ...(typeof owner === 'number' ? { ownerUid: owner } : {}), ...(o.fs ? { fs: o.fs } : {}), ...(o.now ? { now: o.now } : {}), audit }
   // No directory configured: nothing could have been taken, so there is nothing to retire (a hook that ran would have refused).
   const configured = typeof dir === 'string' && dir.trim() !== ''
+  // The dumps THIS instance took (status 'created'), by database. afterEnable retires these and nothing else: a live
+  // dump of the same database and release that another writer took (the host's `take` of a release, an earlier run
+  // whose dump this run only reused) belongs to that writer and stays.
+  const taken = new Map<string, string[]>()
+  const left = new Map<string, string>()
   return {
     upgradeHooks: (_moduleId, postgresService) => {
       let inner: PreApply | undefined
@@ -95,6 +100,11 @@ export function catchupDump(o: CatchupDumpOptions): CatchupDump {
           pgDumpMajor: () => (o.pgDumpMajor ? o.pgDumpMajor() : localPgDumpMajor()),
           service: postgresService,
           pgUser: o.pgUserFor(postgresService),
+          onDump: (d, info) => {
+            if (d.status === 'created') taken.set(info.database, [...(taken.get(info.database) ?? []), d.id])
+            // a dump this run only REUSED was taken by someone else: it is not this run's to retire
+            else left.set(info.database, d.id)
+          },
           ...more,
         })
         await inner(file, ctx)
@@ -104,7 +114,15 @@ export function catchupDump(o: CatchupDumpOptions): CatchupDump {
     retire: {
       async afterEnable(release, database) {
         if (!configured) return
-        await retireDump(dir, release, database, 'enable committed', more)
+        const ids = taken.get(database) ?? []
+        const reused = left.get(database)
+        if (reused !== undefined) {
+          // fixed words and ids only: the database name here is an id (t_<hex>__<module>), never a slug
+          audit(`premigration-dump left-live id=${reused} release=${release} db=${database} reason="taken by another writer, not by this enable"`)
+        }
+        await retireDumpsById(dir, release, database, ids, 'enable committed', more)
+        taken.delete(database)
+        left.delete(database)
       },
       async afterDrop(database) {
         if (!configured) return
