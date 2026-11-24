@@ -118,6 +118,13 @@ function makePatchEvent(body: unknown) {
 
 type ResolutionInput = Record<string, unknown>
 
+// Eligible 5, present 4: quorate, and a tally of up to 4 votes fits the attendance.
+const QUORATE = { eligibleVotingCount: 5, presentVotingCount: 4, quorate: true }
+// Eligible 9, present 7: quorate and roomy, for the cases that pin rule arithmetic with larger tallies.
+const ROOMY = { eligibleVotingCount: 9, presentVotingCount: 7, quorate: true }
+// Eligible 5, only 2 present: not quorate by the app's rule (strict majority).
+const NOT_QUORATE = { eligibleVotingCount: 5, presentVotingCount: 2, quorate: false }
+
 beforeEach(() => {
   mockGetProtocol.mockReset().mockResolvedValue(draftProtocol)
   mockAddResolution.mockReset().mockImplementation(
@@ -127,9 +134,7 @@ beforeEach(() => {
     async (id: string, input: ResolutionInput) => ({ id, protocol_id: PID, ...input }),
   )
   mockDeleteResolution.mockReset()
-  mockGetQuorumContext.mockReset().mockResolvedValue({
-    eligibleVotingCount: 5, presentVotingCount: 4, quorate: true,
-  })
+  mockGetQuorumContext.mockReset().mockResolvedValue(QUORATE)
   mockSql.mockReset().mockResolvedValue([storedTallyRow])
   mockHasRole.mockReturnValue(true)
 })
@@ -187,8 +192,10 @@ describe('POST /api/protocols/[id]/resolutions — acclamation', () => {
     expect(input.votesYes).toBeNull()
     expect(input.votesNo).toBeNull()
     expect(input.votesAbstain).toBeNull()
-    // Acclamation is a declaration, not a computation — no quorum lookup.
-    expect(mockGetQuorumContext).not.toHaveBeenCalled()
+    // Acclamation is a declaration, not a computation, but it is still a decision
+    // of the meeting: the quorum is looked up (a non-quorate meeting is refused,
+    // see the plausibility block below).
+    expect(mockGetQuorumContext).toHaveBeenCalledOnce()
   })
 
   it('(d) without declared_result → 400, nothing persisted', async () => {
@@ -206,6 +213,7 @@ describe('POST /api/protocols/[id]/resolutions — acclamation', () => {
   })
 
   it('(e) full informational tally → stored alongside the declared result', async () => {
+    mockGetQuorumContext.mockResolvedValue({ eligibleVotingCount: 20, presentVotingCount: 15, quorate: true })
     const res = await POST(makePostEvent({
       text: 'X', adoption_mode: 'acclamation', declared_result: 'passed',
       votesYes: 10, votesNo: 1, votesAbstain: 2,
@@ -286,6 +294,7 @@ describe('PATCH /api/protocols/[id]/resolutions/[resId]', () => {
   )
 
   it('(g) pins required_majority to the STORED row: a client-sent rule cannot flip the outcome', async () => {
+    mockGetQuorumContext.mockResolvedValue(ROOMY)
     mockSql.mockResolvedValue([{ ...storedTallyRow, required_majority: 'two_thirds' }])
     const res = await PATCH(makePatchEvent({ votesYes: 4, votesNo: 3, votesAbstain: 0, requiredMajority: 'simple' }))
     expect(res.status).toBe(200)
@@ -303,14 +312,14 @@ describe('PATCH /api/protocols/[id]/resolutions/[resId]', () => {
     expect(input.result).toBe('withdrawn')
   })
 
-  it("(g/c) acclamation row: declared_result 'passed' updates the result without quorum or recomputation", async () => {
+  it("(g/c) acclamation row: declared_result 'passed' updates the result without recomputation (quorum is checked)", async () => {
     mockSql.mockResolvedValue([storedAcclamationRow])
     const res = await PATCH(makePatchEvent({ declared_result: 'passed' }))
     expect(res.status).toBe(200)
 
     const input = mockUpdateResolution.mock.calls[0][1] as ResolutionInput
     expect(input.result).toBe('passed')
-    expect(mockGetQuorumContext).not.toHaveBeenCalled()
+    expect(mockGetQuorumContext).toHaveBeenCalledOnce()
   })
 
   it("(g/a) acclamation row: client result 'withdrawn' updates the result (no silent no-op)", async () => {
@@ -354,6 +363,7 @@ describe('PATCH /api/protocols/[id]/resolutions/[resId]', () => {
   })
 
   it('(g/e) acclamation row: full informational tally → stored', async () => {
+    mockGetQuorumContext.mockResolvedValue(ROOMY)
     mockSql.mockResolvedValue([storedAcclamationRow])
     const res = await PATCH(makePatchEvent({ declared_result: 'rejected', votesYes: 1, votesNo: 8, votesAbstain: 0 }))
     expect(res.status).toBe(200)
@@ -635,6 +645,169 @@ describe('resolution write routes — a decision needs its text', () => {
   it('PATCH without a text field still edits the tallies (text is COALESCEd, not cleared)', async () => {
     mockSql.mockResolvedValue([storedTallyRow])
     const res = await PATCH(makePatchEvent({ votesYes: 3, votesNo: 0, votesAbstain: 0 }))
+    expect(res.status).toBe(200)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Plausibility: the votes must fit the attendance, and a meeting that is not
+// quorate by the app's own rule stores no decision. Found by a live test: 999 yes
+// votes in a body of 2 members, both marked absent, on a page that said
+// "Nicht beschlussfähig", was stored and shown as "Angenommen".
+// ─────────────────────────────────────────────────────────────────────────────
+
+const refusal = (err: unknown) => err as { status: number; body: { message: string } }
+
+describe('POST /api/protocols/[id]/resolutions — votes must fit the attendance', () => {
+  it('the live case: 999 yes in a body of 2, both absent → refused, nothing stored', async () => {
+    mockGetQuorumContext.mockResolvedValue({ eligibleVotingCount: 2, presentVotingCount: 0, quorate: false })
+    const err = await POST(makePostEvent({ text: 'Antrag', votesYes: 999, votesNo: 0, votesAbstain: 0 })).catch((e) => e)
+    expect(refusal(err).status).toBe(422)
+    expect(refusal(err).body.message).toMatch(/nicht beschlussfähig/i)
+    expect(mockAddResolution).not.toHaveBeenCalled()
+  })
+
+  it('more votes than members present in a quorate meeting → 400 naming both numbers, nothing stored', async () => {
+    const err = await POST(makePostEvent({ text: 'Antrag', votesYes: 3, votesNo: 2, votesAbstain: 0 })).catch((e) => e)
+    expect(refusal(err).status).toBe(400)
+    expect(refusal(err).body.message).toMatch(/5/)
+    expect(refusal(err).body.message).toMatch(/4/)
+    expect(refusal(err).body.message).toMatch(/anwesend/)
+    expect(mockAddResolution).not.toHaveBeenCalled()
+  })
+
+  it('abstentions count towards the total', async () => {
+    await expect(
+      POST(makePostEvent({ text: 'Antrag', votesYes: 1, votesNo: 1, votesAbstain: 3 })),
+    ).rejects.toMatchObject({ status: 400 })
+    expect(mockAddResolution).not.toHaveBeenCalled()
+  })
+
+  it('exactly as many votes as members present is plausible → 201', async () => {
+    const res = await POST(makePostEvent({ text: 'Antrag', votesYes: 2, votesNo: 1, votesAbstain: 1 }))
+    expect(res.status).toBe(201)
+    expect(mockAddResolution).toHaveBeenCalledOnce()
+  })
+
+  it('a valid vote in a quorate meeting is stored with the computed result', async () => {
+    const res = await POST(makePostEvent({ text: 'Antrag', votesYes: 3, votesNo: 1, votesAbstain: 0 }))
+    expect(res.status).toBe(201)
+    expect((mockAddResolution.mock.calls[0][1] as ResolutionInput).result).toBe('passed')
+  })
+
+  it('a meeting that is not quorate stores no counted decision, even with a plausible count', async () => {
+    mockGetQuorumContext.mockResolvedValue(NOT_QUORATE)
+    const err = await POST(makePostEvent({ text: 'Antrag', votesYes: 2, votesNo: 0, votesAbstain: 0 })).catch((e) => e)
+    expect(refusal(err).status).toBe(422)
+    expect(refusal(err).body.message).toMatch(/nicht beschlussfähig/i)
+    expect(refusal(err).body.message).toMatch(/Anwesenheit/)
+    expect(mockAddResolution).not.toHaveBeenCalled()
+  })
+
+  it('a withdrawn resolution is no vote: stored in a non-quorate meeting and with any count', async () => {
+    mockGetQuorumContext.mockResolvedValue(NOT_QUORATE)
+    const res = await POST(makePostEvent({ text: 'Zurück', votesYes: 999, votesNo: 0, votesAbstain: 0, result: 'withdrawn' }))
+    expect(res.status).toBe(201)
+    expect((mockAddResolution.mock.calls[0][1] as ResolutionInput).result).toBe('withdrawn')
+  })
+
+  it('a row nobody voted on (0/0/0) is a placeholder, not a decision: stored in a non-quorate meeting', async () => {
+    mockGetQuorumContext.mockResolvedValue(NOT_QUORATE)
+    const res = await POST(makePostEvent({ text: 'Antrag', votesYes: 0, votesNo: 0, votesAbstain: 0 }))
+    expect(res.status).toBe(201)
+  })
+
+  it('a consent resolution with an empty tally is adopted, so a non-quorate meeting refuses it', async () => {
+    mockGetQuorumContext.mockResolvedValue(NOT_QUORATE)
+    await expect(
+      POST(makePostEvent({ text: 'Konsens', requiredMajority: 'consent', votesYes: 0, votesNo: 0, votesAbstain: 0 })),
+    ).rejects.toMatchObject({ status: 422 })
+    expect(mockAddResolution).not.toHaveBeenCalled()
+  })
+
+  it('acclamation in a non-quorate meeting is refused like a counted decision', async () => {
+    mockGetQuorumContext.mockResolvedValue(NOT_QUORATE)
+    await expect(
+      POST(makePostEvent({ text: 'Akklamation', adoption_mode: 'acclamation', declared_result: 'passed' })),
+    ).rejects.toMatchObject({ status: 422 })
+    expect(mockAddResolution).not.toHaveBeenCalled()
+  })
+
+  it('an acclamation count that exceeds the attendance → 400', async () => {
+    await expect(
+      POST(makePostEvent({
+        text: 'Akklamation', adoption_mode: 'acclamation', declared_result: 'passed',
+        votesYes: 40, votesNo: 0, votesAbstain: 0,
+      })),
+    ).rejects.toMatchObject({ status: 400 })
+    expect(mockAddResolution).not.toHaveBeenCalled()
+  })
+
+  it('an acclamation without a count in a quorate meeting is stored', async () => {
+    const res = await POST(makePostEvent({ text: 'Akklamation', adoption_mode: 'acclamation', declared_result: 'passed' }))
+    expect(res.status).toBe(201)
+  })
+})
+
+describe('PATCH /api/protocols/[id]/resolutions/[resId] — votes must fit the attendance', () => {
+  it('an edit that raises the count above the attendance → 400, nothing updated', async () => {
+    mockSql.mockResolvedValue([storedTallyRow])
+    const err = await PATCH(makePatchEvent({ votesYes: 999 })).catch((e) => e)
+    expect(refusal(err).status).toBe(400)
+    expect(refusal(err).body.message).toMatch(/anwesend/)
+    expect(mockUpdateResolution).not.toHaveBeenCalled()
+  })
+
+  it('an edit in a meeting that is not quorate → 422, nothing updated', async () => {
+    mockGetQuorumContext.mockResolvedValue(NOT_QUORATE)
+    mockSql.mockResolvedValue([storedTallyRow])
+    const err = await PATCH(makePatchEvent({ votesYes: 2, votesNo: 0, votesAbstain: 0 })).catch((e) => e)
+    expect(refusal(err).status).toBe(422)
+    expect(refusal(err).body.message).toMatch(/nicht beschlussfähig/i)
+    expect(mockUpdateResolution).not.toHaveBeenCalled()
+  })
+
+  it('the live case on the edit path: 999 yes, both absent → refused', async () => {
+    mockGetQuorumContext.mockResolvedValue({ eligibleVotingCount: 2, presentVotingCount: 0, quorate: false })
+    mockSql.mockResolvedValue([storedTallyRow])
+    await expect(PATCH(makePatchEvent({ votesYes: 999 }))).rejects.toMatchObject({ status: 422 })
+    expect(mockUpdateResolution).not.toHaveBeenCalled()
+  })
+
+  it('an edit that keeps the count within the attendance is stored', async () => {
+    mockSql.mockResolvedValue([storedTallyRow])
+    const res = await PATCH(makePatchEvent({ votesYes: 3, votesNo: 1, votesAbstain: 0 }))
+    expect(res.status).toBe(200)
+    expect((mockUpdateResolution.mock.calls[0][1] as ResolutionInput).result).toBe('passed')
+  })
+
+  it('withdrawing stays possible in a non-quorate meeting and for a row whose stored count is implausible', async () => {
+    mockGetQuorumContext.mockResolvedValue(NOT_QUORATE)
+    mockSql.mockResolvedValue([{ ...storedTallyRow, votes_yes: 999 }])
+    const res = await PATCH(makePatchEvent({ result: 'withdrawn' }))
+    expect(res.status).toBe(200)
+    expect((mockUpdateResolution.mock.calls[0][1] as ResolutionInput).result).toBe('withdrawn')
+  })
+
+  it('an acclamation edit declaring a result in a non-quorate meeting → 422', async () => {
+    mockGetQuorumContext.mockResolvedValue(NOT_QUORATE)
+    mockSql.mockResolvedValue([storedAcclamationRow])
+    await expect(PATCH(makePatchEvent({ declared_result: 'passed' }))).rejects.toMatchObject({ status: 422 })
+    expect(mockUpdateResolution).not.toHaveBeenCalled()
+  })
+
+  it('an acclamation count above the attendance → 400', async () => {
+    mockSql.mockResolvedValue([storedAcclamationRow])
+    await expect(
+      PATCH(makePatchEvent({ declared_result: 'passed', votesYes: 30, votesNo: 0, votesAbstain: 0 })),
+    ).rejects.toMatchObject({ status: 400 })
+    expect(mockUpdateResolution).not.toHaveBeenCalled()
+  })
+
+  it('an edit of an untallied placeholder (text only) stays possible in a non-quorate meeting', async () => {
+    mockGetQuorumContext.mockResolvedValue(NOT_QUORATE)
+    mockSql.mockResolvedValue([{ ...storedTallyRow, votes_yes: 0, votes_no: 0, votes_abstain: 0 }])
+    const res = await PATCH(makePatchEvent({ text: 'Neuer Text' }))
     expect(res.status).toBe(200)
   })
 })
