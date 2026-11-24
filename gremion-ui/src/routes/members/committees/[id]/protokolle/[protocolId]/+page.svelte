@@ -23,6 +23,7 @@
   import AttendanceSection from '$lib/components/protocols/AttendanceSection.svelte'
   import ResolutionRow from '$lib/components/protocols/ResolutionRow.svelte'
   import ActionItemRow from '$lib/components/protocols/ActionItemRow.svelte'
+  import type { AttendanceBasis } from '$lib/governance/resolution-plausibility'
   import { protocolBodyMode } from '$lib/governance/protocol-body-mode'
   import ProtocolBodyEditor from '$lib/components/protocols/ProtocolBodyEditor.svelte'
   import ProtokollgenehmigungPanel from '$lib/components/protocols/ProtokollgenehmigungPanel.svelte'
@@ -55,6 +56,11 @@
   // resolution API accepts the edit until the protocol is published.
   const canEditResolution = (r: ResolutionLike) =>
     Boolean(isAdmin) && (isEditable || (data.protocol.status === 'submitted' && isUntalliedResolution(r)))
+  // The attendance as the roster shows it NOW: AttendanceSection reports it after
+  // every saved click, so a decision is judged against the live roster and not the
+  // numbers of the page load (data.quorum).
+  // svelte-ignore state_referenced_locally
+  let liveAttendance = $state<AttendanceBasis>({ ...data.quorum })
   let actionItems = $state<ProtocolActionItem[]>(data.actionItems)
   // (4) the real 422 body from a blocked publish, surfaced inline (not alert()).
   let publishError = $state<string | null>(null)
@@ -273,6 +279,7 @@
     advisoryAttendance={data.advisoryAttendance}
     isAdmin={(isAdmin && isEditable) ?? false}
     protocolId={data.protocol.id}
+    onQuorum={(q) => (liveAttendance = q)}
   />
 
   <section class="space-y-2">
@@ -307,6 +314,7 @@
           isAdmin={canEditResolution(resolution)}
           protocolId={data.protocol.id}
           eligibleVotingCount={data.quorum.eligibleVotingCount}
+          attendance={liveAttendance}
           onSave={saveResolution}
           onDelete={deleteResolution}
         />
@@ -319,6 +327,7 @@
           error={newResolutionError}
           protocolId={data.protocol.id}
           eligibleVotingCount={data.quorum.eligibleVotingCount}
+          attendance={liveAttendance}
           onSave={createResolution}
           onDelete={() => {}}
           onCancel={cancelNewResolution}

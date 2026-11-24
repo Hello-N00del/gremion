@@ -11,11 +11,15 @@
   // The roster arrives from the page load; the chips own the saved status and
   // hand it back through the bindings, so the quorum line below is derived from
   // what the server has persisted (a failed save never reaches the list).
-  let { attendance, advisoryAttendance, isAdmin, protocolId }: {
+  let { attendance, advisoryAttendance, isAdmin, protocolId, onQuorum }: {
     attendance: AttendanceEntry[]
     advisoryAttendance: AttendanceEntry[]
     isAdmin: boolean
     protocolId: string
+    // Told the saved attendance numbers (also on first render), so the rest of
+    // the page (the decision form) judges against the roster as it is now, not as
+    // it was when the page loaded.
+    onQuorum?: (q: { eligibleVotingCount: number; presentVotingCount: number; quorate: boolean }) => void
   } = $props()
 
   // `attendance` / `advisoryAttendance` seed the local lists (so the first and
@@ -38,6 +42,10 @@
   const eligible = $derived(voting.length)
   const present = $derived(voting.filter((e) => e.status === 'present').length)
   const quorate = $derived(eligible > 0 && present * 2 > eligible)
+
+  $effect(() => {
+    onQuorum?.({ eligibleVotingCount: eligible, presentVotingCount: present, quorate })
+  })
 </script>
 
 <section id="anwesenheit" class="space-y-2">
