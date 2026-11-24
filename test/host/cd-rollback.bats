@@ -83,7 +83,16 @@ _sim_seq() { # FILE DEFAULT -- the word of this call
 _sim_tag() { if [ "$1" = "$SIM_NEW" ]; then printf '%s' "$NEW_TAG"; else printf '%s' "$OLD_TAG"; fi; }
 # a colour that answers nothing: every call that needs the new colour to answer is a finding
 _sim_dead() { if [ "$1" = "$SIM_NEW" ] && [ -e "$DK/newdead" ]; then _sim_log "NEWCALL $2 $1"; return 0; fi; return 1; }
-cd_wait_healthy() { local c="${1#app-}"; _sim_log "wait_healthy $c"; if _sim_dead "$c" wait_healthy; then return 3; fi; [ -e "$DK/running.$c" ] && return 0; return 3; }
+cd_wait_healthy() {
+    local c="${1#app-}"
+    _sim_log "wait_healthy $c"
+    _sim_log "wait_secs $c $2"
+    if _sim_dead "$c" wait_healthy; then return 3; fi
+    [ -e "$DK/running.$c" ] && return 0
+    # healthy.late.<colour>: a colour that is starting or momentarily unhealthy: it answers healthy only to a call that waits
+    if [ "${2:-0}" -gt 0 ] && [ -e "$DK/healthy.late.$c" ]; then return 0; fi
+    return 3
+}
 cd_svc_cid() { _sim_log "cid $1 $2"; if [ "${1#app-}" = "$SIM_NEW" ] && [ -e "$DK/newdead" ]; then return 1; fi; printf 'cid-%s\n' "$1"; }
 cd_colour_identity() { _sim_log "identity $1 $2"; if _sim_dead "$1" identity; then return 1; fi; [ ! -e "$DK/identity.fail" ]; }
 cd_colour_probe() {
@@ -423,6 +432,49 @@ fingerprint() {
     [ -e "$DK/running.green" ]
 }
 
+@test "old: a rollback before the switch (the old colour still serves) whose old colour is momentarily not healthy WAITS for it up to CD_COLOUR_HEALTHY_S and never starts it" {
+    sim_on
+    printf '%s\n' blue > "$DK/active"
+    printf '%s\n' blue > "${GREMION_ROOT}/runtime/active-colour"
+    rm -f "$DK/running.blue"
+    touch "$DK/healthy.late.blue"
+    run rb watch_readiness
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"rc=0 "* ]]
+    assert_absent '^sim start ' "$SHIM_LOG"
+    # the first look is the zero second one; the wait that follows it is the healthy window
+    before 'sim wait_secs blue 0' 'sim truth'
+    before 'sim truth' 'sim wait_secs blue 180'
+    assert_absent 'DOWN-OF-SERVING' "$SHIM_LOG"
+    [ "$(cat "$DK/active")" = blue ]
+    hist_has rollback_old_running
+}
+
+@test "old: the wait is the key CD_COLOUR_HEALTHY_S, and a serving old colour that never gets healthy ends the rollback as old_unhealthy with nothing started and the new colour left running" {
+    sim_on
+    printf '%s\n' blue > "$DK/active"
+    printf '%s\n' blue > "${GREMION_ROOT}/runtime/active-colour"
+    rm -f "$DK/running.blue"
+    export CD_COLOUR_HEALTHY_S=42
+    run rb watch_readiness
+    [[ "$output" == *"rc=1 reason=old_unhealthy"* ]]
+    assert_present '^sim wait_secs blue 42$' "$SHIM_LOG"
+    assert_absent '^sim start ' "$SHIM_LOG"
+    assert_absent '^sim (switch|down|workers)' "$SHIM_LOG"
+    [ -e "$DK/running.green" ]
+    [ "$(sj .hold.kind)" = rollback_failed ]
+}
+
+@test "old: the new colour serving and the old one gone is still the start of the old colour (the truth is asked only after the zero second look failed)" {
+    sim_on
+    rm -f "$DK/running.blue"
+    run rb watch_readiness
+    [ "$status" -eq 0 ]
+    [ "$(count "sim start $OLD_TREE blue $OLD_TAG")" = 1 ]
+    before 'sim wait_secs blue 0' 'sim truth'
+    before 'sim truth' 'sim start'
+}
+
 # ================================================================= the proof of the old colour
 
 @test "prove: the old colour's image identity is checked; a failure stops before the switch" {
@@ -615,6 +667,9 @@ fingerprint() {
     printf 'bad\nbad\nok\nbad\nbad\nok\n' > "$DK/sample.seq"
     run rb watch_readiness
     [[ "$output" == *"rc=0 "* ]]
+    # without the reset the fourth sample is the third in a row, and the window ends there
+    [ "$(count 'sim sample blue')" -ge 11 ]
+    assert_absent '^sim notify rollback_failed' "$SHIM_LOG"
 }
 
 @test "window: a bad sample while a shared service is down does not COUNT toward the streak" {
@@ -629,10 +684,13 @@ fingerprint() {
 @test "window: a sample set aside because a shared service is down does not RESET the streak" {
     cd_write_cfg CD_POST_ROLLBACK_S=90
     sim_on
-    # two bad, one set aside, one bad: a reset would have left the streak at 1
-    printf 'bad\nbad\nshared\nbad\n' > "$DK/sample.seq"
+    # two bad, one set aside, one bad: the streak is 3 and the window ends there. A set-aside sample
+    # that reset the streak would leave 1 (and the sample that follows is good), so the window would
+    # run on and succeed: the last word is `ok` so that no sticking `bad` can end it by another road.
+    printf 'bad\nbad\nshared\nbad\nok\n' > "$DK/sample.seq"
     run rb watch_readiness
     [[ "$output" == *"rc=1 reason=unhealthy_after_rollback"* ]]
+    [ "$(count 'sim sample blue')" = 4 ]
     assert_absent '^sim (workers|down)' "$SHIM_LOG"
 }
 
@@ -685,6 +743,7 @@ fingerprint() {
 
 @test "stop: the log tail of the new colour is kept under logs/ with mode 0600" {
     sim_on
+    rm -rf "${GREMION_ROOT}/logs"
     run rb watch_readiness
     [ "$status" -eq 0 ]
     f="$(ls "${GREMION_ROOT}"/logs/cd-rollback-"${NEW_TAG}"-*.log)"
@@ -692,6 +751,33 @@ fingerprint() {
     [ "$(stat -c %a "$f")" = 600 ]
     assert_present 'log-tail-marker-zq' "$f"
     [[ "$output" != *"log-tail-marker-zq"* ]]
+    # logs/ was made by this step: 0700 (the file names tenants)
+    [ "$(stat -c %a "${GREMION_ROOT}/logs")" = 700 ]
+}
+
+@test "stop: a symlinked logs/ is not written through, and a symlinked log file is refused (the rollback is still done)" {
+    local elsewhere="${GREMION_ROOT}/elsewhere" victim="${GREMION_ROOT}/victim.txt"
+    sim_on
+    rm -rf "${GREMION_ROOT}/logs"
+    mkdir -p "$elsewhere"
+    ln -s "$elsewhere" "${GREMION_ROOT}/logs"
+    run rb watch_readiness
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"rc=0 "* ]]
+    [ -z "$(ls -A "$elsewhere")" ]
+    # a link in the place of the file itself (the name is the tag and the clock, so it is planted by name)
+    world_new_serves
+    seed_pre
+    rm -f "${GREMION_ROOT}/logs"
+    mkdir -p "${GREMION_ROOT}/logs"
+    printf 'untouched\n' > "$victim"
+    for i in $(seq 0 300); do
+        ln -s "$victim" "${GREMION_ROOT}/logs/cd-rollback-${NEW_TAG}-$(( $(cd_clock) + i )).log"
+    done
+    run rb watch_readiness
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"rc=0 "* ]]
+    [ "$(cat "$victim")" = untouched ]
 }
 
 @test "stop: a stop that fails is a warning, the rollback is still done" {
