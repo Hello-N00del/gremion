@@ -243,17 +243,21 @@ teardown() {
 }
 
 # ===========================================================================================
-# kill -9 at every stage boundary, then the boot resume
+# kill -9 at every stage boundary, then the resume
 # ===========================================================================================
 
-# pl_kill_case REGEX NTH -- the tick dies in the call that matches, the boot resume runs, and the end
-# state is the one of the uninterrupted run
+# pl_kill_case REGEX NTH [plain] -- the tick dies in the call that matches; then the boot unit's
+# `tick --resume-only` takes the release over (or, with plain, the timer's plain tick)
 pl_kill_case() {
+    local pat="$1" nth="$2"
+    local -a args
+    shift 2
     pl_scn_green
-    pl_killed_tick "$1" "$2"
+    pl_killed_tick "$pat" "$nth"
     # the interrupted state is a release in flight, not an idle host
     [ "$(pl_state .phase)" != idle ]
-    run pl_tick --resume-only
+    if [ "${1:-}" = plain ]; then args=(); else args=(--resume-only); fi
+    run pl_tick "${args[@]}"
     echo "$output"
     [ "$status" -eq 0 ]
     pl_no_stubs
@@ -261,59 +265,130 @@ pl_kill_case() {
     [ "$(pl_state .release)" = null ]
 }
 
-@test "kill -9 in the fetch, then the resume: the release commits" {
+# the boot unit finishes the release it finds and never starts the reconcile stage: the release is
+# committed, one `released` mail, and the hold `reconcile_failed` (reason interrupted) asks the operator
+# for the customer reconcile
+pl_assert_boot_end() {
+    pl_assert_committed
+    # never a rollback
+    [ "$(pl_hist rollback_started)" -eq 0 ]
+    [ "$(pl_state .hold.kind)" = reconcile_failed ]
+    [ "$(pl_state .hold.reason)" = interrupted ]
+    [ ! -s "$DK/tenant.slugs" ]
+    [ "$(pl_mails released)" -eq 1 ]
+}
+
+@test "kill -9 in the fetch, then the boot resume: the release commits" {
     pl_kill_case 'git clone --quiet --no-checkout' 1
-    pl_assert_committed
+    pl_assert_boot_end
 }
 
-@test "kill -9 in the classify, then the resume: the release commits" {
+@test "kill -9 in the classify, then the boot resume: the release commits" {
     pl_kill_case 'config --format json --no-env-resolution' 1
-    pl_assert_committed
+    pl_assert_boot_end
 }
 
-@test "kill -9 in the render, then the resume: the release commits" {
+@test "kill -9 in the render, then the boot resume: the release commits" {
     pl_kill_case '^render --release' 1
-    pl_assert_committed
+    pl_assert_boot_end
 }
 
-@test "kill -9 in the build, then the resume: the release commits" {
+@test "kill -9 in the build, then the boot resume: the release commits" {
     pl_kill_case 'app-green.env --profile . build$' 1
-    pl_assert_committed
+    pl_assert_boot_end
 }
 
-@test "kill -9 in the snapshot (the first take), then the resume: the release commits" {
+@test "kill -9 in the snapshot (the first take), then the boot resume: the release commits" {
     pl_kill_case '^dump take' 1
-    pl_assert_committed
+    pl_assert_boot_end
 }
 
-@test "kill -9 in the snapshot (the fifth take), then the resume: the release commits" {
+@test "kill -9 in the snapshot (the fifth take), then the boot resume: the release commits" {
     pl_kill_case '^dump take' 5
-    pl_assert_committed
+    pl_assert_boot_end
 }
 
-@test "kill -9 in the migrate (the first one-shot), then the resume: the release commits" {
+@test "kill -9 in the migrate (the first one-shot), then the boot resume: the release commits" {
     pl_kill_case 'gremion.cd=.* migrate$' 1
-    pl_assert_committed
+    pl_assert_boot_end
 }
 
-@test "kill -9 in the module step, then the resume: the release commits" {
+@test "kill -9 in the module step, then the boot resume: the release commits" {
     pl_kill_case 'tenant-create module-upgrade' 1
-    pl_assert_committed
+    pl_assert_boot_end
 }
 
-@test "kill -9 in the start, then the resume: the release commits" {
+@test "kill -9 in the start, then the boot resume: the release commits" {
     pl_kill_case 'app-green.env up -d' 1
-    pl_assert_committed
+    pl_assert_boot_end
 }
 
-@test "kill -9 in the gates, then the resume: the release commits" {
+@test "kill -9 in the gates, then the boot resume: the release commits" {
     pl_kill_case '^isolation run' 1
-    pl_assert_committed
+    pl_assert_boot_end
 }
 
-@test "kill -9 in the watch, then the resume: the window goes on and the release commits" {
+@test "kill -9 in the switch call, then the boot resume: the switch is read from the edge and the release commits" {
+    pl_kill_case '^switch green' 1
+    pl_assert_boot_end
+    # the first call never ran, so the edge was asked again and the switch happened once
+    [ "$(pl_count '^switch green')" -eq 1 ]
+}
+
+@test "kill -9 in the watch, then the boot resume: the window goes on and the release commits" {
     pl_kill_case '--resolve .* -o /dev/null' 4
+    pl_assert_boot_end
+}
+
+@test "a timer tick after a kill -9 takes the release over and ends in the state of the uninterrupted run, the reconcile included" {
+    pl_kill_case 'app-green.env --profile . build$' 1 plain
     pl_assert_committed
+    [ "$(pl_state .hold)" = null ]
+    [ "$(pl_hist reconciled)" -eq 1 ]
+    [ "$(wc -l <"$DK/tenant.slugs")" -eq 3 ]
+    [ "$(pl_mails released)" -eq 1 ]
+}
+
+@test "a timer tick after a kill -9 in the watch commits and reconciles" {
+    pl_kill_case '--resolve .* -o /dev/null' 4 plain
+    pl_assert_committed
+    [ "$(pl_state .hold)" = null ]
+    [ "$(pl_hist reconciled)" -eq 1 ]
+}
+
+@test "kill -9 in the commit before the commit point, then the boot resume: the switch back, no block, the hold failure" {
+    pl_kill_case '^isolation record' 1
+    local l12="${C_L0:0:12}"
+    [ "$(pl_state .live.sha)" = "$C_L0" ]
+    [ "$(readlink "${GREMION_ROOT}/current")" = "${GREMION_ROOT}/releases/${l12}" ]
+    [ "$(cat "${GREMION_ROOT}/runtime/current-tag")" = "pilot-${l12}" ]
+    [ "$(cat "${GREMION_ROOT}/runtime/active-colour")" = blue ]
+    # nothing the commit steps 1 to 4 wrote still names the new release
+    [ "$(cat "${GREMION_ROOT}/data/isolation-recorded")" = "$C_L0" ]
+    [ "$(pl_state .hold.kind)" = failure ]
+    [ "$(pl_state .hold.reason)" = commit_stuck ]
+    [ "$(pl_hist rolled_back)" -eq 1 ]
+    [ "$(pl_blocks)" -eq 0 ]
+}
+
+@test "kill -9 in the commit after the commit point, then the boot resume: the steps after it finish forward" {
+    pl_kill_case 'app-blue.env down' 1
+    pl_assert_boot_end
+    pl_after '^kill-9' '^down blue'
+}
+
+@test "kill -9 in the reconcile stage, then the boot resume: the hold reconcile_failed, the release stays committed" {
+    pl_scn_green
+    pl_killed_tick '^tenant reconcile' 2
+    run pl_tick --resume-only
+    echo "$output"
+    [ "$status" -eq 0 ]
+    pl_no_stubs
+    pl_assert_committed
+    [ "$(pl_state .hold.kind)" = reconcile_failed ]
+    [ "$(pl_state .hold.reason)" = interrupted ]
+    [ "$(pl_hist rollback_started)" -eq 0 ]
+    [ "$(pl_blocks)" -eq 0 ]
 }
 
 @test "workers: new off at the start, old off then new on at the switch, new on in the gate file at the commit" {
