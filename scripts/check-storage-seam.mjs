@@ -248,9 +248,9 @@ export const ALLOWLIST = [
   },
   {
     path: 'packages/tenant-store/src/dump/ledger.ts',
-    sites: 8,
+    sites: 5,
     reason:
-      'TASK-075: the append-only, fsynced ledger.jsonl and its lock file in the operator-owned migration-dump directory (mode 0600). The 8 sites include a read-only directory open (`openSync(dir, \'r\')`, used to fsync the directory entry) and the append-open probe that proves the ledger takes an append before a dump is unlinked — platform migration bookkeeping, not tenant files',
+      'TASK-075: the append-only, fsynced ledger.jsonl and its lock file in the operator-owned migration-dump directory (mode 0600). The sites include a read-only directory open (`openSync(dir, \'r\')`, used to fsync the directory entry) and the append-open probe that proves the ledger takes an append before a dump is unlinked — platform migration bookkeeping, not tenant files',
     residual: 'dump bookkeeping lives in the dump directory, outside the storage seam; revisit if the ledger moves into the database (TASK-086 imports it)',
   },
   {
@@ -261,8 +261,15 @@ export const ALLOWLIST = [
     residual: 'dumps live in the dump directory, outside the storage seam, until the release that needed them has switched',
   },
   {
+    path: 'packages/tenant-store/src/dump/safefs.ts',
+    sites: 4,
+    reason:
+      'The no-follow file helpers of the migration-dump directory: every open, create, mode change and directory create that the dump code (take, ledger, retire) performs goes through here, so a link planted in that directory is refused instead of followed. It writes database dumps and their ledger, never a tenant file/draft/media object',
+    residual: 'dumps live in the dump directory, outside the storage seam, until the release that needed them has switched',
+  },
+  {
     path: 'packages/tenant-store/src/dump/take.ts',
-    sites: 10,
+    sites: 2,
     reason:
       'TASK-075: takes one pg_dump per migration into the operator-owned dump directory (0700 directory, 0600 file), verifies and fsyncs it, and removes a failed one. Includes a read-only-intent `openSync(file, \'r+\')` for fsync and the owner hand-over (`chownSync` plus the mode re-assertion) a root process applies to everything it writes so the deploy user can read and retire it — a database dump, not a tenant file/draft/media object',
     residual: 'dumps live in the dump directory, outside the storage seam, until the release that needed them has switched',
@@ -273,6 +280,13 @@ export const ALLOWLIST = [
     reason:
       'TRD-149/150/151: the tenant data export in open formats — writes one CSV and one JSON file per table plus manifest.json (create-exclusive, 0600) into a caller-chosen output directory. Includes stream `.write(...)` calls on those export files; it exports DATABASE rows, it does not touch the tenant storage objects',
     residual: 'output directory is chosen by the operator command; revisit if the export is to be delivered through the object store (TRD-223)',
+  },
+  {
+    path: 'packages/tenant-store/src/fd-stream.ts',
+    sites: 3,
+    reason:
+      'Read and write streams over an already-open file descriptor, used by the dump and export code so a file is opened once (no-follow) and never re-opened by name. It opens nothing itself; the descriptor is a database dump or export file, never a tenant file/draft/media object',
+    residual: 'the callers own the descriptor and its directory; revisit together with their entries',
   },
   {
     path: 'packages/tenant-store/src/lifecycle/export.ts',
