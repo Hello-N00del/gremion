@@ -170,7 +170,9 @@ ad_setup() {
 exit 0
 EOF
 )"
-    shim systemctl 'cat "$DK/timers.json" 2>/dev/null || exit 1'
+    # `systemctl show ... UNIT` answers from $DK/state.UNIT (ad_unit_state); no such file means
+    # the unit does not exist (LoadState=not-found); anything else is the list of timers
+    shim systemctl 'if [ "$1" = show ]; then u="${!#}"; if [ -f "$DK/state.$u" ]; then cat "$DK/state.$u"; else printf "LoadState=not-found\nActiveState=inactive\nUnitFileState=\n"; fi; exit 0; fi; cat "$DK/timers.json" 2>/dev/null || exit 1'
     ad_timers_json
     # the hosts' installed set and a systemd directory
     GREMION_CD_SYSTEMD_DIR="${GREMION_ROOT}/.systemd"
@@ -205,6 +207,11 @@ ad_timers_json() {
          {unit: "gremion-backup.timer", next: $b, activates: "gremion-backup.service"},
          {unit: "gremion-purge.timer", next: $p, activates: "gremion-purge.service"}]
         | map(select(.unit != $miss))' > "${DK}/timers.json"
+}
+
+# ad_unit_state UNIT LOAD UNITFILESTATE ACTIVE -- what `systemctl show` says about a unit
+ad_unit_state() {
+    printf 'LoadState=%s\nActiveState=%s\nUnitFileState=%s\n' "$2" "$4" "$3" > "${DK}/state.$1"
 }
 
 ad_write_prelude() {
