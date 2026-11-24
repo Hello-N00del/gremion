@@ -28,8 +28,8 @@ import { closeSync, constants, createReadStream, fstatSync, fsyncSync, rmSync, s
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import type { Exporter } from '../lifecycle/types.js'
-import { appendEvent, assertRelease, auditLine, DumpError, dumpFileParts, fsyncDir, liveDumps, readEvents, withLedgerLock, type ByKind, type DumpEvent, type DumpScope, type HandOver } from './ledger.js'
-import { allowedOwners, anchorDir, assertPlain, handOverNoFollow, openChildDir, openNoFollow, setMode, sizeNoFollow } from './safefs.js'
+import { appendEvent, assertRelease, auditLine, DumpError, dumpFileParts, fsyncDir, liveDumps, readEvents, withLedgerLock, type ByKind, type DumpEvent, type DumpScope, type ENABLE_ORIGIN, type HandOver } from './ledger.js'
+import { allowedOwners, anchorDir, assertPlain, handOverFd, madeSince, openChildDir, openNoFollow, SELF_UID, setMode, sizeNoFollow, unsafePath } from './safefs.js'
 
 /** Free space must be at least this multiple of pg_database_size (brief §1). */
 export const SPACE_FACTOR = 1.2
@@ -88,14 +88,13 @@ export function isOwnerUid(v: unknown): v is number {
  * gremion-migration-dump status, verify and switched, which run as that user, can read and retire it. undefined
  * (no hand-over at all) for a process that is not root, and when no `ownerUid` is declared.
  *
- * The hand-over opens the path with O_NOFOLLOW and changes ownership and mode on that descriptor, and only for a plain
- * node of root, the owner or this process: a link, or a file with a second link, is DUMP_PATH_UNSAFE.
+ * It changes ownership and mode on the descriptor that made the node (fchown, fchmod), never on a name, and it is
+ * called only for nodes made in the same call: a node that already stands in the directory is never handed over.
  */
 export function handOverFor(fs: DumpFs, ownerUid: number | undefined): HandOver | undefined {
   if (ownerUid === undefined || fs.uid !== 0) return undefined
-  const owners = allowedOwners(ownerUid)
   const chown = fs.chown ? (p: string, u: number): void => fs.chown!(p, u) : undefined
-  return (path, mode) => handOverNoFollow(path, ownerUid, mode, owners, chown)
+  return (path, mode, fd) => handOverFd(fd, path, ownerUid, mode, chown)
 }
 
 export interface TakeDumpOptions {
@@ -122,6 +121,8 @@ export interface TakeDumpOptions {
    * hands everything it writes to it; for every other process it is ignored and nothing changes.
    */
   ownerUid?: number
+  /** Written to the ledger line (DumpEvent.origin): who took this dump. The enable catch-up sets it; nothing else does. */
+  origin?: typeof ENABLE_ORIGIN
   probe: DumpProbe
   fs?: DumpFs
   byKind?: ByKind
@@ -168,13 +169,18 @@ export function sha256OfFile(file: string): Promise<string> {
   })
 }
 
-/** What a dump file needs before its ledger line: mode 0600, handed over, fsynced, on one descriptor that is not a link. */
-function sealFile(file: string, owners: readonly number[], handOver: HandOver | undefined): void {
+/**
+ * What a dump file needs before its ledger line: mode 0600, handed over, fsynced, all on one descriptor that is not a
+ * link. The file must be this process's own and written since `startedMs`: the exporter made it a moment ago, so a
+ * node of another owner, or an older node that was moved into its place, is refused before anything is changed.
+ */
+function sealFile(file: string, startedMs: number, handOver: HandOver | undefined): void {
   const fd = openNoFollow(file, constants.O_RDWR)
   try {
-    assertPlain(fd, file, 'file', owners)
+    const st = assertPlain(fd, file, 'file', SELF_UID === undefined ? undefined : [SELF_UID])
+    if (!madeSince(st, startedMs)) throw unsafePath(file, 'is not the file the exporter just wrote')
     setMode(fd, file, 0o600)
-    handOver?.(file, 0o600)
+    handOver?.(file, 0o600, fd)
     fsyncSync(fd)
   } finally {
     closeSync(fd)
@@ -243,7 +249,7 @@ async function takeUnder(o: TakeDumpOptions, fs: DumpFs, anchor: ReturnType<type
   const dir = o.dir as string
   const adir = anchor.dir
   const handOver = handOverFor(fs, o.ownerUid)
-  const owners = allowedOwners(o.ownerUid)
+  const owners = allowedOwners(o.ownerUid, fs.uid)
   const server = o.service !== undefined && o.service !== 'postgres' && o.pgUser !== undefined ? { pg_service: o.service, pg_user: o.pgUser } : null
   if (server && (!/^[a-z][a-z0-9]*-postgres$/.test(server.pg_service) || !/^[a-z_][a-z0-9_]{0,62}$/.test(server.pg_user))) {
     throw new DumpError('DUMP_SCOPE', 'the server and role of a module-server dump are not valid names; nothing was dumped or migrated')
@@ -305,6 +311,7 @@ async function takeUnder(o: TakeDumpOptions, fs: DumpFs, anchor: ReturnType<type
       const name = `${o.database}.${id}.dump`
       const file = `${o.release}/${name}`
       const path = join(relDir.dir, name)
+      const startedMs = Date.now()
       try {
         await o.exporter.dump({ service: o.service ?? 'postgres', database: o.database }, path)
       } catch (err) {
@@ -312,7 +319,7 @@ async function takeUnder(o: TakeDumpOptions, fs: DumpFs, anchor: ReturnType<type
         throw new DumpError('PG_DUMP_FAILED', `pg_dump of ${o.database} failed: ${(err as Error).message}; the partial file was removed, nothing was migrated`, { cause: err })
       }
       try {
-        sealFile(path, owners, handOver)
+        sealFile(path, startedMs, handOver)
         fsyncDir(relDir.dir)
         fsyncDir(adir)
         const bytes = sizeNoFollow(path)
@@ -338,6 +345,7 @@ async function takeUnder(o: TakeDumpOptions, fs: DumpFs, anchor: ReturnType<type
           bytes,
           dump_taken_at: takenAt.toISOString(),
           ...server,
+          ...(o.origin ? { origin: o.origin } : {}),
         }
         appendEvent(adir, event, handOver)
         audit(auditLine(event))

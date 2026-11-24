@@ -225,7 +225,7 @@ describe('enable of a blocked database: the catch-up dump', () => {
     // the dump is the label of the release, of that one database, with the server and role the host's restore reads
     const created = readEvents(dir).filter((e) => e.event === 'created')
     expect(created).toHaveLength(1)
-    expect(created[0]).toMatchObject({ release: RELEASE, database: s.dbName, scope: 'customer', module_id: 'finance', pg_service: 'finance-postgres', pg_user: 'finance' })
+    expect(created[0]).toMatchObject({ release: RELEASE, database: s.dbName, scope: 'customer', module_id: 'finance', pg_service: 'finance-postgres', pg_user: 'finance', origin: 'enable-catchup' })
     // retired after the commit: no live line, no file, one `deleted` line naming the reason
     expect(liveDumps(readEvents(dir))).toEqual([])
     expect(readEvents(dir).filter((e) => e.event === 'deleted')).toMatchObject([{ database: s.dbName, release: RELEASE, reason: 'enable committed' }])
@@ -326,7 +326,9 @@ describe('enable of a blocked database: the catch-up dump', () => {
     await expect(enableModule(TENANT, first.m, ACTOR, first.deps)).rejects.toThrow(/003_bad\.sql failed/)
     const id = liveDumps(readEvents(dir))[0]!.migration_dump_id
     events = []
-    const second = setup({ module: 'finance', pending: ['003_bad.sql'], upgradeHooks: c.upgradeHooks, dumpRetire: c.retire })
+    // a retry is a NEW process in production: a fresh catch-up instance that remembers nothing of the first
+    const later = catchup(dir, fakeExporter())
+    const second = setup({ module: 'finance', pending: ['003_bad.sql'], upgradeHooks: later.upgradeHooks, dumpRetire: later.retire })
     await enableModule(TENANT, second.m, ACTOR, second.deps)
     expect(events).toEqual(['apply:003_bad.sql', 'unblock', 'commit'])
     expect(events.some((e) => e.startsWith('dump:'))).toBe(false)
@@ -346,7 +348,8 @@ describe('enable of a blocked database: the catch-up dump', () => {
     await expect(enableModule(TENANT, first.m, ACTOR, first.deps)).rejects.toThrow(/crash after the unblock/)
     expect(liveDumps(readEvents(dir))).toHaveLength(1)
     expect(events).toContain('reblock')
-    const second = setup({ module: 'finance', pending: [], upgradeHooks: c.upgradeHooks, dumpRetire: c.retire })
+    const later = catchup(dir, fakeExporter()) // a new process: nothing remembered from the first
+    const second = setup({ module: 'finance', pending: [], upgradeHooks: later.upgradeHooks, dumpRetire: later.retire })
     await enableModule(TENANT, second.m, ACTOR, second.deps)
     expect(liveDumps(readEvents(dir))).toEqual([])
   })

@@ -22,7 +22,7 @@
 // line and no planted link can make a retire remove a file elsewhere.
 import { lstatSync, rmdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { appendEvent, assertLedgerWritable, assertRelease, auditLine, DumpError, dumpFileParts, fsyncDir, liveDumps, readEvents, withLedgerLock, type DumpEvent } from './ledger.js'
+import { appendEvent, assertLedgerWritable, assertRelease, auditLine, DumpError, dumpFileParts, ENABLE_ORIGIN, fsyncDir, liveDumps, readEvents, withLedgerLock, type DumpEvent } from './ledger.js'
 import { allowedOwners, openChildDir } from './safefs.js'
 import { anchorDumpDir, defaultDumpFs, handOverFor, type DumpFs } from './take.js'
 
@@ -43,22 +43,26 @@ export interface RetireOptions {
 export interface RetireResult {
   /** The migration_dump_id of every dump retired, oldest first; empty when none was live. */
   retired: string[]
+  /** Only for retireEnableDumps: live dumps of the same release and database that were NOT retired (another writer's). */
+  left: string[]
 }
 
-async function retireMatching(o: RetireOptions, match: (e: DumpEvent) => boolean): Promise<RetireResult> {
+async function retireMatching(o: RetireOptions, match: (e: DumpEvent) => boolean, leftWhen: (e: DumpEvent) => boolean = () => false): Promise<RetireResult> {
   if (typeof o.reason !== 'string' || o.reason.trim() === '') throw new DumpError('DUMP_SCOPE', 'a retire needs a reason: it is written to the ledger')
   const fs = o.fs ?? defaultDumpFs
   const anchor = anchorDumpDir(o.dir, fs, o.ownerUid)
   const adir = anchor.dir
   const handOver = handOverFor(fs, o.ownerUid)
-  const owners = allowedOwners(o.ownerUid)
+  const owners = allowedOwners(o.ownerUid, fs.uid)
   const now = o.now ?? (() => new Date())
   const audit = o.audit ?? ((l: string) => console.log(l))
   try {
     return await withLedgerLock(
       adir,
       async () => {
-        const mine = liveDumps(readEvents(adir)).filter(match)
+        const live = liveDumps(readEvents(adir))
+        const mine = live.filter(match)
+        const left = live.filter((e) => !match(e) && leftWhen(e)).map((e) => e.migration_dump_id)
         const retired: string[] = []
         const releaseDirs = new Set<string>()
         // every line is checked before anything is unlinked: a line of another shape refuses the whole retire
@@ -112,7 +116,7 @@ async function retireMatching(o: RetireOptions, match: (e: DumpEvent) => boolean
             // not empty (another database's dump of that release) or already gone: both are fine
           }
         }
-        return { retired }
+        return { retired, left }
       },
       handOver,
     )
@@ -141,14 +145,18 @@ export async function retireDump(dir: string | undefined, release: string, datab
 }
 
 /**
- * Retires exactly the live dumps whose ids are named, and only while each is still a live dump of `database` and
- * `release`. For a caller that took a dump itself and must retire that one and nothing else: a live dump of the same
- * database and release that another writer took (the host's `take`, an earlier run) is never touched.
+ * Retires the live dumps of `database` and `release` that the ENABLE catch-up took (ledger origin 'enable-catchup':
+ * this run's, or an earlier attempt's of the same enable), and nothing else. A live dump of the same database and
+ * release that another writer took (the host's `take` of a release, the migrate CLI) belongs to that writer and stays;
+ * its ids come back in `left`, read in the same pass under the same lock.
  */
-export async function retireDumpsById(dir: string | undefined, release: string, database: string, ids: readonly string[], reason: string, more: Omit<RetireOptions, 'dir' | 'database' | 'reason'> = {}): Promise<RetireResult> {
+export async function retireEnableDumps(dir: string | undefined, release: string, database: string, reason: string, more: Omit<RetireOptions, 'dir' | 'database' | 'reason'> = {}): Promise<RetireResult> {
   assertRelease(release)
-  const wanted = new Set(ids)
-  return retireMatching({ dir, database, reason, ...more }, (e) => wanted.has(e.migration_dump_id) && e.database === database && e.release === release)
+  return retireMatching(
+    { dir, database, reason, ...more },
+    (e) => e.database === database && e.release === release && e.origin === ENABLE_ORIGIN,
+    (e) => e.database === database && e.release === release,
+  )
 }
 
 /**

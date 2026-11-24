@@ -8,8 +8,9 @@
 // The same container proves the root process never follows a link that the deploy user plants in its directory (it
 // can create, rename and replace every entry there): a link in the place of the ledger, of the release directory, of
 // the dump file the exporter just wrote, of the lock, and a forged ledger line pointing a retire into a linked
-// directory. Each is refused (DUMP_PATH_UNSAFE, or LEDGER_LOCKED for the lock) and a root-owned victim outside the
-// directory keeps its owner, its mode and its content.
+// directory. It also proves root never hands over a node it did not make: a root-owned directory and a root-owned file
+// that the directory owner moves into the places root is about to use. Each is refused (DUMP_PATH_UNSAFE, or
+// LEDGER_LOCKED for the lock) and a root-owned victim keeps its owner, its mode and its content.
 //
 // This needs a root process and two other uids, which a CI runner is not, so it runs in a throwaway container of the
 // node image (one root process; the deploy-user halves are child processes of it with uid/gid set). The dump code
@@ -44,7 +45,7 @@ const code = async (p) => p.then(() => 'no error', (e) => e.code ?? String(e.mes
 
 // runs as root
 const SCENARIO = `
-import { chmodSync, chownSync, cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, chownSync, cpSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { takeDump } from './take.js'
 import { retireDump } from './retire.js'
@@ -73,6 +74,10 @@ out.other = run('as-other.mjs')
 
 // ---- the deploy user plants links in its own directory; the root process must never follow one ----
 mkdirSync('/victim', { mode: 0o755 })
+// worst case for the rename attacks below: the deploy user may move things out of this directory
+chmodSync('/victim', 0o777)
+const ROOTDIR = '/victim/rootdir'
+const ROOTFILE = '/victim/rootfile'
 const VICTIM = '/victim/target.txt'
 const RELROOT = '/victim/relroot'
 const ID = '0192f0c1-2b3c-7d4e-8f00-aaaaaaaaaaaa'
@@ -88,6 +93,13 @@ const reset = () => {
   rmSync(RELROOT, { recursive: true, force: true })
   mkdirSync(RELROOT, { mode: 0o755 })
   chmodSync(RELROOT, 0o755)
+  rmSync(ROOTDIR, { recursive: true, force: true })
+  mkdirSync(ROOTDIR, { mode: 0o777 })
+  chmodSync(ROOTDIR, 0o777) // a root-owned directory the deploy user may write to, so it can move it (a directory move needs write access to the directory itself)
+  rmSync(ROOTFILE, { force: true })
+  writeFileSync(ROOTFILE, 'ROOT OWNED', { mode: 0o644 })
+  chmodSync(ROOTFILE, 0o644)
+  utimesSync(ROOTFILE, Date.now() / 1000 - 3600, Date.now() / 1000 - 3600) // an old file of root, not one this call just made
 }
 let atk = 0
 const fresh = () => {
@@ -106,9 +118,21 @@ const attack = async (victim, setup, run) => {
   const d = fresh()
   const planted = plant(setup(d))
   if (planted.status !== 0) return { error: 'plant failed: ' + (planted.stderr || planted.stdout) }
-  const before = snap(victim)
+  const where = typeof victim === 'function' ? victim(d) : victim
+  const before = snap(where)
   const c = await code(run(d))
-  return { code: c, unchanged: snap(victim) === before, stillThere: existsSync(VICTIM_DUMP) }
+  return { code: c, unchanged: snap(where) === before, stillThere: existsSync(VICTIM_DUMP) }
+}
+// a root-owned file the exporter's output is replaced with (moved in by the directory's owner): watched on an open descriptor, because the failed take removes the name
+const movedFile = async () => {
+  reset()
+  const d = fresh()
+  const vfd = openSync(ROOTFILE, 'r')
+  const facts = () => JSON.stringify({ uid: fstatSync(vfd).uid, mode: (fstatSync(vfd).mode & 0o777).toString(8) })
+  const before = facts()
+  const moved = { ...exporter, async dump(t, f) { renameSync(ROOTFILE, f) } }
+  const c = await code(take1(d, { exporter: moved }))
+  return { code: c, unchanged: facts() === before, stillThere: true }
 }
 const take1 = (d, over) => takeDump({ ...base(d, 'dist-v1'), ownerUid: 1000, ...(over || {}) })
 const retire9 = (d) => retireDump(d, 'dist-v9', DB, 'attack', { ownerUid: 1000, audit: () => {} })
@@ -131,6 +155,9 @@ out.attacks = {
     (d) => retire9(d),
   ),
   retireLedgerLink: await attack(VICTIM, (d) => [{ op: 'symlink', target: VICTIM, path: d + '/ledger.jsonl' }], (d) => retire9(d)),
+  // a root-owned directory moved to the place of the release directory: it exists, so it is never handed over
+  movedDir: await attack((d) => d + '/dist-v1', (d) => [{ op: 'rename', from: ROOTDIR, to: d + '/dist-v1' }], (d) => take1(d)),
+  movedFile: await movedFile(),
 }
 console.log(JSON.stringify(out))
 `
@@ -162,11 +189,12 @@ console.log(JSON.stringify(out))
 
 // runs as uid 1000: the deploy user plants what it can plant in its own directory
 const AS_PLANT = `
-import { rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 for (const o of JSON.parse(process.argv[2])) {
   if (o.op === 'symlink') symlinkSync(o.target, o.path)
   else if (o.op === 'write') writeFileSync(o.path, o.text, { mode: 0o600 })
   else if (o.op === 'rm') rmSync(o.path, { force: true })
+  else if (o.op === 'rename') renameSync(o.from, o.to)
 }
 console.log('{}')
 `
@@ -256,6 +284,10 @@ describe('the dump with the real uids (a root process, the deploy user, another 
     expect(a.swappedDump, JSON.stringify(a)).toEqual(unsafe)
     expect(a.retireLinkedRelease, JSON.stringify(a)).toEqual(unsafe)
     expect(a.retireLedgerLink, JSON.stringify(a)).toEqual(unsafe)
+    // nodes of root that the owner moved into place are never handed over: the existing directory is refused, and a
+    // file that is not the one the exporter just wrote is refused before its owner or mode changes
+    expect(a.movedDir, JSON.stringify(a)).toEqual(unsafe)
+    expect(a.movedFile, JSON.stringify(a)).toEqual(unsafe)
     // a ledger line that names a path outside <release>/<name>.<id>.dump is refused as a corrupt ledger, and nothing is removed
     expect(a.retireForgedPath, JSON.stringify(a)).toEqual({ code: 'LEDGER_CORRUPT', unchanged: true, stillThere: true })
     // a lock that a link stands in for was never replaced: the lock refuses, as it always did

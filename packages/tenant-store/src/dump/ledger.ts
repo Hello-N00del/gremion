@@ -68,13 +68,23 @@ export interface DumpEvent {
    */
   pg_service?: string
   pg_user?: string
+  /**
+   * created only, optional: who took the dump. The enable catch-up (a customer switching a module on again inside its
+   * Karenz) writes 'enable-catchup'; the host's `take` and the migrate CLI write nothing. The enable retires the dumps
+   * of its own origin for a database and release, and leaves any other writer's dump of the same label alone.
+   */
+  origin?: typeof ENABLE_ORIGIN
 }
 
 /**
- * Hands a path that a ROOT process has just written to the owner of the dump directory and sets its mode.
- * undefined for every process that is not root: it never changes ownership and behaves as it always did.
+ * Hands a node that a ROOT process has just made to the owner of the dump directory and sets its mode, on the
+ * descriptor that made it (`fd`; `path` names it for tests and messages only). undefined for every process that is
+ * not root: it never changes ownership and behaves as it always did.
  */
-export type HandOver = (path: string, mode: number) => void
+export type HandOver = (path: string, mode: number, fd: number) => void
+
+/** The `origin` of a dump the enable catch-up took (see DumpEvent.origin). */
+export const ENABLE_ORIGIN = 'enable-catchup'
 
 /** Release refs name a directory: 1-64 of [A-Za-z0-9._-], starting alphanumeric. */
 export const RELEASE_REF = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
@@ -154,8 +164,8 @@ export function liveDumps(events: readonly DumpEvent[]): DumpEvent[] {
 
 /**
  * Appends one event and fsyncs the file and its directory before returning. The ledger is opened without following a
- * link and must be a plain file with one link. It is handed over only when this call created it, or when root still
- * owns it (a run that died before it handed it over): an existing ledger of the owner is appended to and left alone.
+ * link and must be a plain file with one link. It is handed over only when this call created it, on the descriptor
+ * that created it: an existing ledger is appended to and left alone, whoever owns it.
  */
 export function appendEvent(dir: string, event: DumpEvent, handOver?: HandOver): void {
   const file = join(dir, LEDGER_FILE)
@@ -169,15 +179,14 @@ export function appendEvent(dir: string, event: DumpEvent, handOver?: HandOver):
     if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
     fd = openNoFollow(file, append)
   }
-  let rootOwned = false
   try {
-    rootOwned = assertPlain(fd, file, 'file').uid === 0
+    assertPlain(fd, file, 'file')
     writeSync(fd, `${JSON.stringify(event)}\n`)
     fsyncSync(fd)
+    if (created) handOver?.(file, 0o600, fd)
   } finally {
     closeSync(fd)
   }
-  if (created || rootOwned) handOver?.(file, 0o600)
   fsyncDir(dir)
 }
 
@@ -228,12 +237,13 @@ export async function withLedgerLock<T>(dir: string, fn: () => Promise<T>, handO
     throw err
   }
   try {
-    writeSync(fd, `${process.pid} ${new Date().toISOString()}\n`)
-  } finally {
-    closeSync(fd)
-  }
-  try {
-    handOver?.(lock, 0o600)
+    try {
+      writeSync(fd, `${process.pid} ${new Date().toISOString()}\n`)
+      // on the descriptor that created the lock (O_EXCL): the node handed over is the one made here
+      handOver?.(lock, 0o600, fd)
+    } finally {
+      closeSync(fd)
+    }
     return await fn()
   } finally {
     unlinkSync(lock)

@@ -15,7 +15,7 @@ import type { PreApplyContext, RunMigrationsHooks } from '../runner.js'
 import { PLATFORM_DATABASE } from '../lifecycle/platform.js'
 import type { Exporter } from '../lifecycle/types.js'
 import { DumpError, type ByKind, type DumpScope } from './ledger.js'
-import { takeDump, type DumpFs, type TakenDump } from './take.js'
+import { takeDump, type DumpFs, type TakeDumpOptions, type TakenDump } from './take.js'
 
 export type PreApply = NonNullable<RunMigrationsHooks['preApply']>
 type AnyPreApply = (file: string, ctx: PreApplyContext) => void | Promise<void>
@@ -48,12 +48,14 @@ export interface DumpHookOptions {
   pgUser?: string
   /** See TakeDumpOptions.ownerUid: set only by the one-shot that runs as root. */
   ownerUid?: number
+  /** See TakeDumpOptions.origin: set only by the enable catch-up. */
+  origin?: TakeDumpOptions['origin']
   fs?: DumpFs
   byKind?: ByKind
   now?: () => Date
   audit?: (line: string) => void
-  /** Called with what was taken (tests, the CLI's summary) and the database it is of. */
-  onDump?: (d: TakenDump, info: { database: string; release: string }) => void
+  /** Called with what was taken (tests, the CLI's summary). */
+  onDump?: (d: TakenDump) => void
 }
 
 /**
@@ -83,11 +85,12 @@ export function dumpHook(o: DumpHookOptions): PreApply {
       ...(o.service !== undefined ? { service: o.service } : {}),
       ...(o.pgUser !== undefined ? { pgUser: o.pgUser } : {}),
       ...(o.ownerUid !== undefined ? { ownerUid: o.ownerUid } : {}),
+      ...(o.origin ? { origin: o.origin } : {}),
       ...(o.fs ? { fs: o.fs } : {}),
       ...(o.byKind ? { byKind: o.byKind } : {}),
       ...(o.now ? { now: o.now } : {}),
       ...(o.audit ? { audit: o.audit } : {}),
     })
-    o.onDump?.(taken, { database: row.db, release: o.release })
+    o.onDump?.(taken)
   }
 }

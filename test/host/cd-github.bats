@@ -1232,6 +1232,24 @@ esac
 exec /usr/bin/stat "$@"'
 }
 
+@test "proof: the fetch of a local path runs with the trust file as git's global config (a root-owned repository needs it), and an https fetch does not" {
+    # a git shim that notes the global config each call runs with, then runs the real git
+    shim git 'printf "GCG=%s ARGS=%s\n" "${GIT_CONFIG_GLOBAL:-unset}" "$*" >> "${GH}/git-env.log"; exec "$GH_REAL_GIT" "$@"'
+    gh_proof_local
+    run --separate-stderr gh_lib 'cd_gh_proof_source "$1" proof/x' "$PROOF_SHA"
+    [ "$status" -eq 0 ] || { echo "$stderr"; return 1; }
+    local fetch_line
+    fetch_line="$(grep ' fetch ' "${GH}/git-env.log")"
+    [[ "$fetch_line" == "GCG=${GREMION_ROOT}/data/cd/proof-gitconfig "* ]] || { echo "the fetch ran with: ${fetch_line}"; return 1; }
+    # the same program with an https proof repository leaves git's own configuration alone
+    : > "${GH}/git-env.log"
+    cd_write_cfg CD_REPO_URL=https://github.com/org/repo CD_PROOF_MODE=1 CD_PROOF_REPO=https://example.org/proof/repo
+    run --separate-stderr gh_lib 'cd_gh_proof_source "$1" proof/x' "$PROOF_SHA"
+    [ "$status" -eq 0 ] || { echo "$stderr"; return 1; }
+    fetch_line="$(grep ' fetch ' "${GH}/git-env.log")"
+    [[ "$fetch_line" == "GCG=unset "* ]] || { echo "the https fetch ran with: ${fetch_line}"; return 1; }
+}
+
 @test "proof: CD_PROOF_REPO as an absolute path to a bare repository is fetched with real git, under refs/proof/<ref>, no API call" {
     gh_proof_local
     run --separate-stderr gh_lib 'cd_gh_proof_source "$1" proof/x' "$PROOF_SHA"
