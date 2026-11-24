@@ -253,6 +253,9 @@ stage_then() {
 # cfg [KEY=VAL ...] -- etc/cd.env: the valid base, no post-reconcile window unless a test asks for one.
 cfg() { cd_write_cfg CD_POST_RECONCILE_S=0 "$@"; }
 
+# journal_lines -- what the program said to the journal (the logger shim records its calls).
+journal_lines() { grep -E '^logger ' "$SHIM_LOG" || true; }
+
 STATE="data/cd/state.json"
 jqs() { jq -c "$1" "${GREMION_ROOT}/${STATE}"; }
 counts() { jqs '.live.reconcile | del(.at)'; }
@@ -606,7 +609,7 @@ fingerprint() {
     [ "$after" -ge 2 ]
 }
 
-@test "a container that never disappears ends the stage with reason container_alive, the rest skipped, an alert, and the host lock still held" {
+@test "a container that never disappears ends the stage with reason container_alive, the rest skipped, a critical journal line, and the host lock still held" {
     only slugmarker-a slugmarker-b slugmarker-c
     : >"$DK/outlive.slugmarker-a"
     : >"$DK/kill.refuse"
@@ -617,7 +620,8 @@ fingerprint() {
     [ "$(counts)" = '{"total":3,"ok":0,"failed":1,"timeout":0,"busy":0,"skipped":2,"invalid":0,"seconds":0,"reason":"container_alive"}' ]
     [ "$(hold_kind)" = reconcile_failed ]
     [ "$(hold_reason)" = container_alive ]
-    [ -s "${GREMION_ROOT}/data/cd/ALERT" ]
+    [ ! -e "${GREMION_ROOT}/data/cd/ALERT" ]
+    grep -q "could not be confirmed gone" "$SHIM_LOG"
     grep -q 'kind: reconcile_failed' "${GREMION_ROOT}"/data/cd/outbox/*.eml
     grep -qxF 'reason: container_alive' "${GREMION_ROOT}"/data/cd/outbox/*.eml
 }
@@ -708,6 +712,7 @@ fingerprint() {
         refute_text "$w" "$(cat "${GREMION_ROOT}/${STATE}")"
         refute_text "$w" "$(cat "${GREMION_ROOT}/data/cd/history.jsonl")"
         refute_text "$w" "$(cat "${GREMION_ROOT}"/data/cd/outbox/*.eml 2>/dev/null)"
+        refute_text "$w" "$(journal_lines)"
     done
     # a failing run leaks nothing either
     child_rc slugmarker-b 1
@@ -719,6 +724,7 @@ fingerprint() {
         refute_text "$w" "$(cat "${GREMION_ROOT}/${STATE}")"
         refute_text "$w" "$(cat "${GREMION_ROOT}/data/cd/history.jsonl")"
         refute_text "$w" "$(cat "${GREMION_ROOT}"/data/cd/outbox/*.eml 2>/dev/null)"
+        refute_text "$w" "$(journal_lines)"
     done
 }
 
@@ -733,6 +739,7 @@ fingerprint() {
         refute_text "$w" "$(cat "${GREMION_ROOT}/${STATE}")"
         refute_text "$w" "$(cat "${GREMION_ROOT}/data/cd/history.jsonl")"
         refute_text "$w" "$(cat "${GREMION_ROOT}"/data/cd/outbox/*.eml 2>/dev/null)"
+        refute_text "$w" "$(journal_lines)"
     done
 }
 
@@ -857,13 +864,39 @@ fingerprint() {
 }
 
 @test "the timer guard answering 3 between two customers stops the stage with reason timer_guard" {
-    seq_rc cd_data_timer_guard 0 3
+    seq_rc cd_data_timer_guard 0 3 3
     stage
     [ "$status" -eq 1 ]
     [ "$(order_of)" = "slugmarker-a" ]
     [ "$(counts)" = '{"total":3,"ok":1,"failed":0,"timeout":0,"busy":0,"skipped":2,"invalid":0,"seconds":0,"reason":"timer_guard"}' ]
     # a span of one child's cap (300 s: 5 minutes) plus one minute
     grep -qxF 'stub cd_data_timer_guard 6' "$SHIM_LOG"
+}
+
+@test "the timer guard answering 3 because the host lock is held by an operation is no stop: the stage waits for the lock and goes on" {
+    hold_host_lock 3
+    only slugmarker-a
+    seq_rc cd_data_timer_guard 3
+    stage
+    [ "$status" -eq 0 ]
+    [ "$(order_of)" = "slugmarker-a" ]
+    [ "$(counts)" = '{"total":1,"ok":1,"failed":0,"timeout":0,"busy":0,"skipped":0,"invalid":0,"seconds":0,"reason":null}' ]
+    # asked twice: once before the wait and once after
+    [ "$(calls_of 'stub cd_data_timer_guard')" -eq 2 ]
+    release_host_lock
+}
+
+@test "a guard answer 3 with the host lock held for longer than the wait counts the customer busy and runs no child" {
+    hold_host_lock 30
+    cfg CD_RECONCILE_LOCK_WAIT_S=1
+    only slugmarker-a
+    seq_rc cd_data_timer_guard 3
+    stage
+    [ "$status" -eq 1 ]
+    [ "$(file_lines "$DK/child.argv")" -eq 0 ]
+    [ "$(rec_reason)" = busy ]
+    [ "$(jqs '.live.reconcile.busy')" = 1 ]
+    release_host_lock
 }
 
 @test "a timer guard that cannot answer is not a pass: the stage stops with reason unknown" {

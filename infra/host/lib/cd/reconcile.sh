@@ -76,6 +76,8 @@ _CD_REC_T0=0
 declare -gA _CD_REC_N=()      # ok failed timeout busy skipped invalid
 _CD_REC_CHILD_RC=0
 _CD_REC_ALIVE=0
+_CD_REC_OUTCOME=''
+_CD_REC_GUARD=''
 
 _cd_rec_err() { printf 'cd-reconcile: %s\n' "$*" >&2; }
 
@@ -104,6 +106,8 @@ _cd_rec_reset() {
     _CD_REC_N=([ok]=0 [failed]=0 [timeout]=0 [busy]=0 [skipped]=0 [invalid]=0)
     _CD_REC_CHILD_RC=0
     _CD_REC_ALIVE=0
+    _CD_REC_OUTCOME=''
+    _CD_REC_GUARD=''
 }
 
 # _cd_rec_logfile - the one 0600 file of this run under logs/ (psql's complaints, the
@@ -562,9 +566,40 @@ _cd_rec_order_guard() {
     return 0
 }
 
+# _cd_rec_guard SPAN_MIN - the timer guard between two customers. The result is left in
+# _CD_REC_GUARD: ok (the lock is free for a child that fits before the next backup or purge),
+# overlap (the next elapse of a timer is inside the span), unknown (the guard cannot answer: not
+# a pass) or busy (the host lock is held by something else for longer than the wait).
+# The guard answers 3 both for a timer that elapses inside the span and for a host lock that is
+# held at that instant (an executor operation, the hourly Karenz run). The second is no reason to
+# end the stage, only to wait for the lock as every customer does, so a 3 is asked again once the
+# lock has been had and let go; a timer that really overlaps answers 3 again.
+_cd_rec_guard() {
+    local span="$1" rc=0 wait lrc=0
+    _CD_REC_GUARD=ok
+    cd_data_timer_guard "$span" >/dev/null 2>&1 || rc=$?
+    if ((rc == 3)); then
+        wait="$(cd_cfg CD_RECONCILE_LOCK_WAIT_S)" || wait=120
+        cd_hostlock_take "$wait" || lrc=$?
+        if ((lrc != 0)); then
+            _CD_REC_GUARD=busy
+            return 0
+        fi
+        cd_hostlock_release
+        rc=0
+        cd_data_timer_guard "$span" >/dev/null 2>&1 || rc=$?
+    fi
+    case "$rc" in
+        0) ;;
+        3) _CD_REC_GUARD=overlap ;;
+        *) _CD_REC_GUARD=unknown ;;
+    esac
+    return 0
+}
+
 # cd_reconcile_run - see the header.
 cd_reconcile_run() {
-    local tag max_s guard_min i n slug stop='' grc
+    local tag max_s guard_min i n slug stop=''
     local -a slugs=()
     _cd_rec_reset
     cd_require_lock "the reconcile stage" || return 2
@@ -610,16 +645,17 @@ cd_reconcile_run() {
         if cd_killswitch_active; then stop=killswitch; break; fi
         if _cd_rec_rollback_pending; then stop=rollback_request; break; fi
         if (($(cd_now) - _CD_REC_T0 >= max_s)); then stop=budget; break; fi
-        grc=0
-        cd_data_timer_guard "$guard_min" >/dev/null 2>&1 || grc=$?
-        if ((grc == 3)); then
-            stop=timer_guard
-            break
-        elif ((grc != 0)); then
-            stop=unknown
-            break
+        _cd_rec_guard "$guard_min"
+        case "$_CD_REC_GUARD" in
+            overlap) stop=timer_guard; break ;;
+            unknown) stop=unknown; break ;;
+        esac
+        if [[ "$_CD_REC_GUARD" == busy ]]; then
+            # an operation of the host holds the lock for longer than the wait: no call is made
+            _CD_REC_OUTCOME=busy
+        else
+            _cd_rec_one "$slug" "$tag"
         fi
-        _cd_rec_one "$slug" "$tag"
         case "$_CD_REC_OUTCOME" in
             ok) _CD_REC_N[ok]=$((_CD_REC_N[ok] + 1)) ;;
             failed) _CD_REC_N[failed]=$((_CD_REC_N[failed] + 1)) ;;
@@ -649,7 +685,11 @@ cd_reconcile_run() {
     if [[ -n "$stop" ]]; then
         _CD_REC_N[skipped]=$((n - i))
         if [[ "$stop" == container_alive ]]; then
-            cd_alert "reconcile: a container of the verb could not be confirmed gone; the host lock is kept until this process exits"
+            # critical: the journal line (no name in it) and the mail say so; no ALERT file, which
+            # only the operator clears and which `gremion-cd reconcile` could not
+            if command -v logger >/dev/null 2>&1; then
+                logger -t gremion-cd -p daemon.err -- "reconcile: a container of the verb could not be confirmed gone; the host lock is kept until the process exits" </dev/null 2>/dev/null || true
+            fi
         fi
         _cd_rec_finish "$stop" 1
         return $?
