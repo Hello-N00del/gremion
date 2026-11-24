@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+printf 'render %s\n' "$*" >> "$DK/order.log"
+[ -f "$DK/render.fail" ] && exit 1
+exit 0

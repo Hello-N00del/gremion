@@ -1,0 +1,291 @@
+# The docker of the whole-pipeline suite: ONE shim whose answers come from a small world of files
+# under $DK. It is installed as `docker` first on PATH by test_helper/cd-pipeline.bash.
+#
+# The world (all files under $DK):
+#   ctr/<cid>           one container: key=value lines (proj svc ref id status health restarts
+#                       exit oneoff labels)
+#   img.<ref>           the image id of a reference (a build writes it; a missing one is "No such image")
+#   svc.app svc.state   the services of the app project and of the state project
+#                       (every service of the app project runs a first-party image gremion-<service>)
+#   refs.app            extra image references `config --images` lists (the one-shots), %TAG% replaced
+#   srv.<svc>.role      the role the server <svc> accepts for psql; srv.<svc>.dbs its databases
+#   q.<name>            what the psql queries of the control database answer
+#   readyz.<colour>     the internal readiness answer of a colour: ok (default), notready, wrongrel, none
+#   portal.<colour>     the portal status of a colour (default 200)
+#   accesslog           the lines `tail` of the traefik container prints
+# Switches (a file's existence): build.fail up.fail down.fail run.<svc>.rc run.<svc>.leave run.<svc>.hook
+#   unhealthy.<colour> restart.<colour> ps.fail psql.fail.<svc> config.fail
+# Every call is appended to $DK/argv.log; the calls that matter, in order, to $DK/order.log.
+(IFS='|'; printf '%s\n' "$*" >>"$DK/argv.log")
+mkdir -p "$DK/ctr"
+
+refid() { printf 'sha256:%s' "$(printf '%s' "$1" | sha256sum | cut -c1-64)"; }
+kv() { sed -n "s/^$2=//p" "$1" 2>/dev/null | head -n 1; }
+cattr() { kv "$DK/ctr/$1" "$2"; }
+
+# ids of the containers that match the filters (one per line)
+list_ctr() { # all proj svc oneoff exited label_cd label_req id
+    local all="$1" proj="$2" svc="$3" oneoff="$4" exited="$5" lcd="$6" lreq="$7" want="$8" f c st
+    for f in "$DK"/ctr/*; do
+        [ -f "$f" ] || continue
+        c="${f##*/}"
+        [ -n "$proj" ] && [ "$(cattr "$c" proj)" != "$proj" ] && continue
+        [ -n "$svc" ] && [ "$(cattr "$c" svc)" != "$svc" ] && continue
+        [ -n "$oneoff" ] && [ "$(cattr "$c" oneoff)" != "$oneoff" ] && continue
+        [ -n "$lcd" ] && [ "$(cattr "$c" label_cd)" != "$lcd" ] && continue
+        [ -n "$lreq" ] && [ "$(cattr "$c" label_req)" != "$lreq" ] && continue
+        [ -n "$want" ] && [ "$c" != "$want" ] && continue
+        st="$(cattr "$c" status)"
+        if [ -n "$exited" ]; then [ "$st" = exited ] || continue; fi
+        if [ -z "$all" ] && [ -z "$exited" ] && [ "$st" != running ]; then continue; fi
+        echo "$c"
+    done
+}
+
+repo_of() { # SERVICE -- the first-party repository of a service of the app project
+    case "$1" in
+        gremion-*) echo "$1" ;;
+        kernel-api) echo gremion-kernel-api ;;
+        *) echo "gremion-$1" ;;
+    esac
+}
+
+images_of() { # TAG -- the references `config --images` lists
+    local tag="$1" s
+    for s in $(cat "$DK/svc.app" 2>/dev/null); do echo "$(repo_of "$s"):${tag}"; done
+    if [ -f "$DK/refs.app" ]; then sed "s/%TAG%/${tag}/g" "$DK/refs.app"; fi
+    echo "postgres:16"
+}
+
+mk_ctr() { # CID PROJ SVC REF ID COLOUR ONEOFF STATUS
+    local c="$1" colour="$6" stack="${2%-app-*}"
+    stack="${stack%-state}"
+    {
+        echo "proj=$2"; echo "svc=$3"; echo "ref=$4"; echo "id=$5"; echo "oneoff=$7"; echo "status=$8"
+        echo "health=healthy"; echo "restarts=0"; echo "exit=0"; echo "colour=$colour"
+        if [ "$colour" = state ]; then
+            echo "mounts=${stack}_pgdata"
+            echo "nets=${stack}_state"
+            echo "aliases=${stack}_state=${3},"
+        else
+            echo "mounts=${2}_data"
+            echo "nets=${stack}_edge ${stack}_state ${2}_app"
+            echo "aliases=${stack}_edge=${3}-${colour}, ${stack}_state=${3}-${colour}, ${2}_app=${3},"
+        fi
+    } >"$DK/ctr/$c"
+}
+
+# the tail of a `compose run` hook: a test may kill the program or touch the world mid-call
+run_hook() { # SVC
+    [ -f "$DK/run.$1.hook" ] && . "$DK/run.$1.hook"
+    return 0
+}
+
+case "$1" in
+  compose)
+    envf=''; prev=''; verb=''; fmt=''; star=''
+    for a in "$@"; do
+        [ "$prev" = --env-file ] && envf="$a"
+        [ "$prev" = --profile ] && star="$a"
+        prev="$a"
+    done
+    for a in "$@"; do
+        case "$a" in config|run|build|pull|up|down) verb="$a"; break ;; esac
+    done
+    kind="$(basename "$envf" .env)"
+    colour="${kind#app-}"
+    cp="$(kv "$envf" COMPOSE_PROJECT_NAME)"
+    tag="$(kv "$envf" IMAGE_TAG)"
+    case "$verb" in
+      config)
+        [ -f "$DK/config.fail" ] && exit 1
+        case " $* " in
+          *" --services "*) cat "$DK/svc.$([ "$kind" = state ] && echo state || echo app)"; exit 0 ;;
+          *" --images "*) images_of "$tag"; exit 0 ;;
+          *" --quiet "*) exit 0 ;;
+          *" --format json "*)
+            if [ "$kind" = state ]; then
+                if [ -f "$DK/compose.state.json" ]; then cat "$DK/compose.state.json"; else printf '{"services":{"postgres":{"image":"postgres:16"}}}\n'; fi
+            else
+                printf '{"services":{"kernel-api-migrate":{"environment":{"GREMION_RELEASE_REF":"%s"}}}}\n' "$tag"
+            fi
+            exit 0 ;;
+        esac
+        exit 0 ;;
+      pull) echo "pull $colour" >>"$DK/order.log"; exit 0 ;;
+      build)
+        echo "build $colour tag=$tag" >>"$DK/order.log"
+        if [ -f "$DK/build.fail" ]; then echo "build error: the Dockerfile step failed" >&2; exit 1; fi
+        images_of "$tag" | while read -r ref; do
+            case "$ref" in postgres:*) continue ;; esac
+            refid "$ref" >"$DK/img.$ref"
+        done
+        exit 0 ;;
+      down)
+        echo "down $colour active=$(cat "$GREMION_ROOT/runtime/active-colour" 2>/dev/null)" >>"$DK/order.log"
+        [ -f "$DK/down.fail" ] && exit 1
+        for c in $(list_ctr 1 "$cp" '' '' '' '' '' ''); do rm -f "$DK/ctr/$c"; done
+        exit 0 ;;
+      up)
+        echo "up $colour tag=$tag" >>"$DK/order.log"
+        [ -f "$DK/up.fail" ] && { echo "up error: container exited" >&2; exit 1; }
+        for s in $(cat "$DK/svc.app"); do
+            ref="$(repo_of "$s"):${tag}"
+            if [ ! -f "$DK/img.$ref" ]; then echo "pull access denied for $ref" >&2; exit 1; fi
+            id="$(cat "$DK/img.$ref")"
+            mk_ctr "c-${cp}-${s}" "$cp" "$s" "$ref" "$id" "$colour" False running
+            if [ -f "$DK/unhealthy.$colour" ]; then sed -i 's/^health=.*/health=unhealthy/' "$DK/ctr/c-${cp}-${s}"; fi
+        done
+        exit 0 ;;
+      run)
+        last=''; rid=''; pv=''
+        for a in "$@"; do
+            [ "$pv" = --label ] && rid="${a#gremion.cd=}"
+            pv="$a"; last="$a"
+        done
+        svc=''
+        for a in "$@"; do
+            case "$a" in migrate|kernel-api-migrate|tenant-create|calendar-service|content-service|newsletter-service) svc="$a"; break ;; esac
+        done
+        printf 'run %s svc=%s cwd=%s args=%s\n' "$colour" "$svc" "$PWD" "$*" >>"$DK/run.log"
+        echo "run $colour $svc" >>"$DK/order.log"
+        if [ "$svc" = tenant-create ]; then echo "run-module $colour rid=$rid" >>"$DK/order.log"; fi
+        run_hook "$svc"
+        if [ -f "$DK/run.$svc.leave" ]; then
+            mk_ctr "c-run-$svc" "$cp" "$svc" "gremion-${svc}:${tag}" "$(refid x)" "$colour" True running
+            sed -i "s/^oneoff=.*/oneoff=True\nlabel_cd=${rid}/" "$DK/ctr/c-run-$svc"
+        fi
+        [ -f "$DK/run.$svc.out" ] && cat "$DK/run.$svc.out"
+        exit "$(cat "$DK/run.$svc.rc" 2>/dev/null || echo 0)" ;;
+    esac
+    exit 0 ;;
+  ps)
+    [ -f "$DK/ps.fail" ] && exit 1
+    all=''; proj=''; svc=''; oneoff=''; exited=''; lcd=''; lreq=''; want=''
+    for a in "$@"; do
+        case "$a" in
+          -a|-aq) all=1 ;;
+          label=com.docker.compose.project=*) proj="${a#label=com.docker.compose.project=}" ;;
+          label=com.docker.compose.service=*) svc="${a#label=com.docker.compose.service=}" ;;
+          label=com.docker.compose.oneoff=*) oneoff="${a#label=com.docker.compose.oneoff=}" ;;
+          status=exited) exited=1 ;;
+          label=gremion.cd=*) lcd="${a#label=gremion.cd=}" ;;
+          label=gremion.request=*) lreq="${a#label=gremion.request=}" ;;
+          id=*) want="${a#id=}" ;;
+        esac
+    done
+    [ -n "$lcd" ] && echo "ps-label $lcd" >>"$DK/order.log"
+    list_ctr "$all" "$proj" "$svc" "$oneoff" "$exited" "$lcd" "$lreq" "$want"
+    exit 0 ;;
+  inspect)
+    fmt=''; prev=''; cid=''
+    for a in "$@"; do
+        case "$prev" in --format|-f) fmt="$a" ;; esac
+        prev="$a"; cid="$a"
+    done
+    [ -f "$DK/ctr/$cid" ] || { echo "Error: No such object: $cid" >&2; exit 1; }
+    colour="$(cattr "$cid" colour)"
+    health="$(cattr "$cid" health)"
+    restarts="$(cattr "$cid" restarts)"
+    case "$fmt" in
+      *'index .Config.Labels'*) cattr "$cid" svc ;;
+      *'range .Mounts'*) echo "$(cattr "$cid" mounts) " ;;
+      *'range $net, $ep'*) echo "$(cattr "$cid" aliases) " ;;
+      *'range $k, $v'*) echo "$(cattr "$cid" nets) " ;;
+      '{{.Config.Image}} {{.Image}}') echo "$(cattr "$cid" ref) $(cattr "$cid" id)" ;;
+      '{{.Image}} {{.Config.Image}}') echo "$(cattr "$cid" id) $(cattr "$cid" ref)" ;;
+      '{{.State.ExitCode}}') cattr "$cid" exit ;;
+      '{{.RestartCount}}') echo "$restarts" ;;
+      '{{.State.Status}} {{.State.ExitCode}} '*) echo "$(cattr "$cid" status) $(cattr "$cid" exit) $health $restarts" ;;
+      '{{.State.Status}} {{if .State.Health}}'*) echo "$(cattr "$cid" status) $health" ;;
+      *) echo "inspect shim: unknown format $fmt" >&2; exit 1 ;;
+    esac
+    exit 0 ;;
+  image)
+    ref="${@: -1}"
+    [ "$2" = inspect ] || exit 0
+    if [ -f "$DK/img.$ref" ]; then cat "$DK/img.$ref"; exit 0; fi
+    case "$ref" in postgres:*) refid "$ref"; exit 0 ;; esac
+    echo "Error: No such image: $ref" >&2; exit 1 ;;
+  exec)
+    shift
+    [ "$1" = -i ] && shift
+    cid="$1"; shift
+    [ -f "$DK/ctr/$cid" ] || { echo "Error: No such container: $cid" >&2; exit 1; }
+    svc="$(cattr "$cid" svc)"; colour="$(cattr "$cid" colour)"
+    case "$1" in
+      node)
+        script="$3"
+        case "$script" in
+          *'/readyz'*)
+            tagc="$(kv "$GREMION_ROOT/etc/env/app-${colour}.env" IMAGE_TAG)"
+            case "$(cat "$DK/readyz.$colour" 2>/dev/null || echo ok)" in
+              ok) printf '200\n{"ready":true,"colour":"%s","release":"%s","tenants":{"total":2,"notReady":0}}\n' "$colour" "$tagc" ;;
+              notready) printf '503\n{"ready":false,"colour":"%s","release":"%s","tenants":{"total":2,"notReady":2}}\n' "$colour" "$tagc" ;;
+              wrongrel) printf '200\n{"ready":true,"colour":"%s","release":"pilot-ffffffffffff","tenants":{"total":2,"notReady":0}}\n' "$colour" ;;
+              *) exit 5 ;;
+            esac
+            exit 0 ;;
+          *) printf '%s\n' "$(cat "$DK/portal.$colour" 2>/dev/null || echo 200)"; exit 0 ;;
+        esac ;;
+      tail) [ -f "$DK/accesslog" ] && cat "$DK/accesslog"; exit 0 ;;
+      psql)
+        shift
+        role=''; db=''; sql=''; file=''
+        while [ $# -gt 0 ]; do
+            case "$1" in -U) role="$2"; shift ;; -d) db="$2"; shift ;; -c) sql="$2"; shift ;; -f) file="$2"; shift ;; esac
+            shift
+        done
+        printf 'exec svc=%s role=%s db=%s\n' "$svc" "$role" "$db" >>"$DK/exec.log"
+        want="$(cat "$DK/srv.$svc.role" 2>/dev/null)"
+        if [ "$role" != "$want" ]; then
+            echo "FATAL: role \"$role\" does not exist" >&2
+            exit 2
+        fi
+        [ -f "$DK/psql.fail.$svc" ] && { echo "psql: error: connection lost" >&2; exit 2; }
+        if [ -n "$file" ]; then
+            # a script on stdin: the control database is a query (the reconcile stage), any other
+            # database a script to apply (the pgbouncer role and function)
+            sql="$(cat)"
+            if [ "$db" != control ]; then
+                printf '%s\n' "$sql" >"$DK/stdin.$db.$(date +%s%N)"
+                [ -f "$DK/pgb.fail" ] && exit 1
+                exit 0
+            fi
+        fi
+        case "$sql" in
+          *"from pg_database"*|*"from pg_catalog.pg_database"*|*"FROM pg_catalog.pg_database"*)
+            excl="$(printf '%s' "$sql" | grep -o "'[^']*'" | tr -d "'")"
+            while IFS='|' read -r n b; do
+                [ -n "$n" ] || continue
+                skip=0
+                for e in $excl; do [ "$e" = "$n" ] && skip=1; done
+                [ "$skip" = 1 ] && continue
+                # the gate-database listing of the module step: a name filter, not an exclusion list
+                case "$sql" in *"datname ~ '^t_[0-9a-f]{32}__'"*) printf '%s\n' "$n" | grep -qE '^t_[0-9a-f]{32}__' || continue ;; esac
+                case "$sql" in *"|| '|' ||"*) echo "$n|$b" ;; *) echo "$n" ;; esac
+            done <"$DK/srv.$svc.dbs" ;;
+          *"plt.module_enablement"*) cat "$DK/q.module_enabled" 2>/dev/null ;;
+          *"plt.module_database"*) cat "$DK/rows.module_database" 2>/dev/null ;;
+          *"from tenant where status = 'active'"*) cat "$DK/tenants.active" 2>/dev/null ;;
+          *"group by status"*) cat "$DK/q.status" 2>/dev/null ;;
+          *"replace(id::text"*) cat "$DK/q.ids" 2>/dev/null ;;
+          *tenant_domain*) cat "$DK/q.canary" 2>/dev/null ;;
+          *"status in ('active','suspended')"*) cat "$DK/q.list" 2>/dev/null ;;
+          *) echo "psql shim: unknown query" >&2; exit 1 ;;
+        esac
+        exit 0 ;;
+    esac
+    exit 1 ;;
+  rm)
+    echo "rm ${*:2}" >>"$DK/order.log"
+    for a in "${@:2}"; do case "$a" in -*) ;; *) rm -f "$DK/ctr/$a" ;; esac; done
+    exit 0 ;;
+  kill)
+    echo "kill ${*:2}" >>"$DK/order.log"
+    for a in "${@:2}"; do case "$a" in -*) ;; *) [ -f "$DK/ctr/$a" ] && sed -i 's/^status=.*/status=exited/' "$DK/ctr/$a" ;; esac; done
+    exit 0 ;;
+  logs) echo "log-tail-line"; exit 0 ;;
+  info) echo /var/lib/docker; exit 0 ;;
+esac
+exit 0
