@@ -123,8 +123,27 @@
     !recurrenceFreq || recurrenceEndMode !== 'until' || recurrenceUntil !== '',
   )
 
+  // The reasons a save is refused show once Speichern was pressed, and go away
+  // as soon as the field is right, so the button itself never has to be dead.
+  let attempted = $state(false)
+  let formError = $state('')
+  const titleError = $derived(attempted && title.trim() === '' ? 'Bitte einen Titel eingeben.' : '')
+  // An end equal to the start stays valid: an all-day event is one date.
+  const endError = $derived(
+    attempted && datesValid && new Date(endAt).getTime() < new Date(startAt).getTime()
+      ? 'Das Ende darf nicht vor dem Beginn liegen.'
+      : '',
+  )
+
   async function save() {
-    if (!title || !datesValid || !recurrenceValid) return
+    if (!datesValid || !recurrenceValid) return
+    attempted = true
+    formError = ''
+    if (title.trim() === '') {
+      document.getElementById('ce-title')?.focus()
+      return
+    }
+    if (new Date(endAt).getTime() < new Date(startAt).getTime()) return
     saving = true
     try {
       const res = await fetch('/api/calendar/events', {
@@ -150,7 +169,8 @@
       await loadEvents(from, to)
       onClose?.()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Fehler beim Speichern')
+      // Shown in the dialog, which stays open, instead of a toast behind it.
+      formError = e instanceof Error ? e.message : 'Fehler beim Speichern'
     } finally {
       saving = false
     }
@@ -171,7 +191,16 @@
   <div data-dialog-body class="ce-body space-y-4">
     <div class="space-y-1">
       <Label for="ce-title">Titel *</Label>
-      <Input id="ce-title" bind:value={title} placeholder="Termin-Titel" />
+      <Input
+        id="ce-title"
+        bind:value={title}
+        placeholder="Termin-Titel"
+        aria-invalid={titleError ? 'true' : undefined}
+        aria-describedby={titleError ? 'ce-title-error' : undefined}
+      />
+      {#if titleError}
+        <p id="ce-title-error" role="alert" class="ce-error">{titleError}</p>
+      {/if}
     </div>
 
     <div class="space-y-1">
@@ -196,7 +225,7 @@
       </div>
       <div class="space-y-1">
         <Label for="ce-end">Ende</Label>
-        <DateTimeFieldDe id="ce-end" label="Ende" dateOnly={allDay} bind:value={endAt} />
+        <DateTimeFieldDe id="ce-end" label="Ende" dateOnly={allDay} bind:value={endAt} error={endError} />
       </div>
     </div>
 
@@ -346,12 +375,18 @@
       ></textarea>
     </div>
   </div>
-  <DialogFooter>
-    <Button variant="outline" onclick={onClose}>Abbrechen</Button>
-    <Button onclick={save} disabled={!title || !datesValid || !recurrenceValid || saving}>
-      {saving ? 'Speichern...' : 'Speichern'}
-    </Button>
-  </DialogFooter>
+  <!-- One grid row for the refusal and the buttons: the dialog grid has three rows. -->
+  <div>
+    {#if formError}
+      <p role="alert" class="ce-error ce-form-error">{formError}</p>
+    {/if}
+    <DialogFooter>
+      <Button variant="outline" onclick={onClose}>Abbrechen</Button>
+      <Button onclick={save} disabled={!datesValid || !recurrenceValid || saving}>
+        {saving ? 'Speichern...' : 'Speichern'}
+      </Button>
+    </DialogFooter>
+  </div>
 </Dialog>
 
 <style>
@@ -365,6 +400,14 @@
   :global(.ce-until) {
     width: 16rem;
     max-width: 100%;
+  }
+  .ce-error {
+    margin: 0;
+    font-size: 0.75rem;
+    color: var(--rust);
+  }
+  .ce-form-error {
+    padding: 0 0.25rem 0.5rem;
   }
   .ce-body {
     min-height: 0;
