@@ -48,8 +48,8 @@
 #                manual rollback after the commit point; a commit_stuck rollback after commit
 #                step 2); live and previous of the state follow after a committed release.
 #       isolation the isolation record of the OLD tip, when the new tip was recorded (a committed
-#                release, and commit_stuck: commit step 1 records the new tip before the commit
-#                point). A failure is only a mail.
+#                release, commit_stuck, and any rule while the stage is commit: commit step 1
+#                records the new tip before the commit point). A failure is only a mail.
 #       mail     `rolled_back`.
 #     Then phase idle and release null. A rollback never restores a database.
 #
@@ -616,7 +616,10 @@ _cd_rb_s_current() {
 # refuses ISOLATION_STALE_TIP otherwise. A failure here is a mail, never a blocker.
 _cd_rb_s_isolation() {
     local rc=0
-    if [[ "$RB_COMMITTED" -ne 1 && "$RB_RULE" != commit_stuck ]]; then
+    # The new tip is recorded at commit step 1, before the commit point, so any rollback of a release
+    # whose commit stage began (an operator's request taken while the steps retry, a kill switch park
+    # that ends in one) must put the old tip back, not only commit_stuck.
+    if [[ "$RB_COMMITTED" -ne 1 && "$RB_RULE" != commit_stuck && "$RB_STAGE" != commit ]]; then
         return 0
     fi
     cd_colour_isolation_record "$RB_OLD_TREE" >/dev/null 2>&1 </dev/null || rc=$?

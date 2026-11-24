@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+[ -f "$DK/hook.sh" ] && . "$DK/hook.sh" && pl_hook "isolation $*"
+# gremion-isolation: `run --out DIR` leaves the evidence of the tip of $GREMION_RELEASE_DIR; `record FILE`
+# writes the host's record of that tip.
+cmd="$1"
+shift
+tip="$(git -C "$GREMION_RELEASE_DIR" rev-parse HEAD)"
+case "$cmd" in
+  run)
+    [ "$1" = --out ] && out="$2"
+    echo "isolation run ${tip:0:12}" >> "$DK/order.log"
+    [ -f "$DK/isorun.fail" ] && exit 1
+    mkdir -p "$out"
+    echo '{"tip":"'"$tip"'"}' > "$out/$tip.json" ;;
+  record)
+    echo "isolation record ${tip:0:12}" >> "$DK/order.log"
+    [ -f "$DK/isorecord.fail" ] && exit 1
+    printf '%s\n' "$tip" > "$GREMION_ROOT/data/isolation-recorded" ;;
+esac
+exit 0

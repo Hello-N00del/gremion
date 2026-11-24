@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# gremion-mail: the relay transport, a curl config that carries no password
+case "$1" in
+    transport) echo relay ;;
+    relay-curl-config)
+        msg=""
+        while [ $# -gt 0 ]; do [ "$1" = --message ] && msg="$2"; shift; done
+        printf 'url = "smtp://relay.example.org:587"\nssl-reqd\nmail-from = "system@example.org"\nmail-rcpt = "ops@example.org"\nupload-file = "%s"\n' "$msg" ;;
+esac
+exit 0
