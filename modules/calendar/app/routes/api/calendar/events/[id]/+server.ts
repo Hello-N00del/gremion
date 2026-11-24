@@ -14,6 +14,7 @@ import type { SessionUser } from '$lib/auth/types'
 import { resolveCalendarBackendOr503 } from '$lib/server/calendar/backend/resolve'
 import type { DbEvent, DbRecurrence } from '$lib/server/calendar/backend'
 import { expandRecurringEvents } from '$lib/server/calendar/recurrence-expand'
+import { END_BEFORE_START_MESSAGE, endsBeforeStart } from '$lib/server/calendar/event-validation'
 import {
   canManageEvent,
   canPublishEvent,
@@ -95,6 +96,13 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 
   const d = parsed.data
 
+  // An end before the start is refused, whichever side the body names. A pair
+  // that is wrong by itself is checked here, before the series handling below,
+  // so it answers 400 and never 409.
+  if (d.startAt && d.endAt && endsBeforeStart(new Date(d.startAt), new Date(d.endAt))) {
+    return json({ success: false, error: END_BEFORE_START_MESSAGE }, { status: 400 })
+  }
+
   // S3#29: creator, committee member or CouncilAdmin only; publishing and
   // committee tagging need committee membership or CouncilAdmin.
   const authz = await loadEventAuthzContext(user)
@@ -135,6 +143,17 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
       startAt = undefined
       endAt = undefined
     }
+  }
+
+  // A body that names one side only is compared with the stored other side.
+  // This runs after the series handling: an occurrence's own time is no move
+  // (startAt/endAt are cleared above), so it is never held against the
+  // series' first occurrence.
+  if (
+    (startAt !== undefined || endAt !== undefined) &&
+    endsBeforeStart(startAt ?? new Date(existing.startAt), endAt ?? new Date(existing.endAt))
+  ) {
+    return json({ success: false, error: END_BEFORE_START_MESSAGE }, { status: 400 })
   }
 
   let recurrence: DbRecurrence | null | undefined = undefined
