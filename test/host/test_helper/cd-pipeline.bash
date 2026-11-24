@@ -492,6 +492,10 @@ pl_diag() {
         jq -c '[.event, (. | del(.event, .at))] | tostring' "${GREMION_ROOT}/data/cd/history.jsonl" | tail -n 60
         echo "---- order"
         tail -n 60 "$DK/order.log"
+        if [ -f "$DK/tenant.log" ]; then
+            echo "---- tenant"
+            cat "$DK/tenant.log"
+        fi
         echo "---- journal"
         grep '^logger ' "$SHIM_LOG" | tail -n 20
         if [ "${PL_DIAG:-}" = calls ]; then

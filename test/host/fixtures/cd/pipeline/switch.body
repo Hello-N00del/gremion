@@ -5,7 +5,7 @@
 # Traefik move, the exit is 1, active-colour stays) or fail (nothing is written, exit 2).
 colour="$1"
 mode="$(cat "$DK/switch.mode.$colour" 2>/dev/null || echo ok)"
-printf 'switch %s mode=%s from=%s\n' "$colour" "$mode" "$(basename "$(dirname "$(dirname "$(dirname "$0")")")")" >> "$DK/order.log"
+printf 'switch %s mode=%s from=%s\n' "$colour" "$mode" "$(basename "$(dirname "$(dirname "$(dirname "$(dirname "$(readlink -f "$0")")")")")")" >> "$DK/order.log"
 other=blue
 [ "$colour" = blue ] && other=green
 point() {

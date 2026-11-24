@@ -420,6 +420,51 @@ pl_assert_boot_end() {
 }
 
 # ===========================================================================================
+# the watch: what the driver does with each end of the real loop
+# ===========================================================================================
+
+@test "the watch ends parked when a shared service and both colours are down for the pause cap: no rollback, the host lock released, the hold failure" {
+    pl_scn_green
+    # at the first sample of the window: the state project's database is unhealthy, the new colour answers
+    # 503 on the public route and the old colour is not ready either (nothing says the release is at fault)
+    pl_on outage '--max-time 12 http://127.0.0.1:18080/api/version' 'sed -i "s/^health=.*/health=unhealthy/" "$DK/ctr/c-state-postgres"; : >"$DK/public.fail.green"; : >"$DK/next.fail.blue"'
+    run pl_tick
+    echo "$output"
+    pl_no_stubs
+    [ "$(pl_state .phase)" = parked ]
+    [ "$(pl_state .hold.kind)" = failure ]
+    [ "$(pl_hist rollback_started)" -eq 0 ]
+    [ "$(pl_blocks)" -eq 0 ]
+    # the new colour still serves and nothing was switched back or torn down
+    [ "$(cat "${GREMION_ROOT}/runtime/active-colour")" = green ]
+    [ "$(pl_count '^switch blue')" -eq 0 ]
+    [ "$(pl_count '^down green')" -eq 1 ]
+    [ "$(pl_mails parked)" -ge 1 ]
+    # the host lock is handed back at the park; both locks are free after the exit
+    pl_hostlock_free
+    pl_cdlock_free
+    [ "$(pl_state .release.switch_started)" = true ]
+    [ "$(pl_state .release.committed_at)" = null ]
+}
+
+@test "the watch: a rollback of the loop that fails ends the release too, the hold rollback_failed stands alone" {
+    pl_scn_green
+    # the pause cap triggers a rollback (the old colour answers ready through the loopback route), and the
+    # old colour then fails its own proof (its internal answer says not ready)
+    pl_on outage '--max-time 12 http://127.0.0.1:18080/api/version' 'sed -i "s/^health=.*/health=unhealthy/" "$DK/ctr/c-state-postgres"; : >"$DK/public.fail.green"; printf "notready\n" >"$DK/readyz.blue"'
+    run pl_tick
+    echo "$output"
+    pl_no_stubs
+    [ "$(pl_state .hold.kind)" = rollback_failed ]
+    [ "$(pl_state .phase)" = idle ]
+    # no release record is left behind with phase idle
+    [ "$(pl_state .release)" = null ]
+    [ "$(pl_mails rollback_failed)" -ge 1 ]
+    pl_hostlock_free
+    pl_cdlock_free
+}
+
+# ===========================================================================================
 # the reconcile stage through the real libraries
 # ===========================================================================================
 

@@ -936,8 +936,11 @@ _cd_drv_st_watch() {
     cd_heartbeat_stop
     _cd_drv_load
     if [[ -z "$R_ID" || "$D_PHASE" == idle ]]; then
-        # the loop ran a rollback (a trigger, proof_end or the operator's request)
+        # the loop ran a rollback (a trigger, proof_end or the operator's request). One that did
+        # not complete leaves its release record behind with phase idle (the hold rollback_failed
+        # is the news): the release is over all the same, as _cd_drv_after_rollback ends it
         CD_DRV_ROLLED=1
+        if [[ -n "$R_ID" ]]; then _cd_drv_end_release; fi
         cd_hostlock_release
         return 0
     fi
