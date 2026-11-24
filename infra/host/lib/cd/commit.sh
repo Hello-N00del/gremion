@@ -64,16 +64,16 @@
 #                         released); 4 the loop could not judge (eight samples in a row gave no
 #                         verdict) or the rollback that a TRIGGER asked for was refused or busy with
 #                         nothing touched: the release is still watching, in flight, with both locks
-#                         held. The plan gives the driver no rule for it (commit_stuck is defined for
+#                         held. Nothing here gives the driver a rule for it (commit_stuck is defined for
 #                         the commit steps 1 to 5 only), so what it does with a 4 is the driver's
-#                         decision (unit U14a); this file promises nothing. A rollback that the
+#                         decision; this file promises nothing. A rollback that the
 #                         OPERATOR asks for and that is refused is never a 4: it is mailed and the
 #                         watch goes on (in the kill switch park too). A trigger on a release whose
 #                         rollback target is unusable leaves the process waiting in place, both
 #                         locks held, for that operator rollback, and mails again every hour (it never
 #                         returns 3: the host lock is handed back only by the pause cap and by a
-#                         complete rollback). It has no time limit of its own: that is a decision of
-#                         the plan and of the driver (unit U14a).
+#                         complete rollback). It has no time limit of its own: that is a decision of the
+#                         driver, not of this file.
 #   cd_commit_promote     0 committed and steps 6 to 8 done; 1 not done: a rollback ran (the
 #                         operator's request, or commit_stuck at the cap; cd_rollback_run owns the
 #                         state and the hold it leaves, and after a complete one there is no release
@@ -184,7 +184,9 @@ _cd_commit_take_rollback_request() {
         size="$(stat -c %s "$f" 2>/dev/null)" || continue
         [[ "$size" =~ ^[0-9]+$ ]] || continue
         ((size <= 65536)) || continue
-        if ! jq -s -e 'length == 1 and (.[0] | type == "object" and .v == 1 and .verb == "rollback" and (.args | type == "object"))' \
+        # the same fields as cd_request_next requires: a file it would reject stays for the driver
+        if ! jq -s -e 'length == 1 and (.[0] | type == "object" and .v == 1 and .verb == "rollback" and (.args | type == "object")
+            and (.at | type == "string") and (.by | type == "string"))' \
             "$f" >/dev/null 2>&1; then
             continue
         fi
@@ -316,8 +318,8 @@ _cd_commit_park() {
 # (watching): the resume path of the next tick takes the locks again and the next trigger lands
 # here again. There is no time limit here on purpose: what the program does with a release that
 # nobody can roll back and nobody has rolled back (hand the host lock back with the new colour
-# serving a migrated schema and `current` on the old tree, or hold it) is a decision of the plan
-# and of the driver, not of this file; the hourly mail and the operator's `rollback` are the ways out.
+# serving a migrated schema and `current` on the old tree, or hold it) is a decision of the driver,
+# not of this file; the hourly mail and the operator's `rollback` are the ways out.
 _cd_commit_wait_operator() {
     local stage="$1" rule="$2" now
     cd_heartbeat_stop
@@ -675,7 +677,9 @@ _cd_commit_step7() {
         _cd_commit_err "step 7: the state names no previous release"
         return 2
     fi
-    cd_colour_down "$CM_PREV_TREE" "$CM_PREV_COLOUR"
+    # a compose down that hangs would hold both locks past CD_COMMIT_MAX_MIN, because the cap is
+    # read only between two attempts: the call has its own time limit, as the prune's has
+    CD_DC_TIMEOUT=120 cd_colour_down "$CM_PREV_TREE" "$CM_PREV_COLOUR"
 }
 
 # step 8: the `released` mail, queued once (the key is the release id, so a resumed step 6 to 8
@@ -865,6 +869,12 @@ cd_commit_promote() {
     # operator's own request that _cd_commit_nap takes
     _CD_COMMIT_FWD_START="$(cd_now)" || return 1
     _CD_COMMIT_PARKED_S=0
+    # the window of steps 6 and 7 is a second one of CD_COMMIT_MAX_MIN, after steps 1 to 5 that
+    # may have used the first: the background beat of the stage is started again with the budget of
+    # one window, so it does not stop while those steps still retry correctly
+    if [[ -n "${CD_HB_PID:-}" ]]; then
+        cd_heartbeat_start commit "$(_cd_commit_hb_budget commit)" || true
+    fi
     rc=0
     _cd_commit_forward 6 _cd_commit_step6 || rc=$?
     if ((rc != 0)); then return 1; fi

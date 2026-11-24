@@ -1136,6 +1136,34 @@ EOF
     [ "$(calls 'fake cd_rollback_run')" -eq 0 ]
 }
 
+@test "step 7: the old colour's compose down carries a time limit, so a hung docker cannot hold the host lock past the cap" {
+    seed_state 60
+    run cdc_lib 'cd_colour_down() { echo "s7dct=${CD_DC_TIMEOUT:-none} $2" >> "$SHIM_LOG"; }; cd_commit_promote; echo "rc=$?"'
+    [[ "$output" == *"rc=0"* ]]
+    [ "$(grep -c '^s7dct=120 blue' "$SHIM_LOG")" -eq 1 ]
+    [ "$(grep -c '^s7dct=none' "$SHIM_LOG")" -eq 0 ]
+}
+
+@test "after the commit point the background heartbeat is re-armed with the budget of the window of steps 6 and 7" {
+    seed_state 60
+    # the beat that the driver started for the stage covers one cap; the window after the commit
+    # point is a second one (CD_COMMIT_MAX_MIN 3 here: 3 * 60 + 300)
+    run cdc_lib 'cd_heartbeat_start commit 100; cd_commit_promote; echo "rc=$?"; cd_heartbeat_stop; echo "hbbudget=$(awk "{print \$5}" "$CD_HEARTBEAT_FILE")"'
+    [[ "$output" == *"rc=0"* ]]
+    [[ "$output" == *"hbbudget=480"* ]]
+}
+
+@test "a rollback request without the fields the core requires is left alone, as the driver's own reject reads it" {
+    mkdir -p "${GREMION_ROOT}/runtime/cd/requests"
+    printf '{"v":1,"verb":"rollback","args":{}}\n' > "${GREMION_ROOT}/runtime/cd/requests/1700000000-0001-rollback.json"
+    run cdc_lib '_cd_commit_take_rollback_request; echo "rc=$?"'
+    [[ "$output" == *"rc=1"* ]]
+    [ -f "${GREMION_ROOT}/runtime/cd/requests/1700000000-0001-rollback.json" ]
+    run cd_lib 'cd_request_put rollback "{}"'
+    run cdc_lib '_cd_commit_take_rollback_request; echo "rc=$?"'
+    [[ "$output" == *"rc=0"* ]]
+}
+
 # ------------------------------------------------------------------ a whole release
 
 @test "a whole release against a fake root: current, the host programs and state.env are byte-identical until the commit step, the programs and state.env after it as well" {
