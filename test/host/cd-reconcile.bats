@@ -910,7 +910,9 @@ fingerprint() {
 # ------------------------------------------------------------------------ the order guard
 
 @test "the stage refuses when current is not the live release's tree: code 2, no child, no query" {
-    mkdir -p "${GREMION_ROOT}/releases/bbbbbbbbbbbb"
+    # the other tree is a complete one, so only the order guard can refuse
+    mkdir -p "${GREMION_ROOT}/releases/bbbbbbbbbbbb/infra/host/bin"
+    cp "${TREE}/infra/host/bin/gremion-tenant" "${GREMION_ROOT}/releases/bbbbbbbbbbbb/infra/host/bin/gremion-tenant"
     ln -sfn "${GREMION_ROOT}/releases/bbbbbbbbbbbb" "${GREMION_ROOT}/current"
     stage
     [ "$status" -eq 2 ]
