@@ -391,6 +391,48 @@ pl_assert_boot_end() {
     [ "$(pl_blocks)" -eq 0 ]
 }
 
+# ===========================================================================================
+# the host lock span
+# ===========================================================================================
+
+@test "the released mail carries the span of the host lock, and status shows what the last release held it for" {
+    pl_scn_green
+    run pl_tick
+    [ "$status" -eq 0 ]
+    pl_no_stubs
+    local f
+    f="$(pl_mail_file released)"
+    [[ "$(pl_mail_field "$f" hostlock_min)" =~ ^[0-9]+$ ]]
+    # the window alone is two minutes of the fake clock
+    [ "$(pl_mail_field "$f" hostlock_min)" -ge 2 ]
+    # a span inside the limit is no note
+    run grep -c 'lock_span_over' "$f"
+    [ "$output" = 0 ]
+    run "${HOST_SRC}/bin/gremion-cd" status
+    [[ "$output" == *"the last release held it "*" minutes"* ]]
+}
+
+@test "a lock span past CD_LOCK_SPAN_MIN is a note of the released mail" {
+    pl_scn_green
+    cd_write_cfg CD_REPO_URL=https://github.com/org/repo CD_POST_RECONCILE_S=0 CD_WATCH_MINUTES=2 CD_WATCH_INTERVAL_S=30 CD_LOCK_SPAN_MIN=1
+    run pl_tick
+    [ "$status" -eq 0 ]
+    grep -qE '^notes: .*lock_span_over' "$(pl_mail_file released)"
+}
+
+@test "a release that was taken over after a kill -9 reports the span from its first take of the host lock" {
+    pl_scn_green
+    # the process dies in the snapshot, which holds the host lock
+    pl_killed_tick '^dump take' 5
+    # half an hour passes before the next tick (the host was down)
+    cd_advance 1800
+    run pl_tick
+    [ "$status" -eq 0 ]
+    pl_no_stubs
+    pl_assert_committed
+    [ "$(pl_mail_field "$(pl_mail_file released)" hostlock_min)" -ge 30 ]
+}
+
 @test "workers: new off at the start, old off then new on at the switch, new on in the gate file at the commit" {
     pl_scn_green
     run pl_tick

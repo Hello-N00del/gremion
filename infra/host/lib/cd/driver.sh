@@ -140,7 +140,40 @@ _cd_drv_end_release() {
     # what a resumed switch stage found out belongs to the release that is over now
     CD_DRV_SWITCH_DONE=0
     _cd_drv_set '.phase = "idle" | .release = null'
-    rm -f "${CD_DATA}/release-ref" 2>/dev/null || true
+    rm -f "${CD_DATA}/release-ref" "${CD_DATA}/hostlock-since" 2>/dev/null || true
+    CD_HOSTLOCK_SINCE=''
+}
+
+# _cd_drv_lock_since -- the host lock was just taken for the release in R_ID: note when this release
+# first took it, for the span the `released` mail and `status` report (commit.sh reads
+# CD_HOSTLOCK_SINCE). The first take is written down in a file named after the release, so a process
+# that takes the release over after a kill -9 or a reboot goes on counting from it: the span it
+# reports is never shorter than what the release has held. Never fails.
+_cd_drv_lock_since() {
+    local f="${CD_DATA}/hostlock-since" rid='' at=''
+    CD_HOSTLOCK_SINCE=''
+    [[ -n "${R_ID:-}" ]] || return 0
+    if [[ -r "$f" ]]; then
+        read -r rid at <"$f" || true
+        if [[ "$rid" == "$R_ID" && "$at" =~ ^[0-9]{1,12}$ ]]; then
+            CD_HOSTLOCK_SINCE="$at"
+            return 0
+        fi
+    fi
+    at="$(cd_now)" || return 0
+    printf '%s %s\n' "$R_ID" "$at" | cd_atomic_write "$f" 600 || return 0
+    CD_HOSTLOCK_SINCE="$at"
+    return 0
+}
+
+# _cd_drv_lock_record -- the host lock of a committed release is about to go (commit step 10): its
+# span in whole minutes, as the history line `status` reads.
+_cd_drv_lock_record() {
+    local now
+    [[ "${CD_HOSTLOCK_SINCE:-}" =~ ^[0-9]{1,12}$ ]] || return 0
+    now="$(cd_now)" || return 0
+    cd_hist hostlock_released minutes=$(((now - CD_HOSTLOCK_SINCE) / 60)) sha12="${R_SHA12:-}" || true
+    return 0
 }
 
 # _cd_drv_consume_rollbacks -- a release has ended without a rollback of its own (an abort, a
@@ -681,6 +714,9 @@ _cd_drv_hostlock_wait() {
     if ((beat == 1)); then
         cd_heartbeat_stop
     fi
+    if ((rc == 0)); then
+        _cd_drv_lock_since
+    fi
     return "$rc"
 }
 
@@ -762,6 +798,7 @@ _cd_drv_st_snapshot() {
         _cd_drv_fail snapshot "$rc" host_lock
         return 0
     fi
+    _cd_drv_lock_since
     _cd_drv_begin snapshot 3600
     t0="$(cd_now)" || t0=0
     rc=0
@@ -992,6 +1029,7 @@ _cd_drv_st_commit() {
         cd_hist prune_failed code="$rc" || true
     fi
     # step 10: the host lock only. The cd lock stays for the reconcile stage.
+    _cd_drv_lock_record
     cd_hostlock_release
     cd_heartbeat_stop
     cd_stage_ok commit || true

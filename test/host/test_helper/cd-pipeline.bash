@@ -77,6 +77,8 @@ pl_mails() {
     done
     echo "$n"
 }
+# pl_mail_field FILE KEY -- the value of one `key: value` line of a mail (the lines end in CRLF)
+pl_mail_field() { sed -n "s/^$2: //p" "$1" | tr -d '\r'; }
 # pl_mail_file KIND -- the first mail of the kind
 pl_mail_file() {
     local f
