@@ -307,7 +307,7 @@ pl_server() {
 }
 
 pl_world() {
-    local root="${GREMION_ROOT}" h
+    local root="${GREMION_ROOT}"
     mkdir -p "$DK/ctr" "${root}/etc/edge" "${root}/etc/secrets/governance" "${root}/etc/secrets/tenants" "${root}/data"
     chmod 700 "${root}/etc/secrets/governance" "${root}/etc/secrets/tenants"
     mkdir -m 700 "$DUMPDIR"
@@ -376,8 +376,6 @@ EOF
         name="${pair%%:*}"; svc="${pair##*:}"; u="http://${svc}-green:3000"
         jq -cn --arg u "$u" '{loadBalancer: {servers: [{url: $u}]}, serverStatus: {($u): "UP"}}' >"$DK/traefik.${name}"
     done
-    h=''
-    : "$h"
 }
 
 # pl_leaf_world -- the three leaf services run in the target colour (their profiles are on), and each

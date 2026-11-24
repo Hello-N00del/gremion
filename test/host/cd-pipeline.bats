@@ -660,6 +660,11 @@ pl_assert_boot_end() {
     [ "$(pl_count '^run green calendar-service')" -eq 1 ]
     [ "$(pl_count '^run green newsletter-service')" -eq 0 ]
     [ -s "$DK/live.tsv" ]
+    # the target colour is torn down and its env file carries the tag it had before
+    pl_after '^run green content-service' '^down green'
+    assert_present '^IMAGE_TAG=pilot-eeeeeeeeeeee$' "${GREMION_ROOT}/etc/env/app-green.env"
+    pl_hostlock_free
+    pl_cdlock_free
 }
 
 @test "the leaf step: with leaf services rendered but no dump of a module server in the set the entry is never run" {
