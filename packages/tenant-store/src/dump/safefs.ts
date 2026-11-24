@@ -8,10 +8,14 @@
 // somewhere else, to hand a root-owned file to that user, or to read one. Four rules close that, and the
 // dump directory and everything below it is held to them:
 //
-//   1. Nothing is opened by a name that may be a link: every open carries O_NOFOLLOW, so a link at the LAST
-//      component fails (ELOOP) instead of being followed. A refused link is DUMP_PATH_UNSAFE, never skipped.
+//   1. Nothing below the dump directory is opened by a name that may be a link: every open the dump code makes
+//      carries O_NOFOLLOW, so a link at the LAST component fails (ELOOP) instead of being followed, and O_NONBLOCK,
+//      so a FIFO in the place of a file cannot hold the process in open(2). A refused link is DUMP_PATH_UNSAFE,
+//      never skipped. A reader outside this file (the exporter's `pg_restore --list`) is handed the descriptor, never
+//      the name (Exporter.list, `fd`).
 //   2. What was opened is checked on the descriptor, not on the name: fstat says regular file with one link (a
-//      hard link to a root-owned file is refused) or directory, owned by a uid the dump code may meet.
+//      hard link to a root-owned file is refused) or directory, owned by a uid the dump code may meet. That holds
+//      for an existing ledger too: it is read and appended to only when it belongs to such a uid.
 //   3. Ownership and mode are changed on the descriptor (fchown, fchmod), never by path, and only on the very
 //      descriptor that created the node (O_EXCL; or a directory made in this call and found empty, fresh and this
 //      process's own; or the dump file the exporter wrote, found fresh and this process's own). A node that already
@@ -25,6 +29,7 @@ import { DumpError } from './errors.js'
 
 const O_NOFOLLOW = constants.O_NOFOLLOW ?? 0
 const O_DIRECTORY = constants.O_DIRECTORY ?? 0
+const O_NONBLOCK = constants.O_NONBLOCK ?? 0
 const IS_WINDOWS = process.platform === 'win32'
 const PROC_FD = '/proc/self/fd'
 /** How far back the mtime of a file this call has just made may lie (coarse file system clocks, a clock step). */
@@ -52,9 +57,11 @@ export function allowedOwners(ownerUid: number | undefined, fsUid: number | unde
 }
 
 /**
- * open(2) with O_NOFOLLOW. A link at the last component is DUMP_PATH_UNSAFE (ELOOP, EMLINK); any other error is
- * the caller's (ENOENT, EEXIST, EACCES ...). Where O_NOFOLLOW does not exist (Windows) the same refusal comes from
- * an lstat first.
+ * open(2) with O_NOFOLLOW and O_NONBLOCK. A link at the last component is DUMP_PATH_UNSAFE (ELOOP, EMLINK); so is a
+ * FIFO with no peer (ENXIO on a write-only open); any other error is the caller's (ENOENT, EEXIST, EACCES ...).
+ * O_NONBLOCK makes the open of a FIFO return at once instead of waiting for a peer, and the descriptor check
+ * (assertPlain) then refuses it; it changes nothing for a regular file or a directory. Where O_NOFOLLOW does not
+ * exist (Windows) the link refusal comes from an lstat first.
  */
 export function openNoFollow(path: string, flags: number, mode?: number): number {
   if (O_NOFOLLOW === 0) {
@@ -66,10 +73,11 @@ export function openNoFollow(path: string, flags: number, mode?: number): number
     }
   }
   try {
-    return openSync(path, flags | O_NOFOLLOW, mode)
+    return openSync(path, flags | O_NOFOLLOW | O_NONBLOCK, mode)
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code
     if (code === 'ELOOP' || code === 'EMLINK') throw unsafePath(path, 'is a link', err)
+    if (code === 'ENXIO') throw unsafePath(path, 'is not a regular file', err)
     throw err
   }
 }
@@ -105,8 +113,11 @@ export function handOverFd(fd: number, path: string, uid: number, mode: number, 
   setMode(fd, path, mode)
 }
 
-/** The text of a plain file, null when it does not exist. A link, a directory or a multiply linked file is refused. */
-export function readTextNoFollow(path: string): string | null {
+/**
+ * The text of a plain file, null when it does not exist. A link, a FIFO, a directory or a multiply linked file is
+ * refused, and so is a file of a uid not in `owners` (when given).
+ */
+export function readTextNoFollow(path: string, owners?: readonly number[]): string | null {
   let fd: number
   try {
     fd = openNoFollow(path, constants.O_RDONLY)
@@ -115,22 +126,13 @@ export function readTextNoFollow(path: string): string | null {
     throw err
   }
   try {
-    assertPlain(fd, path, 'file')
+    assertPlain(fd, path, 'file', owners)
     return readFileSync(fd, 'utf8')
   } finally {
     closeSync(fd)
   }
 }
 
-/** The size of a plain file, read from the descriptor. */
-export function sizeNoFollow(path: string): number {
-  const fd = openNoFollow(path, constants.O_RDONLY)
-  try {
-    return Number(assertPlain(fd, path, 'file').size)
-  } finally {
-    closeSync(fd)
-  }
-}
 
 // ── an anchored directory ─────────────────────────────────────────────────────
 

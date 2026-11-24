@@ -60,7 +60,7 @@ async function retireMatching(o: RetireOptions, match: (e: DumpEvent) => boolean
     return await withLedgerLock(
       adir,
       async () => {
-        const live = liveDumps(readEvents(adir))
+        const live = liveDumps(readEvents(adir, owners))
         const mine = live.filter(match)
         const left = live.filter((e) => !match(e) && leftWhen(e)).map((e) => e.migration_dump_id)
         const retired: string[] = []
@@ -68,7 +68,7 @@ async function retireMatching(o: RetireOptions, match: (e: DumpEvent) => boolean
         // every line is checked before anything is unlinked: a line of another shape refuses the whole retire
         const parts = mine.map((e) => dumpFileParts(e))
         // the host does this first too: the `deleted` line must be writable BEFORE a file is unlinked
-        if (mine.length > 0) assertLedgerWritable(adir)
+        if (mine.length > 0) assertLedgerWritable(adir, owners)
         for (const [i, e] of mine.entries()) {
           const { rel, name } = parts[i]!
           const relDir = openChildDir(anchor, rel, { create: false, owners })
@@ -104,7 +104,7 @@ async function retireMatching(o: RetireOptions, match: (e: DumpEvent) => boolean
             ...(e.pg_service !== undefined ? { pg_service: e.pg_service } : {}),
             ...(e.pg_user !== undefined ? { pg_user: e.pg_user } : {}),
           }
-          appendEvent(adir, event, handOver)
+          appendEvent(adir, event, handOver, owners)
           audit(auditLine(event))
           retired.push(e.migration_dump_id)
           releaseDirs.add(rel)

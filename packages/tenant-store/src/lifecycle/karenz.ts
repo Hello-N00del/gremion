@@ -135,6 +135,21 @@ function describeError(err: unknown): string {
 }
 
 /**
+ * The cause of a failed dump retire, for the run's error and its log line. The dump code's own errors (DumpError,
+ * LifecycleError) are written without a database name and are quoted. Anything else (a raw errno error from rm, open
+ * or unlink) carries the path of the dump in its message, and that path holds the database name: only its errno code
+ * and syscall are kept.
+ */
+function describeRetireCause(err: unknown): string {
+  if (err instanceof LifecycleError || (err instanceof Error && err.name === 'DumpError')) return describeError(err)
+  const e = err as { code?: unknown; syscall?: unknown } | null
+  const code = typeof e?.code === 'string' ? e.code : null
+  const syscall = typeof e?.syscall === 'string' ? e.syscall : null
+  if (code !== null) return syscall !== null ? `${code} in ${syscall}` : code
+  return 'an unexpected error; see the host log of the one-shot'
+}
+
+/**
  * Dumps in the export tree that no row references: a file written by an attempt that failed before it was
  * recorded. Exports of disables from before the Karenz stay referenced by plt.module_database.export_path
  * and are therefore not listed.
@@ -297,7 +312,7 @@ async function finalizeRow(
       await deps.afterDrop(tenantId, moduleKey, md.dbName)
     } catch (err) {
       retireFailure = err
-      log(`the pre-migration dump of a dropped module database could not be retired for Karenz ${r.karenz_id} (${describeError(err)}); it is left for the operator: gremion-migration-dump status, then discard`)
+      log(`the pre-migration dump of a dropped module database could not be retired for Karenz ${r.karenz_id} (${describeRetireCause(err)}); it is left for the operator: gremion-migration-dump status, then discard`)
     }
   }
 
@@ -338,7 +353,7 @@ async function finalizeRow(
   if (retireFailure !== null) {
     throw new LifecycleError(
       'DUMP_RETIRE_FAILED',
-      `the pre-migration dump of the dropped module database of Karenz ${r.karenz_id} could not be retired (${describeError(retireFailure)}); the platform side stays open and the next run repeats it, or discard the dump by hand: gremion-migration-dump status, then discard`,
+      `the pre-migration dump of the dropped module database of Karenz ${r.karenz_id} could not be retired (${describeRetireCause(retireFailure)}); the platform side stays open and the next run repeats it, or discard the dump by hand: gremion-migration-dump status, then discard`,
       { cause: retireFailure },
     )
   }

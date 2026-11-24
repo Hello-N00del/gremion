@@ -24,12 +24,13 @@
 // checked on its descriptor; ownership and mode change on the descriptor. A link planted by the owner of the directory
 // is refused (DUMP_PATH_UNSAFE), never followed, so a root process cannot be made to write, chown or read elsewhere.
 import { randomBytes } from 'node:crypto'
-import { closeSync, constants, createReadStream, fstatSync, fsyncSync, rmSync, statfsSync, statSync } from 'node:fs'
+import { closeSync, constants, fstatSync, fsyncSync, rmSync, statfsSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
+import { descriptorStream } from '../fd-stream.js'
 import { join } from 'node:path'
 import type { Exporter } from '../lifecycle/types.js'
 import { appendEvent, assertRelease, auditLine, DumpError, dumpFileParts, fsyncDir, liveDumps, readEvents, withLedgerLock, type ByKind, type DumpEvent, type DumpScope, type ENABLE_ORIGIN, type HandOver } from './ledger.js'
-import { allowedOwners, anchorDir, assertPlain, handOverFd, madeSince, openChildDir, openNoFollow, SELF_UID, setMode, sizeNoFollow, unsafePath } from './safefs.js'
+import { allowedOwners, anchorDir, assertPlain, handOverFd, madeSince, openChildDir, openNoFollow, SELF_UID, setMode, unsafePath } from './safefs.js'
 
 /** Free space must be at least this multiple of pg_database_size (brief §1). */
 export const SPACE_FACTOR = 1.2
@@ -150,23 +151,30 @@ export function uuidv7(now: Date = new Date()): string {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
 }
 
-/** sha256 of a plain file, read from a descriptor opened with O_NOFOLLOW (a link in its place is DUMP_PATH_UNSAFE). */
-export function sha256OfFile(file: string): Promise<string> {
+/** sha256 of what an open descriptor holds, read positionally from byte 0 (the descriptor stays open and its offset untouched). */
+export function sha256OfFd(fd: number): Promise<string> {
   return new Promise((resolve, reject) => {
-    let fd: number
-    try {
-      fd = openNoFollow(file, constants.O_RDONLY)
-      assertPlain(fd, file, 'file')
-    } catch (err) {
-      reject(err)
-      return
-    }
     const h = createHash('sha256')
-    createReadStream('', { fd })
+    descriptorStream(fd)
       .on('data', (c) => h.update(c))
       .on('error', reject)
       .on('end', () => resolve(h.digest('hex')))
   })
+}
+
+/**
+ * Opens a dump file once (no link followed, no wait on a FIFO), checks it on the descriptor and runs `use` on it. The
+ * size, the table of contents and the sha256 of a dump all come from this one descriptor: nothing reopens the file by
+ * name after it was handed over, so what is read is the node that was checked.
+ */
+async function withDumpFile<T>(path: string, owners: readonly number[], use: (fd: number, bytes: number) => Promise<T>): Promise<T> {
+  const fd = openNoFollow(path, constants.O_RDONLY)
+  try {
+    const st = assertPlain(fd, path, 'file', owners)
+    return await use(fd, Number(st.size))
+  } finally {
+    closeSync(fd)
+  }
 }
 
 /**
@@ -258,7 +266,7 @@ async function takeUnder(o: TakeDumpOptions, fs: DumpFs, anchor: ReturnType<type
   const audit = o.audit ?? ((l: string) => console.log(l))
 
   return withLedgerLock(adir, async () => {
-    const live = liveDumps(readEvents(adir)).filter((e) => e.database === o.database)
+    const live = liveDumps(readEvents(adir, owners)).filter((e) => e.database === o.database)
     const foreign = live.filter((e) => e.release !== o.release)
     if (foreign.length) {
       const f = foreign[0]!
@@ -278,8 +286,7 @@ async function takeUnder(o: TakeDumpOptions, fs: DumpFs, anchor: ReturnType<type
         if (relDir === null) throw new Error('the release directory is missing')
         try {
           const anchored = join(relDir.dir, name)
-          bytes = sizeNoFollow(anchored)
-          sha256 = await sha256OfFile(anchored)
+          ;({ bytes, sha256 } = await withDumpFile(anchored, owners, async (fd, size) => ({ bytes: size, sha256: await sha256OfFd(fd) })))
         } finally {
           relDir.close()
         }
@@ -322,13 +329,16 @@ async function takeUnder(o: TakeDumpOptions, fs: DumpFs, anchor: ReturnType<type
         sealFile(path, startedMs, handOver)
         fsyncDir(relDir.dir)
         fsyncDir(adir)
-        const bytes = sizeNoFollow(path)
-        if (bytes <= 0) throw new Error('the dump is empty (0 bytes)')
-        const toc = await o.exporter.list(path)
-        if (!/^; Archive created at /m.test(toc) || !new RegExp(`^;\\s+dbname: ${o.database.replace(/[.]/g, '\\.')}$`, 'm').test(toc)) {
-          throw new Error(`pg_restore --list does not describe a dump of ${o.database}`)
-        }
-        const sha256 = await sha256OfFile(path)
+        // one descriptor for everything read from the dump: its size, the exporter's table of contents (handed the
+        // descriptor, not the name) and its sha256
+        const { bytes, sha256 } = await withDumpFile(path, owners, async (fd, size) => {
+          if (size <= 0) throw new Error('the dump is empty (0 bytes)')
+          const toc = await o.exporter.list(path, { fd })
+          if (!/^; Archive created at /m.test(toc) || !new RegExp(`^;\\s+dbname: ${o.database.replace(/[.]/g, '\\.')}$`, 'm').test(toc)) {
+            throw new Error(`pg_restore --list does not describe a dump of ${o.database}`)
+          }
+          return { bytes: size, sha256: await sha256OfFd(fd) }
+        })
         const event: DumpEvent = {
           v: 1,
           event: 'created',
@@ -347,7 +357,7 @@ async function takeUnder(o: TakeDumpOptions, fs: DumpFs, anchor: ReturnType<type
           ...server,
           ...(o.origin ? { origin: o.origin } : {}),
         }
-        appendEvent(adir, event, handOver)
+        appendEvent(adir, event, handOver, owners)
         audit(auditLine(event))
         return { status: 'created', id, path: join(dir, file), sha256, bytes }
       } catch (err) {

@@ -26,7 +26,7 @@
 import { closeSync, constants, fsyncSync, openSync, unlinkSync, writeSync } from 'node:fs'
 import { join } from 'node:path'
 import { DumpError, type DumpErrorCode } from './errors.js'
-import { assertPlain, openNoFollow, readTextNoFollow } from './safefs.js'
+import { assertPlain, openNoFollow, readTextNoFollow, SELF_UID } from './safefs.js'
 
 // The error type lives in errors.ts (safefs.ts needs it too); these two names keep every importer of this file working.
 export { DumpError }
@@ -127,11 +127,15 @@ export function fsyncDir(dir: string): void {
   }
 }
 
-/** Every event in the ledger, oldest first. A line that does not parse is LEDGER_CORRUPT (never skipped). */
-export function readEvents(dir: string): DumpEvent[] {
+/**
+ * Every event in the ledger, oldest first. A line that does not parse is LEDGER_CORRUPT (never skipped). `owners` are
+ * the uids an existing ledger may belong to (allowedOwners): a root-owned file that was moved into its place is not
+ * read as the ledger. Without it the owner is not checked (a reader that is not the dump code).
+ */
+export function readEvents(dir: string, owners?: readonly number[]): DumpEvent[] {
   const file = join(dir, LEDGER_FILE)
   // read through a no-follow open: a link in the ledger's place is refused, never read (root would read what it points at)
-  const text = readTextNoFollow(file)
+  const text = readTextNoFollow(file, owners)
   if (text === null) return []
   const out: DumpEvent[] = []
   const lines = text.split('\n')
@@ -165,9 +169,11 @@ export function liveDumps(events: readonly DumpEvent[]): DumpEvent[] {
 /**
  * Appends one event and fsyncs the file and its directory before returning. The ledger is opened without following a
  * link and must be a plain file with one link. It is handed over only when this call created it, on the descriptor
- * that created it: an existing ledger is appended to and left alone, whoever owns it.
+ * that created it. An existing ledger is appended to and left alone, but only when it belongs to one of `owners`
+ * (allowedOwners): a file of another uid that was moved into its place gets no line. A ledger this call created is
+ * this process's own, whatever `owners` says.
  */
-export function appendEvent(dir: string, event: DumpEvent, handOver?: HandOver): void {
+export function appendEvent(dir: string, event: DumpEvent, handOver?: HandOver, owners?: readonly number[]): void {
   const file = join(dir, LEDGER_FILE)
   const append = constants.O_WRONLY | constants.O_APPEND
   let fd: number
@@ -180,7 +186,7 @@ export function appendEvent(dir: string, event: DumpEvent, handOver?: HandOver):
     fd = openNoFollow(file, append)
   }
   try {
-    assertPlain(fd, file, 'file')
+    assertPlain(fd, file, 'file', created ? (SELF_UID === undefined ? undefined : [SELF_UID]) : owners)
     writeSync(fd, `${JSON.stringify(event)}\n`)
     fsyncSync(fd)
     if (created) handOver?.(file, 0o600, fd)
@@ -195,12 +201,12 @@ export function appendEvent(dir: string, event: DumpEvent, handOver?: HandOver):
  * the same first (`-w` and an open for append): a dump file unlinked before a failed append leaves a live ledger line
  * with no file. Call it only while the ledger exists (a live dump is in it); it never creates the file.
  */
-export function assertLedgerWritable(dir: string): void {
+export function assertLedgerWritable(dir: string, owners?: readonly number[]): void {
   const file = join(dir, LEDGER_FILE)
   try {
     const fd = openNoFollow(file, constants.O_WRONLY | constants.O_APPEND)
     try {
-      assertPlain(fd, file, 'file')
+      assertPlain(fd, file, 'file', owners)
     } finally {
       closeSync(fd)
     }

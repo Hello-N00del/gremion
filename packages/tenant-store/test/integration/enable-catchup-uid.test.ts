@@ -66,7 +66,7 @@ out.take = taken.status
 out.stat = { dir: stat(dir), release: stat(dir + '/dist-v1'), dump: stat(taken.path), ledger: stat(dir + '/ledger.jsonl') }
 out.lockGone = !existsSync(dir + '/ledger.lock')
 const run = (script) => {
-  const r = spawnSync(process.execPath, ['/tmp/app/' + script, dir], { uid: script === 'as-other.mjs' ? 1001 : 1000, gid: script === 'as-other.mjs' ? 1001 : 1000, encoding: 'utf8' })
+  const r = spawnSync(process.execPath, ['/tmp/app/dump/' + script, dir], { uid: script === 'as-other.mjs' ? 1001 : 1000, gid: script === 'as-other.mjs' ? 1001 : 1000, encoding: 'utf8' })
   try { return JSON.parse(r.stdout) } catch { return { error: r.stderr || r.stdout, status: r.status } }
 }
 out.deploy = run('as-deploy.mjs')
@@ -78,6 +78,7 @@ mkdirSync('/victim', { mode: 0o755 })
 chmodSync('/victim', 0o777)
 const ROOTDIR = '/victim/rootdir'
 const ROOTFILE = '/victim/rootfile'
+const ROOTLEDGER = '/victim/rootledger'
 const VICTIM = '/victim/target.txt'
 const RELROOT = '/victim/relroot'
 const ID = '0192f0c1-2b3c-7d4e-8f00-aaaaaaaaaaaa'
@@ -100,6 +101,9 @@ const reset = () => {
   writeFileSync(ROOTFILE, 'ROOT OWNED', { mode: 0o644 })
   chmodSync(ROOTFILE, 0o644)
   utimesSync(ROOTFILE, Date.now() / 1000 - 3600, Date.now() / 1000 - 3600) // an old file of root, not one this call just made
+  rmSync(ROOTLEDGER, { force: true })
+  writeFileSync(ROOTLEDGER, forged('dist-v9', 'dist-v9/' + DB + '.' + ID + '.dump'), { mode: 0o644 }) // a ledger of root, with a live dump of another release in it
+  chmodSync(ROOTLEDGER, 0o644)
 }
 let atk = 0
 const fresh = () => {
@@ -109,7 +113,7 @@ const fresh = () => {
   chmodSync(d, 0o700)
   return d
 }
-const plant = (ops) => spawnSync(process.execPath, ['/tmp/app/plant.mjs', JSON.stringify(ops)], { uid: 1000, gid: 1000, encoding: 'utf8' })
+const plant = (ops) => spawnSync(process.execPath, ['/tmp/app/dump/plant.mjs', JSON.stringify(ops)], { uid: 1000, gid: 1000, encoding: 'utf8' })
 const forged = (rel, file) => JSON.stringify({ v: 1, event: 'created', at: '2026-11-17T03:00:00.000Z', migration_dump_id: ID, release: rel, scope: 'customer', customer_id: '0192f0c1-2b3c-7d4e-8f00-112233445566', module_id: 'finance', database: DB, by_kind: 'system', file, sha256: 'a'.repeat(64), bytes: 9, dump_taken_at: '2026-11-17T03:00:00.000Z' }) + '\\n'
 const swapped = { ...exporter, async dump(t, f) { writeFileSync(f, 'PGDMP', { flag: 'wx', mode: 0o600 }); unlinkSync(f); symlinkSync(VICTIM, f) } }
 const attack = async (victim, setup, run) => {
@@ -133,6 +137,35 @@ const movedFile = async () => {
   const moved = { ...exporter, async dump(t, f) { renameSync(ROOTFILE, f) } }
   const c = await code(take1(d, { exporter: moved }))
   return { code: c, unchanged: facts() === before, stillThere: true }
+}
+// a root-owned file moved into the place of the ledger while the take runs (watched on an open descriptor: uid, mode AND size, so an appended line shows)
+const movedLedger = async () => {
+  reset()
+  const d = fresh()
+  const vfd = openSync(ROOTFILE, 'r')
+  const facts = () => {
+    const st = fstatSync(vfd)
+    return JSON.stringify({ uid: st.uid, mode: (st.mode & 0o777).toString(8), size: st.size })
+  }
+  const before = facts()
+  const moved = { ...exporter, async dump(t, f) { writeFileSync(f, 'PGDMP fake dump of ' + t.database, { flag: 'wx', mode: 0o600 }); renameSync(ROOTFILE, d + '/ledger.jsonl') } }
+  const c = await code(take1(d, { exporter: moved }))
+  return { code: c, unchanged: facts() === before, stillThere: true }
+}
+// what could block the process (a FIFO where a file is read) runs in a root child with a clock on it, so a hang is a result and not the end of the run
+const rootChild = (spec) => {
+  const r = spawnSync(process.execPath, ['/tmp/app/dump/attack-child.mjs', JSON.stringify(spec)], { encoding: 'utf8', timeout: 15000 })
+  if (r.error || r.signal) return { hung: true }
+  try { return { hung: false, ...JSON.parse(r.stdout.trim().split(String.fromCharCode(10)).at(-1)) } } catch { return { hung: false, error: r.stderr || r.stdout } }
+}
+const childAttack = (kind, setup) => {
+  reset()
+  const d = fresh()
+  if (setup) {
+    const planted = plant(setup(d))
+    if (planted.status !== 0) return { error: 'plant failed: ' + (planted.stderr || planted.stdout) }
+  }
+  return rootChild({ kind, dir: d, victim: VICTIM })
 }
 const take1 = (d, over) => takeDump({ ...base(d, 'dist-v1'), ownerUid: 1000, ...(over || {}) })
 const retire9 = (d) => retireDump(d, 'dist-v9', DB, 'attack', { ownerUid: 1000, audit: () => {} })
@@ -158,6 +191,15 @@ out.attacks = {
   // a root-owned directory moved to the place of the release directory: it exists, so it is never handed over
   movedDir: await attack((d) => d + '/dist-v1', (d) => [{ op: 'rename', from: ROOTDIR, to: d + '/dist-v1' }], (d) => take1(d)),
   movedFile: await movedFile(),
+  // a root-owned file in the place of the ledger: refused by owner, before it is read and before it is appended to
+  movedLedgerBefore: await attack((d) => d + '/ledger.jsonl', (d) => [{ op: 'rename', from: ROOTLEDGER, to: d + '/ledger.jsonl' }], (d) => take1(d)),
+  movedLedgerDuring: await movedLedger(),
+  retireMovedLedger: await attack((d) => d + '/ledger.jsonl', (d) => [{ op: 'rename', from: ROOTLEDGER, to: d + '/ledger.jsonl' }], (d) => retire9(d)),
+  // a FIFO where the ledger is read must not hold the process in open(2)
+  ledgerFifo: childAttack('take', (d) => [{ op: 'mkfifo', path: d + '/ledger.jsonl' }]),
+  // the name of the dump is replaced (by a link to a root-only file, by a FIFO) before the table of contents is read: the exporter is handed the descriptor
+  listLink: childAttack('listLink'),
+  listFifo: childAttack('listFifo'),
 }
 console.log(JSON.stringify(out))
 `
@@ -189,14 +231,46 @@ console.log(JSON.stringify(out))
 
 // runs as uid 1000: the deploy user plants what it can plant in its own directory
 const AS_PLANT = `
+import { spawnSync } from 'node:child_process'
 import { renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 for (const o of JSON.parse(process.argv[2])) {
+  if (o.op === 'mkfifo') spawnSync('mkfifo', [o.path])
   if (o.op === 'symlink') symlinkSync(o.target, o.path)
   else if (o.op === 'write') writeFileSync(o.path, o.text, { mode: 0o600 })
   else if (o.op === 'rm') rmSync(o.path, { force: true })
   else if (o.op === 'rename') renameSync(o.from, o.to)
 }
 console.log('{}')
+`
+
+// runs as root, one take per process (the scenario gives it a clock): what could block on a FIFO, and the race between the seal of the dump and the read of its table of contents
+const ROOT_CHILD = `
+import { readFileSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { takeDump } from './take.js'
+${COMMON}
+const spec = JSON.parse(process.argv[2])
+const state = { readByName: false }
+// an exporter whose reader finds the name of the dump already replaced (the deploy user won the race). A reader handed
+// the descriptor reads the dump; one that has only the name reads, or waits on, whatever now stands there.
+const swapping = (kind) => ({
+  ...exporter,
+  async list(f, source) {
+    unlinkSync(f)
+    if (kind === 'link') symlinkSync(spec.victim, f)
+    else spawnSync('mkfifo', [f])
+    if (source && source.fd !== undefined) {
+      readFileSync(source.fd)
+      return exporter.list()
+    }
+    state.readByName = true
+    readFileSync(f)
+    return exporter.list()
+  },
+})
+const over = spec.kind === 'listLink' ? { exporter: swapping('link') } : spec.kind === 'listFifo' ? { exporter: swapping('fifo') } : {}
+const c = await code(takeDump({ ...base(spec.dir, 'dist-v1'), ownerUid: 1000, ...over }))
+console.log(JSON.stringify({ code: c, readByName: state.readByName }))
 `
 
 // runs as uid 1001, a non-root uid that does not own the directory
@@ -223,18 +297,23 @@ describe('the dump with the real uids (a root process, the deploy user, another 
     const work = mkdtempSync(join(EXPORT_ROOT, 'u6g-uid-'))
     scratch.push(work)
     // the dump code, as it is in the checkout: transpiled file by file, same names, so its relative imports resolve
-    for (const f of ['errors', 'safefs', 'ledger', 'take', 'retire'].filter((n) => existsSync(join(DUMP_SRC, `${n}.ts`)))) {
-      const js = ts.transpileModule(readFileSync(join(DUMP_SRC, `${f}.ts`), 'utf8'), { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022, verbatimModuleSyntax: false } })
-      writeFileSync(join(work, `${f}.js`), js.outputText)
+    // (the same layout as src/: dump/ beside fd-stream.js, so take's import of ../fd-stream.js resolves)
+    const transpile = (from: string, to: string): void => {
+      const js = ts.transpileModule(readFileSync(from, 'utf8'), { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022, verbatimModuleSyntax: false } })
+      writeFileSync(to, js.outputText)
     }
+    mkdirSync(join(work, 'dump'))
+    for (const f of ['errors', 'safefs', 'ledger', 'take', 'retire'].filter((n) => existsSync(join(DUMP_SRC, `${n}.ts`)))) transpile(join(DUMP_SRC, `${f}.ts`), join(work, 'dump', `${f}.js`))
+    transpile(fileURLToPath(new URL('../../src/fd-stream.ts', import.meta.url)), join(work, 'fd-stream.js'))
     writeFileSync(join(work, 'package.json'), '{"type":"module"}')
-    writeFileSync(join(work, 'scenario.mjs'), SCENARIO)
-    writeFileSync(join(work, 'as-deploy.mjs'), AS_DEPLOY)
-    writeFileSync(join(work, 'as-other.mjs'), AS_OTHER)
-    writeFileSync(join(work, 'plant.mjs'), AS_PLANT)
+    writeFileSync(join(work, 'dump', 'scenario.mjs'), SCENARIO)
+    writeFileSync(join(work, 'dump', 'as-deploy.mjs'), AS_DEPLOY)
+    writeFileSync(join(work, 'dump', 'as-other.mjs'), AS_OTHER)
+    writeFileSync(join(work, 'dump', 'plant.mjs'), AS_PLANT)
+    writeFileSync(join(work, 'dump', 'attack-child.mjs'), ROOT_CHILD)
     // the scenario imports ./take.js from /work, so it runs from there
     const name = `bd-u6g-uid-${randomBytes(4).toString('hex')}`
-    const r = spawnSync('docker', ['run', '--rm', '--name', name, '--mount', `type=bind,source=${work},target=/work,readonly`, '-w', '/work', IMAGE, 'node', '/work/scenario.mjs'], { encoding: 'utf8', timeout: 120_000 })
+    const r = spawnSync('docker', ['run', '--rm', '--name', name, '--mount', `type=bind,source=${work},target=/work,readonly`, '-w', '/work', IMAGE, 'node', '/work/dump/scenario.mjs'], { encoding: 'utf8', timeout: 120_000 })
     spawnSync('docker', ['rm', '-f', name], { encoding: 'utf8' }) // by explicit name; a no-op after --rm
     expect(r.status, `${r.stderr}\n${r.stdout}`).toBe(0)
     const out = JSON.parse(r.stdout.trim().split('\n').at(-1)!) as {
@@ -246,7 +325,7 @@ describe('the dump with the real uids (a root process, the deploy user, another 
       lockGone: boolean
       deploy: { uid: number; live: number; shaMatches: boolean; release: string; nonRootTake: string; retired: number; stillLive: string[]; files: string[]; ledger: { uid: number } }
       other: { uid: number; noOwnerUid: string; withOwnerUid1000: string; withOwnerUid1001: string }
-      attacks: Record<string, { code?: string; unchanged?: boolean; stillThere?: boolean; error?: string }>
+      attacks: Record<string, { code?: string; unchanged?: boolean; stillThere?: boolean; error?: string; hung?: boolean; readByName?: boolean }>
     }
 
     // the scenario really ran as root, and the deploy half as uid 1000
@@ -288,6 +367,17 @@ describe('the dump with the real uids (a root process, the deploy user, another 
     // file that is not the one the exporter just wrote is refused before its owner or mode changes
     expect(a.movedDir, JSON.stringify(a)).toEqual(unsafe)
     expect(a.movedFile, JSON.stringify(a)).toEqual(unsafe)
+    // a root-owned file in the place of the ledger (before the take, while it runs, and for a retire) is refused by owner:
+    // it is not read as the ledger and gets no line (uid, mode and size of the victim are as they were)
+    expect(a.movedLedgerBefore, JSON.stringify(a)).toEqual(unsafe)
+    expect(a.movedLedgerDuring, JSON.stringify(a)).toEqual(unsafe)
+    expect(a.retireMovedLedger, JSON.stringify(a)).toEqual(unsafe)
+    // a FIFO in the place of the ledger is refused at once, the process is not held in open(2)
+    expect(a.ledgerFifo, JSON.stringify(a)).toEqual({ hung: false, code: 'DUMP_PATH_UNSAFE', readByName: false })
+    // the table of contents is read from the descriptor that was checked: a name replaced by a link to a root-only file, or by
+    // a FIFO, between the seal and the read is never opened, and the take is not held up
+    expect(a.listLink, JSON.stringify(a)).toEqual({ hung: false, code: 'no error', readByName: false })
+    expect(a.listFifo, JSON.stringify(a)).toEqual({ hung: false, code: 'no error', readByName: false })
     // a ledger line that names a path outside <release>/<name>.<id>.dump is refused as a corrupt ledger, and nothing is removed
     expect(a.retireForgedPath, JSON.stringify(a)).toEqual({ code: 'LEDGER_CORRUPT', unchanged: true, stillThere: true })
     // a lock that a link stands in for was never replaced: the lock refuses, as it always did

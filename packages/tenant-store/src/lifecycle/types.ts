@@ -50,8 +50,13 @@ export interface ExportTarget {
 export interface Exporter {
   /** Writes a custom-format dump of target.database to `file` (which does not exist yet). */
   dump(target: ExportTarget, file: string): Promise<void>
-  /** The archive's table of contents (`pg_restore --list`). Throws when it does not parse. */
-  list(file: string): Promise<string>
+  /**
+   * The archive's table of contents (`pg_restore --list`). Throws when it does not parse. With `source.fd` the archive
+   * is read from that open descriptor (from byte 0, positionally, and the descriptor is left open for the caller to
+   * close) and `file` only names it for messages: a caller that has checked what the descriptor holds passes it so the
+   * archive is never reopened by a name that may have been replaced since.
+   */
+  list(file: string, source?: { fd?: number }): Promise<string>
 }
 
 export type LifecycleStep = 'enabling' | 'roles' | 'created' | 'unblocked' | 'migrated' | 'enabled' | 'disabling' | 'exported' | 'blocked' | 'dropped'

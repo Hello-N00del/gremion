@@ -8,7 +8,7 @@
 //   2. A sink error (EEXIST from 'wx', EACCES, ENOSPC) must reject dump(),
 //      never become an unhandled rejection, and never leave pg_dump blocked
 //      on a full stdout pipe.
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -83,6 +83,39 @@ describe('pgDumpExporter list(): pg_restore --list stops reading after the TOC (
     await expect(exporter().list(join(SCRATCH, 'no-such.dump'))).rejects.toMatchObject({ code: 'ENOENT' })
     await settle()
     expect(strays).toEqual([])
+  }, 20_000)
+})
+
+describe('pgDumpExporter list() handed a descriptor: the archive is read from it, never reopened by name', () => {
+  const echo = node('process.stdin.pipe(process.stdout)')
+
+  it('feeds pg_restore what the descriptor holds, whatever the name is (here: nothing), and leaves the descriptor open and reusable', async () => {
+    const file = join(SCRATCH, 'fd-list.dump')
+    writeFileSync(file, 'FROM THE DESCRIPTOR')
+    const fd = openSync(file, 'r')
+    try {
+      const gone = join(SCRATCH, 'no-such-name.dump')
+      await expect(exporter({ pgRestore: echo }).list(gone, { fd })).resolves.toBe('FROM THE DESCRIPTOR')
+      // the descriptor belongs to the caller: still open, and a second read starts at byte 0 again
+      expect(fstatSync(fd).size).toBe(19)
+      await expect(exporter({ pgRestore: echo }).list(gone, { fd })).resolves.toBe('FROM THE DESCRIPTOR')
+    } finally {
+      closeSync(fd)
+    }
+  }, 20_000)
+
+  it('a 4 MB archive that pg_restore stops reading: the TOC comes back, nothing stray, and the descriptor is still open', async () => {
+    const file = join(SCRATCH, 'fd-big.dump')
+    writeFileSync(file, Buffer.alloc(4 * MB, 0x43))
+    const fd = openSync(file, 'r')
+    try {
+      await expect(exporter().list(file, { fd })).resolves.toBe(TOC)
+      await settle()
+      expect(strays).toEqual([])
+      expect(fstatSync(fd).size).toBe(4 * MB)
+    } finally {
+      closeSync(fd)
+    }
   }, 20_000)
 })
 

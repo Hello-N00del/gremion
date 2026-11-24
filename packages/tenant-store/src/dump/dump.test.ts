@@ -2,7 +2,7 @@
 // dump hook's once-per-run, composePreApply's order, and the cli's refusals.
 // The database half (a real pg_dump under the runner's lock) is
 // test/integration/dump.test.ts.
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, fstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -93,6 +93,26 @@ describe('takeDump (TRD-206)', () => {
     expect(d.bytes).toBeGreaterThan(0)
     expect(o.lines).toEqual([expect.stringMatching(/^premigration-dump created id=\S+ release=dist-v1\.2\.0 db=gremion_platform sha256=[0-9a-f]{64} bytes=\d+$/)])
     expect(existsSync(join(dir, LEDGER_LOCK))).toBe(false)
+  })
+
+  it('hands the exporter the descriptor of the sealed dump, not only its name: an open regular file holding the dump bytes during list()', async () => {
+    const dir = freshDir()
+    const seen: { fd?: number; regular?: boolean; size?: number } = {}
+    const ex = fakeExporter()
+    const list = ex.list.bind(ex)
+    ex.list = async (file, source) => {
+      seen.fd = source?.fd
+      if (source?.fd !== undefined) {
+        const st = fstatSync(source.fd)
+        seen.regular = st.isFile()
+        seen.size = st.size
+      }
+      return list(file, source)
+    }
+    const d = await takeDump(opts(dir, { exporter: ex }))
+    expect(typeof seen.fd).toBe('number')
+    expect(seen.regular).toBe(true)
+    expect(seen.size).toBe(d.bytes)
   })
 
   it('the same release reuses its live dump (no second pg_dump, no second line)', async () => {
