@@ -661,3 +661,135 @@ signal_parent() {
     [ "$status" -eq 0 ]
     assert_absent '^error ' "${GREMION_ROOT}/events.log" 'an error event on a clean run'
 }
+
+# ---------------------------------------------------------------------------
+# SECONDARY_TENANT_HOSTS (state.env): a second, core-only customer on an explicitly allowed host
+# ---------------------------------------------------------------------------
+# The verdict fixture creates alpha-rat on rat.alpha.example with enable calendar and votes.
+
+# secondary_install <pilot host> <secondary list> -- the install's customer host and its allow-list, in state.env
+secondary_install() {
+    printf 'PILOT_TENANT_HOST=%s\nSECONDARY_TENANT_HOSTS=%s\nPLATFORM_DOMAIN=plat.example.org\n' "$1" "$2" >> "${GREMION_ROOT}/etc/env/state.env"
+}
+
+# verdict_enable <module> ... -- the create verdict's module list
+verdict_enable() {
+    local list
+    list="$(printf '%s\n' "$@" | jq -R . | jq -sc .)"
+    jq -c --argjson e "$list" '.args.enable = $e' "${FIX}/verdict-create-ok.json" > "${GREMION_ROOT}/verdict.json"
+}
+
+# create_ran / create_refused_before_phase_a -- what the run did, read from the step order
+create_ran() { run steps; [[ "$output" == *"tc phase-a alpha-rat"* ]]; }
+create_refused_before_phase_a() {
+    [ "$status" -eq 1 ] || { echo "status=$status"; steps; return 1; }
+    run steps
+    [[ "$output" != *"phase-a"* && "$output" != *"vendor-mail"* && "$output" != *"phase-b"* && "$output" != *"render-router"* ]] || { echo "$output"; return 1; }
+    [ "${lines[-1]}" = "psql finish failed" ]
+}
+
+@test "secondary host: a host named in SECONDARY_TENANT_HOSTS runs the create with core modules" {
+    secondary_install rat.pilot.example 'rat.alpha.example,other.example.org'
+    verdict_enable calendar board content publishing
+    queue create
+    run "$EXEC" --once
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; steps; return 1; }
+    create_ran || { steps; return 1; }
+}
+
+@test "secondary host: the host as the request writes it may differ in case from the list" {
+    secondary_install rat.pilot.example 'rat.alpha.example'
+    jq -c '.args.host = "Rat.Alpha.Example" | .args.enable = ["board"]' "${FIX}/verdict-create-ok.json" > "${GREMION_ROOT}/verdict.json"
+    queue create
+    run "$EXEC" --once
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; steps; return 1; }
+    create_ran || { steps; return 1; }
+}
+
+@test "secondary host: a host that is neither PILOT_TENANT_HOST nor in the list is refused before phase A, and the events name what is allowed" {
+    secondary_install rat.pilot.example 'rat.beta.example,other.example.org'
+    verdict_enable calendar
+    queue create
+    run "$EXEC" --once
+    create_refused_before_phase_a
+    grep -q '^error .*rat\.alpha\.example.*rat\.pilot\.example.*rat\.beta\.example' "${GREMION_ROOT}/events.log" || { cat "${GREMION_ROOT}/events.log"; return 1; }
+    grep -q 'SECONDARY_TENANT_HOSTS' "${GREMION_ROOT}/events.log" || { cat "${GREMION_ROOT}/events.log"; return 1; }
+}
+
+@test "secondary host: a request host that merely resembles a listed one (prefix, suffix, glob, comma list) is refused" {
+    secondary_install rat.pilot.example 'rat.alpha.example'
+    local h
+    for h in 'rat.alpha.exampl' 'xrat.alpha.example' 'rat.alpha.example.evil.example' '*' 'rat.alpha.example,rat.pilot.example' 'rat.alpha.example ' ''; do
+        jq -c --arg h "$h" '.args.host = $h | .args.enable = ["calendar"]' "${FIX}/verdict-create-ok.json" > "${GREMION_ROOT}/verdict.json"
+        : > "$ORDER"
+        queue create
+        run "$EXEC" --once
+        create_refused_before_phase_a || { echo "host '${h}' was not refused"; return 1; }
+    done
+}
+
+@test "secondary host: the module allow-set is core only: votes, files, messaging, anything unknown is refused BEFORE phase A, naming the module" {
+    secondary_install rat.pilot.example 'rat.alpha.example'
+    local m
+    for m in votes files messaging elections finance some-new-module; do
+        verdict_enable calendar "$m"
+        : > "$ORDER"
+        queue create
+        run "$EXEC" --once
+        create_refused_before_phase_a || { echo "module ${m} was not refused"; return 1; }
+        grep -q "^error .*${m}.*secondary host" "${GREMION_ROOT}/events.log" || { echo "no reason for ${m}"; cat "${GREMION_ROOT}/events.log"; return 1; }
+    done
+}
+
+@test "secondary host: the primary host keeps every module: with the list set, a create on PILOT_TENANT_HOST with votes, files and messaging ticked is not stopped" {
+    secondary_install rat.alpha.example 'canary.example.org'
+    verdict_enable calendar votes files messaging
+    queue create
+    run "$EXEC" --once
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; steps; return 1; }
+    create_ran || { steps; return 1; }
+    run steps
+    [[ "$output" == *"tc phase-b alpha-rat"* ]] || { echo "$output"; return 1; }
+}
+
+@test "secondary host: the primary host is never judged by the list: a malformed list does not stop a create on PILOT_TENANT_HOST" {
+    secondary_install rat.alpha.example 'https://nonsense,'
+    queue create
+    run "$EXEC" --once
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; steps; return 1; }
+    create_ran || { steps; return 1; }
+}
+
+@test "secondary host: a malformed list refuses a create on any other host, outright (nothing is created)" {
+    local bad
+    for bad in 'https://rat.alpha.example' 'rat.alpha.example,' 'Rat.Alpha.Example' 'rat.alpha.example,rat.alpha.example' 'rat.pilot.example,rat.alpha.example' 'plat.example.org,rat.alpha.example'; do
+        sed -i '/^PILOT_TENANT_HOST=/d; /^SECONDARY_TENANT_HOSTS=/d; /^PLATFORM_DOMAIN=/d' "${GREMION_ROOT}/etc/env/state.env"
+        secondary_install rat.pilot.example "$bad"
+        verdict_enable calendar
+        : > "$ORDER"
+        queue create
+        run "$EXEC" --once
+        create_refused_before_phase_a || { echo "list '${bad}' was accepted"; return 1; }
+        grep -q 'SECONDARY_TENANT_HOSTS.*nothing was created' "${GREMION_ROOT}/events.log" || { echo "no reason for '${bad}'"; cat "${GREMION_ROOT}/events.log"; return 1; }
+    done
+}
+
+@test "secondary host: a list without a usable PILOT_TENANT_HOST refuses the create (a secondary host is an addition), and no list keeps today's message" {
+    printf 'PILOT_TENANT_HOST=\nSECONDARY_TENANT_HOSTS=rat.alpha.example\n' >> "${GREMION_ROOT}/etc/env/state.env"
+    verdict_enable calendar
+    queue create
+    run "$EXEC" --once
+    create_refused_before_phase_a
+    grep -q 'SECONDARY_TENANT_HOSTS.*PILOT_TENANT_HOST' "${GREMION_ROOT}/events.log" || { cat "${GREMION_ROOT}/events.log"; return 1; }
+    # no list: the refusal is the one that always was (the install's customer host is named, no list is mentioned)
+    sed -i '/^PILOT_TENANT_HOST=/d; /^SECONDARY_TENANT_HOSTS=/d' "${GREMION_ROOT}/etc/env/state.env"
+    printf 'PILOT_TENANT_HOST=rat.pilot.example\nSECONDARY_TENANT_HOSTS=\n' >> "${GREMION_ROOT}/etc/env/state.env"
+    : > "$ORDER"
+    : > "${GREMION_ROOT}/events.log"
+    queue create
+    run "$EXEC" --once
+    create_refused_before_phase_a
+    grep -q 'is not this install.s customer host rat\.pilot\.example (PILOT_TENANT_HOST); nothing was created\. Request the create again with rat\.pilot\.example' "${GREMION_ROOT}/events.log" || { cat "${GREMION_ROOT}/events.log"; return 1; }
+    run grep -c 'SECONDARY_TENANT_HOSTS' "${GREMION_ROOT}/events.log"
+    [ "$output" = 0 ]
+}
