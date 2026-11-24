@@ -150,6 +150,20 @@ describe('classifyFailure: the phase decides what a dropped connection is', () =
   )
 })
 
+describe('classifyFailure: a bounded wait that ran out is retry-later, whatever the phase', () => {
+  const server = (code: string): Error => Object.assign(new Error('boom'), { code })
+  it.each(['55P03', '57014'])('%s (lock_timeout / statement_timeout) is class timeout before any DDL and inside a file', async (code) => {
+    const m = await vi.importActual<typeof import('../src/migrate-only.ts')>('../src/migrate-only.ts')
+    expect(m.classifyFailure(server(code), 'before-ddl')).toBe('timeout')
+    expect(m.classifyFailure(server(code), 'in-migration')).toBe('timeout')
+    expect(m.classifyFailure(server(code))).toBe('timeout')
+  })
+  it('a timeout is not an unreachable server: the customers after it are still tried', async () => {
+    const m = await vi.importActual<typeof import('../src/migrate-only.ts')>('../src/migrate-only.ts')
+    expect(m.classifyFailure(server('55P03'), 'before-ddl')).not.toBe('unreachable')
+  })
+})
+
 describe('classifyFailure: which exit code an error earns', () => {
   const pgErr = (code: string, extra: Record<string, unknown> = {}): Error =>
     Object.assign(new Error('boom'), { code, ...extra })
@@ -172,6 +186,8 @@ describe('classifyFailure: which exit code an error earns', () => {
     ['a thrown string', 'boom', 'sql'],
     ['XX000 tuple concurrently updated (two sessions replacing one function)', pgErr('XX000', { message: 'tuple concurrently updated' }), 'race'],
     ['XX000 with another message is a defect', pgErr('XX000', { message: 'something else' }), 'sql'],
+    ['55P03 lock_not_available', pgErr('55P03'), 'timeout'],
+    ['57014 query_canceled', pgErr('57014'), 'timeout'],
     ['a refused login (28P01)', pgErr('28P01'), 'precondition'],
     ['a role that does not exist (28000)', pgErr('28000'), 'precondition'],
   ] as const)('%s', (_label, err, expected) => {
