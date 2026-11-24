@@ -51,6 +51,6 @@ describe('Nextcloud failing for another reason stays a server error', () => {
     vi.stubGlobal('fetch', answer(500))
     const { GET } = await import('./+server')
     // @ts-expect-error partial event
-    await expect(GET({ params: { id: '99999' }, locals })).rejects.toThrow()
+    await expect(GET({ params: { id: '99999' }, locals })).rejects.toThrow(/Nextcloud Polls/)
   })
 })

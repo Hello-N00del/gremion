@@ -44,7 +44,7 @@ const event = (id: string, method = 'GET', body?: unknown) =>
     request: new Request('http://localhost/x', {
       method,
       headers: { 'content-type': 'application/json' },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     }),
   }) as never
 
