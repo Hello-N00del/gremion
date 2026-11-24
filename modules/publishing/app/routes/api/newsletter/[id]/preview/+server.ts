@@ -6,13 +6,14 @@ import { createNextcloudClient } from '$lib/server/files/nextcloud-client'
 import { convertOdtToHtml } from '$lib/server/newsletter/collabora-convert'
 import { sanitizeRichHtml } from '$lib/server/security/html-sanitize'
 import { serviceEnv } from '$lib/server/env/service-env'
+import { parseRouteId } from '$lib/server/newsletter/route-ids'
 
 export const GET: RequestHandler = async ({ params, locals }) => {
   if (!locals.user || !hasRole(locals.user.roles, Role.Finance)) {
     return json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
-  const id = parseInt(params.id, 10)
-  if (isNaN(id)) return json({ success: false, error: 'Invalid id' }, { status: 400 })
+  const id = parseRouteId(params.id)
+  if (id === null) return json({ success: false, error: 'Not found' }, { status: 404 })
   const backend = resolveNewsletterBackendOr503()
   if (backend instanceof Response) return backend
   const newsletter = await backend.getNewsletter(id)

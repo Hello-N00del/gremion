@@ -280,7 +280,9 @@ export class ServiceNewsletterClient implements NewsletterBackendPort {
       }
       return res.data
     } catch (err) {
-      if (err instanceof NewsletterServiceError && err.status === 404) {
+      // 404: unknown id. 400: the leaf refuses an id that is not a positive integer
+      // ("invalid newsletter id"); that names nothing either. Neither is a fault.
+      if (err instanceof NewsletterServiceError && (err.status === 404 || err.status === 400)) {
         return null
       }
       throw err

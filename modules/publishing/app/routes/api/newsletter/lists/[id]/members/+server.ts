@@ -4,6 +4,7 @@ import { hasRole, Role } from '$lib/auth'
 import { resolveNewsletterBackendOr503 } from '$lib/server/newsletter/backend/resolve'
 import { parseCsvMembers } from '$lib/server/newsletter/csv-import'
 import { z } from 'zod'
+import { parseRouteId } from '$lib/server/newsletter/route-ids'
 
 const manualSchema = z.object({
   email: z.string().email(),
@@ -14,8 +15,8 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
   if (!locals.user || !hasRole(locals.user.roles, Role.Finance)) {
     return json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
-  const listId = parseInt(params.id, 10)
-  if (isNaN(listId)) return json({ success: false, error: 'Invalid id' }, { status: 400 })
+  const listId = parseRouteId(params.id)
+  if (listId === null) return json({ success: false, error: 'Invalid id' }, { status: 400 })
 
   const contentType = request.headers.get('content-type') ?? ''
 
@@ -45,8 +46,8 @@ export const GET: RequestHandler = async ({ params, locals }) => {
   if (!locals.user || !hasRole(locals.user.roles, Role.Finance)) {
     return json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
-  const listId = parseInt(params.id, 10)
-  if (isNaN(listId)) return json({ success: false, error: 'Invalid id' }, { status: 400 })
+  const listId = parseRouteId(params.id)
+  if (listId === null) return json({ success: false, error: 'Invalid id' }, { status: 400 })
   const backend = resolveNewsletterBackendOr503()
   if (backend instanceof Response) return backend
   const members = await backend.listMembers(listId)

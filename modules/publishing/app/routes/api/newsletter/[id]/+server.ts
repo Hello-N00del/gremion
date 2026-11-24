@@ -4,6 +4,7 @@ import { hasRole, Role } from '$lib/auth'
 import { resolveNewsletterBackendOr503 } from '$lib/server/newsletter/backend/resolve'
 import { parseJsonBody } from '$lib/server/parse-json-body'
 import { z } from 'zod'
+import { parseRouteId } from '$lib/server/newsletter/route-ids'
 
 function requireFinance(locals: App.Locals): Response | null {
   if (!locals.user || !hasRole(locals.user.roles, Role.Finance)) {
@@ -15,8 +16,8 @@ function requireFinance(locals: App.Locals): Response | null {
 export const GET: RequestHandler = async ({ params, locals }) => {
   const forbidden = requireFinance(locals)
   if (forbidden) return forbidden
-  const id = parseInt(params.id, 10)
-  if (isNaN(id)) return json({ success: false, error: 'Invalid id' }, { status: 400 })
+  const id = parseRouteId(params.id)
+  if (id === null) return json({ success: false, error: 'Not found' }, { status: 404 })
   const backend = resolveNewsletterBackendOr503()
   if (backend instanceof Response) return backend
   const newsletter = await backend.getNewsletter(id)
@@ -38,8 +39,8 @@ const patchSchema = z.object({
 export const PATCH: RequestHandler = async ({ request, params, locals }) => {
   const forbidden = requireFinance(locals)
   if (forbidden) return forbidden
-  const id = parseInt(params.id, 10)
-  if (isNaN(id)) return json({ success: false, error: 'Invalid id' }, { status: 400 })
+  const id = parseRouteId(params.id)
+  if (id === null) return json({ success: false, error: 'Not found' }, { status: 404 })
   const body = await parseJsonBody(request)
   const parsed = patchSchema.safeParse(body)
   if (!parsed.success) {

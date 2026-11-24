@@ -4,6 +4,7 @@ import { hasRole, Role } from '$lib/auth'
 import { resolveNewsletterBackendOr503 } from '$lib/server/newsletter/backend/resolve'
 import { writeAuditEntry } from '$lib/server/audit-db'
 import { z } from 'zod'
+import { parseRouteId } from '$lib/server/newsletter/route-ids'
 
 // The scheduler sends any row with scheduled_at <= now(), so scheduling is a deferred send-now.
 const MIN_LEAD_MS = 5 * 60_000
@@ -16,8 +17,8 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
   if (!locals.user || !(hasRole(locals.user.roles, Role.ITAdmin) || hasRole(locals.user.roles, Role.CouncilAdmin))) {
     return json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
-  const id = parseInt(params.id, 10)
-  if (isNaN(id)) return json({ success: false, error: 'Invalid id' }, { status: 400 })
+  const id = parseRouteId(params.id)
+  if (id === null) return json({ success: false, error: 'Not found' }, { status: 404 })
   const body = await request.json()
   const parsed = scheduleSchema.safeParse(body)
   if (!parsed.success) {

@@ -412,6 +412,19 @@ describe('ServiceNewsletterClient — method routing', () => {
     expect(result).toBeNull()
   })
 
+  it('getNewsletter returns null when leaf refuses the id with 400 (invalid newsletter id)', async () => {
+    resetStub({ firstStatus: 400, body: { success: false, error: 'invalid newsletter id' } })
+    const client = new ServiceNewsletterClient()
+    const result = await withTenant(() => client.getNewsletter(0))
+    expect(result).toBeNull()
+  })
+
+  it('getNewsletter still throws for a leaf 500', async () => {
+    resetStub({ firstStatus: 500, body: { success: false, error: 'boom' } })
+    const client = new ServiceNewsletterClient()
+    await expect(withTenant(() => client.getNewsletter(1))).rejects.toMatchObject({ status: 500 })
+  })
+
   it('dispatchNow → POST /api/v1/newsletters/3/send', async () => {
     resetStub({ firstStatus: 202, body: { success: true, data: { newsletterId: 3, status: 'sending' } } })
     const client = new ServiceNewsletterClient()

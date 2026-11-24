@@ -4,6 +4,7 @@ import { hasRole, Role } from '$lib/auth'
 import { resolveNewsletterBackendOr503 } from '$lib/server/newsletter/backend/resolve'
 import { createNextcloudClient } from '$lib/server/files/nextcloud-client'
 import { serviceEnv } from '$lib/server/env/service-env'
+import { parseRouteId } from '$lib/server/newsletter/route-ids'
 
 // #412: the draft ODT lives in the ADMIN Nextcloud space (uploaded by the
 // api/newsletter POST as the sys user), so the generic per-user /files/edit
@@ -18,8 +19,8 @@ export const GET: RequestHandler = async ({ params, locals, url }) => {
   if (!locals.user || !hasRole(locals.user.roles, Role.Finance)) {
     return json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
-  const id = parseInt(params.id, 10)
-  if (isNaN(id)) return json({ success: false, error: 'Invalid id' }, { status: 400 })
+  const id = parseRouteId(params.id)
+  if (id === null) return json({ success: false, error: 'Not found' }, { status: 404 })
   const backend = resolveNewsletterBackendOr503()
   if (backend instanceof Response) return backend
   const newsletter = await backend.getNewsletter(id)
