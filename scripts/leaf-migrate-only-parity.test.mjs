@@ -66,11 +66,23 @@ export function driftOf(copies) {
 const copiesOf = (rel, root = ROOT) =>
   LEAVES.map((leaf) => ({ leaf, text: readFileSync(path.join(root, 'modules', leaf.dir, rel), 'utf8') }))
 
-for (const rel of COPIED) {
-  test(`the three copies of ${rel} are identical apart from the leaf's own names`, () => {
-    assert.deepEqual(driftOf(copiesOf(rel)), [])
-  })
-}
+// One explicit test() per copied file: the unit:node count reads declared test() calls, so a loop that
+// registers them would be reported as a count mismatch. The last test pins that the list below is COPIED.
+test("the three copies of src/migrate-only.ts are identical apart from the leaf's own names", () => {
+  assert.deepEqual(driftOf(copiesOf('src/migrate-only.ts')), [])
+})
+
+test("the three copies of test/migrate-only.test.ts are identical apart from the leaf's own names", () => {
+  assert.deepEqual(driftOf(copiesOf('test/migrate-only.test.ts')), [])
+})
+
+test("the three copies of test/migrate-only.integration.test.ts are identical apart from the leaf's own names", () => {
+  assert.deepEqual(driftOf(copiesOf('test/migrate-only.integration.test.ts')), [])
+})
+
+test('every copied file has its own parity test above', () => {
+  assert.deepEqual(COPIED, ['src/migrate-only.ts', 'test/migrate-only.test.ts', 'test/migrate-only.integration.test.ts'])
+})
 
 test('guard efficacy: a copy that drifts by one line is reported, with the leaf and the line', () => {
   const copies = copiesOf('src/migrate-only.ts')
