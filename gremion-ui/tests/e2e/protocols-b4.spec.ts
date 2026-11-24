@@ -27,15 +27,20 @@ test.describe('B4 — Meeting Minutes', () => {
     await expect(page.locator('text=Entwurf')).toBeVisible()
   })
 
-  test('admin can add a resolution to the protocol', async ({ page }) => {
+  // A decision has to fit the meeting: this protocol has no recorded attendance, so a
+  // count far above any roster is refused (not quorate, or more votes than members
+  // present), with a German message, and nothing is stored.
+  test('admin cannot save a decision that does not fit the attendance', async ({ page }) => {
     await page.goto(`/members/committees/${COMMITTEE_ID}/protokolle`)
     await page.click('text=E2E Testprotokoll')
     await page.click('text=+ Beschluss hinzufügen')
     await page.fill('[placeholder="Beschlusstext"]', 'Testbeschluss: Einstimmig angenommen')
-    await page.getByLabel('Ja', { exact: true }).fill('10')
+    await page.getByLabel('Ja', { exact: true }).fill('999')
     await page.getByLabel('Nein', { exact: true }).fill('0')
+    await page.getByLabel('Enthaltung', { exact: true }).fill('0')
     await page.click('text=Speichern')
-    await expect(page.locator('text=Testbeschluss: Einstimmig angenommen')).toBeVisible()
+    await expect(page.getByRole('alert')).toContainText(/Nicht beschlussfähig|übersteigen/)
+    await expect(page.locator('text=Angenommen')).not.toBeVisible()
   })
 
   test('admin can submit protocol for vote', async ({ page }) => {

@@ -2,8 +2,10 @@
 // recorded in? ONE predicate for the resolution routes and the entry form, so the
 // server's refusal and the form's can never disagree about it.
 //
-// Two rules, both read from the attendance the protocol page shows (the voting
-// members of the body and which of them are marked present):
+// Three rules. The two attendance rules read the attendance the protocol page
+// shows (the voting members of the body and which of them are marked present):
+//   - each count is a whole number from 0 (a negative part could cancel a huge
+//     positive one and slip the sum below the attendance);
 //   - a meeting that is not quorate by the app's own rule (strict majority of the
 //     voting members present, see quorum.ts) records no decision;
 //   - yes + no + abstain cannot exceed the number of voting members present.
@@ -30,11 +32,26 @@ export type ResolutionPlausibilityRow = Omit<ResolutionVoteFields, 'result'> & {
 }
 
 export interface ResolutionRefusal {
-  code: 'not_quorate' | 'votes_exceed_attendance'
+  code: 'invalid_count' | 'not_quorate' | 'votes_exceed_attendance'
   message: string
 }
 
 const count = (v: number | string | null | undefined): number => Number(v ?? 0) || 0
+
+export const INVALID_COUNT_MESSAGE = 'Jede Stimmzahl muss eine ganze Zahl von 0 an sein.'
+
+/**
+ * True for a count the form or an API client sent: null/undefined (no count) or a whole
+ * number from 0, given as a number or as a numeric string (as the vote-state helper
+ * reads it).
+ */
+const isValidCount = (v: unknown): boolean => {
+  if (v === null || v === undefined) return true
+  if (typeof v === 'string' && v.trim() === '') return false
+  if (typeof v !== 'number' && typeof v !== 'string') return false
+  const n = Number(v)
+  return Number.isInteger(n) && n >= 0
+}
 
 export function notQuorateMessage(attendance: AttendanceBasis): string {
   return (
@@ -57,6 +74,10 @@ export function checkResolutionAgainstAttendance(
   attendance: AttendanceBasis,
 ): ResolutionRefusal | null {
   if (row.result === 'withdrawn') return null
+
+  if (![row.votes_yes, row.votes_no, row.votes_abstain].every(isValidCount)) {
+    return { code: 'invalid_count', message: INVALID_COUNT_MESSAGE }
+  }
 
   const total = count(row.votes_yes) + count(row.votes_no) + count(row.votes_abstain)
   const isDecision = !isUntalliedResolution({ ...row, result: row.result ?? 'rejected' })

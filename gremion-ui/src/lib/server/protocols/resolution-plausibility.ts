@@ -10,7 +10,8 @@ import {
 
 /**
  * Throws 422 when the meeting is not quorate (the same status the publish gate
- * answers with), 400 when the count exceeds the members present. Returns when the
+ * answers with), 400 when a count is not a whole number from 0 or the total exceeds
+ * the members present. Returns when the
  * decision fits, or is exempt (withdrawn, nobody voted on yet).
  */
 export function assertResolutionFitsMeeting(

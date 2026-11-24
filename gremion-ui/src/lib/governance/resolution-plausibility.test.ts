@@ -66,4 +66,24 @@ describe('checkResolutionAgainstAttendance', () => {
     expect(checkResolutionAgainstAttendance(tally(0, 0, 0, { votes_yes: '9' }), QUORATE)?.code)
       .toBe('votes_exceed_attendance')
   })
+
+  it('refuses a count that is negative, fractional or not a number, whatever the sum is', () => {
+    const acc = (yes: unknown, no: unknown, abstain: unknown) =>
+      ({ result: 'passed', required_majority: 'simple', adoption_mode: 'acclamation',
+        votes_yes: yes, votes_no: no, votes_abstain: abstain }) as never
+    expect(checkResolutionAgainstAttendance(acc(999, -999, 0), QUORATE)?.code).toBe('invalid_count')
+    expect(checkResolutionAgainstAttendance(acc(1.5, 0, 0), QUORATE)?.code).toBe('invalid_count')
+    expect(checkResolutionAgainstAttendance(acc('abc', 0, 0), QUORATE)?.code).toBe('invalid_count')
+    expect(checkResolutionAgainstAttendance(acc('-2', 0, 0), QUORATE)?.code).toBe('invalid_count')
+    expect(checkResolutionAgainstAttendance(acc('', 0, 0), QUORATE)?.code).toBe('invalid_count')
+    expect(checkResolutionAgainstAttendance(acc(true, 0, 0), QUORATE)?.code).toBe('invalid_count')
+    expect(checkResolutionAgainstAttendance(acc('2', 0, 0), QUORATE)).toBeNull()
+    expect(checkResolutionAgainstAttendance(acc(Number.NaN, 0, 0), QUORATE)?.code).toBe('invalid_count')
+    expect(checkResolutionAgainstAttendance(acc(null, null, null), QUORATE)).toBeNull()
+    expect(checkResolutionAgainstAttendance(acc(0, 0, 0), QUORATE)).toBeNull()
+  })
+
+  it('does not look at the counts of a withdrawn resolution', () => {
+    expect(checkResolutionAgainstAttendance(tally(999, -1, 0, { result: 'withdrawn' }), NOT_QUORATE)).toBeNull()
+  })
 })

@@ -743,6 +743,33 @@ describe('POST /api/protocols/[id]/resolutions — votes must fit the attendance
     expect(mockAddResolution).not.toHaveBeenCalled()
   })
 
+  it('an acclamation count with a negative part that cancels the rest (999 / -999) → 400, nothing stored', async () => {
+    mockGetQuorumContext.mockResolvedValue({ eligibleVotingCount: 2, presentVotingCount: 2, quorate: true })
+    const err = await POST(makePostEvent({
+      text: 'Akklamation', adoption_mode: 'acclamation', declared_result: 'passed',
+      votesYes: 999, votesNo: -999, votesAbstain: 0,
+    })).catch((e) => e)
+    expect(refusal(err).status).toBe(400)
+    expect(refusal(err).body.message).toMatch(/ganze Zahl/)
+    expect(mockAddResolution).not.toHaveBeenCalled()
+  })
+
+  it('an acclamation count that is not a whole number → 400, nothing stored', async () => {
+    await expect(
+      POST(makePostEvent({
+        text: 'Akklamation', adoption_mode: 'acclamation', declared_result: 'passed',
+        votesYes: 1.5, votesNo: 0, votesAbstain: 0,
+      })),
+    ).rejects.toMatchObject({ status: 400 })
+    await expect(
+      POST(makePostEvent({
+        text: 'Akklamation', adoption_mode: 'acclamation', declared_result: 'passed',
+        votesYes: 'zwei', votesNo: 0, votesAbstain: 0,
+      })),
+    ).rejects.toMatchObject({ status: 400 })
+    expect(mockAddResolution).not.toHaveBeenCalled()
+  })
+
   it('an acclamation without a count in a quorate meeting is stored', async () => {
     const res = await POST(makePostEvent({ text: 'Akklamation', adoption_mode: 'acclamation', declared_result: 'passed' }))
     expect(res.status).toBe(201)
@@ -800,6 +827,25 @@ describe('PATCH /api/protocols/[id]/resolutions/[resId] — votes must fit the a
     mockSql.mockResolvedValue([storedAcclamationRow])
     await expect(
       PATCH(makePatchEvent({ declared_result: 'passed', votesYes: 30, votesNo: 0, votesAbstain: 0 })),
+    ).rejects.toMatchObject({ status: 400 })
+    expect(mockUpdateResolution).not.toHaveBeenCalled()
+  })
+
+  it('an acclamation edit with a negative part that cancels the rest (999 / -999) → 400, nothing updated', async () => {
+    mockSql.mockResolvedValue([storedAcclamationRow])
+    mockGetQuorumContext.mockResolvedValue({ eligibleVotingCount: 2, presentVotingCount: 2, quorate: true })
+    const err = await PATCH(makePatchEvent({
+      declared_result: 'passed', votesYes: 999, votesNo: -999, votesAbstain: 0,
+    })).catch((e) => e)
+    expect(refusal(err).status).toBe(400)
+    expect(refusal(err).body.message).toMatch(/ganze Zahl/)
+    expect(mockUpdateResolution).not.toHaveBeenCalled()
+  })
+
+  it('an acclamation edit with a count that is not a whole number → 400, nothing updated', async () => {
+    mockSql.mockResolvedValue([storedAcclamationRow])
+    await expect(
+      PATCH(makePatchEvent({ declared_result: 'passed', votesYes: 0.5, votesNo: 0, votesAbstain: 0 })),
     ).rejects.toMatchObject({ status: 400 })
     expect(mockUpdateResolution).not.toHaveBeenCalled()
   })
