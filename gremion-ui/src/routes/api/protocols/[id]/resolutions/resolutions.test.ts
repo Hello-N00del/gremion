@@ -365,12 +365,12 @@ describe('PATCH /api/protocols/[id]/resolutions/[resId]', () => {
   it('(g/e) acclamation row: full informational tally → stored', async () => {
     mockGetQuorumContext.mockResolvedValue(ROOMY)
     mockSql.mockResolvedValue([storedAcclamationRow])
-    const res = await PATCH(makePatchEvent({ declared_result: 'rejected', votesYes: 1, votesNo: 8, votesAbstain: 0 }))
+    const res = await PATCH(makePatchEvent({ declared_result: 'rejected', votesYes: 1, votesNo: 6, votesAbstain: 0 }))
     expect(res.status).toBe(200)
 
     const input = mockUpdateResolution.mock.calls[0][1] as ResolutionInput
     expect(input.votesYes).toBe(1)
-    expect(input.votesNo).toBe(8)
+    expect(input.votesNo).toBe(6)
     expect(input.votesAbstain).toBe(0)
     expect(input.result).toBe('rejected')
   })
