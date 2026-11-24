@@ -19,7 +19,11 @@
 #                phase rolling_back. Nothing waits for mail.
 #       old      the old colour is started from ITS OWN tree, env file and tag when its project
 #                is not all running and healthy. Its env IMAGE_TAG is checked against the tag
-#                first (a colour that was retagged for a later release is not startable).
+#                first (a colour that was retagged for a later release is not startable). A colour
+#                that the truth (cd_traffic_truth) still names as serving, which is the old colour
+#                of a rollback before the switch, is never started: it is waited for, up to
+#                CD_COLOUR_HEALTHY_S, and a colour that does not get healthy ends the rollback
+#                (old_unhealthy).
 #       prove    the old colour is the old release: image identity, three consecutive internal
 #                answers (colour and release are the old ones), the portal list page (the old
 #                image reads the migrated schema), and the ready-only answer through the next
@@ -273,10 +277,25 @@ _cd_rb_begin() {
 
 # old: the old colour is up, from its own tree, env and tag.
 _cd_rb_s_old() {
-    local c="$RB_OLD_COLOUR" tree="$RB_OLD_TREE" tag="$RB_OLD_TAG" envf cur t
+    local c="$RB_OLD_COLOUR" tree="$RB_OLD_TREE" tag="$RB_OLD_TAG" envf cur t truth
     if cd_wait_healthy "app-${c}" 0 "$tree" >/dev/null 2>&1; then
         cd_hist rollback_old_running colour="$c" || true
         return 0
+    fi
+    # A rollback before the switch (or one that the switch never reached): the old colour still
+    # SERVES, and the one look above can have met it starting or momentarily unhealthy. Starting
+    # a colour that serves is refused by the guard of cd_colour_start (and would be wrong: it
+    # takes the project down first), which ended the rollback in rollback_failed. The truth
+    # names the old colour: wait for it, for as long as a started colour is given.
+    truth="$(cd_traffic_truth 2>/dev/null </dev/null)" || truth=''
+    if [[ "$truth" == "$c" ]]; then
+        t="$(_cd_rb_num CD_COLOUR_HEALTHY_S 180)"
+        if cd_wait_healthy "app-${c}" "$t" "$tree" >/dev/null 2>&1; then
+            cd_hist rollback_old_running colour="$c" || true
+            return 0
+        fi
+        _cd_rb_why old_unhealthy "the ${c} colour serves but did not become healthy"
+        return 1
     fi
     envf="$(cd_envfile "app-${c}" 2>/dev/null)" || envf=''
     cur=''
@@ -494,9 +513,14 @@ _cd_rb_keep_logs() {
     cid="$(cd_svc_cid "app-${RB_NEW_COLOUR}" gremion-ui 2>/dev/null </dev/null)" || return 0
     [[ -n "$cid" ]] || return 0
     dir="${CD_ROOT}/logs"
-    mkdir -p -- "$dir" 2>/dev/null || return 0
+    # 0700 when this creates it; a link in place of the directory or of the file is refused
+    # (the log names tenants and must not be written through a planted link)
+    [[ -L "$dir" ]] && return 0
+    cd_mkdir "$dir" 2>/dev/null || return 0
     f="${dir}/cd-rollback-${RB_NEW_TAG}-$(cd_now).log"
-    ( umask 077; timeout -k 2 30 docker logs --tail 500 "$cid" >"$f" 2>&1 </dev/null ) || true
+    [[ -L "$f" ]] && return 0
+    # noclobber: a link planted between the check and the write is not followed either
+    ( umask 077; set -C; timeout -k 2 30 docker logs --tail 500 "$cid" >"$f" 2>&1 </dev/null ) || true
     chmod 600 -- "$f" 2>/dev/null || true
     return 0
 }

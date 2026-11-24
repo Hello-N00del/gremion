@@ -1941,3 +1941,212 @@ DRV_RN_B='{"target":"bbbbbbbbbbbb","with_state":false,"force_blocked":false,"acc
     [ "$(drv_n '^stub cd_rollback_run manual_rollback')" -eq 0 ]
     [ "$(drv_hist rollback_refused)" -eq 1 ]
 }
+
+# ===========================================================================================
+# must-fix unit A: the driver items that the first drills of the stage showed
+# ===========================================================================================
+
+DRV_STATE_TIER='{"v":1,"holds":[{"kind":"state_tier","reason":"edge"}],"hold":{"kind":"state_tier","reason":"edge"},"migrations":{"total":0}}'
+
+@test "state apply: the state-<tag> dump set is retired when the apply succeeded, before the app snapshot is taken (a live state set would refuse the dump series of the app snapshot)" {
+    cd_stub_set cd_classify 0 "$DRV_STATE_TIER"
+    drv_seed
+    drv_rn bbbbbbbbbbbb --with-state
+    [ "$status" -eq 0 ]
+    [ "$(drv_state '.live.sha12')" = bbbbbbbbbbbb ]
+    assert_recorded stub "cd_data_dumpset_retire state-${TAG_B}"
+    [ "$(drv_n '^stub cd_data_dumpset_retire')" -eq 1 ]
+    drv_order '^stub cd_adopt_apply_state' "^stub cd_data_dumpset_retire state-${TAG_B}" "^stub cd_data_dumpset_take ${TAG_B} app"
+}
+
+@test "state apply: a state apply that failed keeps its dump set (the restore point), and a retire that fails holds failure with its own code and takes no app snapshot" {
+    cd_stub_set cd_classify 0 "$DRV_STATE_TIER"
+    drv_seed
+    cd_stub_set cd_adopt_apply_state 1
+    drv_rn bbbbbbbbbbbb --with-state
+    [ "$status" -eq 0 ]
+    [ "$(drv_n '^stub cd_data_dumpset_retire')" -eq 0 ]
+    [ "$(drv_state '.hold.kind')" = failure ]
+    # a retire that fails: the set is still live, the hold names it, nothing is snapshotted on top of it
+    cd_stub_set cd_adopt_apply_state 0
+    cd_stub_set cd_data_dumpset_retire 1
+    drv_seed
+    : > "$SHIM_LOG"
+    drv_rn bbbbbbbbbbbb --with-state
+    [ "$status" -eq 0 ]
+    [ "$(drv_n '^stub cd_data_dumpset_retire')" -eq 1 ]
+    [ "$(drv_n '^stub cd_data_dumpset_take')" -eq 0 ]
+    [ "$(drv_state '.hold.kind')" = failure ]
+    [ "$(drv_state '.hold.reason')" = state_dump_retire ]
+    [ "$(drv_state '.phase')" = idle ]
+    [ "$(drv_state '.live.sha12')" = aaaaaaaaaaaa ]
+}
+
+@test "switch: release.switched_at is an ISO timestamp by the time the watch starts (the watch reads it to bound the 5xx window)" {
+    drv_seed
+    export CD_STUB_HOOK_cd_commit_watch_loop='printf "sw=%s\n" "$(cd_state_get ".release.switched_at")" >> "$SHIM_LOG"'
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    [ "$(grep -c '^sw=' "$SHIM_LOG")" -eq 1 ]
+    run grep -E '^sw=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' "$SHIM_LOG"
+    [ "$status" -eq 0 ]
+    # and the watch's own parser reads it back as a time
+    sw="${output#sw=}"
+    run date -u -d "$sw" +%s
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ ^[0-9]{10}$ ]]
+}
+
+@test "poll: an unchanged tip (none, tip_unchanged, final) keeps the stored verdict, so a red main stays red past one tick (the watchdog's red_since lives on it)" {
+    local v
+    for v in red none; do
+        drv_seed ".poll.verdict = \"${v}\" | .poll.tip12 = \"cccccccccccc\""
+        cd_stub_set cd_gh_candidate 0 '{"verdict":"none","sha":"","reason":"tip_unchanged","final":true,"tip":"cccccccccccccccccccccccccccccccccccccccc"}'
+        run cd_prog tick
+        [ "$status" -eq 0 ]
+        [ "$(drv_state '.poll.verdict')" = "$v" ]
+        [ "$(drv_state '.poll.tip12')" = cccccccccccc ]
+    done
+    # a red verdict that github.sh reaches from the walk is still red, and the same tip twice is red twice
+    drv_seed
+    cd_stub_set cd_gh_candidate 0 '{"verdict":"none","sha":"","reason":"no_green_commit","final":true,"tip":"cccccccccccccccccccccccccccccccccccccccc"}'
+    run cd_prog tick
+    [ "$(drv_state '.poll.verdict')" = red ]
+    cd_stub_set cd_gh_candidate 0 '{"verdict":"none","sha":"","reason":"tip_unchanged","final":true,"tip":"cccccccccccccccccccccccccccccccccccccccc"}'
+    run cd_prog tick
+    [ "$(drv_state '.poll.verdict')" = red ]
+    # up_to_date is a real answer about the live tip: it is not red
+    cd_stub_set cd_gh_candidate 0 '{"verdict":"none","sha":"","reason":"up_to_date","final":true,"tip":"cccccccccccccccccccccccccccccccccccccccc"}'
+    run cd_prog tick
+    [ "$(drv_state '.poll.verdict')" = none ]
+}
+
+@test "classify refusal: a rollback request made while the classifier ran for a held candidate is consumed with the refused release, it never rolls the LIVE release back" {
+    drv_seed
+    cd_stub_set cd_classify 0 '{"v":1,"holds":[{"kind":"ci_changed","reason":"x"}],"hold":{"kind":"ci_changed","reason":"x"},"migrations":{"total":0}}'
+    export CD_STUB_HOOK_cd_classify='cd_request_put rollback "{\"reason\":\"\"}" >/dev/null 2>&1'
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    [ "$(drv_state '.hold.kind')" = ci_changed ]
+    [ "$(drv_n '^stub cd_rollback_run')" -eq 0 ]
+    [ "$(drv_hist rollback_refused)" -eq 1 ]
+    [ "$(drv_pending)" -eq 0 ]
+    [ "$(drv_state '.live.sha12')" = aaaaaaaaaaaa ]
+    [ "$(drv_state '.previous.sha12')" = dddddddddddd ]
+}
+
+@test "classify refusal: the same for a release-now that the classifier refuses (the manual path of the same function)" {
+    drv_seed
+    cd_stub_set cd_classify 0 '{"v":1,"holds":[{"kind":"contract_migration","reason":"x"}],"hold":{"kind":"contract_migration","reason":"x"},"migrations":{"total":0}}'
+    export CD_STUB_HOOK_cd_classify='cd_request_put rollback "{\"reason\":\"\"}" >/dev/null 2>&1'
+    drv_rn bbbbbbbbbbbb
+    [ "$status" -eq 0 ]
+    [ "$(drv_n '^stub cd_rollback_run')" -eq 0 ]
+    [ "$(drv_hist rollback_refused)" -eq 1 ]
+    [ "$(drv_pending)" -eq 0 ]
+    [ "$(drv_state '.live.sha12')" = aaaaaaaaaaaa ]
+}
+
+@test "park: the kill-switch reminder is queued again every hour while a release stays parked, not once" {
+    cd_need_flock
+    drv_seed_sw watch started
+    : > "${GREMION_ROOT}/etc/cd.disabled"
+    export CD_STUB_HOOK_cd_notify='[[ "$1" == killswitch ]] && printf "mailat %s\n" "$(cd_now)" >> "$SHIM_LOG"; true'
+    drv_bg_tick
+    drv_wait "[ \"\$(grep -c '^mailat' '${SHIM_LOG}')\" -ge 1 ]"
+    cd_advance 3700
+    drv_wait "[ \"\$(grep -c '^mailat' '${SHIM_LOG}')\" -ge 2 ]"
+    rm -f "${GREMION_ROOT}/etc/cd.disabled"
+    drv_wait "! kill -0 ${DRV_BG_PID} 2>/dev/null"
+    local n first last
+    n="$(grep -c '^mailat' "$SHIM_LOG")"
+    first="$(grep -m1 '^mailat' "$SHIM_LOG" | cut -d' ' -f2)"
+    last="$(grep '^mailat' "$SHIM_LOG" | tail -n 1 | cut -d' ' -f2)"
+    [ "$n" -ge 2 ]
+    # one per hour of the clock: never one per 15 second pass
+    [ "$n" -le $(( (last - first) / 3600 + 1 )) ]
+    awk '/^mailat/ { if (p && $2 - p < 3600) bad = 1; p = $2 } END { exit bad }' "$SHIM_LOG"
+}
+
+@test "resume: --accept-descendants without a reason is refused BEFORE the dump set is discarded (a refusal leaves the restore point alone)" {
+    drv_seed '.hold = {"kind":"failure","reason":"dump_failed","sha12":"bbbbbbbbbbbb","since":"2026-11-17T00:00:00Z"}'
+    cd_stub_set cd_data_dumpset_live 0 "pilot-bbbbbbbbbbbb"
+    cd_lib 'cd_request_put resume "{\"reason\":\"\",\"accept_descendants\":true,\"discard_dump\":true}"'
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    [ "$(drv_n '^stub cd_data_dumpset_discard')" -eq 0 ]
+    [ "$(drv_hist resume_refused)" -eq 1 ]
+    [ "$(drv_state '.hold.kind')" = failure ]
+    # with the reason the same request discards and resumes
+    cd_lib 'cd_request_put resume "{\"reason\":\"fixed by hand\",\"accept_descendants\":true,\"discard_dump\":true}"'
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    [ "$(drv_n '^stub cd_data_dumpset_discard pilot-bbbbbbbbbbbb')" -eq 1 ]
+    [ "$(drv_state '.hold')" = null ]
+}
+
+@test "switch: a switch the truth showed as done in a release that was then rolled back as stuck is not carried over into the next release of the same process (the second release switches)" {
+    drv_seed_sw switch started '.release.attempt = 2'
+    cd_stub_set cd_traffic_truth 0 "file=green traefik=green"
+    export CD_STUB_HOOK_cd_rollback_run="cd_request_put release-now '${DRV_RN_B}' >/dev/null 2>&1"
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    assert_recorded stub "cd_rollback_run commit_stuck"
+    [ "$(drv_n '^stub cd_traffic_switch')" -eq 1 ]
+    drv_order '^stub cd_rollback_run commit_stuck' '^stub cd_traffic_switch' '^stub cd_traffic_confirm'
+    [ "$(drv_state '.live.sha12')" = bbbbbbbbbbbb ]
+}
+
+@test "failed colour log: logs/ is created with mode 700, the file is 0600, and a symlinked logs/ or log file is refused (nothing is written through it)" {
+    local elsewhere="${GREMION_ROOT}/elsewhere" victim="${GREMION_ROOT}/victim.txt"
+    shim docker 'echo failed-colour-log-tail'
+    cd_stub_set cd_svc_cid 0 aaaaaaaaaaaa1234
+    cd_stub_set cd_prepare_build 1
+    rm -rf "${GREMION_ROOT}/logs"
+    drv_seed
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    [ "$(stat -c %a "${GREMION_ROOT}/logs")" = 700 ]
+    [ "$(stat -c %a "${GREMION_ROOT}/logs/cd-failed-bbbbbbbbbbbb.log")" = 600 ]
+    grep -q failed-colour-log-tail "${GREMION_ROOT}/logs/cd-failed-bbbbbbbbbbbb.log"
+    # a symlinked directory
+    rm -rf "${GREMION_ROOT}/logs"
+    mkdir -p "$elsewhere"
+    ln -s "$elsewhere" "${GREMION_ROOT}/logs"
+    drv_seed
+    cd_stub_set cd_prepare_build 1
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    [ -z "$(ls -A "$elsewhere")" ]
+    # a symlinked file
+    rm -f "${GREMION_ROOT}/logs"
+    mkdir -p "${GREMION_ROOT}/logs"
+    printf 'untouched\n' > "$victim"
+    ln -s "$victim" "${GREMION_ROOT}/logs/cd-failed-bbbbbbbbbbbb.log"
+    drv_seed
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    [ "$(cat "$victim")" = untouched ]
+}
+
+@test "commit stage: a promote that fails after commit step 5 in a release-now still closes the blocks the release contains, and the failure hold stands" {
+    cd_need_flock
+    cd_git_fixture
+    local c3_12="${C3:0:12}" green
+    green="{\"verdict\":\"green\",\"sha\":\"${C3}\",\"reason\":\"\",\"final\":true,\"tip\":\"${C3}\"}"
+    drv_seed '.hold = {"kind":"blocked","reason":"build_failed","sha12":"cccccccccccc","since":"2026-11-17T00:00:00Z"}'
+    cd_lib "cd_lock_take; cd_block_add ${C2} build_failed x"
+    cd_stub_set cd_gh_candidate 0 "$green"
+    export CD_STUB_HOOK_cd_commit_promote="drv_step5; cd_hold_set failure post_commit_6 ${c3_12}; return 1"
+    run cd_prog release-now "$c3_12"
+    [ "$status" -eq 0 ]
+    run cd_prog tick
+    [ "$status" -eq 0 ]
+    [ "$(drv_n '^stub cd_rollback_run')" -eq 0 ]
+    [ "$(drv_state '.live.sha12')" = "$c3_12" ]
+    [ "$(jq -r '[.[] | select(.cleared == null)] | length' "${GREMION_ROOT}/data/cd/blocked.json")" -eq 0 ]
+    [ "$(jq -r '.[0].cleared.reason' "${GREMION_ROOT}/data/cd/blocked.json")" = "superseded by ${c3_12}" ]
+    [ "$(drv_state '.hold.kind')" = failure ]
+    [ "$(drv_state '.hold.reason')" = post_commit_6 ]
+    [ "$(drv_state '.phase')" = idle ]
+}
