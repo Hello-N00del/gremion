@@ -32,9 +32,10 @@ that changes application code only is released without anyone being asked:
    customer is reconciled once;
 6. the operator gets one mail at each decision point.
 
-**It holds, and asks, for everything else.** A release that changes a host program, a systemd
-unit, a compose or env template, the edge, a migration chain the program cannot apply, a contract
-migration, the CI workflows, or the database declaration of a module is not released by itself:
+**It holds, and asks, for everything else.** A release that changes a host program or one of the
+host's systemd, firewall or env templates, the compose configuration of the state project, the edge,
+a migration chain the program cannot apply, a contract migration, the CI workflows, or the database
+declaration of a module is not released by itself:
 the tick sets a hold, mails the one command that applies it (or says that stage 1 cannot), and
 waits. See [Holds](#holds).
 
@@ -613,10 +614,19 @@ Whether a duplicate dispatch is prevented, leaf by leaf, read from the code:
   again, a live claim is skipped. A crash between send and record leaves a claim that is taken over
   after 15 minutes, so the guarantee is at most once per live claim, at least once after a crash
   (`modules/publishing/src/dispatch.ts`, lines 33 to 48).
-- **Content (post publication): prevented for e-mail and portal.** `claimPostForPublish` is the same
-  kind of atomic update (`modules/content/src/store/posts.ts`, lines 199 to 208), and recipients are
-  claimed through `claimDelivery` (`modules/content/src/store/deliveries.ts`, line 74). Portal
-  publication is idempotent at the kernel by the post's origin id.
+- **Content (scheduled publication): prevented per recipient, not per post.** The scheduler does not use
+  the whole-post claim (`claimPostForPublish`, `modules/content/src/store/posts.ts`, lines 199 to 208:
+  that belongs to the publish request of the API). It lists the due channels with a plain select
+  (`listDueScheduledChannels`, `modules/content/src/store/posts.ts`, lines 242 to 262) and publishes
+  each one through `publishChannel` (`dispatchDueChannels`, `modules/content/src/scheduler.ts`, lines 245
+  to 300), so both
+  schedulers can take the same due channel. For e-mail every recipient is claimed first through
+  `claimDelivery` (`modules/content/src/store/deliveries.ts`, line 74; used at
+  `modules/content/src/publish-channel.ts`, line 305): the pass that loses a recipient skips it as
+  already sent or in flight, so no recipient is mailed twice while a claim is live (a claim that is
+  older than 15 minutes is taken over). What the losing pass reports back, and so the channel status
+  it writes, is not examined here. Portal publication is idempotent at the kernel by the post's
+  origin id (`modules/content/src/publish-channel.ts`, header).
 - **Content (Instagram queue): not prevented, and dormant.** `drainPublishOps` is a plain select
   with no claim (`modules/content/src/store/publish-ops.ts`, lines 128 to 139), so two schedulers can
   read the same pending operation. With no credentials, which is the default, every operation is
@@ -628,8 +638,8 @@ Whether a duplicate dispatch is prevented, leaf by leaf, read from the code:
   event's uid, which replaces (`modules/calendar/src/caldav/pusher.ts`, lines 91 to 113), and a delete
   treats 404 and 410 as success (same file, line 139). The one visible effect: a failing entry can
   count an attempt in both schedulers, so it reaches its limit of three attempts sooner
-  (`modules/calendar/src/store/caldav-queue.ts`, lines 74 to 81, and `modules/calendar/src/caldav/sync.ts`,
-  line 28).
+  (`recordCaldavSyncFailure`, `modules/calendar/src/store/caldav-queue.ts`, lines 74 to 81, and
+  `modules/calendar/src/caldav/sync.ts`, line 28).
 - The outbox relays of all three leaves lock their rows with `FOR UPDATE SKIP LOCKED`
   (`outbox.ts` of each leaf), so an event is published once.
 
@@ -829,10 +839,15 @@ The hand procedure, in a window:
    the new release is the active colour, the colour's env file names `pilot-<sha12>`, its containers
    run that tag's images, `releases/<sha12>` is a clean checkout whose head is that commit, `current`
    points at it, and the public `/readyz` answers ready.
-4. With the new colour active, apply the platform migration with the call the state tier itself makes:
-   `gremion-tenant init`, run from the new release tree (`GREMION_RELEASE_DIR` names that tree). It
-   starts the one-shot of the active colour, so it now runs the new image's migrations. Skip it only if
-   your upgrade procedure has just run it; the call is meant to be repeatable.
+4. With the new colour active, apply the platform migration with the call the state tier itself makes
+   as its platform step: `gremion-tenant init`, run from the new release tree with
+   `GREMION_RELEASE_DIR` naming that tree, so that it starts the one-shot of the active colour and runs
+   the new image's migrations. The call does more than migrate: it renders the panel and one-shot
+   secrets, creates or checks the ops realm, sets the ops realm's sender, and restarts the executor,
+   and the upgrade runbook describes the refusals of its realm and governance parts. This repository
+   does not say that a second run is harmless; the only evidence is that the state tier repeats the
+   call on a retry. Run it once, read what it prints, and skip it only if your upgrade procedure has
+   just run it.
 5. Verify on the running system, not on the repository: `gremion-verify`, the public `/readyz`, one
    customer's login page.
 6. `gremion-cd adopt --re-adopt --reason TEXT`. It needs `phase` idle or parked, re-reads the truth
@@ -872,8 +887,8 @@ module step applies its chain.
 
 **The freeze window.** A hold that comes from the host manifest, the state tier or a declaration is a
 property of the newest candidate against the *live* release, and every later candidate contains the
-change. So from the first merge of a change that touches a host program, a compose or env template or
-a module declaration, until the hand upgrade has been done and `adopt --re-adopt` has recorded it, CD
+change. So from the first merge of a change that touches a host program or template of the manifest, the
+compose configuration of the state project or a module declaration, until the hand upgrade has been done and `adopt --re-adopt` has recorded it, CD
 holds every candidate. Ordinary fixes merged inside the window are not lost: they ship in the first
 release after it, because the first tick after the re-adopt classifies the newest candidate against the
 new live release. Keep the window to one sitting. When a series of changes ends in such a release, the ones that touch only application code ship as
@@ -951,24 +966,17 @@ This section is the amendment to [release-cadence.md](release-cadence.md) that c
 needs. It is a clearly marked part of this document; the policy itself stays in that file.
 
 While the named pilot runs, rules 1 and 2 of the cadence are suspended by agreement with the pilot
-council, and the following applies to releases that CD carries:
+council. For the releases that CD carries:
 
 - **Fixes ship continuously.** A commit that has been merged and has a green CI run is released by the
-  program without a further request, at any time outside the quiet windows. This is the "more frequent
-  releases" that rule 3 makes possible; it is not a mandate to ship often.
-- **A feature pull request carries its change list as a file.** The dated change list in German and in
-  English that rule 1 requires is part of the pull request that makes the change, as a file in the
-  repository, so it reaches main in the same commit that CD releases. A feature pull request without
-  it is incomplete, and the reviewer sends it back.
+  program without a further request, at any time outside the quiet windows.
+- **A feature pull request carries its change list as a file.** The change list in German and in English
+  is a file of the pull request, so it reaches the main branch in the same commit that CD releases.
 - **`CD_POLICY_ACK` records the agreement date.** The program does not start a release while the key is
-  empty. The value is the date on which the council approved full adoption and continuous support and
-  upgrades. It is set by the install on the host (`<agreement date>`), and the template ships it empty
-  because a pilot-specific value does not belong in a public repository.
-- **Rule 4 is unchanged.** A security fix ships at any time and CD does not wait for a council's
-  deferral.
+  empty. The value is the date on which the pilot council agreed to full adoption and continuous support
+  and upgrades. It is set by the install on the host (`<agreement date>`), and the template ships it
+  empty because a pilot-specific value does not belong in a public repository.
 - **Every release adds one visible row per customer.** The reconcile stage writes one row into the access
   record that the council administrator reads (see [Reconcile](#reconcile-after-the-commit-point)), so
   continuous fixes mean one such row per customer per release, plus one for every re-run and hand call.
-  The rows are automatic and carry the release tag; they are not break-glass rows.
-- **Semester breaks apply again after the pilot.** When the pilot's stated end date passes, clear
-  `CD_POLICY_ACK` so that no release starts without a new agreement.
+  The rows are automatic and carry the release tag.

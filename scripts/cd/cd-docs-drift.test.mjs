@@ -439,6 +439,31 @@ test('the document names no address, no date, and keeps the two placeholders of 
   assert.ok(!/https?:\/\/(?!example\.(org|com)\b)/i.test(text), 'a URL of a real host is in the document')
 })
 
+test('every source path the document cites exists, and defines the function it is cited for', () => {
+  const text = docText()
+  const cited = [...new Set([...text.matchAll(/`((?:modules|packages|gremion-ui|scripts|infra|docs|test)\/[A-Za-z0-9_./@-]+\.[a-z]+)`/g)].map((m) => m[1]))]
+  assert.ok(cited.length >= 12, `only ${cited.length} source paths are cited`)
+  for (const rel of cited) assert.ok(existsSync(path.join(ROOT, rel)), `the document cites ${rel}, which does not exist`)
+  // The Q-and-A about duplicate dispatch cites functions with line numbers; the line numbers may drift,
+  // the function and the file may not.
+  const functions = [
+    ['claimNewsletterForSending', 'modules/publishing/src/store/newsletters.ts'],
+    ['claimRecipient', 'modules/publishing/src/store/deliveries.ts'],
+    ['claimPostForPublish', 'modules/content/src/store/posts.ts'],
+    ['listDueScheduledChannels', 'modules/content/src/store/posts.ts'],
+    ['dispatchDueChannels', 'modules/content/src/scheduler.ts'],
+    ['claimDelivery', 'modules/content/src/store/deliveries.ts'],
+    ['drainPublishOps', 'modules/content/src/store/publish-ops.ts'],
+    ['listPendingCaldavSync', 'modules/calendar/src/store/caldav-queue.ts'],
+    ['recordCaldavSyncFailure', 'modules/calendar/src/store/caldav-queue.ts'],
+  ]
+  for (const [name, rel] of functions) {
+    assert.ok(text.includes(name), `the document no longer names ${name}`)
+    assert.ok(text.includes(rel), `the document no longer cites ${rel}`)
+    assert.match(read(rel), new RegExp(`function ${name}\\b`), `${rel} does not define ${name}`)
+  }
+})
+
 test('the pointers lead to the document and the old "in progress" row is gone', () => {
   const tooling = read('docs/ops/host-tooling.md')
   const row = tooling.split('\n').find((l) => l.startsWith('| `gremion-cd'))
@@ -462,5 +487,5 @@ test('this file is collected by unit:node (a count assertion over the same glob 
   assert.ok(collected.includes('scripts/cd/cd-guards.test.mjs'), 'the sibling guard file is no longer collected')
   assert.ok(collected.length >= 20, `only ${collected.length} node test files collected: the glob emptied`)
   const declared = (readFileSync(path.join(ROOT, self), 'utf8').match(/^[ \t]*test(?:\.(?:skip|only|todo))?\(/gm) ?? []).length
-  assert.equal(declared, 16, `this file declares ${declared} tests, not the 16 that the count in this assertion knows`)
+  assert.equal(declared, 17, `this file declares ${declared} tests, not the 17 that the count in this assertion knows`)
 })
