@@ -156,8 +156,8 @@ export function createPollsClient(opts: { oidcBearer?: string; tenantId?: string
       try {
         raw = (await ncFetch<{ poll: NcPoll }>(`/poll/${id}`)).poll
       } catch (e) {
-        // NC answers 403/404 for polls this user cannot see: same answer as foreign.
-        if (e instanceof Error && /→\s*(403|404)\b/.test(e.message)) throw notFound()
+        // NC answers 403/404 for polls this user cannot see, and 400 for an id it does not know at all: same answer as foreign.
+        if (e instanceof Error && /→\s*(400|403|404)\b/.test(e.message)) throw notFound()
         throw e
       }
       const scoped = scopePoll(raw, t, legacy(), adminUser())
