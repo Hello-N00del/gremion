@@ -1,0 +1,84 @@
+# The curl of the whole-pipeline suite: the answers of the code host (routes in $GH), of the mail
+# relay, of the Traefik API and of the application through the edge. State under $DK.
+#   traefik.<name>        the JSON of one Traefik service (app@file, public@file, panel@file, ...)
+#   routers.json          the router list
+#   public.fail.<colour>  while runtime/active-colour names <colour>, the public edge answers 503 on /readyz
+#   next.fail.<colour>    while the next route names <colour>, the loopback test router answers 503
+#   login.status          the status of /auth/login through the edge (default 302)
+#   traefik.down          the Traefik API does not answer
+#   mail.fail             the relay does not take a message
+[ -f "$DK/hook.sh" ] && . "$DK/hook.sh" && pl_hook "curl $*"
+active="$(cat "$GREMION_ROOT/runtime/active-colour" 2>/dev/null)"
+url="${@: -1}"
+case " $* " in
+  *" -K - "*|*" -K -"*)
+    cfg="$(cat)"
+    if printf '%s\n' "$cfg" | grep -q '^upload-file = '; then
+        # the mail relay
+        printf 'mail-relay\n' >>"$DK/mail.log"
+        if ( exec 7>>"$GREMION_ROOT/runtime/hostd.lock"; flock -n 7 ); then echo free >>"$DK/mail.lock"; else echo held >>"$DK/mail.lock"; fi
+        printf '%s\n' "$cfg" | sed -n 's/^upload-file = "\(.*\)"$/\1/p' | while read -r f; do cp "$f" "$DK/mail.$(date +%s%N).eml" 2>/dev/null || true; done
+        [ -f "$DK/mail.fail" ] && exit 7
+        exit 0
+    fi
+    # the code host
+    url="$(printf '%s\n' "$cfg" | sed -n 's/^url = "\(.*\)"$/\1/p')"
+    out="$(printf '%s\n' "$cfg" | sed -n 's/^output = "\(.*\)"$/\1/p')"
+    hdr="$(printf '%s\n' "$cfg" | sed -n 's/^dump-header = "\(.*\)"$/\1/p')"
+    printf '%s\n' "$url" >>"$GH/urls.log"
+    status=404
+    body="$GH/empty-object.json"
+    extra=""
+    while IFS=$'\t' read -r pat st bf ex; do
+        [ -n "$pat" ] || continue
+        case "$url" in
+          $pat) status="$st"; body="$bf"; extra="$ex"; break ;;
+        esac
+    done <"$GH/routes"
+    {
+        printf 'HTTP/2 %s\r\n' "$status"
+        if [ -n "$extra" ]; then printf '%s' "$extra" | tr ';' '\n' | sed 's/$/\r/'; fi
+    } >"$hdr"
+    if [ "$body" = EMPTY ]; then : >"$out"; else cat "$body" >"$out"; fi
+    printf '%s' "$status"
+    exit 0 ;;
+esac
+hdrfile=''; prev=''
+for a in "$@"; do
+    [ "$prev" = -D ] && hdrfile="$a"
+    prev="$a"
+done
+case "$url" in
+  */api/version)
+    [ -f "$DK/traefik.down" ] && exit 7
+    echo '{"Version":"3.0"}'; exit 0 ;;
+  */api/http/services/*)
+    [ -f "$DK/traefik.down" ] && exit 7
+    f="$DK/traefik.${url##*/api/http/services/}"
+    [ -f "$f" ] || { echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; }
+    cat "$f"; exit 0 ;;
+  */api/http/routers*)
+    [ -f "$DK/traefik.down" ] && exit 7
+    [ -n "$hdrfile" ] && printf 'HTTP/1.1 200 OK\r\n\r\n' >"$hdrfile"
+    cat "$DK/routers.json"; exit 0 ;;
+  */readyz)
+    # the loopback test router answers for the NEXT colour, the real edge for the serving one
+    flag="public.fail.$active"
+    case "$url" in
+        http://127.0.0.1:*) flag="next.fail.$(jq -r '.loadBalancer.servers[0].url' "$DK/traefik.app-next@file" | sed 's/.*-\(blue\|green\):3000$/\1/')" ;;
+    esac
+    if [ -f "$DK/$flag" ]; then body='{"ready":false}'; code=503; else body='{"ready":true}'; code=200; fi
+    case " $* " in
+      *" -w "*)
+        case "$*" in
+          *'-o /dev/null'*) printf '%s' "$code" ;;
+          *) printf '%s\n%s' "$body" "$code" ;;
+        esac ;;
+      *) printf '%s' "$body" ;;
+    esac
+    exit 0 ;;
+  */auth/login)
+    printf '%s' "$(cat "$DK/login.status" 2>/dev/null || echo 302)"; exit 0 ;;
+esac
+echo "curl shim: no route for the request" >&2
+exit 7

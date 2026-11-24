@@ -1213,6 +1213,108 @@ gh_proof_repo() {
     [ "$status" -eq 2 ]
 }
 
+# CD_PROOF_REPO as a local path (the run sheet sets it to the bare repository that
+# make-proof-commits.sh builds). Real git, a real bare repository: no https address anywhere.
+gh_proof_local() {
+    local mode="${1:-1}"
+    gh_proof_repo "$mode"
+    cd_write_cfg CD_REPO_URL=https://github.com/org/repo "CD_PROOF_MODE=${mode}" "CD_PROOF_REPO=${GH_PROOF}"
+}
+
+# gh_fake_owner UID -- stat answers UID as the owner of the proof repository (a test cannot
+# chown to another user without root, and a test that skips without root fails the CI gate).
+gh_fake_owner() {
+    GH_FAKE_OWNER="$1"
+    export GH_FAKE_OWNER
+    shim stat 'case "$*" in
+    *%u*) for a in "$@"; do case "$a" in */proof.git) echo "$GH_FAKE_OWNER"; exit 0 ;; esac; done ;;
+esac
+exec /usr/bin/stat "$@"'
+}
+
+@test "proof: the fetch of a local path runs with the trust file as git's global config (a root-owned repository needs it), and an https fetch does not" {
+    # a git shim that notes the global config each call runs with, then runs the real git
+    shim git 'printf "GCG=%s ARGS=%s\n" "${GIT_CONFIG_GLOBAL:-unset}" "$*" >> "${GH}/git-env.log"; exec "$GH_REAL_GIT" "$@"'
+    gh_proof_local
+    run --separate-stderr gh_lib 'cd_gh_proof_source "$1" proof/x' "$PROOF_SHA"
+    [ "$status" -eq 0 ] || { echo "$stderr"; return 1; }
+    local fetch_line
+    fetch_line="$(grep ' fetch ' "${GH}/git-env.log")"
+    [[ "$fetch_line" == "GCG=${GREMION_ROOT}/data/cd/proof-gitconfig "* ]] || { echo "the fetch ran with: ${fetch_line}"; return 1; }
+    # the same program with an https proof repository leaves git's own configuration alone
+    : > "${GH}/git-env.log"
+    cd_write_cfg CD_REPO_URL=https://github.com/org/repo CD_PROOF_MODE=1 CD_PROOF_REPO=https://example.org/proof/repo
+    run --separate-stderr gh_lib 'cd_gh_proof_source "$1" proof/x' "$PROOF_SHA"
+    [ "$status" -eq 0 ] || { echo "$stderr"; return 1; }
+    fetch_line="$(grep ' fetch ' "${GH}/git-env.log")"
+    [[ "$fetch_line" == "GCG=unset "* ]] || { echo "the https fetch ran with: ${fetch_line}"; return 1; }
+}
+
+@test "proof: CD_PROOF_REPO as an absolute path to a bare repository is fetched with real git, under refs/proof/<ref>, no API call" {
+    gh_proof_local
+    run --separate-stderr gh_lib 'cd_gh_proof_source "$1" proof/x' "$PROOF_SHA"
+    [ "$status" -eq 0 ] || { echo "$stderr"; return 1; }
+    [ "$(gh_rg --git-dir="${GREMION_ROOT}/data/cd/mirror.git" rev-parse refs/proof/proof/x)" = "$PROOF_SHA" ]
+    [ "$(gh_calls)" -eq 0 ]
+    grep -qF "fetch --no-tags --quiet ${GH_PROOF}" "$SHIM_LOG"
+    # git trusts exactly this path (a root-owned repository read by the deploy user needs it), in a private file
+    local tf="${GREMION_ROOT}/data/cd/proof-gitconfig"
+    [ "$(stat -c %a "$tf")" = 600 ]
+    [ "$(grep -c 'directory' "$tf")" -eq 1 ]
+    grep -qF "directory = ${GH_PROOF}" "$tf"
+}
+
+@test "proof: a path that is not a bare repository (a working tree, an empty directory, a file) is refused (2) before any fetch" {
+    local bad
+    gh_proof_local
+    mkdir -p "${GREMION_ROOT}/empty-dir"
+    gh_rg init -q "${GREMION_ROOT}/work-repo"
+    : > "${GREMION_ROOT}/a-file"
+    for bad in "${GREMION_ROOT}/work-repo" "${GREMION_ROOT}/empty-dir" "${GREMION_ROOT}/a-file" "${GREMION_ROOT}/does-not-exist"; do
+        cd_write_cfg CD_REPO_URL=https://github.com/org/repo CD_PROOF_MODE=1 "CD_PROOF_REPO=${bad}"
+        run --separate-stderr gh_lib 'cd_gh_proof_source "$1" proof/x' "$PROOF_SHA"
+        [ "$status" -eq 2 ] || { echo "accepted ${bad}"; return 1; }
+        [[ "$stderr" == *"not a bare git repository"* || "$stderr" == *"without a link"* ]] || { echo "refused for another reason: ${stderr}"; return 1; }
+    done
+    gh_never grep -q ' fetch ' "$SHIM_LOG"
+}
+
+@test "proof: a path through a symbolic link is refused (2) before any fetch" {
+    gh_proof_local
+    ln -s "$GH_PROOF" "${GREMION_ROOT}/proof-link.git"
+    cd_write_cfg CD_REPO_URL=https://github.com/org/repo CD_PROOF_MODE=1 "CD_PROOF_REPO=${GREMION_ROOT}/proof-link.git"
+    run --separate-stderr gh_lib 'cd_gh_proof_source "$1" proof/x' "$PROOF_SHA"
+    [ "$status" -eq 2 ]
+    [[ "$stderr" == *"without a link"* ]] || { echo "refused for another reason: ${stderr}"; return 1; }
+    gh_never grep -q ' fetch ' "$SHIM_LOG"
+}
+
+@test "proof: a bare repository owned by neither root nor the deploy user is refused (2) before any fetch" {
+    gh_proof_local
+    gh_fake_owner 54321
+    run --separate-stderr gh_lib 'cd_gh_proof_source "$1" proof/x' "$PROOF_SHA"
+    [ "$status" -eq 2 ]
+    [[ "$stderr" == *"neither root nor the deploy user"* ]] || { echo "refused for another reason: ${stderr}"; return 1; }
+    gh_never grep -q ' fetch ' "$SHIM_LOG"
+}
+
+@test "proof: a bare repository that root owns passes the owner check (and so does one the deploy user owns)" {
+    gh_proof_local
+    gh_fake_owner 0
+    run --separate-stderr gh_lib 'cd_gh_proof_source "$1" proof/x' "$PROOF_SHA"
+    [ "$status" -eq 0 ] || { echo "$stderr"; return 1; }
+}
+
+@test "proof: a local path with proof mode off is refused at the config (2) and git is never run" {
+    gh_proof_repo 0
+    cd_write_cfg CD_REPO_URL=https://github.com/org/repo CD_PROOF_MODE=0 "CD_PROOF_REPO=${GH_PROOF}"
+    run --separate-stderr gh_lib 'cd_gh_proof_source "$1" proof/x' "$PROOF_SHA"
+    [ "$status" -eq 2 ]
+    [[ "$stderr" == *"CD_PROOF_REPO is a local path"* ]] || { echo "refused for another reason: ${stderr}"; return 1; }
+    gh_never grep -q ' fetch ' "$SHIM_LOG"
+    [ ! -e "${GREMION_ROOT}/data/cd/mirror.git" ]
+}
+
 # -- the poll verb ---------------------------------------------------------------------
 
 @test "poll: the verb prints the verdict of the newest candidate through the dispatcher (a dry run)" {

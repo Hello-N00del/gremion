@@ -4,14 +4,17 @@
  * Runs against CALENDAR_TEST_PG_URL under the same fail-closed guard as the other integration tests
  * (localhost, NOT port 5432, a `_test_` database prefix). It uses a prefix of its OWN
  * (`calendar_mo_test_`) so it never touches the databases of the other integration files, and drops only
- * what it made. The real-bundle runs use the production prefix `calendar_` (the bundle has no other) on
- * the same throwaway server and drop exactly the three names they create.
+ * what it made. The real-bundle runs use it too: the bundle is built with the production prefix replaced
+ * by the test prefix (an esbuild load hook, asserted to have replaced something), so no database with the
+ * production prefix is ever created or dropped on the test server.
  *
  * Coverage:
  *  - the catalogue is read without creating anything (no control database, no catalogue table);
  *  - a catalogued customer with a database is `migrated`, one without is `skipped` and NO database is created;
  *  - a hostile slug in the catalogue is found in no stream;
- *  - the session advisory lock (an entry waits for a holder of the lock);
+ *  - the session advisory lock (an entry waits for a holder of the lock) and its BOUND: a holder that never
+ *    lets go ends the wait as 55P03 (lock_timeout) or 57014 (statement_timeout), exit 3, one diagnostic line
+ *    per failed customer with no slug and no database name;
  *  - idempotence: a second run and a cold-miss storeFor leave the schema fingerprint identical, and every
  *    file of the image's migrations/ applied twice does too;
  *  - the overlap with the OLD runner (new files then the previous release's files; the detector goes red
@@ -29,16 +32,27 @@ import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 import postgres from 'postgres'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { classifyFailure, MAX_ATTEMPTS, MIGRATE_LOCK_NAME, runMigrateOnly, type MigrateFn } from '../src/migrate-only.ts'
+import {
+  classifyFailure,
+  DEFAULT_LOCK_TIMEOUT_MS,
+  MAX_ATTEMPTS,
+  MIGRATE_LOCK_NAME,
+  runMigrateOnly,
+  runMigrateOnlyCli,
+  STATEMENT_TIMEOUT_MARGIN_MS,
+  type MigrateFn,
+} from '../src/migrate-only.ts'
 import { _resetTenantStoreForTests, storeFor } from '../src/tenant-store.ts'
 import { assertSafeTestEnv, requireEphemeralTestPgUrl } from './support/pg-test-guard.ts'
 
 const TEST_PG_URL = requireEphemeralTestPgUrl()
 const PREFIX = 'calendar_mo_test_'
-const PROD_PREFIX = 'calendar_'
-// The databases the real-bundle runs create under the production prefix (a hostile slug never gets one).
-const PROD_DATABASES = ['control', 'alpha', 'beta'].map((n) => PROD_PREFIX + n)
+// The leaf name the diagnostic lines start with (the one place a copy of this file differs besides the prefix).
+const LEAF = 'calendar'
+const PROD_PREFIX = `${LEAF}_`
 assertSafeTestEnv(TEST_PG_URL, PREFIX)
+// One diagnostic line per failed customer: fixed shape, never a slug or a database name.
+const diag = (cls: string, code: string, file = '-'): string => `[${LEAF}] --migrate-only: customer failed class=${cls} sqlstate=${code} file=${file}`
 
 const MODULE_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
 const REAL_MIGRATIONS = path.join(MODULE_DIR, 'migrations')
@@ -63,7 +77,7 @@ function connect(db: string): ReturnType<typeof postgres> {
 async function dropAll(): Promise<void> {
   const rows = await admin<{ datname: string }[]>`
     SELECT datname FROM pg_database
-     WHERE datname LIKE ${PREFIX.replace(/_/g, '\\_') + '%'} OR datname IN ${admin(PROD_DATABASES)}
+     WHERE datname LIKE ${PREFIX.replace(/_/g, '\\_') + '%'}
   `
   for (const { datname } of rows) {
     await admin.unsafe(
@@ -207,6 +221,23 @@ process.exit(0)
 const EXTERNALS = ['@nats-io/transport-node', '@nats-io/jetstream', '@nats-io/nats-core', 'postgres', 'zod']
 
 /**
+ * The bundle must never touch a database with the production prefix: the two source files that hold it as a
+ * default are loaded with that literal replaced by the test prefix. A file where nothing was replaced fails
+ * the build (a silent no-op would run the bundle against the production names).
+ */
+const testPrefixPlugin = {
+  name: 'test-db-prefix',
+  setup(b: { onLoad: (o: { filter: RegExp }, cb: (a: { path: string }) => Promise<{ contents: string; loader: 'ts' }>) => void }) {
+    b.onLoad({ filter: /src[\\/](migrate-only|tenant-store)\.ts$/ }, async (a) => {
+      const text = await readFile(a.path, 'utf-8')
+      const out = text.split(`'${PROD_PREFIX}'`).join(`'${PREFIX}'`)
+      if (out === text) throw new Error(`no production prefix literal in ${a.path}: the bundle would use the production names`)
+      return { contents: out, loader: 'ts' }
+    })
+  },
+}
+
+/**
  * Bundle `entry` (a file of src/ or the harness) the way the image's build does and put `migrationsDir` next
  * to it, so the bundle finds it exactly as the container does (../migrations of dist/).
  */
@@ -226,6 +257,7 @@ async function bundle(name: string, migrationsDir: string, entry: 'index' | 'har
     target: 'node22',
     outfile,
     external: EXTERNALS,
+    ...(entry === 'index' ? { plugins: [testPrefixPlugin] } : {}),
     logLevel: 'silent',
   })
   return outfile
@@ -285,7 +317,7 @@ const deps = { openStore: storeFor }
 describe('the catalogue is read without creating anything', () => {
   it('no control database: total 0, exit 0, and the control database is NOT created', async () => {
     const result = await runMigrateOnly(deps, opts)
-    expect(result).toEqual({ code: 0, counts: { v: 1, total: 0, migrated: 0, skipped: 0, failed: 0 } })
+    expect(result).toEqual({ code: 0, counts: { v: 1, total: 0, migrated: 0, skipped: 0, failed: 0 }, diagnostics: [] })
     expect(await dbExists(PREFIX + 'control')).toBe(false)
   })
 
@@ -312,7 +344,7 @@ describe('every catalogued customer, in this process', () => {
 
     const result = await runMigrateOnly(deps, opts)
 
-    expect(result).toEqual({ code: 0, counts: { v: 1, total: 3, migrated: 2, skipped: 1, failed: 0 } })
+    expect(result).toEqual({ code: 0, counts: { v: 1, total: 3, migrated: 2, skipped: 1, failed: 0 }, diagnostics: [] })
     expect(await dbExists(PREFIX + 'beta')).toBe(false)
     expect(await catalogueCount(PREFIX)).toBe(3)
     const expected = await fingerprint(PREFIX + 'ref')
@@ -340,6 +372,8 @@ describe('every catalogued customer, in this process', () => {
     expect(result.counts).toEqual({ v: 1, total: 2, migrated: 1, skipped: 0, failed: 1 })
     expect(seen.join('\n')).not.toContain('DROP')
     expect(await dbExists('postgres')).toBe(true)
+    // the diagnostic line of the hostile row names no slug: class and nothing else
+    expect(result.diagnostics).toEqual([diag('sql', '-')])
   })
 
   it('a manifest whose hash differs fails the customer closed (exit 1) before any DDL', async () => {
@@ -349,6 +383,8 @@ describe('every catalogued customer, in this process', () => {
     const result = await runMigrateOnly(deps, { ...opts, manifest })
     expect(result.code).toBe(1)
     expect(result.counts).toMatchObject({ total: 1, migrated: 0, failed: 1 })
+    // the runner names the file whose hash differs; the line carries that file name and no database name
+    expect(result.diagnostics).toEqual([diag('sql', '-', files.sort()[0]!)])
     const db = connect(PREFIX + 'alpha')
     try {
       const rows = await db`SELECT count(*)::int AS n FROM pg_tables WHERE schemaname = 'public'`
@@ -381,7 +417,7 @@ describe('exit codes: a catalogue race is retried, a defect is not', () => {
     await seedCatalogue(PREFIX, [ALPHA], ['alpha'])
     const f = failing([raceFirst(), pgErr('42710'), pgErr('40P01')])
     const result = await runMigrateOnly(deps, { ...opts, migrate: f.migrate })
-    expect(result).toEqual({ code: 0, counts: { v: 1, total: 1, migrated: 1, skipped: 0, failed: 0 } })
+    expect(result).toEqual({ code: 0, counts: { v: 1, total: 1, migrated: 1, skipped: 0, failed: 0 }, diagnostics: [] })
     expect(f.calls()).toBe(MAX_ATTEMPTS)
   })
 
@@ -411,7 +447,12 @@ describe('exit codes: a catalogue race is retried, a defect is not', () => {
       throw pgErr('ECONNREFUSED')
     }
     const result = await runMigrateOnly(deps, { ...opts, migrate })
-    expect(result).toEqual({ code: 3, counts: { v: 1, total: 3, migrated: 0, skipped: 0, failed: 3 } })
+    // one line per failed customer, the short-circuited ones included; none names a customer
+    expect(result).toEqual({
+      code: 3,
+      counts: { v: 1, total: 3, migrated: 0, skipped: 0, failed: 3 },
+      diagnostics: [diag('unreachable', 'ECONNREFUSED'), diag('unreachable', '-'), diag('unreachable', '-')],
+    })
     expect(calls).toEqual(['alpha'])
   })
 
@@ -532,6 +573,91 @@ describe('the session advisory lock', () => {
   }, 60_000)
 })
 
+describe('the wait for the advisory lock is bounded', () => {
+  /** Holds the migrate lock of the ALPHA database until released: the stuck holder. */
+  async function withStuckHolder<T>(fn: () => Promise<T>): Promise<T> {
+    const holder = connect(PREFIX + 'alpha')
+    try {
+      await holder`SELECT pg_advisory_lock(hashtextextended(${MIGRATE_LOCK_NAME}, 0))`
+      return await fn()
+    } finally {
+      await holder.end()
+    }
+  }
+
+  it('the defaults are finite and ordered: a lock_timeout well inside the host step, a larger statement_timeout', () => {
+    expect(DEFAULT_LOCK_TIMEOUT_MS).toBeGreaterThan(0)
+    expect(DEFAULT_LOCK_TIMEOUT_MS).toBeLessThanOrEqual(120_000)
+    expect(STATEMENT_TIMEOUT_MARGIN_MS).toBeGreaterThan(0)
+  })
+
+  it('a holder that never lets go ends the wait as 55P03 within the bound: exit 3, one line with no name, the next customer still migrated', async () => {
+    await seedCatalogue(PREFIX, [ALPHA, BETA], ['alpha', 'beta'])
+    const migrated: string[] = []
+    const started = Date.now()
+    const result = await withStuckHolder(() =>
+      runMigrateOnly(deps, { ...opts, lockTimeoutMs: 1500, migrate: async (t) => void migrated.push(t.slug) }),
+    )
+    expect(Date.now() - started).toBeLessThan(20_000)
+    expect(result.code).toBe(3)
+    expect(result.counts).toEqual({ v: 1, total: 2, migrated: 1, skipped: 0, failed: 1 })
+    expect(migrated).toEqual(['beta'])
+    expect(result.diagnostics).toEqual([diag('timeout', '55P03')])
+    expect(result.diagnostics.join('\n')).not.toMatch(/alpha|beta|_mo_test_|control/)
+  }, 30_000)
+
+  it('with lock_timeout off, the statement_timeout still ends the wait, as 57014 (also exit 3)', async () => {
+    await seedCatalogue(PREFIX, [ALPHA], ['alpha'])
+    const started = Date.now()
+    const result = await withStuckHolder(() =>
+      runMigrateOnly(deps, { ...opts, lockTimeoutMs: 0, statementTimeoutMs: 1500, migrate: async () => {} }),
+    )
+    expect(Date.now() - started).toBeLessThan(20_000)
+    expect(result.code).toBe(3)
+    expect(result.counts).toEqual({ v: 1, total: 1, migrated: 0, skipped: 0, failed: 1 })
+    expect(result.diagnostics).toEqual([diag('timeout', '57014')])
+  }, 30_000)
+
+  it('a holder that lets go inside the bound costs nothing: the entry runs and exits 0 with no diagnostic', async () => {
+    await seedCatalogue(PREFIX, [ALPHA], ['alpha'])
+    const holder = connect(PREFIX + 'alpha')
+    try {
+      await holder`SELECT pg_advisory_lock(hashtextextended(${MIGRATE_LOCK_NAME}, 0))`
+      const pending = runMigrateOnly(deps, { ...opts, lockTimeoutMs: 20_000, migrate: async () => {} })
+      await new Promise((r) => setTimeout(r, 700))
+      await holder`SELECT pg_advisory_unlock_all()`
+      const result = await pending
+      expect(result.code).toBe(0)
+      expect(result.diagnostics).toEqual([])
+    } finally {
+      await holder.end()
+    }
+  }, 30_000)
+
+  it('the CLI: the counts line is the only stdout, stderr holds exactly the diagnostic line of the failed customer', async () => {
+    await seedCatalogue(PREFIX, [ALPHA, BETA], ['alpha', 'beta'])
+    const out: string[] = []
+    const err: string[] = []
+    const savedConsole = { log: console.log, info: console.info, warn: console.warn, error: console.error, debug: console.debug, trace: console.trace }
+    const spies = [
+      vi.spyOn(process.stdout, 'write').mockImplementation(((c: unknown, cb?: () => void) => (out.push(String(c)), cb?.(), true)) as never),
+      vi.spyOn(process.stderr, 'write').mockImplementation(((c: unknown, cb?: () => void) => (err.push(String(c)), cb?.(), true)) as never),
+    ]
+    let code: number
+    try {
+      code = await withStuckHolder(() =>
+        runMigrateOnlyCli(deps, ['--migrate-only'], { ...opts, lockTimeoutMs: 1500, migrate: async () => {} }),
+      )
+    } finally {
+      for (const s of spies) s.mockRestore()
+      Object.assign(console, savedConsole) // the CLI silences console for its process
+    }
+    expect(code).toBe(3)
+    expect(out.join('')).toBe(JSON.stringify({ v: 1, total: 2, migrated: 1, skipped: 0, failed: 1 }) + '\n')
+    expect(err.join('')).toBe(diag('timeout', '55P03') + '\n')
+  }, 30_000)
+})
+
 describe('idempotence: the claim that makes the scheduler redundant', () => {
   it('a second run, and a cold-miss storeFor of the same customer, leave the schema fingerprint identical', async () => {
     await seedCatalogue(PREFIX, [ALPHA], ['alpha'])
@@ -636,7 +762,7 @@ describe('real processes', () => {
 
   it('the real bundle: one JSON line on stdout and nothing else, no name in any stream, and the process ends by itself', async () => {
     const entry = await bundle('image', REAL_MIGRATIONS, 'index')
-    await seedCatalogue(PROD_PREFIX, [ALPHA, BETA], ['alpha'])
+    await seedCatalogue(PREFIX, [ALPHA, BETA], ['alpha'])
     const env = {
       CALENDAR_PG_URL: TEST_PG_URL,
       // Were the service to start, these would make it bind a port and try a broker.
@@ -654,16 +780,18 @@ describe('real processes', () => {
       expect(ran.stdout).not.toContain(name)
       expect(ran.stderr).not.toContain(name)
     }
-    expect(await dbExists(PROD_PREFIX + 'beta')).toBe(false)
+    expect(await dbExists(PREFIX + 'beta')).toBe(false)
   }, 120_000)
 
   it('the real bundle with a hostile catalogue row: exit 1, the line is still the only output', async () => {
     const entry = await bundle('image', REAL_MIGRATIONS, 'index')
-    await seedCatalogue(PROD_PREFIX, [ALPHA, HOSTILE], ['alpha'])
+    await seedCatalogue(PREFIX, [ALPHA, HOSTILE], ['alpha'])
     const ran = await run(entry, ['--migrate-only'], { CALENDAR_PG_URL: TEST_PG_URL })
     expect(ran.code).toBe(1)
     expect(JSON.parse(ran.stdout)).toEqual({ v: 1, total: 2, migrated: 1, skipped: 0, failed: 1 })
     expect(ran.stdout + ran.stderr).not.toContain('DROP')
+    // stderr: exactly one diagnostic line, for the one failed customer, with no slug in it
+    expect(ran.stderr).toBe(diag('sql', '-') + '\n')
   }, 120_000)
 
   it('the real bundle: a slug argument is exit 2 with nothing on stdout; a missing URL is exit 2; a refused connection is exit 3', async () => {

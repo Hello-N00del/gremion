@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+[ -f "$DK/hook.sh" ] && . "$DK/hook.sh" && pl_hook "switch $*"
+# gremion-switch of a fake release tree: writes the edge file, points the fake Traefik at the colour,
+# then active-colour. $DK/switch.mode.<colour> is ok (default), write_then_fail (the edge file and
+# Traefik move, the exit is 1, active-colour stays) or fail (nothing is written, exit 2).
+colour="$1"
+mode="$(cat "$DK/switch.mode.$colour" 2>/dev/null || echo ok)"
+printf 'switch %s mode=%s from=%s\n' "$colour" "$mode" "$(basename "$(dirname "$(dirname "$(dirname "$(dirname "$(readlink -f "$0")")")")")")" >> "$DK/order.log"
+other=blue
+[ "$colour" = blue ] && other=green
+point() {
+    local pair name svc u
+    for pair in app@file:gremion-ui public@file:gremion-public panel@file:control-panel; do
+        name="${pair%%:*}"; svc="${pair##*:}"; u="http://${svc}-${colour}:3000"
+        jq -cn --arg u "$u" '{loadBalancer: {servers: [{url: $u}]}, serverStatus: {($u): "UP"}}' > "$DK/traefik.${name}"
+    done
+    for pair in app-next@file:gremion-ui public-next@file:gremion-public; do
+        name="${pair%%:*}"; svc="${pair##*:}"; u="http://${svc}-${other}:3000"
+        jq -cn --arg u "$u" '{loadBalancer: {servers: [{url: $u}]}, serverStatus: {($u): "UP"}}' > "$DK/traefik.${name}"
+    done
+    printf 'active=%s\n' "$colour" > "$GREMION_ROOT/etc/edge/active.yml"
+}
+case "$mode" in
+    ok) point; printf '%s\n' "$colour" > "$GREMION_ROOT/runtime/active-colour" ;;
+    write_then_fail) point; echo "poll failed" >&2; exit 1 ;;
+    fail) exit 2 ;;
+esac
+exit 0

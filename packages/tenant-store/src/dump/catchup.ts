@@ -17,8 +17,8 @@ import { execFile } from 'node:child_process'
 import type { RunMigrationsHooks } from '../runner.js'
 import type { DumpRetirer, Exporter } from '../lifecycle/types.js'
 import { dumpHook, type PreApply } from './hook.js'
-import { DumpError } from './ledger.js'
-import { retireDatabaseDumps, retireDump } from './retire.js'
+import { DumpError, ENABLE_ORIGIN } from './ledger.js'
+import { retireDatabaseDumps, retireEnableDumps } from './retire.js'
 import { isOwnerUid, type DumpFs } from './take.js'
 
 /** "pg_dump (PostgreSQL) 18.1 (Debian 18.1-1)" -> 18. */
@@ -95,6 +95,8 @@ export function catchupDump(o: CatchupDumpOptions): CatchupDump {
           pgDumpMajor: () => (o.pgDumpMajor ? o.pgDumpMajor() : localPgDumpMajor()),
           service: postgresService,
           pgUser: o.pgUserFor(postgresService),
+          // the ledger line says who took it: afterEnable retires the dumps of this origin and no other writer's
+          origin: ENABLE_ORIGIN,
           ...more,
         })
         await inner(file, ctx)
@@ -104,7 +106,13 @@ export function catchupDump(o: CatchupDumpOptions): CatchupDump {
     retire: {
       async afterEnable(release, database) {
         if (!configured) return
-        await retireDump(dir, release, database, 'enable committed', more)
+        // Only the dumps of the enable's own origin go: a live dump of the same release and database that another
+        // writer took (the host's `take` of a release) belongs to that writer, stays, and is named here, with ids only
+        // (the database name is an id, t_<hex>__<module>, never a slug), because it holds the next release's take.
+        const r = await retireEnableDumps(dir, release, database, 'enable committed', more)
+        for (const id of r.left) {
+          audit(`premigration-dump left-live id=${id} release=${release} db=${database} reason="not recorded as taken by this enable"`)
+        }
       },
       async afterDrop(database) {
         if (!configured) return

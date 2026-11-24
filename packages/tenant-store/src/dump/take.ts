@@ -13,17 +13,25 @@
 //      (another release -> DUMP_SERIES; this release -> reused);
 //   3. pg_dump major >= the server's major (PG_DUMP_VERSION);
 //   4. free space >= 1.2 x pg_database_size (DUMP_SPACE);
-//   5. pg_dump -Fc (TASK-021's pgDumpExporter) to <dir>/<release>/<db>.<id>.dump,
-//      0600 in a 0700 directory; a non-zero exit removes the partial file;
-//   6. fsync the file and both directories, bytes > 0, pg_restore --list names
-//      the database, sha256;
+//   5. the dump file <dir>/<release>/<db>.<id>.dump is created exclusively (0600, 0700 directory) and
+//      pg_dump -Fc (TASK-021's pgDumpExporter) writes into that descriptor; a non-zero exit removes the file;
+//   6. on the same descriptor: bytes > 0, pg_restore --list names the database, sha256; the name must still be this
+//      node; only then mode 0600, the hand-over to the owner, fsync (and of both directories);
 //   7. append `created` (fsynced) and print one audit line.
+//
+// Links (safefs.ts): the dump directory is opened once, without following a link, and every name below it is reached
+// through that descriptor; the release directory is opened the same way; every file is opened with O_NOFOLLOW and
+// checked on its descriptor; ownership and mode change on the descriptor. The dump file is never reopened by name
+// between its creation and the ledger line. A link planted by the owner of the directory is refused
+// (DUMP_PATH_UNSAFE), never followed, so a root process cannot be made to write, chown or read elsewhere.
 import { randomBytes } from 'node:crypto'
-import { chmodSync, chownSync, closeSync, createReadStream, fsyncSync, mkdirSync, openSync, rmSync, statSync, statfsSync } from 'node:fs'
+import { closeSync, constants, fstatSync, fsyncSync, rmSync, statfsSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
+import { descriptorStream } from '../fd-stream.js'
 import { join } from 'node:path'
 import type { Exporter } from '../lifecycle/types.js'
-import { appendEvent, assertRelease, auditLine, DumpError, fsyncDir, liveDumps, readEvents, withLedgerLock, type ByKind, type DumpEvent, type DumpScope, type HandOver } from './ledger.js'
+import { appendEvent, assertRelease, auditLine, DumpError, dumpFileParts, fsyncDir, liveDumps, readEvents, withLedgerLock, type ByKind, type DumpEvent, type DumpScope, type ENABLE_ORIGIN, type HandOver } from './ledger.js'
+import { allowedOwners, anchorDir, assertNamed, assertPlain, handOverFd, openChildDir, openNoFollow, SELF_UID, setMode } from './safefs.js'
 
 /** Free space must be at least this multiple of pg_database_size (brief §1). */
 export const SPACE_FACTOR = 1.2
@@ -39,15 +47,20 @@ export interface DumpProbe {
 
 export interface DumpFs {
   statDir(dir: string): { isDirectory: boolean; mode: number; uid: number }
+  /**
+   * The same facts read from an OPEN descriptor of the directory: the owner and mode asked of the dump directory are then
+   * those of the inode that is used, not of whatever the name pointed at a moment earlier. Optional: a stand-in for
+   * statDir (a test) that has none is checked by statDir alone.
+   */
+  fstatDir?(fd: number): { isDirectory: boolean; mode: number; uid: number }
   freeBytes(dir: string): number
   /** This process's uid; undefined where the platform has none (the owner check then refuses). */
   uid: number | undefined
-  /** chown(path, uid) leaving the group alone; only a root process with an `ownerUid` ever calls it. Default: fs.chownSync. */
+  /**
+   * chown(path, uid) leaving the group alone; only a root process with an `ownerUid` ever calls it. A test seam: the
+   * default is fchown on a descriptor opened with O_NOFOLLOW, never a chown by name.
+   */
   chown?(path: string, uid: number): void
-}
-
-function defaultChown(path: string, uid: number): void {
-  chownSync(path, uid, -1)
 }
 
 export const defaultDumpFs: DumpFs = {
@@ -55,12 +68,15 @@ export const defaultDumpFs: DumpFs = {
     const s = statSync(dir)
     return { isDirectory: s.isDirectory(), mode: s.mode & 0o777, uid: s.uid }
   },
+  fstatDir(fd) {
+    const s = fstatSync(fd)
+    return { isDirectory: s.isDirectory(), mode: s.mode & 0o777, uid: s.uid }
+  },
   freeBytes(dir) {
     const s = statfsSync(dir)
     return Number(s.bavail) * Number(s.bsize)
   },
   uid: typeof process.getuid === 'function' ? process.getuid() : undefined,
-  chown: defaultChown,
 }
 
 /** A uid that can own a directory: a non-negative 32-bit integer. */
@@ -73,14 +89,14 @@ export function isOwnerUid(v: unknown): v is number {
  * deploy user): every path it writes goes to `ownerUid` with its mode re-asserted, so the host's
  * gremion-migration-dump status, verify and switched, which run as that user, can read and retire it. undefined
  * (no hand-over at all) for a process that is not root, and when no `ownerUid` is declared.
+ *
+ * It changes ownership and mode on the descriptor that made the node (fchown, fchmod), never on a name, and it is
+ * called only for nodes made in the same call: a node that already stands in the directory is never handed over.
  */
 export function handOverFor(fs: DumpFs, ownerUid: number | undefined): HandOver | undefined {
   if (ownerUid === undefined || fs.uid !== 0) return undefined
-  return (path, mode) => {
-    if (fs.chown) fs.chown(path, ownerUid)
-    else defaultChown(path, ownerUid)
-    chmodSync(path, mode)
-  }
+  const chown = fs.chown ? (p: string, u: number): void => fs.chown!(p, u) : undefined
+  return (path, mode, fd) => handOverFd(fd, path, ownerUid, mode, chown)
 }
 
 export interface TakeDumpOptions {
@@ -107,6 +123,8 @@ export interface TakeDumpOptions {
    * hands everything it writes to it; for every other process it is ignored and nothing changes.
    */
   ownerUid?: number
+  /** Written to the ledger line (DumpEvent.origin): who took this dump. The enable catch-up sets it; nothing else does. */
+  origin?: typeof ENABLE_ORIGIN
   probe: DumpProbe
   fs?: DumpFs
   byKind?: ByKind
@@ -134,28 +152,74 @@ export function uuidv7(now: Date = new Date()): string {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
 }
 
-export function sha256OfFile(file: string): Promise<string> {
+/** sha256 of what an open descriptor holds, read positionally from byte 0 (the descriptor stays open and its offset untouched). */
+export function sha256OfFd(fd: number): Promise<string> {
   return new Promise((resolve, reject) => {
     const h = createHash('sha256')
-    createReadStream(file)
+    descriptorStream(fd)
       .on('data', (c) => h.update(c))
       .on('error', reject)
       .on('end', () => resolve(h.digest('hex')))
   })
 }
 
-function fsyncFile(file: string): void {
-  const fd = openSync(file, 'r+')
+/**
+ * Opens a dump file once (no link followed, no wait on a FIFO), checks it on the descriptor and runs `use` on it. The
+ * size, the table of contents and the sha256 of a dump all come from this one descriptor: nothing reopens the file by
+ * name after it was handed over, so what is read is the node that was checked.
+ */
+async function withDumpFile<T>(path: string, owners: readonly number[], use: (fd: number, bytes: number) => Promise<T>): Promise<T> {
+  const fd = openNoFollow(path, constants.O_RDONLY)
   try {
-    fsyncSync(fd)
+    const st = assertPlain(fd, path, 'file', owners)
+    return await use(fd, Number(st.size))
   } finally {
     closeSync(fd)
   }
 }
 
 /**
- * The dump dir checks (brief §1 "Never a series"): set, a directory, 0700, owned by this uid. A root process
- * with a declared `ownerUid` is the one exception: the directory must be owned by exactly that uid (anything
+ * What a dump file needs before its ledger line, all on the descriptor that created it: size, table of contents,
+ * sha256, then (and only then) mode 0600, the hand-over and fsync. The name is compared with the descriptor before and
+ * after, so a name that was moved, replaced or linked over is refused before anything is handed over. Nothing here
+ * reopens the file by name.
+ */
+async function verifyAndSeal(fd: number, path: string, o: TakeDumpOptions, handOver: HandOver | undefined): Promise<{ bytes: number; sha256: string }> {
+  const st = assertPlain(fd, path, 'file', SELF_UID === undefined ? undefined : [SELF_UID])
+  assertNamed(fd, path)
+  const size = Number(st.size)
+  if (size <= 0) throw new Error('the dump is empty (0 bytes)')
+  const toc = await o.exporter.list(path, { fd })
+  if (!/^; Archive created at /m.test(toc) || !new RegExp(`^;\\s+dbname: ${o.database.replace(/[.]/g, '\\.')}$`, 'm').test(toc)) {
+    throw new Error(`pg_restore --list does not describe a dump of ${o.database}`)
+  }
+  const sha256 = await sha256OfFd(fd)
+  // the exporter and the table of contents ran on this descriptor: it must still be a plain file of the size that was hashed
+  const after = assertPlain(fd, path, 'file', SELF_UID === undefined ? undefined : [SELF_UID])
+  if (Number(after.size) !== size) throw new Error('the dump changed while it was verified')
+  setMode(fd, path, 0o600)
+  handOver?.(path, 0o600, fd)
+  fsyncSync(fd)
+  assertNamed(fd, path)
+  return { bytes: size, sha256 }
+}
+
+/** The facts of a directory held to the dump directory rules: set aside from checkDumpDir so a descriptor can be held to them too. */
+function verifyDirStat(s: { isDirectory: boolean; mode: number; uid: number }, dir: string, fs: DumpFs, ownerUid?: number): void {
+  if (!s.isDirectory) throw new DumpError('DUMP_DIR_INVALID', `${dir} is not a directory`)
+  if ((s.mode & 0o777) !== 0o700) throw new DumpError('DUMP_DIR_MODE', `${dir} has mode ${(s.mode & 0o777).toString(8).padStart(4, '0')}, want 0700 (the dump holds the whole database in clear)`)
+  if (fs.uid === undefined) throw new DumpError('DUMP_DIR_OWNER', `the owner of ${dir} cannot be verified on this platform (no uid)`)
+  if (ownerUid !== undefined && !isOwnerUid(ownerUid)) throw new DumpError('DUMP_DIR_OWNER', `the declared owner uid ${String(ownerUid)} is not a uid`)
+  if (ownerUid !== undefined && fs.uid === 0) {
+    if (s.uid !== ownerUid) throw new DumpError('DUMP_DIR_OWNER', `${dir} is owned by uid ${s.uid}, not by the declared owner uid ${ownerUid} (this process is root and writes only into that owner's directory)`)
+    return
+  }
+  if (s.uid !== fs.uid) throw new DumpError('DUMP_DIR_OWNER', `${dir} is owned by uid ${s.uid}, not by this process (uid ${fs.uid})`)
+}
+
+/**
+ * The dump dir checks (brief §1 "Never a series"): set, a directory, 0700, owned by this uid. A root process with a
+ * declared `ownerUid` is the one exception: the directory must be owned by exactly that uid (anything
  * else, including a directory root owns, is still DUMP_DIR_OWNER), because everything it writes is handed to it.
  */
 export function checkDumpDir(dir: string | undefined, fs: DumpFs = defaultDumpFs, ownerUid?: number): string {
@@ -168,16 +232,17 @@ export function checkDumpDir(dir: string | undefined, fs: DumpFs = defaultDumpFs
   } catch (err) {
     throw new DumpError('DUMP_DIR_INVALID', `${dir} cannot be read: ${(err as Error).message}`, { cause: err })
   }
-  if (!s.isDirectory) throw new DumpError('DUMP_DIR_INVALID', `${dir} is not a directory`)
-  if ((s.mode & 0o777) !== 0o700) throw new DumpError('DUMP_DIR_MODE', `${dir} has mode ${(s.mode & 0o777).toString(8).padStart(4, '0')}, want 0700 (the dump holds the whole database in clear)`)
-  if (fs.uid === undefined) throw new DumpError('DUMP_DIR_OWNER', `the owner of ${dir} cannot be verified on this platform (no uid)`)
-  if (ownerUid !== undefined && !isOwnerUid(ownerUid)) throw new DumpError('DUMP_DIR_OWNER', `the declared owner uid ${String(ownerUid)} is not a uid`)
-  if (ownerUid !== undefined && fs.uid === 0) {
-    if (s.uid !== ownerUid) throw new DumpError('DUMP_DIR_OWNER', `${dir} is owned by uid ${s.uid}, not by the declared owner uid ${ownerUid} (this process is root and writes only into that owner's directory)`)
-    return dir
-  }
-  if (s.uid !== fs.uid) throw new DumpError('DUMP_DIR_OWNER', `${dir} is owned by uid ${s.uid}, not by this process (uid ${fs.uid})`)
+  verifyDirStat(s, dir, fs, ownerUid)
   return dir
+}
+
+/**
+ * The dump directory, checked by name (checkDumpDir) and then OPENED without following a link, with the same rules
+ * asked of the open descriptor: every later name is reached through it. Close the anchor when done.
+ */
+export function anchorDumpDir(dir: string | undefined, fs: DumpFs, ownerUid?: number): ReturnType<typeof anchorDir> {
+  const checked = checkDumpDir(dir, fs, ownerUid)
+  return anchorDir(checked, fs.fstatDir ? (fd) => verifyDirStat(fs.fstatDir!(fd), checked, fs, ownerUid) : undefined)
 }
 
 const DB_FILE_PART = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,62}$/
@@ -188,8 +253,20 @@ export async function takeDump(o: TakeDumpOptions): Promise<TakenDump> {
   if (o.scope !== 'platform' && o.scope !== 'customer') throw new DumpError('DUMP_SCOPE', `scope ${JSON.stringify(o.scope)}`)
   if ((o.scope === 'customer') !== Boolean(o.customerId)) throw new DumpError('DUMP_SCOPE', 'a customer-scope dump names its customer_id; a platform dump names none (DB-OPS-MIGRATION-DUMP scope check)')
   const fs = o.fs ?? defaultDumpFs
-  const dir = checkDumpDir(o.dir, fs, o.ownerUid)
+  const anchor = anchorDumpDir(o.dir, fs, o.ownerUid)
+  try {
+    return await takeUnder(o, fs, anchor)
+  } finally {
+    anchor.close()
+  }
+}
+
+async function takeUnder(o: TakeDumpOptions, fs: DumpFs, anchor: ReturnType<typeof anchorDir>): Promise<TakenDump> {
+  // `dir` is the real path (what callers and audit lines see); `adir` is the anchored one every operation uses.
+  const dir = o.dir as string
+  const adir = anchor.dir
   const handOver = handOverFor(fs, o.ownerUid)
+  const owners = allowedOwners(o.ownerUid, fs.uid)
   const server = o.service !== undefined && o.service !== 'postgres' && o.pgUser !== undefined ? { pg_service: o.service, pg_user: o.pgUser } : null
   if (server && (!/^[a-z][a-z0-9]*-postgres$/.test(server.pg_service) || !/^[a-z_][a-z0-9_]{0,62}$/.test(server.pg_user))) {
     throw new DumpError('DUMP_SCOPE', 'the server and role of a module-server dump are not valid names; nothing was dumped or migrated')
@@ -197,8 +274,8 @@ export async function takeDump(o: TakeDumpOptions): Promise<TakenDump> {
   const now = o.now ?? (() => new Date())
   const audit = o.audit ?? ((l: string) => console.log(l))
 
-  return withLedgerLock(dir, async () => {
-    const live = liveDumps(readEvents(dir)).filter((e) => e.database === o.database)
+  return withLedgerLock(adir, async () => {
+    const live = liveDumps(readEvents(adir, owners)).filter((e) => e.database === o.database)
     const foreign = live.filter((e) => e.release !== o.release)
     if (foreign.length) {
       const f = foreign[0]!
@@ -209,14 +286,23 @@ export async function takeDump(o: TakeDumpOptions): Promise<TakenDump> {
     }
     const mine = live.find((e) => e.release === o.release)
     if (mine) {
+      const { rel, name } = dumpFileParts(mine)
       const path = join(dir, mine.file!)
       let bytes: number
+      let sha256: string
       try {
-        bytes = statSync(path).size
+        const relDir = openChildDir(anchor, rel, { create: false, owners })
+        if (relDir === null) throw new Error('the release directory is missing')
+        try {
+          const anchored = join(relDir.dir, name)
+          ;({ bytes, sha256 } = await withDumpFile(anchored, owners, async (fd, size) => ({ bytes: size, sha256: await sha256OfFd(fd) })))
+        } finally {
+          relDir.close()
+        }
       } catch (err) {
+        if (err instanceof DumpError) throw err
         throw new DumpError('DUMP_UNVERIFIED', `the ledger's live dump ${mine.migration_dump_id} of ${o.release} is missing on disk (${path}); nothing was migrated`, { cause: err })
       }
-      const sha256 = await sha256OfFile(path)
       if (sha256 !== mine.sha256 || bytes !== mine.bytes) {
         throw new DumpError('DUMP_UNVERIFIED', `the live dump ${mine.migration_dump_id} of ${o.release} no longer matches its ledger sha256/bytes (${path}); nothing was migrated`)
       }
@@ -236,56 +322,70 @@ export async function takeDump(o: TakeDumpOptions): Promise<TakenDump> {
 
     const takenAt = now()
     const id = uuidv7(takenAt)
-    const relDir = o.release
-    const releaseDir = join(dir, relDir)
-    mkdirSync(releaseDir, { recursive: true, mode: 0o700 })
-    chmodSync(releaseDir, 0o700)
-    handOver?.(releaseDir, 0o700)
-    const file = `${relDir}/${o.database}.${id}.dump`
-    const path = join(dir, file)
+    const relDir = openChildDir(anchor, o.release, { create: true, owners, ...(handOver ? { handOver } : {}) })!
     try {
-      await o.exporter.dump({ service: o.service ?? 'postgres', database: o.database }, path)
-    } catch (err) {
-      rmSync(path, { force: true })
-      throw new DumpError('PG_DUMP_FAILED', `pg_dump of ${o.database} failed: ${(err as Error).message}; the partial file was removed, nothing was migrated`, { cause: err })
-    }
-    try {
-      chmodSync(path, 0o600)
-      handOver?.(path, 0o600)
-      fsyncFile(path)
-      fsyncDir(releaseDir)
-      fsyncDir(dir)
-      const bytes = statSync(path).size
-      if (bytes <= 0) throw new Error('the dump is empty (0 bytes)')
-      const toc = await o.exporter.list(path)
-      if (!/^; Archive created at /m.test(toc) || !new RegExp(`^;\\s+dbname: ${o.database.replace(/[.]/g, '\\.')}$`, 'm').test(toc)) {
-        throw new Error(`pg_restore --list does not describe a dump of ${o.database}`)
+      const name = `${o.database}.${id}.dump`
+      const file = `${o.release}/${name}`
+      const path = join(relDir.dir, name)
+      // created here, exclusively, and written through this descriptor: the dump never goes through a name
+      const fd = openNoFollow(path, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL, 0o600)
+      const discard = (): void => {
+        try {
+          rmSync(path, { force: true })
+        } catch {
+          // the original failure is the one to report
+        }
       }
-      const sha256 = await sha256OfFile(path)
-      const event: DumpEvent = {
-        v: 1,
-        event: 'created',
-        at: takenAt.toISOString(),
-        migration_dump_id: id,
-        release: o.release,
-        scope: o.scope,
-        customer_id: o.scope === 'customer' ? (o.customerId ?? null) : null,
-        module_id: o.moduleId ?? null,
-        database: o.database,
-        by_kind: o.byKind ?? 'system',
-        file,
-        sha256,
-        bytes,
-        dump_taken_at: takenAt.toISOString(),
-        ...server,
+      try {
+        try {
+          await o.exporter.dump({ service: o.service ?? 'postgres', database: o.database }, path, { fd })
+        } catch (err) {
+          discard()
+          throw new DumpError('PG_DUMP_FAILED', `pg_dump of ${o.database} failed: ${(err as Error).message}; the partial file was removed, nothing was migrated`, { cause: err })
+        }
+        let verified: { bytes: number; sha256: string }
+        try {
+          verified = await verifyAndSeal(fd, path, o, handOver)
+        } catch (err) {
+          discard()
+          if (err instanceof DumpError) throw err
+          throw new DumpError('DUMP_UNVERIFIED', `the dump of ${o.database} could not be verified: ${(err as Error).message}; it was removed, nothing was migrated`, { cause: err })
+        }
+        const { bytes, sha256 } = verified
+        try {
+          fsyncDir(relDir.dir)
+          fsyncDir(adir)
+          const event: DumpEvent = {
+            v: 1,
+            event: 'created',
+            at: takenAt.toISOString(),
+            migration_dump_id: id,
+            release: o.release,
+            scope: o.scope,
+            customer_id: o.scope === 'customer' ? (o.customerId ?? null) : null,
+            module_id: o.moduleId ?? null,
+            database: o.database,
+            by_kind: o.byKind ?? 'system',
+            file,
+            sha256,
+            bytes,
+            dump_taken_at: takenAt.toISOString(),
+            ...server,
+            ...(o.origin ? { origin: o.origin } : {}),
+          }
+          appendEvent(adir, event, handOver, owners)
+          audit(auditLine(event))
+          return { status: 'created', id, path: join(dir, file), sha256, bytes }
+        } catch (err) {
+          discard()
+          if (err instanceof DumpError) throw err
+          throw new DumpError('DUMP_UNVERIFIED', `the dump of ${o.database} could not be verified: ${(err as Error).message}; it was removed, nothing was migrated`, { cause: err })
+        }
+      } finally {
+        closeSync(fd)
       }
-      appendEvent(dir, event, handOver)
-      audit(auditLine(event))
-      return { status: 'created', id, path, sha256, bytes }
-    } catch (err) {
-      rmSync(path, { force: true })
-      if (err instanceof DumpError) throw err
-      throw new DumpError('DUMP_UNVERIFIED', `the dump of ${o.database} could not be verified: ${(err as Error).message}; it was removed, nothing was migrated`, { cause: err })
+    } finally {
+      relDir.close()
     }
   }, handOver)
 }

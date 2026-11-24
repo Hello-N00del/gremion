@@ -19,8 +19,8 @@ afterAll(() => {
 })
 const DB = 't_0192f0c12b3c7d4e8f00112233445566__finance'
 const exporter: Exporter = {
-  async dump(target, file) {
-    writeFileSync(file, `PGDMP fake dump of ${target.database}`, { flag: 'wx', mode: 0o600 })
+  async dump(target, file, sink) {
+    writeFileSync(sink?.fd ?? file, `PGDMP fake dump of ${target.database}`, sink?.fd !== undefined ? {} : { flag: 'wx', mode: 0o600 })
   },
   async list() {
     return `;\n; Archive created at 2026-11-17 03:00:00 UTC\n;     dbname: ${DB}\n`
@@ -54,10 +54,10 @@ describe('catchupDump forwards GREMION_MIGRATION_DUMP_OWNER_UID to the take and 
 
     await c.retire.afterEnable('dist-v9.9.9', DB)
     expect(liveDumps(readEvents(dir))).toEqual([])
-    // the retire wrote the ledger (the `deleted` line) as root too: it went to the same uid
+    // the retire made its own lock as root: it went to the same uid (the ledger it appended to already belonged to it)
     expect(chowned.length).toBeGreaterThan(afterTake)
     expect(chowned.every(([, u]) => u === 1000)).toBe(true)
-    expect(chowned.slice(afterTake).some(([p]) => p.endsWith('ledger.jsonl'))).toBe(true)
+    expect(chowned.slice(afterTake).some(([p]) => p.endsWith('ledger.lock'))).toBe(true)
   })
 
   it('as root, with the uid NOT set: the take refuses DUMP_DIR_OWNER (the check is not relaxed for root), and so does a retire', async () => {

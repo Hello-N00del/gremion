@@ -23,38 +23,19 @@
 // infra/host/bin/gremion-migration-dump (bash). Both take `<dir>/ledger.lock`
 // with O_EXCL before they read-then-append, and both REFUSE on an existing
 // lock (a stale lock is an operator decision, never auto-broken).
-import { closeSync, existsSync, fsyncSync, openSync, readFileSync, unlinkSync, writeSync } from 'node:fs'
+import { closeSync, constants, fsyncSync, openSync, unlinkSync, writeSync } from 'node:fs'
 import { join } from 'node:path'
+import { DumpError, type DumpErrorCode } from './errors.js'
+import { assertPlain, openNoFollow, readTextNoFollow, SELF_UID } from './safefs.js'
+
+// The error type lives in errors.ts (safefs.ts needs it too); these two names keep every importer of this file working.
+export { DumpError }
+export type { DumpErrorCode }
 
 export const LEDGER_FILE = 'ledger.jsonl'
 export const LEDGER_LOCK = 'ledger.lock'
 /** logger(1) tag of every event, also on the host (journalctl -t premigration-dump). */
 export const AUDIT_TAG = 'premigration-dump'
-
-export type DumpErrorCode =
-  | 'RELEASE_INVALID'
-  | 'DUMP_DIR_UNSET'
-  | 'DUMP_DIR_INVALID'
-  | 'DUMP_DIR_MODE'
-  | 'DUMP_DIR_OWNER'
-  | 'DUMP_SERIES'
-  | 'DUMP_SPACE'
-  | 'PG_DUMP_VERSION'
-  | 'PG_DUMP_FAILED'
-  | 'DUMP_UNVERIFIED'
-  | 'DUMP_SCOPE'
-  | 'LEDGER_LOCKED'
-  | 'LEDGER_CORRUPT'
-  | 'LEDGER_UNWRITABLE'
-
-export class DumpError extends Error {
-  override name = 'DumpError'
-  code: DumpErrorCode
-  constructor(code: DumpErrorCode, message: string, options?: { cause?: unknown }) {
-    super(`${code}: ${message}`, options)
-    this.code = code
-  }
-}
 
 export type DumpScope = 'platform' | 'customer'
 export type ByKind = 'system' | 'operator'
@@ -87,13 +68,23 @@ export interface DumpEvent {
    */
   pg_service?: string
   pg_user?: string
+  /**
+   * created only, optional: who took the dump. The enable catch-up (a customer switching a module on again inside its
+   * Karenz) writes 'enable-catchup'; the host's `take` and the migrate CLI write nothing. The enable retires the dumps
+   * of its own origin for a database and release, and leaves any other writer's dump of the same label alone.
+   */
+  origin?: typeof ENABLE_ORIGIN
 }
 
 /**
- * Hands a path that a ROOT process has just written to the owner of the dump directory and sets its mode.
- * undefined for every process that is not root: it never changes ownership and behaves as it always did.
+ * Hands a node that a ROOT process has just made to the owner of the dump directory and sets its mode, on the
+ * descriptor that made it (`fd`; `path` names it for tests and messages only). undefined for every process that is
+ * not root: it never changes ownership and behaves as it always did.
  */
-export type HandOver = (path: string, mode: number) => void
+export type HandOver = (path: string, mode: number, fd: number) => void
+
+/** The `origin` of a dump the enable catch-up took (see DumpEvent.origin). */
+export const ENABLE_ORIGIN = 'enable-catchup'
 
 /** Release refs name a directory: 1-64 of [A-Za-z0-9._-], starting alphanumeric. */
 export const RELEASE_REF = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
@@ -102,6 +93,20 @@ export function assertRelease(release: unknown): asserts release is string {
   if (typeof release !== 'string' || !RELEASE_REF.test(release) || release.includes('..')) {
     throw new DumpError('RELEASE_INVALID', `release ${JSON.stringify(release)} is not 1-64 of [A-Za-z0-9._-] (it names a directory)`)
   }
+}
+
+// The file a ledger line names is <release>/<name>.<id>.dump: the host names <name> after the database, or after the
+// compose service for a module server. The ledger is a file the deploy user can write, so a line is trusted for nothing
+// but this shape: the release is the line's own release, the id its own id, no separator and no dot segment anywhere.
+const DUMP_FILE = /^([^/\\]+)\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,62})\.([A-Za-z0-9-]{1,64})\.dump$/
+
+/** The release directory and the file name below it that a ledger line names; LEDGER_CORRUPT for any other shape. */
+export function dumpFileParts(e: DumpEvent): { rel: string; name: string } {
+  const m = typeof e.file === 'string' ? DUMP_FILE.exec(e.file) : null
+  if (!m || m[1] !== e.release || m[3] !== e.migration_dump_id || !RELEASE_REF.test(m[1]!) || m[1]!.includes('..')) {
+    throw new DumpError('LEDGER_CORRUPT', `the ledger line of dump ${e.migration_dump_id} names a file that is not <release>/<name>.<id>.dump of its own release and id; it was not touched`)
+  }
+  return { rel: m[1]!, name: `${m[2]}.${m[3]}.dump` }
 }
 
 /** fsync a directory so a created/unlinked entry survives a crash. Windows cannot open a directory: skipped there only. */
@@ -122,12 +127,18 @@ export function fsyncDir(dir: string): void {
   }
 }
 
-/** Every event in the ledger, oldest first. A line that does not parse is LEDGER_CORRUPT (never skipped). */
-export function readEvents(dir: string): DumpEvent[] {
+/**
+ * Every event in the ledger, oldest first. A line that does not parse is LEDGER_CORRUPT (never skipped). `owners` are
+ * the uids an existing ledger may belong to (allowedOwners): a root-owned file that was moved into its place is not
+ * read as the ledger. Without it the owner is not checked (a reader that is not the dump code).
+ */
+export function readEvents(dir: string, owners?: readonly number[]): DumpEvent[] {
   const file = join(dir, LEDGER_FILE)
-  if (!existsSync(file)) return []
+  // read through a no-follow open: a link in the ledger's place is refused, never read (root would read what it points at)
+  const text = readTextNoFollow(file, owners)
+  if (text === null) return []
   const out: DumpEvent[] = []
-  const lines = readFileSync(file, 'utf8').split('\n')
+  const lines = text.split('\n')
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!.trim()
     if (line === '') continue
@@ -155,17 +166,33 @@ export function liveDumps(events: readonly DumpEvent[]): DumpEvent[] {
   return [...created.values()]
 }
 
-/** Appends one event and fsyncs the file and its directory before returning. */
-export function appendEvent(dir: string, event: DumpEvent, handOver?: HandOver): void {
+/**
+ * Appends one event and fsyncs the file and its directory before returning. The ledger is opened without following a
+ * link and must be a plain file with one link. It is handed over only when this call created it, on the descriptor
+ * that created it. An existing ledger is appended to and left alone, but only when it belongs to one of `owners`
+ * (allowedOwners): a file of another uid that was moved into its place gets no line. A ledger this call created is
+ * this process's own, whatever `owners` says.
+ */
+export function appendEvent(dir: string, event: DumpEvent, handOver?: HandOver, owners?: readonly number[]): void {
   const file = join(dir, LEDGER_FILE)
-  const fd = openSync(file, 'a', 0o600)
+  const append = constants.O_WRONLY | constants.O_APPEND
+  let fd: number
+  let created = false
   try {
+    fd = openNoFollow(file, append | constants.O_CREAT | constants.O_EXCL, 0o600)
+    created = true
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
+    fd = openNoFollow(file, append)
+  }
+  try {
+    assertPlain(fd, file, 'file', created ? (SELF_UID === undefined ? undefined : [SELF_UID]) : owners)
     writeSync(fd, `${JSON.stringify(event)}\n`)
     fsyncSync(fd)
+    if (created) handOver?.(file, 0o600, fd)
   } finally {
     closeSync(fd)
   }
-  handOver?.(file, 0o600)
   fsyncDir(dir)
 }
 
@@ -174,11 +201,17 @@ export function appendEvent(dir: string, event: DumpEvent, handOver?: HandOver):
  * the same first (`-w` and an open for append): a dump file unlinked before a failed append leaves a live ledger line
  * with no file. Call it only while the ledger exists (a live dump is in it); it never creates the file.
  */
-export function assertLedgerWritable(dir: string): void {
+export function assertLedgerWritable(dir: string, owners?: readonly number[]): void {
   const file = join(dir, LEDGER_FILE)
   try {
-    closeSync(openSync(file, 'a', 0o600))
+    const fd = openNoFollow(file, constants.O_WRONLY | constants.O_APPEND)
+    try {
+      assertPlain(fd, file, 'file', owners)
+    } finally {
+      closeSync(fd)
+    }
   } catch (err) {
+    if (err instanceof DumpError) throw err
     throw new DumpError('LEDGER_UNWRITABLE', `${file} cannot be opened for append: ${err instanceof Error ? err.message : 'unknown error'}; nothing was unlinked`, { cause: err })
   }
 }
@@ -201,7 +234,8 @@ export async function withLedgerLock<T>(dir: string, fn: () => Promise<T>, handO
   const lock = join(dir, LEDGER_LOCK)
   let fd: number
   try {
-    fd = openSync(lock, 'wx', 0o600)
+    // O_EXCL: a lock (or a link standing in its place) that exists refuses, nothing is followed
+    fd = openNoFollow(lock, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600)
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
       throw new DumpError('LEDGER_LOCKED', `${lock} exists: another dump writer is running, or a stale lock was left (remove it only after checking that none runs); nothing was dumped`, { cause: err })
@@ -209,12 +243,13 @@ export async function withLedgerLock<T>(dir: string, fn: () => Promise<T>, handO
     throw err
   }
   try {
-    writeSync(fd, `${process.pid} ${new Date().toISOString()}\n`)
-  } finally {
-    closeSync(fd)
-  }
-  try {
-    handOver?.(lock, 0o600)
+    try {
+      writeSync(fd, `${process.pid} ${new Date().toISOString()}\n`)
+      // on the descriptor that created the lock (O_EXCL): the node handed over is the one made here
+      handOver?.(lock, 0o600, fd)
+    } finally {
+      closeSync(fd)
+    }
     return await fn()
   } finally {
     unlinkSync(lock)

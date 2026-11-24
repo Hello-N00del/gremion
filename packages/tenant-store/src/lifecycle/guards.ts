@@ -32,6 +32,7 @@ export type LifecycleErrorCode =
   | 'KARENZ_FINALIZING'
   | 'KARENZ_RESTORE_PENDING'
   | 'EXPORT_MISSING'
+  | 'DUMP_RETIRE_FAILED'
 
 export class LifecycleError extends Error {
   override name = 'LifecycleError'

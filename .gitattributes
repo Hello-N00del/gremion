@@ -118,3 +118,11 @@ test/host/fixtures/** text eol=lf
 # gremion-cd (U13): the apply-root fixtures are scripts that carry no .sh extension (make lint-sh must not
 # be asked to cover stand-ins), so no other rule gives them LF.
 test/host/fixtures/cd/units/* text eol=lf
+
+# cd-driver: test/host/fixtures/cd/driver/driver-stubs.bash is appended to the helper's stub
+# file and sourced by bash, so a CRLF copy fails every test with a carriage-return
+# command-not-found. `.bash` matches no rule above, and the rule for test_helper reaches
+# that directory only (measured: `git check-attr eol` answered "unspecified" and
+# `git ls-files --eol` reported w/crlf under core.autocrlf=true). The glob covers the
+# fixtures of this one directory and no other unit's.
+test/host/fixtures/cd/driver/*.bash text eol=lf

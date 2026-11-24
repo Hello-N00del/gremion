@@ -172,6 +172,48 @@ SHA_B=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
     [ "$status" -eq 2 ]
 }
 
+@test "config: CD_PROOF_REPO accepts an absolute local path only in proof mode, whatever the order of the lines; https stays as it was" {
+    # https: as before, with and without proof mode
+    cd_write_cfg 'CD_PROOF_REPO=https://example.org/org/proof'
+    run cd_lib 'cd_cfg_load'
+    [ "$status" -eq 0 ]
+    cd_write_cfg 'CD_PROOF_MODE=1' 'CD_PROOF_REPO=https://example.org/org/proof'
+    run cd_lib 'cd_cfg_load'
+    [ "$status" -eq 0 ]
+    # a local path in proof mode: accepted, the line order is free
+    cd_write_cfg 'CD_PROOF_MODE=1' 'CD_PROOF_REPO=/opt/gremion/data/cd-proof/proof.git'
+    run cd_lib 'cd_cfg_load; cd_cfg CD_PROOF_REPO'
+    [ "$status" -eq 0 ]
+    [ "$output" = "/opt/gremion/data/cd-proof/proof.git" ]
+    cd_write_cfg 'CD_PROOF_REPO=/opt/gremion/data/cd-proof/proof.git' 'CD_PROOF_MODE=1'
+    run cd_lib 'cd_cfg_load'
+    [ "$status" -eq 0 ]
+}
+
+@test "config: CD_PROOF_REPO as a local path outside proof mode is exit 2 and names the key" {
+    cd_write_cfg 'CD_PROOF_REPO=/opt/gremion/data/cd-proof/proof.git'
+    run cd_lib 'cd_cfg_load'
+    [ "$status" -eq 2 ]
+    [[ "$output" == *CD_PROOF_REPO* ]]
+    cd_write_cfg 'CD_PROOF_MODE=0' 'CD_PROOF_REPO=/opt/gremion/data/cd-proof/proof.git'
+    run cd_lib 'cd_cfg_load'
+    [ "$status" -eq 2 ]
+    cd_write_cfg 'CD_PROOF_REPO=/opt/gremion/data/cd-proof/proof.git' 'CD_PROOF_MODE=0'
+    run cd_lib 'cd_cfg_load'
+    [ "$status" -eq 2 ]
+}
+
+@test "config: CD_PROOF_REPO refuses a relative path, a dot segment, a trailing slash and odd characters, even in proof mode" {
+    local bad
+    for bad in 'proof.git' './proof.git' '../proof.git' 'data/cd-proof/proof.git' '~/proof.git' \
+               '/opt/../etc/proof.git' '/opt/./proof.git' '/opt/gremion/proof.git/' '//opt/proof.git' \
+               '/opt/proof git' '/opt/proof;git' '/opt/$HOME/proof.git' 'file:///opt/proof.git' 'http://example.org/proof'; do
+        cd_write_cfg 'CD_PROOF_MODE=1' "CD_PROOF_REPO=${bad}"
+        run cd_lib 'cd_cfg_load'
+        [ "$status" -eq 2 ] || { echo "accepted CD_PROOF_REPO='${bad}'"; return 1; }
+    done
+}
+
 @test "config: an operator value that is not an https URL / host / path is exit 2" {
     local kv
     for kv in 'CD_REPO_URL=http://example.org/org/repo' 'CD_REPO_URL=https://' 'CD_PING_URL=ftp://example.org/x' \
@@ -1323,12 +1365,15 @@ request_count() { find "${GREMION_ROOT}/runtime/cd/requests" -maxdepth 1 -name '
     [ "$status" -eq 2 ]
 }
 
-@test "dispatcher: verb x-y runs cd_cmd_x_y (a stubbed verb of another unit) and passes its arguments and its exit code" {
+@test "dispatcher: verb x-y runs cd_cmd_x_y (a verb of another unit) and passes its arguments and its exit code" {
+    # a verb of its own: the test must not depend on which verbs the other units own yet
+    local src="${GREMION_ROOT}/host-copy"
+    cp -r "$HOST_SRC" "$src"
+    printf 'cd_cmd_zz_verb_probe() { printf "%%s\n" "$*" > "${GREMION_ROOT}/zz-args"; return 3; }\n' > "${src}/lib/cd/zz-probe.sh"
     cd_seed_state
-    cd_stub_set cd_cmd_release_now 3
-    run cd_prog release-now 0123456789ab --with-state
+    run env HOST_SRC="$src" "${src}/bin/gremion-cd" zz-verb-probe 0123456789ab --with-state
     [ "$status" -eq 3 ]
-    grep -q '^stub cd_cmd_release_now 0123456789ab --with-state$' "$SHIM_LOG"
+    [ "$(cat "${GREMION_ROOT}/zz-args")" = "0123456789ab --with-state" ]
 }
 
 @test "dispatcher: help lists the verbs, version prints the program and schema version, neither needs a config" {

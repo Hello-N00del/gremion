@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { MemoryStorageBackend } from '@gremion/storage'
 import { afterAll, describe, expect, it, vi } from 'vitest'
+import { DumpError } from '../../src/dump/errors.js'
 import { finalizeDueKarenz, type FinalizeDeps } from '../../src/lifecycle/karenz.js'
 import type { LifecycleModule } from '../../src/lifecycle/types.js'
 import { tenantModuleDbName } from '../../src/names.js'
@@ -141,16 +142,53 @@ describe('finalizeDueKarenz: afterDrop', () => {
     expect(afterDrop).toHaveBeenNthCalledWith(1, T, 'lcfix', DB)
   })
 
-  it('a throw from afterDrop is logged with the Karenz id and never stops the finalize: the export step and the platform side still complete', async () => {
+  it('a throw from afterDrop is SURFACED, not logged and forgotten: the row errors without the database name, the export step still runs, the platform side is NOT marked done, and the next run repeats it', async () => {
     const log: string[] = []
-    const h = harness({ state: 'open', db: 'blocked' }, { afterDrop: async () => { throw new Error('LEDGER_LOCKED: a stale lock') }, log: (l) => log.push(l) })
+    let failing = true
+    const afterDrop = vi.fn(async () => {
+      if (failing) throw new DumpError('LEDGER_LOCKED', 'a stale lock')
+    })
+    const h = harness({ state: 'open', db: 'blocked' }, { afterDrop, log: (l) => log.push(l) })
     const r = await finalizeDueKarenz(h.deps)
-    expect(r).toMatchObject({ finalized: 1, errors: [] })
-    expect(h.events).toContain('export-removed')
-    expect(h.events).toContain('platform-done')
-    expect(log.join('\n')).toMatch(/could not be retired for Karenz k1 \(LEDGER_LOCKED: a stale lock\)/)
-    // the database name never reaches the retire's own log line
+    // surfaced: one error naming the Karenz id and the cause, and the row is not finished
+    expect(r.finalized).toBe(0)
+    expect(r.errors).toHaveLength(1)
+    expect(r.errors[0]).toMatchObject({ karenzId: 'k1', moduleKey: 'lcfix' })
+    expect(r.errors[0]!.message).toMatch(/DUMP_RETIRE_FAILED/)
+    expect(r.errors[0]!.message).toMatch(/Karenz k1/)
+    expect(r.errors[0]!.message).toMatch(/LEDGER_LOCKED: a stale lock/)
+    expect(r.errors[0]!.message).not.toContain(DB)
     expect(log.filter((l) => /could not be retired/.test(l)).join('\n')).not.toContain(DB)
+    // the day-30 duties that do not depend on the dump still happen: the export is removed
+    expect(h.events).toContain('export-removed')
+    // but the platform side is not marked done, so the hourly run comes back to it
+    expect(h.events).not.toContain('platform-done')
+    expect(h.row.platform_done_at).toBeNull()
+    expect(h.md.state).toBe('dropped')
+
+    failing = false
+    const second = await finalizeDueKarenz(h.deps)
+    expect(second).toMatchObject({ finalized: 1, errors: [] })
+    expect(afterDrop).toHaveBeenCalledTimes(2)
+    expect(h.events).toContain('platform-done')
+  })
+
+  it('a raw errno error from the retire (the dump path is in its message) is reported by errno code and syscall only: no database name, no path', async () => {
+    const log: string[] = []
+    const afterDrop = vi.fn(async () => {
+      throw Object.assign(new Error(`EISDIR: illegal operation on a directory, rm '/dumps/dist-v1/${DB}.0192f0c1.dump'`), { code: 'EISDIR', syscall: 'rm', path: `/dumps/dist-v1/${DB}.0192f0c1.dump` })
+    })
+    const h = harness({ state: 'open', db: 'blocked' }, { afterDrop, log: (l) => log.push(l) })
+    const r = await finalizeDueKarenz(h.deps)
+    expect(r.errors).toHaveLength(1)
+    expect(r.errors[0]!.message).toMatch(/DUMP_RETIRE_FAILED/)
+    expect(r.errors[0]!.message).toMatch(/EISDIR in rm/)
+    expect(r.errors[0]!.message).not.toContain(DB)
+    expect(r.errors[0]!.message).not.toContain('/dumps/')
+    const line = log.filter((l) => /could not be retired/.test(l)).join(' ')
+    expect(line).toMatch(/EISDIR in rm/)
+    expect(line).not.toContain(DB)
+    expect(line).not.toContain('/dumps/')
   })
 
   it('is not called while the database is still blocked (the drop did not happen), for a module with no database, or in a dry run', async () => {

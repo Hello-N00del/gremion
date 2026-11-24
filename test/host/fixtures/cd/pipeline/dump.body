@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+[ -f "$DK/hook.sh" ] && . "$DK/hook.sh" && pl_hook "dump $*"
+cmd="${1:-}"
+shift
+rel=''; db=''; svc=''; usr=''; reason=''
+while [ $# -gt 0 ]; do
+    case "$1" in
+      --release) rel="$2"; shift ;;
+      --db) db="$2"; shift ;;
+      --pg-service) svc="$2"; shift ;;
+      --pg-user) usr="$2"; shift ;;
+      --reason) reason="$2"; shift ;;
+    esac
+    shift
+done
+printf '%s rel=%s db=%s svc=%s usr=%s\n' "$cmd" "$rel" "$db" "$svc" "$usr" >>"$DK/dump.log"
+live="$DK/live.tsv"
+touch "$live"
+case "$cmd" in
+  take)
+    if { [ -n "$svc" ] && [ -z "$usr" ]; } || { [ -z "$svc" ] && [ -n "$usr" ]; }; then
+        echo "--pg-service and --pg-user come together or not at all" >&2
+        exit 2
+    fi
+    srv="${svc:-postgres}"
+    want="$(cat "$DK/srv.$srv.role")"
+    have="${usr:-$(sed -n 's/^POSTGRES_USER=//p' "$GREMION_ROOT/etc/env/state.env")}"
+    if [ "$have" != "$want" ]; then
+        echo "PG_DUMP_FAILED: pg_dump of $db failed (role $have)" >&2
+        exit 1
+    fi
+    if [ -f "$DK/take.fail" ] && grep -qxF "$db" "$DK/take.fail"; then
+        echo "PG_DUMP_FAILED: pg_dump of $db failed; nothing was migrated" >&2
+        exit 1
+    fi
+    if [ -n "$(awk -F'\t' -v r="$rel" '$2 != r' "$live" | head -n 1)" ]; then
+        echo "DUMP_SERIES: a live dump of another release exists (database $db)" >&2
+        exit 1
+    fi
+    if awk -F'\t' -v r="$rel" -v d="$db" '$2 == r && $3 == d { f = 1 } END { exit !f }' "$live"; then
+        echo "premigration-dump reused release=$rel db=$db"
+        exit 0
+    fi
+    n="$(cat "$DK/idseq" 2>/dev/null || echo 0)"
+    id=$((n + 1))
+    echo "$id" >"$DK/idseq"
+    if [ -n "$svc" ]; then file="$rel/$svc.$id.dump"; else file="$rel/$db.$id.dump"; fi
+    mkdir -p "$DUMPDIR/$rel"
+    : >"$DUMPDIR/$file"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$rel" "$db" "$svc" "$usr" "$file" >>"$live"
+    if [ -n "$svc" ]; then name="svc=$svc"; else name="db=$db"; fi
+    logger -t premigration-dump -- "created id=$id release=$rel $name"
+    echo "premigration-dump created id=$id release=$rel $name"
+    echo "debug: dumped database $db"
+    if [ -n "$svc" ]; then echo "TAKE-OK release=$rel svc=$svc id=$id"; else echo "TAKE-OK release=$rel db=$db"; fi
+    ;;
+  status)
+    [ -f "$DK/status.fail" ] && exit 1
+    if [ -f "$DK/status.garbage" ]; then echo "nonsense"; exit 0; fi
+    hide="$(cat "$DK/status.hide" 2>/dev/null)"
+    awk -F'\t' -v r="$rel" -v h="$hide" '(r == "" || $2 == r) && $3 != h { printf "LIVE %s release=%s db=%s taken=2026-11-17T00:00:00Z bytes=100 file=%s\n", $1, $2, $3, $6 }' "$live"
+    n="$(awk -F'\t' -v r="$rel" -v h="$hide" '(r == "" || $2 == r) && $3 != h { c++ } END { print c + 0 }' "$live")"
+    [ -f "$DK/status.lie" ] && n=$((n + 1))
+    printf 'STATUS: %s live dump(s)\n' "$n"
+    ;;
+  switched | discard)
+    if [ "$cmd" = discard ] && [ -z "$reason" ]; then echo "discard needs --reason" >&2; exit 2; fi
+    [ -f "$DK/switch.fail" ] && exit 1
+    awk -F'\t' -v r="$rel" '$2 != r' "$live" >"$live.new"
+    mv -f "$live.new" "$live"
+    rm -rf "${DUMPDIR:?}/${rel:?}"
+    if [ -f "$DK/switched.leave" ]; then
+        printf '99\t%s\tleftover\t\t\t%s/leftover.99.dump\n' "$rel" "$rel" >>"$live"
+    fi
+    logger -t premigration-dump -- "deleted release=$rel reason=$reason"
+    echo "$(printf '%s' "$cmd" | tr '[:lower:]' '[:upper:]')-OK release=$rel"
+    ;;
+  *) exit 2 ;;
+esac
+exit 0

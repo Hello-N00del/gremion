@@ -69,8 +69,10 @@ export interface FinalizeDeps {
    * longer exists is retired with it. Driven from the ROW, not from what this run did: a run that crashed between
    * the drop's state write and this call is repeated by the next hourly run with a `dropped` row, and must still
    * call it. Called before the export step, on every pass of such a row, so it must be idempotent (a no-op when
-   * no dump is live). A throw is logged with the Karenz id and never stops the finalize; the dump is left for the
-   * operator (the blocked database was unchanged since its verified export, which is an equivalent restore point).
+   * no dump is live). A throw is SURFACED: the export step still runs, but the row ends as an error of the run
+   * (FinalizeResult.errors, code DUMP_RETIRE_FAILED, no database name in it) and its platform side is not marked done,
+   * so the next hourly run repeats the call; the dump is also left for the operator to discard (the blocked database
+   * was unchanged since its verified export, which is an equivalent restore point).
    */
   afterDrop?: (tenantId: string, moduleKey: string, dbName: string) => Promise<void> | void
   log?: (line: string) => void
@@ -130,6 +132,21 @@ function sha256File(file: string): Promise<string> {
 function describeError(err: unknown): string {
   if (err instanceof LifecycleError) return `${err.code}: ${err.message}`
   return err instanceof Error ? err.message : String(err)
+}
+
+/**
+ * The cause of a failed dump retire, for the run's error and its log line. The dump code's own errors (DumpError,
+ * LifecycleError) are written without a database name and are quoted. Anything else (a raw errno error from rm, open
+ * or unlink) carries the path of the dump in its message, and that path holds the database name: only its errno code
+ * and syscall are kept.
+ */
+function describeRetireCause(err: unknown): string {
+  if (err instanceof LifecycleError || (err instanceof Error && err.name === 'DumpError')) return describeError(err)
+  const e = err as { code?: unknown; syscall?: unknown } | null
+  const code = typeof e?.code === 'string' ? e.code : null
+  const syscall = typeof e?.syscall === 'string' ? e.syscall : null
+  if (code !== null) return syscall !== null ? `${code} in ${syscall}` : code
+  return 'an unexpected error; see the host log of the one-shot'
 }
 
 /**
@@ -286,11 +303,16 @@ async function finalizeRow(
 
   // From the row: `databaseDropped` is true for a database this run dropped and for one that was `dropped` when the
   // row was read (a crash after the state write, an earlier run). `md` is non-null whenever it is true.
+  // A failure is SURFACED, not logged and forgotten: it never stops the duties that do not depend on the dump (the
+  // export below is still removed), but the row ends as an error of this run and its platform side is not marked
+  // done, so the next hourly run repeats the retire (it is idempotent) until it succeeds or the operator discards it.
+  let retireFailure: unknown = null
   if (databaseDropped && md && deps.afterDrop) {
     try {
       await deps.afterDrop(tenantId, moduleKey, md.dbName)
     } catch (err) {
-      log(`the pre-migration dump of a dropped module database could not be retired for Karenz ${r.karenz_id} (${describeError(err)}); it is left for the operator: gremion-migration-dump status, then discard`)
+      retireFailure = err
+      log(`the pre-migration dump of a dropped module database could not be retired for Karenz ${r.karenz_id} (${describeRetireCause(err)}); it is left for the operator: gremion-migration-dump status, then discard`)
     }
   }
 
@@ -326,6 +348,14 @@ async function finalizeRow(
       await deps.platform`UPDATE plt.module_karenz SET export_deleted_at = now() WHERE karenz_id = ${r.karenz_id} AND export_deleted_at IS NULL`
       await hook('export-deleted')
     }
+  }
+
+  if (retireFailure !== null) {
+    throw new LifecycleError(
+      'DUMP_RETIRE_FAILED',
+      `the pre-migration dump of the dropped module database of Karenz ${r.karenz_id} could not be retired (${describeRetireCause(retireFailure)}); the platform side stays open and the next run repeats it, or discard the dump by hand: gremion-migration-dump status, then discard`,
+      { cause: retireFailure },
+    )
   }
 
   let platformDone = false

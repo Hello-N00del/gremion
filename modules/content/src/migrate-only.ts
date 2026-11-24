@@ -24,17 +24,23 @@
 // Streams. Customer databases are named after the customer slug, so a name must never reach a log.
 // The only thing written to stdout is the counts line; every console method is silenced for the
 // run (a library notice would otherwise break "exactly one line"); no error text is ever printed.
+// stderr carries ONE fixed-shape diagnostic line per failed customer (class, SQLSTATE or error code, and
+// the migration file when the error names one), built from validated tokens only: never a slug, a
+// database name or a message text.
 //
 // Locking. Each customer database is migrated under a session advisory lock held on its own
 // connection, so two entries on one database run one after the other (the second finds every file
 // already applied; the files are idempotent). The old colour's runner takes no lock: its collision with
 // this entry is handled by the retry of the catalogue-race errors below, never by the lock.
+// The wait for that lock is BOUNDED: the lock connection carries lock_timeout and a slightly larger
+// statement_timeout, so a stuck holder ends the wait with 55P03 (or 57014) instead of hanging the CD step
+// for ever. Both are "retry later" (class `timeout`, exit 3) and do not stop the customers after it.
 //
 // Exit codes: 0 ok; 1 a migration file raised SQL (or its hash differs from manifest.json); 2 usage,
 // a missing CONTENT_PG_URL, or a refused login (a host configuration fault, not the commit's);
-// 3 a connection that was refused, timed out or dropped before any DDL, or a catalogue-race error
-// that persisted after the retries (retry later, not a defect of the commit). A connection lost INSIDE
-// a migration file is 1.
+// 3 a connection that was refused, timed out or dropped before any DDL, a lock wait that timed out
+// (55P03, 57014), or a catalogue-race error that persisted after the retries (retry later, not a defect
+// of the commit). A connection lost INSIDE a migration file is 1.
 
 import postgres from 'postgres'
 import { evictTenantPools, requireRuntimePgUrl, type StoreForOptions, type TenantRef } from './tenant-store.js'
@@ -48,6 +54,10 @@ export const MIGRATE_LOCK_NAME = 'gremion.leaf.migrate-only'
 /** One attempt plus three retries of a catalogue-race error. */
 export const MAX_ATTEMPTS = 4
 const DEFAULT_RETRY_DELAY_MS = 2000
+/** How long one customer's wait for the advisory lock may last before it ends as 55P03. */
+export const DEFAULT_LOCK_TIMEOUT_MS = 60_000
+/** statement_timeout is this much larger than lock_timeout, so it only fires when lock_timeout did not. */
+export const STATEMENT_TIMEOUT_MARGIN_MS = 5_000
 
 export interface MigrateOnlyCounts {
   v: 1
@@ -57,13 +67,15 @@ export interface MigrateOnlyCounts {
   failed: number
 }
 
-export type FailureClass = 'race' | 'unreachable' | 'precondition' | 'sql'
+export type FailureClass = 'race' | 'unreachable' | 'precondition' | 'timeout' | 'sql'
 
 export interface MigrateOnlyResult {
   code: 0 | 1 | 2 | 3
   counts: MigrateOnlyCounts
   /** With code 2: what is wrong (fixed words, never a value). */
   reason?: 'env' | 'login'
+  /** One line per failed customer: class, SQLSTATE and file, never a slug or a database name. The CLI writes them to stderr. */
+  diagnostics: string[]
 }
 
 /**
@@ -92,6 +104,10 @@ export interface MigrateOnlyOptions {
   migrate?: MigrateFn
   /** Test seam: a manifest that replaces manifest.json (a bad hash must fail the customer). */
   manifest?: Record<string, string>
+  /** lock_timeout of the lock connection in ms. 0 turns lock_timeout off, but statement_timeout (by default this plus STATEMENT_TIMEOUT_MARGIN_MS) still bounds the wait. Default DEFAULT_LOCK_TIMEOUT_MS. */
+  lockTimeoutMs?: number
+  /** statement_timeout of the lock connection in ms. Default lock_timeout + STATEMENT_TIMEOUT_MARGIN_MS. */
+  statementTimeoutMs?: number
 }
 
 // ── error classes ─────────────────────────────────────────────────────────────
@@ -128,6 +144,12 @@ const CONNECTION_LOST_CODES: ReadonlySet<string> = new Set([
 /** The catalogue races of concurrent IF NOT EXISTS DDL (the old runner takes no lock). */
 const RACE_CODES: ReadonlySet<string> = new Set(['42710', '42P07', '40P01', '40001'])
 
+/**
+ * A wait that was cut short by the server: lock_timeout (55P03 lock_not_available) or statement_timeout
+ * (57014 query_canceled). A stuck holder of the advisory lock ends this way; the next run may find it free.
+ */
+const TIMEOUT_CODES: ReadonlySet<string> = new Set(['55P03', '57014'])
+
 function codeOf(err: unknown): string | undefined {
   if (typeof err !== 'object' || err === null) return undefined
   const code = (err as { code?: unknown }).code
@@ -152,6 +174,7 @@ export function classifyFailure(err: unknown, phase: 'before-ddl' | 'in-migratio
   if (UNREACHABLE_CODES.has(code)) return 'unreachable'
   // A refused login (class 28) is the host's credentials, not the commit.
   if (code.startsWith('28')) return 'precondition'
+  if (TIMEOUT_CODES.has(code)) return 'timeout'
   if (phase === 'before-ddl' && CONNECTION_LOST_CODES.has(code)) return 'unreachable'
   if (RACE_CODES.has(code)) return 'race'
   if (code === 'XX000' && err instanceof Error && err.message.includes('tuple concurrently updated')) {
@@ -186,8 +209,55 @@ function dbUrlFor(adminUrl: string, dbName: string): string {
   return u.toString()
 }
 
-function connect(url: string): ReturnType<typeof postgres> {
-  return postgres(url, { max: 1, prepare: false, connect_timeout: 10, onnotice: () => {} })
+function connect(url: string, timeouts?: { lockMs: number; statementMs: number }): ReturnType<typeof postgres> {
+  return postgres(url, {
+    max: 1,
+    prepare: false,
+    connect_timeout: 10,
+    onnotice: () => {},
+    // startup parameters: they bound every wait this connection makes, the advisory lock first among them
+    ...(timeouts ? { connection: { lock_timeout: timeouts.lockMs, statement_timeout: timeouts.statementMs } } : {}),
+  })
+}
+
+// ── the diagnostic line ───────────────────────────────────────────────────────
+
+/** A SQLSTATE or a Node error code: letters, digits and underscore only, so no free text can ride in it. */
+const CODE_TOKEN = /^[A-Za-z0-9_]{1,30}$/
+/** A migration file of the leaf: a plain file name, never a path. */
+const FILE_TOKEN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}\.sql$/
+// The leaf's runner names the file in exactly two of its messages (a file the manifest does not list, a hash
+// that differs); an error raised by SQL inside a file carries no file name, and none is guessed.
+const FILE_IN_MESSAGE = [/migration file "([^"\s]{1,80})" has no entry/, /manifest hash mismatch for ([^\s"]{1,80})/]
+
+function codeToken(err: unknown): string {
+  const nested = typeof err === 'object' && err !== null ? (err as { errors?: unknown }).errors : undefined
+  const code = codeOf(err) ?? (Array.isArray(nested) ? codeOf(nested[0]) : undefined)
+  return code !== undefined && CODE_TOKEN.test(code) ? code : '-'
+}
+
+function fileToken(err: unknown): string {
+  if (!(err instanceof Error)) return '-'
+  for (const re of FILE_IN_MESSAGE) {
+    const m = re.exec(err.message)
+    if (m?.[1] !== undefined && FILE_TOKEN.test(m[1])) return m[1]
+  }
+  return '-'
+}
+
+/** What a failed customer says about itself: the class, the code and the file, and nothing that names the customer. */
+function describeFailure(cls: FailureClass, err?: unknown): Failure {
+  return { cls, code: err === undefined ? '-' : codeToken(err), file: err === undefined ? '-' : fileToken(err) }
+}
+
+interface Failure {
+  cls: FailureClass
+  code: string
+  file: string
+}
+
+function diagnosticLine(f: Failure): string {
+  return `[${LEAF}] --migrate-only: customer failed class=${f.cls} sqlstate=${f.code} file=${f.file}`
 }
 
 function sleep(ms: number): Promise<void> {
@@ -210,21 +280,29 @@ function leafRunner(openStore: OpenStoreFn): MigrateFn {
 
 // ── one customer ──────────────────────────────────────────────────────────────
 
-type Outcome = { kind: 'migrated' } | { kind: 'skipped' } | { kind: 'failed'; cls: FailureClass }
+type Outcome = { kind: 'migrated' } | { kind: 'skipped' } | { kind: 'failed'; failure: Failure }
 
 async function migrateCustomer(
   admin: ReturnType<typeof postgres>,
   row: { id: string; slug: string },
-  run: { pgUrl: string; dbPrefix: string; retryDelayMs: number; migrate: MigrateFn; manifest?: Record<string, string> },
+  run: {
+    pgUrl: string
+    dbPrefix: string
+    retryDelayMs: number
+    migrate: MigrateFn
+    manifest?: Record<string, string>
+    lockTimeoutMs: number
+    statementTimeoutMs: number
+  },
 ): Promise<Outcome> {
-  if (!isServableRow(row)) return { kind: 'failed', cls: 'sql' }
+  if (!isServableRow(row)) return { kind: 'failed', failure: describeFailure('sql') }
   const dbName = run.dbPrefix + row.slug
   let lockConn: ReturnType<typeof postgres> | null = null
   try {
     const present = await admin`SELECT 1 AS present FROM pg_database WHERE datname = ${dbName}`
     if (present.length === 0) return { kind: 'skipped' }
 
-    lockConn = connect(dbUrlFor(run.pgUrl, dbName))
+    lockConn = connect(dbUrlFor(run.pgUrl, dbName), { lockMs: run.lockTimeoutMs, statementMs: run.statementTimeoutMs })
     await lockConn`SELECT pg_advisory_lock(hashtextextended(${MIGRATE_LOCK_NAME}, 0))`
 
     for (let attempt = 1; ; attempt++) {
@@ -237,7 +315,7 @@ async function migrateCustomer(
           await sleep(run.retryDelayMs)
           continue
         }
-        return { kind: 'failed', cls }
+        return { kind: 'failed', failure: describeFailure(cls, err) }
       }
     }
   } catch (err) {
@@ -245,7 +323,7 @@ async function migrateCustomer(
     // above), and nothing has been written yet: a dropped connection is "retry later".
     // The database was dropped between the look and the connect: nothing to migrate, nothing to create.
     if (codeOf(err) === '3D000') return { kind: 'skipped' }
-    return { kind: 'failed', cls: classifyFailure(err, 'before-ddl') }
+    return { kind: 'failed', failure: describeFailure(classifyFailure(err, 'before-ddl'), err) }
   } finally {
     // The session lock goes with its connection.
     if (lockConn !== null) await lockConn.end({ timeout: 5 }).catch(() => {})
@@ -259,14 +337,16 @@ export async function runMigrateOnly(
   options: MigrateOnlyOptions = {},
 ): Promise<MigrateOnlyResult> {
   const counts: MigrateOnlyCounts = { v: 1, total: 0, migrated: 0, skipped: 0, failed: 0 }
+  const diagnostics: string[] = []
 
   let pgUrl: string
   try {
     pgUrl = requireRuntimePgUrl(options.pgUrl, PG_URL_ENV)
     new URL(pgUrl)
   } catch {
-    return { code: 2, counts, reason: 'env' }
+    return { code: 2, counts, reason: 'env', diagnostics }
   }
+  const lockTimeoutMs = options.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS
   const dbPrefix = options.dbPrefix ?? DEFAULT_DB_PREFIX
   const run = {
     pgUrl,
@@ -274,6 +354,8 @@ export async function runMigrateOnly(
     retryDelayMs: options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS,
     migrate: options.migrate ?? leafRunner(deps.openStore),
     manifest: options.manifest,
+    lockTimeoutMs,
+    statementTimeoutMs: options.statementTimeoutMs ?? lockTimeoutMs + STATEMENT_TIMEOUT_MARGIN_MS,
   }
 
   let admin: ReturnType<typeof postgres> | null = null
@@ -284,18 +366,18 @@ export async function runMigrateOnly(
     // 1. Read the catalogue WITHOUT creating anything.
     const controlName = dbPrefix + 'control'
     const hasControl = await admin`SELECT 1 AS present FROM pg_database WHERE datname = ${controlName}`
-    if (hasControl.length === 0) return { code: 0, counts }
+    if (hasControl.length === 0) return { code: 0, counts, diagnostics }
 
     let rows: { id: string; slug: string }[]
     try {
       control = connect(dbUrlFor(pgUrl, controlName))
       const table = await control`SELECT to_regclass('tenant_catalog') IS NOT NULL AS present`
-      if (table[0]?.present !== true) return { code: 0, counts }
+      if (table[0]?.present !== true) return { code: 0, counts, diagnostics }
       rows = await control<{ id: string; slug: string }[]>`
         SELECT tenant_id::text AS id, slug FROM tenant_catalog ORDER BY created_at, tenant_id
       `
     } catch (err) {
-      if (codeOf(err) === '3D000') return { code: 0, counts } // dropped between the look and the connect
+      if (codeOf(err) === '3D000') return { code: 0, counts, diagnostics } // dropped between the look and the connect
       throw err
     }
     counts.total = rows.length
@@ -309,6 +391,7 @@ export async function runMigrateOnly(
       if (unreachable) {
         // The server is gone: do not wait out a connect timeout per remaining customer.
         counts.failed++
+        diagnostics.push(diagnosticLine(describeFailure('unreachable')))
         continue
       }
       const outcome = await migrateCustomer(admin, row, run)
@@ -316,20 +399,22 @@ export async function runMigrateOnly(
       else if (outcome.kind === 'skipped') counts.skipped++
       else {
         counts.failed++
-        if (outcome.cls === 'sql') sawSql = true
-        else if (outcome.cls === 'precondition') sawPrecondition = true
+        diagnostics.push(diagnosticLine(outcome.failure))
+        const cls = outcome.failure.cls
+        if (cls === 'sql') sawSql = true
+        else if (cls === 'precondition') sawPrecondition = true
         else sawRetryLater = true
-        if (outcome.cls === 'unreachable') unreachable = true
+        if (cls === 'unreachable') unreachable = true
       }
     }
-    if (sawSql) return { code: 1, counts }
-    if (sawPrecondition) return { code: 2, counts, reason: 'login' }
-    return { code: sawRetryLater ? 3 : 0, counts }
+    if (sawSql) return { code: 1, counts, diagnostics }
+    if (sawPrecondition) return { code: 2, counts, reason: 'login', diagnostics }
+    return { code: sawRetryLater ? 3 : 0, counts, diagnostics }
   } catch (err) {
     // The catalogue could not be read at all (before any DDL).
     const cls = classifyFailure(err, 'before-ddl')
-    if (cls === 'precondition') return { code: 2, counts, reason: 'login' }
-    return { code: cls === 'sql' ? 1 : 3, counts }
+    if (cls === 'precondition') return { code: 2, counts, reason: 'login', diagnostics }
+    return { code: cls === 'sql' ? 1 : 3, counts, diagnostics }
   } finally {
     if (control !== null) await control.end({ timeout: 5 }).catch(() => {})
     if (admin !== null) await admin.end({ timeout: 5 }).catch(() => {})
@@ -344,13 +429,21 @@ function writeLine(line: string): Promise<void> {
   })
 }
 
+function writeErrLine(line: string): Promise<void> {
+  return new Promise((resolve) => {
+    process.stderr.write(line + '\n', () => resolve())
+  })
+}
+
 /**
  * `node dist/index.js --migrate-only`. Returns the exit code; index.ts exits with it. The counts line
- * is the only thing on stdout, on exits 0, 1 and 3.
+ * is the only thing on stdout, on exits 0, 1 and 3; stderr carries one diagnostic line per failed customer.
+ * `options` is for tests (the real entry passes none).
  */
 export async function runMigrateOnlyCli(
   deps: MigrateOnlyDeps,
   argv: readonly string[] = process.argv.slice(2),
+  options: MigrateOnlyOptions = {},
 ): Promise<number> {
   if (argv.some((a) => a !== '--migrate-only')) {
     // No slug argument (or any other): the run goes through the customers by itself.
@@ -361,7 +454,8 @@ export async function runMigrateOnlyCli(
   for (const method of ['log', 'info', 'warn', 'error', 'debug', 'trace'] as const) {
     console[method] = () => {}
   }
-  const result = await runMigrateOnly(deps)
+  const result = await runMigrateOnly(deps, options)
+  for (const line of result.diagnostics) await writeErrLine(line)
   if (result.code === 2) {
     process.stderr.write(
       result.reason === 'login'

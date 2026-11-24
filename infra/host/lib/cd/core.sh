@@ -94,7 +94,7 @@ declare -gA CD_DEFAULTS=(
 # key -> validator kind. A key with no entry in CD_DEFAULTS has no default (empty).
 declare -gA CD_KIND=(
     [CD_REPO_URL]=urlreq [CD_MAIL_TO]=mail [CD_HOST_LABEL]=label [CD_PROBE_HOST]=host
-    [CD_PING_URL]=url [CD_POLICY_ACK]=free [CD_GITHUB_TOKEN_FILE]=path [CD_PROOF_REPO]=url
+    [CD_PING_URL]=url [CD_POLICY_ACK]=free [CD_GITHUB_TOKEN_FILE]=path [CD_PROOF_REPO]=proofrepo
     [CD_ALLOW_NO_MAIL]=bool [CD_ALLOW_ANY_MERGE_METHOD]=bool [CD_ALIVE_HOUR]=hour
     [CD_API_BUDGET_PER_HOUR]=int:1 [CD_MAX_BATCH]=int:1 [CD_WALKBACK]=int:1
     [CD_PENDING_MAX_MIN]=int:1 [CD_QUIET_WINDOWS]=windows [CD_LOCK_SPAN_MIN]=int:1
@@ -124,6 +124,9 @@ cd_cfg_check() {
     local re_mail='^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$'
     local re_host='^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$'
     local re_path='^/[A-Za-z0-9._/@+-]+$'
+    # an absolute local path: every segment is non-empty and starts with a letter, digit or one of _@+-,
+    # so no dot segment, no hidden name, no empty segment, no trailing slash
+    local re_abs='^(/[A-Za-z0-9_@+-][A-Za-z0-9._@+-]*)+$'
     local w='([01][0-9]|2[0-3]):[0-5][0-9]-([01][0-9]|2[0-3]):[0-5][0-9]'
     local re_win="^${w}(,${w})*\$"
     case "$kind" in
@@ -136,6 +139,7 @@ cd_cfg_check() {
         hour) [[ "$v" =~ ^([0-9]|1[0-9]|2[0-3])$ ]] ;;
         urlreq) [[ "$v" =~ $re_url ]] ;;
         url) [[ -z "$v" ]] || [[ "$v" =~ $re_url ]] ;;
+        proofrepo) [[ -z "$v" ]] || [[ "$v" =~ $re_url ]] || [[ "$v" =~ $re_abs ]] ;;
         mail) [[ "$v" =~ $re_mail ]] ;;
         label) [[ "$v" =~ ^[a-z0-9-]{1,32}$ ]] ;;
         host) [[ -z "$v" ]] || [[ "$v" =~ $re_host ]] ;;
@@ -207,6 +211,12 @@ cd_cfg_load() {
                 return 2
             fi
         done
+    fi
+    # A local path as the proof repository is a proof-mode feature only. It is checked here, after the loop,
+    # because the order of the lines in the file is free.
+    if [[ "${parsed[CD_PROOF_REPO]:-}" == /* && "${parsed[CD_PROOF_MODE]:-0}" != 1 ]]; then
+        cd_err "config: CD_PROOF_REPO is a local path, which is accepted only with CD_PROOF_MODE=1"
+        return 2
     fi
     CD_CFG=()
     for key in "${!parsed[@]}"; do
