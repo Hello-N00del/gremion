@@ -225,11 +225,45 @@ describe('enable of a blocked database: the catch-up dump', () => {
     // the dump is the label of the release, of that one database, with the server and role the host's restore reads
     const created = readEvents(dir).filter((e) => e.event === 'created')
     expect(created).toHaveLength(1)
-    expect(created[0]).toMatchObject({ release: RELEASE, database: s.dbName, scope: 'customer', module_id: 'finance', pg_service: 'finance-postgres', pg_user: 'finance' })
+    expect(created[0]).toMatchObject({ release: RELEASE, database: s.dbName, scope: 'customer', module_id: 'finance', pg_service: 'finance-postgres', pg_user: 'finance', origin: 'enable-catchup' })
     // retired after the commit: no live line, no file, one `deleted` line naming the reason
     expect(liveDumps(readEvents(dir))).toEqual([])
     expect(readEvents(dir).filter((e) => e.event === 'deleted')).toMatchObject([{ database: s.dbName, release: RELEASE, reason: 'enable committed' }])
     expect(readdirSync(dir).filter((f) => f !== 'ledger.jsonl')).toEqual([])
+  })
+
+  it('afterEnable retires ONLY a dump this enable took: a live dump of the same release and database that another writer took is reused, never retired, and the enable says so', async () => {
+    const dir = freshDir()
+    const exporter = fakeExporter()
+    const { takeDump } = await import('../../src/dump/take.js')
+    const dbName = tenantModuleDbName(TENANT, 'finance')
+    // another origin: the host's take of this release for this very database, in the same ledger, under the same label
+    const other = await takeDump({
+      dir,
+      release: RELEASE,
+      database: dbName,
+      scope: 'customer',
+      customerId: TENANT,
+      moduleId: 'finance',
+      exporter,
+      probe: { serverMajor: async () => 18, pgDumpMajor: async () => 18, databaseBytes: async () => 1000 },
+      fs: posixFs,
+      audit: () => {},
+    })
+    events = [] // the other writer's dump is not part of this enable's order
+    const audit: string[] = []
+    const c = catchupDump({ env: { GREMION_MIGRATION_DUMP_DIR: dir }, release: RELEASE, exporter, pgUserFor: (service) => service.replace(/-postgres$/, ''), pgDumpMajor: async () => 18, fs: posixFs, audit: (l) => audit.push(l) })
+    const s = setup({ module: 'finance', pending: ['002_a.sql'], upgradeHooks: c.upgradeHooks, dumpRetire: c.retire })
+
+    await enableModule(TENANT, s.m, ACTOR, s.deps)
+
+    // the enable reused the other writer's dump (no new dump) and left it alone: no `deleted` line, still live
+    expect(events).toEqual(['apply:002_a.sql', 'unblock', 'commit'])
+    expect(liveDumps(readEvents(dir)).map((e) => e.migration_dump_id)).toEqual([other.id])
+    expect(readEvents(dir).filter((e) => e.event === 'deleted')).toEqual([])
+    expect(existsSync(other.path)).toBe(true)
+    // and it says so, with ids only, so the operator knows which dump holds the next release
+    expect(audit.join('\n')).toContain(`premigration-dump left-live id=${other.id} release=${RELEASE} db=${dbName}`)
   })
 
   it('without upgradeHooks (what every caller did before U6g) the pending file is applied with NO dump', async () => {
@@ -292,7 +326,9 @@ describe('enable of a blocked database: the catch-up dump', () => {
     await expect(enableModule(TENANT, first.m, ACTOR, first.deps)).rejects.toThrow(/003_bad\.sql failed/)
     const id = liveDumps(readEvents(dir))[0]!.migration_dump_id
     events = []
-    const second = setup({ module: 'finance', pending: ['003_bad.sql'], upgradeHooks: c.upgradeHooks, dumpRetire: c.retire })
+    // a retry is a NEW process in production: a fresh catch-up instance that remembers nothing of the first
+    const later = catchup(dir, fakeExporter())
+    const second = setup({ module: 'finance', pending: ['003_bad.sql'], upgradeHooks: later.upgradeHooks, dumpRetire: later.retire })
     await enableModule(TENANT, second.m, ACTOR, second.deps)
     expect(events).toEqual(['apply:003_bad.sql', 'unblock', 'commit'])
     expect(events.some((e) => e.startsWith('dump:'))).toBe(false)
@@ -312,7 +348,8 @@ describe('enable of a blocked database: the catch-up dump', () => {
     await expect(enableModule(TENANT, first.m, ACTOR, first.deps)).rejects.toThrow(/crash after the unblock/)
     expect(liveDumps(readEvents(dir))).toHaveLength(1)
     expect(events).toContain('reblock')
-    const second = setup({ module: 'finance', pending: [], upgradeHooks: c.upgradeHooks, dumpRetire: c.retire })
+    const later = catchup(dir, fakeExporter()) // a new process: nothing remembered from the first
+    const second = setup({ module: 'finance', pending: [], upgradeHooks: later.upgradeHooks, dumpRetire: later.retire })
     await enableModule(TENANT, second.m, ACTOR, second.deps)
     expect(liveDumps(readEvents(dir))).toEqual([])
   })

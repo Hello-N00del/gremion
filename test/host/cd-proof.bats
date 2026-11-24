@@ -788,13 +788,14 @@ sheet_section() {
     grep -qF 'second-exit=' <<<"$body"
 }
 
-@test "run sheet: the known gap of the proof repository type is named, with the way back, while the program still types it as an https address" {
-    if grep -qF '[CD_PROOF_REPO]=url' "${KERNEL_ROOT}/infra/host/lib/cd/core.sh"; then
-        assert_present 'known gap' "$SHEET"
-        assert_present 'remove (those|the) (two )?lines again' "$SHEET"
-    fi
-    # the repository value is a plain absolute path
+@test "run sheet: the repository value is a plain absolute path, the program takes it, and the way back stays for a refusal" {
+    # the program takes a local path as the proof repository (in proof mode); the sheet no longer calls that a gap
+    assert_present '\[CD_PROOF_REPO\]=proofrepo' "${KERNEL_ROOT}/infra/host/lib/cd/core.sh"
+    assert_absent 'known gap' "$SHEET" "the known gap of the proof repository type, which the program has closed"
+    # what the sheet says instead: the value, the proof-mode condition, what the path must be, and the way back
     assert_present '^CD_PROOF_REPO=/' "$SHEET"
+    assert_present 'bare repository (that )?root or the deploy user owns' "$SHEET"
+    assert_present 'remove (those|the) (two )?lines again' "$SHEET"
 }
 
 @test "run sheet: every resume that discards a dump also accepts the descendants, in every scenario" {

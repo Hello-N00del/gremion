@@ -110,13 +110,15 @@ CD_PROOF_REPO=/opt/gremion/data/cd-proof/proof.git
 CD_WATCH_MINUTES=6
 ```
 
-Passed when: `gremion-cd status` exits 0 (known gap: the program reads the type of
-`CD_PROOF_REPO` as an https address; a refusal that names the config, or an exit 2 that names
-`CD_PROOF_REPO`, means it still does not accept a local path there. Stop, and FIRST
+Passed when: `gremion-cd status` exits 0 (the program takes an absolute path to a local
+bare repository as `CD_PROOF_REPO` only while `CD_PROOF_MODE=1`; the path must have no dot
+segment and no trailing slash, and it must be a
+bare repository that root or the deploy user owns, reached through no link: that part is
+checked when a proof candidate is fetched, not by `status`. A refusal that names the config, or an exit 2 that names `CD_PROOF_REPO`, means the
+value is not accepted. Stop, and FIRST
 remove those lines again from `etc/cd.env` (`CD_PROOF_MODE`, `CD_PROOF_REPO` and
 `CD_WATCH_MINUTES`): while they stay, every verb of the program refuses the whole config, the
-tick included, and CD is down. Then report that the proof cannot start until the program takes
-a path there),
+tick included, and CD is down. Then report what the refusal said),
 its FIRST line
 is the PROOF MODE banner, the line `config differs from the default:` lists `CD_PROOF_MODE`
 and `CD_WATCH_MINUTES`, and the `operator values` line shows `CD_PROOF_REPO=set` (the value

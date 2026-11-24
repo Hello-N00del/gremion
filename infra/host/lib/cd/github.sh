@@ -170,10 +170,31 @@ cd_gh_mirror_fetch() {
     printf '%s\n' "$sha"
 }
 
+# _cd_gh_proof_local_repo PATH -- 0 when PATH is a bare git repository that no link leads to and that
+# root or the deploy user owns; 2 (a fixed message, never the path) otherwise.
+_cd_gh_proof_local_repo() {
+    local p="$1" owner bare
+    if [[ ! -d "$p" || -L "$p" || "$(cd -- "$p" 2>/dev/null && pwd -P)" != "$p" ]]; then
+        _cd_gh_err "proof: CD_PROOF_REPO is not a directory that is reached without a link"
+        return 2
+    fi
+    owner="$(stat -c '%u' -- "$p" 2>/dev/null)" || owner=""
+    if [[ "$owner" != 0 && "$owner" != "$(id -u)" ]]; then
+        _cd_gh_err "proof: CD_PROOF_REPO is owned by neither root nor the deploy user"
+        return 2
+    fi
+    bare="$(git config --file "${p}/config" --bool --get core.bare 2>/dev/null)" || bare=""
+    if [[ ! -f "${p}/HEAD" || ! -d "${p}/objects" || ! -d "${p}/refs" || -e "${p}/.git" || "$bare" != true ]]; then
+        _cd_gh_err "proof: CD_PROOF_REPO is not a bare git repository"
+        return 2
+    fi
+}
+
 # cd_gh_proof_source SHA REF -- proof mode only. The proof commits come from the local bare
-# repository CD_PROOF_REPO, never from the public repository, and no API call is made.
-# 2 when proof mode is not on (before anything is touched), 1 when the branch tip is not
-# SHA (the ref is removed again).
+# repository CD_PROOF_REPO (an https address, or an absolute path to a bare repository), never
+# from the public repository, and no API call is made.
+# 2 when proof mode is not on (before anything is touched) or the local path is not a bare
+# repository of root or the deploy user, 1 when the branch tip is not SHA (the ref is removed again).
 cd_gh_proof_source() {
     local sha="${1:-}" ref="${2:-}" repo got
     [[ "$(cd_cfg CD_PROOF_MODE)" == 1 ]] || return 2
@@ -190,9 +211,26 @@ cd_gh_proof_source() {
         _cd_gh_err "proof: CD_PROOF_REPO is not set"
         return 2
     fi
+    local trustfile=""
+    if [[ "$repo" == /* ]]; then
+        # a local path: proof mode only (the config refuses it otherwise), and only a bare repository that
+        # root or the deploy user owns, reached through no link. Git itself refuses a repository that another
+        # user owns (a root-owned one, read by the deploy user) and honours safe.directory only from a global
+        # or system file, never from -c: so exactly this path goes into a private global file for this one
+        # fetch. The owner was checked above.
+        _cd_gh_proof_local_repo "$repo" || return 2
+        _cd_gh_mirror || return 2
+        trustfile="${CD_DATA}/proof-gitconfig"
+        printf '[safe]\n\tdirectory = %s\n' "$repo" | cd_atomic_write "$trustfile" 600 || {
+            _cd_gh_err "proof: the trust file for the repository could not be written"
+            return 2
+        }
+    fi
     _cd_gh_mirror || return 2
-    _cd_gh_git --git-dir="$CD_MIRROR_DIR" fetch --no-tags --quiet "$repo" "+refs/heads/${ref}:refs/proof/${ref}" \
-        >/dev/null 2>&1 || {
+    (
+        [[ -z "$trustfile" ]] || export GIT_CONFIG_GLOBAL="$trustfile"
+        _cd_gh_git --git-dir="$CD_MIRROR_DIR" fetch --no-tags --quiet "$repo" "+refs/heads/${ref}:refs/proof/${ref}"
+    ) >/dev/null 2>&1 || {
         _cd_gh_err "proof: the fetch of the branch failed"
         return 1
     }

@@ -2,7 +2,7 @@
 // hand-over (ownerUid), and the server fields of a module-server dump line. No database: a fake exporter and a
 // fake DumpFs on a real scratch directory. The real-uid half (a real root process, a real uid 1000) is
 // test/integration/enable-catchup-uid.test.ts.
-import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -159,6 +159,37 @@ describe('retireDump: one database of one release', () => {
     expect(await code(retireDump(dir, 'dist-v1.0.0', DB_A, 'r', { fs: fsAs() }))).toBe('LEDGER_CORRUPT')
   })
 
+  it('a ledger line is trusted for the shape <release>/<name>.<id>.dump of its own release and id and nothing else: any other path refuses the whole retire and removes nothing', async () => {
+    const code = async (p: Promise<unknown>) => ((await p.then(() => 'no error', (e: DumpError) => e.code)) as string)
+    const ID = '0192f0c1-2b3c-7d4e-8f00-aaaaaaaaaaaa'
+    const shapes: [string, string][] = [
+      ['a nested path', `dist-v1.0.0/sub/x.${ID}.dump`],
+      ['a dot segment', `dist-v1.0.0/../x.${ID}.dump`],
+      ['another release directory', `dist-v7/x.${ID}.dump`],
+      ['another id', `dist-v1.0.0/x.0192f0c1-2b3c-7d4e-8f00-bbbbbbbbbbbb.dump`],
+      ['no id', 'dist-v1.0.0/x.dump'],
+      ['an absolute path', `/etc/x.${ID}.dump`],
+      ['a path without the .dump suffix', `dist-v1.0.0/x.${ID}.sh`],
+    ]
+    for (const [label, file] of shapes) {
+      const dir = freshDir()
+      // the victim sits where the forged line points, inside the directory so the test can see it
+      mkdirSync(join(dir, 'dist-v1.0.0'))
+      writeFileSync(join(dir, 'dist-v1.0.0', `x.${ID}.dump`), 'VICTIM')
+      appendEvent(dir, { v: 1, event: 'created', at: 'x', migration_dump_id: ID, release: 'dist-v1.0.0', scope: 'platform', customer_id: null, module_id: null, database: 'gremion_platform', by_kind: 'system', file, sha256: 'a', bytes: 1 })
+      expect(await code(retireDump(dir, 'dist-v1.0.0', 'gremion_platform', 'r', { fs: fsAs(), audit: () => {} })), label).toBe('LEDGER_CORRUPT')
+      expect(liveDumps(readEvents(dir)), label).toHaveLength(1)
+      expect(readFileSync(join(dir, 'dist-v1.0.0', `x.${ID}.dump`), 'utf8'), label).toBe('VICTIM')
+    }
+    // the shape the host writes for a module-server dump (<service>.<id>.dump) is accepted
+    const ok = freshDir()
+    mkdirSync(join(ok, 'dist-v1.0.0'))
+    writeFileSync(join(ok, 'dist-v1.0.0', `finance-postgres.${ID}.dump`), 'DUMP')
+    appendEvent(ok, { v: 1, event: 'created', at: 'x', migration_dump_id: ID, release: 'dist-v1.0.0', scope: 'platform', customer_id: null, module_id: null, database: 'gremion_platform', by_kind: 'system', file: `dist-v1.0.0/finance-postgres.${ID}.dump`, sha256: 'a', bytes: 4 })
+    expect((await retireDump(ok, 'dist-v1.0.0', 'gremion_platform', 'r', { fs: fsAs(), audit: () => {} })).retired).toEqual([ID])
+    expect(existsSync(join(ok, 'dist-v1.0.0', `finance-postgres.${ID}.dump`))).toBe(false)
+  })
+
   it('an unwritable ledger refuses BEFORE anything is unlinked (the host checks it first too): the file and the live line stay, a repeat after the fix retires', async () => {
     const dir = freshDir()
     const taken = await take(dir)
@@ -214,16 +245,20 @@ describe('ownerUid: a root process writes into the deploy user\'s directory, and
     const chowns: [string, number][] = []
     const d = await take(dir, { ownerUid: 1000, fs: fsAs({ uid: 0, owner: 1000 }, chowns) })
     expect(d.status).toBe('created')
-    const paths = chowns.map(([p]) => p.replace(/\\/g, '/'))
-    expect(paths).toContain(join(dir, 'dist-v1.0.0').replace(/\\/g, '/'))
-    expect(paths).toContain(d.path.replace(/\\/g, '/'))
-    expect(paths).toContain(join(dir, LEDGER_FILE).replace(/\\/g, '/'))
-    expect(paths).toContain(join(dir, LEDGER_LOCK).replace(/\\/g, '/'))
+    // The paths are the ones the code worked through (below a directory descriptor on Linux), so they are compared by
+    // the name they end in: the release directory, the dump, the ledger and the lock.
+    const nameOf = (p: string): string | undefined => p.replace(/\\/g, '/').split('/').at(-1)
+    const names = chowns.map(([p]) => nameOf(p))
+    expect(names).toContain('dist-v1.0.0')
+    expect(names).toContain(nameOf(d.path))
+    expect(names).toContain(LEDGER_FILE)
+    expect(names).toContain(LEDGER_LOCK)
     expect(chowns.every(([, uid]) => uid === 1000)).toBe(true)
-    // the retire hands the ledger over as well
+    // the retire hands its own lock over; the ledger it appends to already belongs to the owner and is left alone
     chowns.length = 0
     await retireDump(dir, 'dist-v1.0.0', DB_A, 'enable committed', { ownerUid: 1000, fs: fsAs({ uid: 0, owner: 1000 }, chowns), audit: () => {} })
-    expect(chowns.map(([p]) => p.replace(/\\/g, '/'))).toEqual(expect.arrayContaining([join(dir, LEDGER_FILE).replace(/\\/g, '/'), join(dir, LEDGER_LOCK).replace(/\\/g, '/')]))
+    expect(chowns.map(([p]) => nameOf(p))).toContain(LEDGER_LOCK)
+    expect(chowns.every(([, uid]) => uid === 1000)).toBe(true)
   })
 
   it('root with a directory owned by uid 1000 and NO ownerUid still fails DUMP_DIR_OWNER (the check is not relaxed for root)', () => {
