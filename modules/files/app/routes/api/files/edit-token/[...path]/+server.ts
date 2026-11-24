@@ -4,6 +4,7 @@ import { createNextcloudClient } from '$lib/server/files/nextcloud-client'
 import { buildWebdavPath } from '$lib/server/files/webdav-path'
 import { isEditableFile } from '$lib/files/editable-types'
 import type { SessionUser } from '$lib/auth'
+import { throwBadGateway } from '$lib/server/files/upstream-failure'
 
 /**
  * WOPI token endpoint for collaborative document editing.
@@ -68,7 +69,6 @@ export const GET: RequestHandler = async (event) => {
     return json(body)
   } catch (err) {
     if ((err as { status?: number }).status) throw err
-    const msg = err instanceof Error ? err.message : String(err)
-    throw error(502, msg)
+    throwBadGateway(err, '[files:upstream]', { op: 'edit-token', requestPath: paramPath })
   }
 }
