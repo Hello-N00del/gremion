@@ -16,6 +16,7 @@ case " $* " in
     if printf '%s\n' "$cfg" | grep -q '^upload-file = '; then
         # the mail relay
         printf 'mail-relay\n' >>"$DK/mail.log"
+        if ( exec 7>>"$GREMION_ROOT/runtime/hostd.lock"; flock -n 7 ); then echo free >>"$DK/mail.lock"; else echo held >>"$DK/mail.lock"; fi
         printf '%s\n' "$cfg" | sed -n 's/^upload-file = "\(.*\)"$/\1/p' | while read -r f; do cp "$f" "$DK/mail.$(date +%s%N).eml" 2>/dev/null || true; done
         [ -f "$DK/mail.fail" ] && exit 7
         exit 0

@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 [ -f "$DK/hook.sh" ] && . "$DK/hook.sh" && pl_hook "tenant $*"
 # gremion-tenant of a fake release tree, called by the reconcile stage as `reconcile <slug> --apply ...`.
-# One line per call: the verb, whether the host lock is declared held, whether a request id was given,
-# the tree this very file lives in, and what the host lock looks like to a second descriptor.
+# One line per call in tenant.log: the verb, whether the host lock is declared held, whether a request id
+# was given, the tree this very file lives in, and what the host lock looks like to a second descriptor.
+#   tenant.sleep       seconds the call takes
+#   tenant.leave       the call leaves a running container labelled with its request id behind
+#   tenant.fail.<slug> the call for that customer exits 1
 slug="${2:-}"
 lockrc=0
 flock -n "$GREMION_ROOT/runtime/hostd.lock" true || lockrc=$?
@@ -10,6 +13,14 @@ printf 'tenant verb=%s held=%s request=%s tree=%s lockrc=%s\n' "${1:-}" "${GREMI
     "$([ -n "${GREMION_EXECUTOR_REQUEST_ID:-}" ] && echo set || echo unset)" \
     "$(basename "$(dirname "$(dirname "$(dirname "$0")")")")" "$lockrc" >> "$DK/tenant.log"
 printf '%s\n' "$slug" >> "$DK/tenant.slugs"
+printf 'tenant-child %s\n' "$slug" >> "$SHIM_LOG"
+if [ -f "$DK/tenant.leave" ]; then
+    {
+        echo "proj=teststack-app-green"; echo "svc=tenant"; echo "ref=x"; echo "id=sha256:0"
+        echo "oneoff=True"; echo "status=running"; echo "health=healthy"; echo "restarts=0"; echo "exit=0"
+        echo "colour=green"; echo "label_req=${GREMION_EXECUTOR_REQUEST_ID:-none}"
+    } > "$DK/ctr/c-tenant-$slug"
+fi
 [ -f "$DK/tenant.sleep" ] && sleep "$(cat "$DK/tenant.sleep")"
 echo "reconciled"
 [ -f "$DK/tenant.fail.$slug" ] && exit 1

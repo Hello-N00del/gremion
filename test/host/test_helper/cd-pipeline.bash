@@ -143,6 +143,17 @@ pl_assert_committed() {
 pl_write_hook() {
     cat >"$DK/hook.sh" <<'HOOK'
 pl_hook() {
+    local r base
+    # a change of the world at a call: $DK/run.<name>.re holds the pattern, run.<name>.sh the shell to
+    # run, once, at the first call that matches (before the call does its work)
+    for r in "$DK"/run.*.re; do
+        [ -f "$r" ] || continue
+        if printf '%s\n' "$1" | grep -qE -- "$(cat "$r")"; then
+            base="${r%.re}"
+            mv -f "$r" "${base}.done"
+            . "${base}.sh"
+        fi
+    done
     [ -f "$DK/kill.at" ] || return 0
     local pat n want
     pat="$(cat "$DK/kill.at")"
@@ -157,6 +168,11 @@ pl_hook() {
     exit 137
 }
 HOOK
+}
+# pl_on NAME REGEX SHELL -- at the first call that matches REGEX, run SHELL (the world changes)
+pl_on() {
+    printf '%s\n' "$2" >"$DK/run.$1.re"
+    printf '%s\n' "$3" >"$DK/run.$1.sh"
 }
 # pl_kill_at REGEX [NTH] -- arm the kill
 pl_kill_at() {

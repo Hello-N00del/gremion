@@ -392,6 +392,114 @@ pl_assert_boot_end() {
 }
 
 # ===========================================================================================
+# an operator rollback during the commit retries
+# ===========================================================================================
+
+@test "an operator rollback while the commit steps retry leaves nothing that names the new release" {
+    pl_scn_green
+    # at commit step 1 the world changes so that step 3 fails (the tag file cannot be written) and the
+    # operator asks for a rollback; the obstacle is gone when the rollback switches back
+    pl_on obstacle '^isolation record' 'rm -f "$GREMION_ROOT/runtime/previous-tag"; mkdir "$GREMION_ROOT/runtime/previous-tag"; "$HOST_SRC/bin/gremion-cd" rollback </dev/null >"$DK/rollback-verb.out" 2>&1 || true'
+    pl_on clear '^switch blue' 'rmdir "$GREMION_ROOT/runtime/previous-tag"'
+    run pl_tick
+    echo "$output"
+    pl_no_stubs
+    local l12="${C_L0:0:12}"
+    [ "$(pl_hist rollback_requested)" -eq 1 ]
+    [ "$(pl_hist rolled_back)" -eq 1 ]
+    [ "$(pl_state .live.sha)" = "$C_L0" ]
+    [ "$(readlink "${GREMION_ROOT}/current")" = "${GREMION_ROOT}/releases/${l12}" ]
+    [ "$(cat "${GREMION_ROOT}/runtime/current-tag")" = "pilot-${l12}" ]
+    [ ! -e "${GREMION_ROOT}/runtime/previous-tag" ]
+    # the record of the isolation evidence names the old tip again: the enable gate would refuse a stale one
+    [ "$(cat "${GREMION_ROOT}/data/isolation-recorded")" = "$C_L0" ]
+    [ "$(cat "${GREMION_ROOT}/runtime/active-colour")" = blue ]
+    [ "$(pl_state .phase)" = idle ]
+    pl_hostlock_free
+    pl_cdlock_free
+}
+
+# ===========================================================================================
+# a held release, a proof release
+# ===========================================================================================
+
+@test "a release that changes the state tier is held and the mail names the exact release-now command" {
+    pl_scn_green
+    # the rendered compose of the state project differs between the live tree and the candidate
+    printf '{"services":{"postgres":{"image":"postgres:17"}}}\n' >"$DK/compose.state.${C_B:0:12}.json"
+    run pl_tick
+    echo "$output"
+    pl_no_stubs
+    [ "$(pl_state .hold.kind)" = state_tier ]
+    [ "$(pl_state .phase)" = idle ]
+    [ "$(pl_state .live.sha)" = "$C_L0" ]
+    # nothing was built, started or switched
+    [ "$(pl_count '^(build|up|switch) ')" -eq 0 ]
+    local f
+    f="$(pl_mail_file held)"
+    [ "$(pl_mail_field "$f" kind)" = held ]
+    grep -q "release-now ${C_B:0:12} --with-state" "$f"
+}
+
+@test "a proof release is rolled back at the end of its window with the rule proof_end and is not blocked" {
+    pl_scn_green
+    cd_write_cfg CD_REPO_URL=https://github.com/org/repo CD_POST_RECONCILE_S=0 CD_WATCH_MINUTES=2 CD_WATCH_INTERVAL_S=30 \
+        CD_PROOF_MODE=1 CD_PROOF_REPO=https://example.org/proof/repo
+    # one commit on a proof branch, on top of main, in the proof repository
+    gh_rg -C "$GH_WORK" checkout -q -b proof-ok main
+    printf 'proof\n' >>"${GH_WORK}/gremion-ui/src/app.txt"
+    gh_rg -C "$GH_WORK" commit -q -am proof
+    local psha
+    psha="$(gh_rg -C "$GH_WORK" rev-parse HEAD)"
+    gh_rg init -q --bare "$GH_PROOF"
+    gh_rg -C "$GH_WORK" push -q "$GH_PROOF" proof-ok:proof-ok
+    gh_rg -C "$GH_WORK" checkout -q main
+    run "${HOST_SRC}/bin/gremion-cd" release-now "$psha" --unverified --ref proof-ok
+    echo "$output"
+    run pl_tick
+    echo "$output"
+    pl_no_stubs
+    # the proof release ran the window and went back: old colour serving, nothing committed, no block
+    [ "$(pl_hist rolled_back)" -eq 1 ]
+    [ "$(jq -s '[.[] | select(.event == "rolled_back")][0].rule' "${GREMION_ROOT}/data/cd/history.jsonl")" = '"proof_end"' ]
+    [ "$(pl_state .live.sha)" = "$C_L0" ]
+    [ "$(pl_blocks)" -eq 0 ]
+    [ "$(cat "${GREMION_ROOT}/runtime/active-colour")" = blue ]
+    [ "$(readlink "${GREMION_ROOT}/current")" = "${GREMION_ROOT}/releases/${C_L0:0:12}" ]
+    [ "$(pl_state .phase)" = idle ]
+    [ "$(pl_state .hold.kind)" = proof ]
+    pl_before '^switch green' '^switch blue'
+    pl_after '^switch blue' '^down green'
+}
+
+# ===========================================================================================
+# a reconcile child that cannot be confirmed gone
+# ===========================================================================================
+
+@test "a reconcile container that cannot be confirmed gone: the release stays committed, one customer is tried, the host lock is kept to the end of the process" {
+    pl_scn_green
+    : >"$DK/tenant.leave"
+    : >"$DK/kill.refuse"
+    run pl_tick
+    echo "$output"
+    pl_no_stubs
+    # committed and untouched by the failure
+    local b12="${C_B:0:12}"
+    [ "$(pl_state .live.sha)" = "$C_B" ]
+    [ "$(readlink "${GREMION_ROOT}/current")" = "${GREMION_ROOT}/releases/${b12}" ]
+    [ "$(pl_blocks)" -eq 0 ]
+    [ "$(pl_hist rollback_started)" -eq 0 ]
+    [ "$(pl_state .hold.kind)" = reconcile_failed ]
+    # the stage stopped at the customer whose container is alive
+    [ "$(wc -l <"$DK/tenant.slugs")" -eq 1 ]
+    # the mails that were sent after it were sent with the host lock still held; it is free after the exit
+    [ -s "$DK/mail.lock" ]
+    [ "$(tail -n 1 "$DK/mail.lock")" = held ]
+    pl_hostlock_free
+    pl_cdlock_free
+}
+
+# ===========================================================================================
 # the host lock span
 # ===========================================================================================
 

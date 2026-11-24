@@ -106,7 +106,7 @@ case "$1" in
           *" --quiet "*) exit 0 ;;
           *" --format json "*)
             if [ "$kind" = state ]; then
-                if [ -f "$DK/compose.state.json" ]; then cat "$DK/compose.state.json"; else printf '{"services":{"postgres":{"image":"postgres:16"}}}\n'; fi
+                if [ -f "$DK/compose.state.$(basename "$PWD").json" ]; then cat "$DK/compose.state.$(basename "$PWD").json"; else printf '{"services":{"postgres":{"image":"postgres:16"}}}\n'; fi
             else
                 printf '{"services":{"kernel-api-migrate":{"environment":{"GREMION_RELEASE_REF":"%s"}}}}\n' "$tag"
             fi
@@ -280,10 +280,12 @@ case "$1" in
     exit 1 ;;
   rm)
     echo "rm ${*:2}" >>"$DK/order.log"
+    [ -f "$DK/kill.refuse" ] && exit 0
     for a in "${@:2}"; do case "$a" in -*) ;; *) rm -f "$DK/ctr/$a" ;; esac; done
     exit 0 ;;
   kill)
     echo "kill ${*:2}" >>"$DK/order.log"
+    [ -f "$DK/kill.refuse" ] && exit 0
     for a in "${@:2}"; do case "$a" in -*) ;; *) [ -f "$DK/ctr/$a" ] && sed -i 's/^status=.*/status=exited/' "$DK/ctr/$a" ;; esac; done
     exit 0 ;;
   logs) echo "log-tail-line"; exit 0 ;;
