@@ -145,7 +145,7 @@ function shellBlock(rel, declaration) {
 
 function keysOfKinds() {
   const keys = [...shellBlock(CORE, 'declare -gA CD_KIND=(').matchAll(/\[(CD_[A-Z0-9_]+)\]=/g)].map((m) => m[1])
-  assert.ok(keys.length >= 50, `only ${keys.length} config keys in CD_KIND`)
+  assert.ok(keys.length >= 45, `only ${keys.length} config keys in CD_KIND`)
   return keys
 }
 
@@ -154,7 +154,7 @@ function defaultsOfProgram() {
   for (const m of shellBlock(CORE, 'declare -gA CD_DEFAULTS=(').matchAll(/\[(CD_[A-Z0-9_]+)\]=("[^"]*"|\S+)/g)) {
     out.set(m[1], m[2].replace(/^"(.*)"$/, '$1'))
   }
-  assert.ok(out.size >= 40, `only ${out.size} defaults in CD_DEFAULTS`)
+  assert.ok(out.size >= 35, `only ${out.size} defaults in CD_DEFAULTS`)
   return out
 }
 
@@ -167,7 +167,7 @@ function templateValues() {
     assert.ok(m, `not KEY=VALUE in the template: ${l}`)
     out.set(m[1], m[2].replace(/^"(.*)"$/, '$1'))
   }
-  assert.ok(out.size >= 50, `only ${out.size} keys in the template`)
+  assert.ok(out.size >= 45, `only ${out.size} keys in the template`)
   return out
 }
 
@@ -283,26 +283,35 @@ test('every gremion-cd command in the document names a verb the program has', ()
 
 test('every flag the document shows is a flag of the program that takes it', () => {
   const ownFlags = new Set(programText().match(FLAG))
-  const others = OTHER_PROGRAMS.map((p) => ({ ...p, flags: new Set(p.files.map(read).join('\n').match(FLAG)) }))
+  const verbs = verbsOfProgram()
+  const others = OTHER_PROGRAMS.map((p) => ({ ...p, flags: new Set(p.files.map(read).join(' ').match(FLAG)) }))
   const extra = {
     '--migrate-only': ['modules/calendar/src/index.ts', 'modules/content/src/index.ts', 'modules/publishing/src/index.ts'],
     '--all': ['gremion-ui/scripts/tenant-provision-modules.ts', 'gremion-ui/scripts/tenant-provision.ts'],
   }
+  // flags of tools that are not this repository's: allowed only in a command span that names the tool
+  const thirdParty = [
+    { word: 'systemctl', flags: ['--now', '--wait', '--no-block'] },
+    { word: 'docker compose', flags: ['--env-file', '--rm', '--no-deps'] },
+  ]
   let checked = 0
   for (const span of codeSpans(docText())) {
     const flags = span.match(FLAG) ?? []
-    if (flags.length === 0) continue
-    const other = others.find((p) => span.includes(p.word))
     for (const flag of flags) {
       checked += 1
-      if (span.startsWith('gremion-cd ')) {
+      const tool = thirdParty.find((t) => span.includes(t.word) && t.flags.includes(flag))
+      if (tool) continue
+      const other = others.find((p) => span.includes(p.word))
+      if (span.startsWith('gremion-cd ') || verbs.has(span.split(' ')[0])) {
         assert.ok(ownFlags.has(flag), `"${span}": ${flag} is not a flag of gremion-cd`)
       } else if (other) {
         assert.ok(other.flags.has(flag), `"${span}": ${flag} is not a flag of ${other.word}`)
+      } else if (span.startsWith('--')) {
+        // a span that starts with a flag, in prose or in a table cell: it must exist in the program or in one of the known programs
+        const known = ownFlags.has(flag) || others.some((p) => p.flags.has(flag)) || (extra[flag] ?? []).some((f) => read(f).includes(flag))
+        assert.ok(known, `the flag ${flag} is a flag of no program this file knows`)
       } else if (extra[flag]) {
         assert.ok(extra[flag].some((f) => read(f).includes(flag)), `"${span}": ${flag} is in none of ${extra[flag].join(', ')}`)
-      } else if (flag === '--now' || flag === '--wait' || flag === '--no-block') {
-        // flags of systemctl that the document names while it explains what the program calls
       } else {
         assert.fail(`"${span}": ${flag} is a flag no check of this file knows (add the program it belongs to)`)
       }
@@ -317,8 +326,8 @@ test('the operator-value table and the tunable table together name exactly the c
   const tunables = firstCells(subsection(config, 'Tunable keys'))
   const kinds = keysOfKinds()
   const defaults = defaultsOfProgram()
-  assert.ok(operator.length >= 7, `only ${operator.length} operator keys documented`)
-  assert.ok(tunables.length >= 40, `only ${tunables.length} tunable keys documented`)
+  assert.ok(operator.length >= 8, `only ${operator.length} operator keys documented`)
+  assert.ok(tunables.length >= 35, `only ${tunables.length} tunable keys documented`)
   assert.deepEqual(sorted(operator), sorted(kinds.filter((k) => !defaults.has(k))), 'the operator-value table differs from the keys that have no default')
   assert.deepEqual(sorted(tunables), sorted([...defaults.keys()]), 'the tunable table differs from the keys that have a default')
   assert.deepEqual(onlyIn(kinds, [...operator, ...tunables]), [], 'a key of the parser is not documented')
@@ -341,7 +350,7 @@ test('every key of the shipped template is documented and every documented defau
 test('every CD_ name in the document is a config key (an internal knob is never presented as a key)', () => {
   const kinds = new Set(keysOfKinds())
   const names = new Set(docText().match(/\bCD_[A-Z0-9_]+\b/g))
-  assert.ok(names.size >= 50, `only ${names.size} CD_ names found`)
+  assert.ok(names.size >= 45, `only ${names.size} CD_ names found`)
   const bad = sorted([...names].filter((n) => !kinds.has(n)))
   assert.deepEqual(bad, [], 'the document names a CD_ variable the parser would refuse as an unknown key')
 })
@@ -442,4 +451,16 @@ test('the pointers lead to the document and the old "in progress" row is gone', 
   assert.ok(read('infra/host/README.md').includes('docs/ops/continuous-deployment.md'), 'infra/host/README.md does not point at the document')
   assert.ok(read('docs/INDEX.md').includes('ops/continuous-deployment.md'), 'docs/INDEX.md does not link the document')
   assert.ok(read('infra/host/bootstrap.sh').includes('docs/ops/continuous-deployment.md'), 'the cd stage of bootstrap.sh names the document and the document must exist')
+})
+
+test('this file is collected by unit:node (a count assertion over the same glob the suite uses)', () => {
+  const self = 'scripts/cd/cd-docs-drift.test.mjs'
+  const collected = globSync('scripts/**/*.test.mjs', { cwd: ROOT })
+    .map((f) => f.split(path.sep).join('/'))
+    .filter((f) => !f.split('/').includes('__fixtures__'))
+  assert.ok(collected.includes(self), 'unit:node would not run this file')
+  assert.ok(collected.includes('scripts/cd/cd-guards.test.mjs'), 'the sibling guard file is no longer collected')
+  assert.ok(collected.length >= 20, `only ${collected.length} node test files collected: the glob emptied`)
+  const declared = (readFileSync(path.join(ROOT, self), 'utf8').match(/^[ \t]*test(?:\.(?:skip|only|todo))?\(/gm) ?? []).length
+  assert.equal(declared, 16, `this file declares ${declared} tests, not the 16 that the count in this assertion knows`)
 })

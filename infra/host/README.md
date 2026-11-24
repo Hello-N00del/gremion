@@ -23,6 +23,21 @@ infra/host/
   module-profiles.json   the compose profiles each catalogue module needs on the pilot install
 ```
 
+## Programs
+
+Every program of `bin/` is documented in
+[docs/ops/host-tooling.md](../../docs/ops/host-tooling.md) (section 4). The continuous-deployment
+programs are the family `gremion-cd`, and they are documented for the operator in
+[docs/ops/continuous-deployment.md](../../docs/ops/continuous-deployment.md):
+
+| Path | What it is |
+|---|---|
+| `bin/gremion-cd` | the dispatcher: maps a verb `x-y` to the function `cd_cmd_x_y` of a library and loads `etc/cd.env` |
+| `lib/cd/*.sh` | one library per area, sourced in sorted order with `core.sh` first: `core` (config, state, locks, hold, block), `cmd-state` (`help`, `version`, `status`, `hold`, `resume`), `github` (pick-up), `classify`, `notify` and `watchdog`, `prepare`, `data` (timer guard, dump set, migrate stage), `modules` (module step), `leaves` (leaf step), `docker`, `colour`, `traffic`, `watch`, `rollback`, `commit`, `reconcile`, `adopt`, `driver` (tick, pipeline, failure policy, `release-now`, `rollback`, `reconcile`) |
+| `lib/cd/apply-root.sh` | the one script that runs as root, only from `gremion-cd-apply@.service`; never sourced and never run from a tick |
+| `templates/systemd/gremion-cd*.service`, `gremion-cd*.timer` | the tick (every five minutes), the watchdog (every ten), the boot resume and the root apply unit |
+| `templates/env/cd.env.tmpl` | the configuration template; every operator value is a `CHANGE_ME_OPERATOR_` placeholder |
+
 Installed on a host as:
 
 ```
