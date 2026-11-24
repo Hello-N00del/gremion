@@ -690,7 +690,7 @@ create_refused_before_phase_a() {
 
 @test "secondary host: a host named in SECONDARY_TENANT_HOSTS runs the create with core modules" {
     secondary_install rat.pilot.example 'rat.alpha.example,other.example.org'
-    verdict_enable calendar board content publishing
+    verdict_enable calendar board content
     queue create
     run "$EXEC" --once
     [ "$status" -eq 0 ] || { echo "status=$status $output"; steps; return 1; }
@@ -731,7 +731,7 @@ create_refused_before_phase_a() {
 @test "secondary host: the module allow-set is core only: votes, files, messaging, anything unknown is refused BEFORE phase A, naming the module" {
     secondary_install rat.pilot.example 'rat.alpha.example'
     local m
-    for m in votes files messaging elections finance some-new-module; do
+    for m in votes files messaging publishing elections finance some-new-module; do
         verdict_enable calendar "$m"
         : > "$ORDER"
         queue create

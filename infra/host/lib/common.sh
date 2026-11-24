@@ -565,9 +565,14 @@ resolve_control_panel_host() {
 # state.env only, never from a request.
 
 # The modules a customer on a secondary host may enable: the leaves that keep their
-# data in their own database and never reach the shared Synapse or Nextcloud. DEFAULT
-# DENY: a module that is not named here (a new one included) is refused there.
-SECONDARY_HOST_MODULES="board calendar content publishing"
+# data in their own database and never reach the shared Synapse or Nextcloud for what
+# they are for. DEFAULT DENY: a module that is not named here (a new one included) is
+# refused there. Left out on purpose: files, messaging and votes (shared Nextcloud
+# and Synapse, isolation evidence for two customers is still owed) and publishing (the
+# newsletter's whole output is mail whose unsubscribe links carry the leaf's public
+# base URL, which is PILOT_TENANT_HOST's: a secondary customer's subscribers would be
+# sent to the primary host).
+SECONDARY_HOST_MODULES="board calendar content"
 
 # secondary_host_module_allowed <module> -> 0 when a customer on a secondary host may enable it.
 secondary_host_module_allowed() {

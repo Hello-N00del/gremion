@@ -153,7 +153,9 @@ step has run:
 Properties the pipeline keeps:
 
 1. **Slug and host guard.** The slug must match `^[a-z0-9-]{1,30}$`; the host is
-   validated, and on a single-customer install it must equal `PILOT_TENANT_HOST`.
+   validated, and on a single-customer install it must equal `PILOT_TENANT_HOST` (or, when the operator
+   lists extra core-only hosts in `SECONDARY_TENANT_HOSTS`, be one of those; see
+   [ops/pilot-services.md](../ops/pilot-services.md), "A secondary customer host").
 2. **Tombstone refusal (§7.8).** A `deleted`/`deleting` slug is a permanent
    tombstone; creating over it is refused before any write (subdomain-takeover
    defence: identifier reuse is forbidden on delete).
