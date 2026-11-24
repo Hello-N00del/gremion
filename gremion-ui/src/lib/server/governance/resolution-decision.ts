@@ -49,9 +49,11 @@ interface ResolutionDecisionBase {
   /**
    * INV-5 enforces quorum AT ADOPTION, not during draft data-entry. The
    * resolution-write endpoints (draft) pass `false` to compute the result from
-   * the rule+tallies without blocking; the adoption point (protocol publish)
-   * enforces quorum hard. Defaults to `true`, so the service is fail-safe for any
-   * caller that means "adopt this now".
+   * the rule+tallies without this function throwing (they run their own check on
+   * the quorum context it returns, `assertResolutionFitsMeeting`: a decision of a
+   * non-quorate meeting is refused, a placeholder nobody voted on is not); the
+   * adoption point (protocol publish) enforces quorum hard. Defaults to `true`,
+   * so the service is fail-safe for any caller that means "adopt this now".
    */
   enforceQuorum?: boolean
 }
