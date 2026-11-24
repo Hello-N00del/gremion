@@ -634,3 +634,76 @@ install_lib_only() {
     [[ "$output" == *"chmod"* ]]
     [[ "$output" != *"probe="* ]]
 }
+
+# ---------------------------------------------------------------------------
+# SECONDARY_TENANT_HOSTS: the optional allow-list of extra customer hosts (core-only customers)
+# ---------------------------------------------------------------------------
+
+@test "secondary_hosts_problem: empty is fine, a clean list is fine, and every malformed entry is named by its position and reason" {
+    run_with 'secondary_hosts_problem "" plat.example.org pilot.example.org control.plat.example.org'
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+    run_with 'secondary_hosts_problem "canary.example.org,test.example.net" plat.example.org pilot.example.org control.plat.example.org'
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+    local bad want
+    while IFS='|' read -r bad want; do
+        run_with 'secondary_hosts_problem "$1" plat.example.org pilot.example.org control.plat.example.org' "$bad"
+        [ "$status" -eq 1 ] || { echo "accepted: ${bad}"; return 1; }
+        [[ "$output" == *"entry 1"* ]] || { echo "no position for ${bad}: ${output}"; return 1; }
+        [[ "$output" == *"$want"* ]] || { echo "wrong reason for ${bad}: ${output}"; return 1; }
+    done <<'CASES'
+https://canary.example.org|scheme
+canary.example.org:8443|port
+canary.example.org/path|path
+*.example.org|wildcard
+Canary.Example.org|not lowercase
+canary.example.org.|trailing dot
+canary|single label
+203.0.113.7|IP address
+plat.example.org|platform domain
+www.plat.example.org|platform host
+pilot.example.org|PILOT_TENANT_HOST
+turn.pilot.example.org|video relay
+control.plat.example.org|control panel
+CASES
+}
+
+@test "secondary_hosts_problem: a duplicate, a leading, doubled or trailing comma, and white space are refused" {
+    run_with 'secondary_hosts_problem "a.example.org,b.example.org,a.example.org" plat.example.org pilot.example.org control.plat.example.org'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"duplicate"* ]] || { echo "$output"; return 1; }
+    local bad
+    for bad in ',a.example.org' 'a.example.org,' 'a.example.org,,b.example.org' 'a.example.org, b.example.org' ' a.example.org'; do
+        run_with 'secondary_hosts_problem "$1" plat.example.org pilot.example.org control.plat.example.org' "$bad"
+        [ "$status" -eq 1 ] || { echo "accepted: '${bad}'"; return 1; }
+    done
+}
+
+@test "secondary_hosts_has: exact whole-entry match after lowercasing, never a substring or a glob" {
+    run_with 'secondary_hosts_has "canary.example.org,test.example.net" "Canary.Example.org"'
+    [ "$status" -eq 0 ]
+    run_with 'secondary_hosts_has "canary.example.org,test.example.net" test.example.net'
+    [ "$status" -eq 0 ]
+    local other
+    for other in example.org canary.example.or 'canary.example.org,test.example.net' '*' '*.example.org' 'xcanary.example.org' ''; do
+        run_with 'secondary_hosts_has "canary.example.org,test.example.net" "$1"' "$other"
+        [ "$status" -eq 1 ] || { echo "matched: '${other}'"; return 1; }
+    done
+    run_with 'secondary_hosts_has "" canary.example.org'
+    [ "$status" -eq 1 ]
+    run_with 'secondary_hosts_has "a.example.org,,b.example.org" ""'
+    [ "$status" -eq 1 ]
+}
+
+@test "secondary_host_module_allowed: only the core leaves are allowed on a secondary host; everything else, a module of the shared services first, is refused" {
+    local m
+    for m in board calendar content publishing; do
+        run_with 'secondary_host_module_allowed "$1"' "$m"
+        [ "$status" -eq 0 ] || { echo "refused: ${m}"; return 1; }
+    done
+    for m in messaging files votes elections finance vault handover unknown-module ''; do
+        run_with 'secondary_host_module_allowed "$1"' "$m"
+        [ "$status" -eq 1 ] || { echo "allowed: '${m}'"; return 1; }
+    done
+}
