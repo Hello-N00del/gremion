@@ -299,7 +299,7 @@ Every kind has a named way out.
 | `proof` | a proof release ended its window clean and was rolled back (rule `proof_end`) | `resume` |
 | `rollback_failed` | the rollback sequence did not complete | repair by hand, `adopt --re-adopt`, then `resume` |
 | `killswitch` | the kill switch aborted a release before its switch | remove the file, then `resume` |
-| `stuck_stage` | a stage was started three times and never finished | `resume` once the cause is fixed |
+| `stuck_stage` | a stage was started three times and never finished. Before the switch the release ends with this hold and no block; after the switch began and before the commit point it is a `commit_stuck` rollback instead; after the commit point the release stays committed and only the hold is set | `resume` once the cause is fixed |
 | `reconcile_failed` | the reconcile stage ended with a customer not ok, or was cut short | `gremion-cd reconcile`, or `resume` after a hand reconcile |
 
 **Classifier holds are the verdict on the newest candidate.** `resume` does not clear them: it
@@ -354,7 +354,7 @@ The rule is the reason a block was written; `status` lists the open ones.
 | Rule | Written when |
 |---|---|
 | `proof_end` | a proof release's window ended clean (the hold is `proof`) |
-| `commit_stuck` | steps 1 to 5 of the commit point did not finish within `CD_COMMIT_MAX_MIN` |
+| `commit_stuck` | a release that had begun to switch but was not committed was taken back, with no block and no hold. The causes: steps 1 to 5 of the commit point did not finish within `CD_COMMIT_MAX_MIN`; the watch loop itself failed (not a verdict on the release); the commit stage failed before step 5 or ended without a commit point; a stage reached its third attempt after the switch began; a restart found the switch, commit or reconcile stage unfinished before the commit point; a pre-switch end was asked for after the switch began (a fault of the caller, which the driver turns into this rollback) |
 
 ## Kill switch
 
@@ -753,7 +753,10 @@ Adoption is done once, by hand, on the live host. Nothing is enabled until the l
    created root-owned by docker; the `cd` stage repeats this idempotently). Then bring the host to
    that release with the host's own upgrade procedure and its switch step, so that the release is the
    live colour and answers ready on `/readyz`: it becomes the first rollback target. The procedure
-   that does this is the pilot host's own and is not carried in this repository.
+   that does this is the pilot host's own and is not carried in this repository. The upgrade runbook
+   named at the top does not do it: the runbook upgrade (`gremion-deploy`) takes a `dist-v` tag and makes
+   `releases/<tag>`, while adopt reads a `pilot-<sha12>` tag and `releases/<sha12>`, so a host upgraded
+   that way is refused by step 5.
 3. As root, run `bash /opt/gremion/current/infra/host/bootstrap.sh cd`. It installs, as real files, every
    host program of `bin/`, `lib/common.sh` and `lib/cd/*.sh` (the apply script is root-owned), renders
    the six systemd units (`gremion-cd.service` and `.timer`, `gremion-cd-watchdog.service` and
@@ -849,7 +852,7 @@ The hand procedure, in a window:
    the release reference the one-shots dump under). Check `gremion-migration-dump status` first: it
    refuses a second live label, so the host must have no other live set.
 3. Bring the host to the release with the host's own upgrade procedure (the one used for the first
-   adoption, see [Adoption](#adoption) step 2). It must leave the end state that the next step reads:
+   adoption, see [Adoption](#adoption) step 2; the runbook upgrade does not fit here either, for the same reason as in adoption step 2). It must leave the end state that the next step reads:
    the new release is the active colour, the colour's env file names `pilot-<sha12>`, its containers
    run that tag's images, `releases/<sha12>` is a clean checkout whose head is that commit, `current`
    points at it, and the public `/readyz` answers ready. Between steps 3 and 4 the new release serves
@@ -872,8 +875,10 @@ The hand procedure, in a window:
 6. `gremion-cd adopt --re-adopt --reason TEXT`. It needs `phase` idle or parked, re-reads the truth
    as `adopt` does, rewrites `live`, `previous` and the manifest, keeps the blocks, the history and
    the mail marks, and is logged and mailed (`adopted`).
-7. `gremion-cd resume` to clear the hold you set. Then retire your hand dump with
-   `gremion-migration-dump switched --release pilot-<sha12>`, or discard it.
+7. Retire your hand dump with `gremion-migration-dump switched --release pilot-<sha12>` (or discard it
+   with a reason). Do this first: resume refuses while that dump is live, because a live dump set
+   after a failed release is a restore point the operator must decide on, and the refusal points at
+   `--discard-dump`. Then `gremion-cd resume` clears the hold you set in step 1.
 
 A hand upgrade takes no CD watch window: nothing watches it for twenty minutes and nothing rolls it
 back. Watch it yourself with `gremion-cd status` and `gremion-verify` for as long as a watch would
@@ -911,9 +916,20 @@ compose configuration of the state project or a module declaration, until the ha
 holds every candidate. Ordinary fixes merged inside the window are not lost: they ship in the first
 release after it, because the first tick after the re-adopt classifies the newest candidate against the
 new live release. Keep the window to one sitting. When a series of changes ends in such a release, the ones that touch only application code ship as
-ordinary releases before it, and the one that changes the declaration comes last. The code cannot
-tell the order in which a series is merged: the order is the series' own release note. The hand
+ordinary releases before it, and the one that changes the declaration comes last. The hand
 upgrade of the last one takes no CD watch window, so the operator watches it by hand.
+
+**The order of the series.** The board plan states the order in which its units reach main, and this
+document reports it as the plan's order: no code in this repository checks that order, and the
+classifier judges each candidate on its own. The unit that changes the declaration merges last of
+the first release. What has to be live before it (the router that sends a customer's board calls to
+the right place, the erasure and organisational-unit calls, the hold that the export honours, the
+move verb and its guard) ships earlier as ordinary releases, taken by CD without anyone being asked.
+Such a unit is an ordinary release only while it touches no host program, no template of the
+manifest, no compose configuration of the state project and no declaration; the first one that does
+opens the freeze window. The flip of the board chain to the class `module-upgrade` is a later
+ordinary release, held as `chain_class_changed` and taken with a bare `release-now <sha12>` (see
+below).
 
 **A gap, named as one.** A customer's existing board rows are in its kernel database (the location
 `kernel` of `board_location`), and the board module's README says the step that moves a board is

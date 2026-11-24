@@ -489,6 +489,59 @@ test('the numbers the document states are the numbers in the code', () => {
   assert.ok(hand.includes('it is not quiet') && hand.includes('the daily digest'), 'the hand procedure does not say what the kill switch really turns off')
 })
 
+test('the rows and procedures that describe a path through the program say what the program does', () => {
+  const text = docText()
+  const holds = subsection(section(text, 'Holds'), 'Hold kinds')
+  const rules = subsection(section(text, 'Holds'), 'Rollback rules that write no block')
+  const row = (table, name) => flat((tableRows(table).find((r) => bare(r[0]) === name) ?? []).join(' '))
+  const driver = read('infra/host/lib/cd/driver.sh')
+  // every caller of the rollback under the rule commit_stuck is a path the row must name: a new caller
+  // fails this count and sends its author to the document
+  assert.equal((driver.match(/_cd_drv_rollback_auto commit_stuck/g) ?? []).length, 7, 'the driver has another caller of the commit_stuck rollback: say it in the row of the rule')
+  const stuck = row(rules, 'commit_stuck')
+  const causes = [
+    ['steps 1 to 5 of the commit point did not finish within `CD_COMMIT_MAX_MIN`', /cd_commit_promote[^]*?rc=\$\?/],
+    ['the watch loop itself failed', /cd_stage_fail watch host watch_loop[^]*?_cd_drv_rollback_auto commit_stuck watch/],
+    ['the commit stage failed before step 5 or ended without a commit point', /_cd_drv_rollback_auto commit_stuck commit/],
+    ['a stage reached its third attempt after the switch began', /elif \[\[ "\$R_SWITCH" == true \]\]; then\s*\n\s*_cd_drv_rollback_auto commit_stuck "\$stage"/],
+    ['a restart found the switch, commit or reconcile stage unfinished before the commit point', /resume_crash stage="\$R_STAGE"[^]*?_cd_drv_rollback_auto commit_stuck "\$R_STAGE"/],
+    ['a pre-switch end was asked for after the switch began', /a pre-switch end was asked for after switch_started; rolling back instead/],
+  ]
+  for (const [phrase, code] of causes) {
+    assert.ok(stuck.includes(phrase), `the commit_stuck row does not say: ${phrase}`)
+    assert.match(driver, code, `the driver no longer has the path that the commit_stuck row describes: ${phrase}`)
+  }
+  const stage = row(holds, 'stuck_stage')
+  assert.ok(stage.includes('after the switch began and before the commit point it is a `commit_stuck` rollback instead') && stage.includes('after the commit point the release stays committed and only the hold is set'), 'the stuck_stage row does not say what a stuck stage becomes after the switch')
+  assert.match(driver, /elif \[\[ "\$R_SWITCH" == true \]\]; then\s*\n\s*_cd_drv_rollback_auto commit_stuck "\$stage"\s*\n\s*else\s*\n\s*_cd_drv_abort stuck/, 'the stuck-stage branches changed: the stuck_stage row describes them')
+  // the platform migration hand procedure: the hand dump is retired BEFORE resume, because resume refuses a live dump set
+  const platform = flat(subsection(section(text, 'Hand procedures'), 'A release that carries a platform migration'))
+  const retire = platform.indexOf('gremion-migration-dump switched --release pilot-<sha12>')
+  const resume = platform.indexOf('gremion-cd resume')
+  assert.ok(retire > 0 && resume > 0 && retire < resume, 'the platform migration procedure must retire the hand dump before it runs gremion-cd resume')
+  assert.ok(platform.includes('resume refuses while that dump is live'), 'the platform migration procedure does not say why the dump is retired first')
+  assert.match(read('infra/host/lib/cd/cmd-state.sh'), /resume refused: a dump set is live after a failed release[^]*?--discard-dump/, 'resume no longer refuses a live dump set')
+  // the host upgrade procedure of the runbook does not fit the release trees CD adopts: say why, in both places
+  const why = 'the runbook upgrade (`gremion-deploy`) takes a `dist-v` tag and makes `releases/<tag>`, while adopt reads a `pilot-<sha12>` tag and `releases/<sha12>`'
+  assert.ok(flat(section(text, 'Adoption')).includes(why), 'the adoption steps do not say why the runbook upgrade does not fit')
+  assert.ok(platform.includes('for the same reason as in adoption step 2'), 'the platform migration procedure does not point at the adoption step for the upgrade procedure')
+  assert.match(read('infra/host/bin/gremion-deploy'), /\^dist-v\[0-9\]\+/, 'gremion-deploy no longer takes only dist-v tags')
+  assert.match(read('infra/host/lib/cd/adopt.sh'), /\^pilot-\[0-9a-f\]\{12\}\$/, 'adopt no longer reads only pilot-<sha12> tags')
+  // the order of the board series is the plan's, and the document says so
+  const board = flat(subsection(section(text, 'Hand procedures'), 'The board declaration release'))
+  for (const phrase of ['The order of the series', 'merges last', 'ships earlier as ordinary releases', 'no code in this repository checks that order', 'chain_class_changed']) {
+    assert.ok(board.includes(phrase), `the board section does not say: ${phrase}`)
+  }
+  // the README row for the template says which values are placeholders and which ship empty
+  const tmpl = read(TEMPLATE)
+  const placeholders = [...tmpl.matchAll(/^(CD_[A-Z0-9_]+)=CHANGE_ME_OPERATOR_/gm)].map((m) => m[1])
+  const empties = [...tmpl.matchAll(/^(CD_[A-Z0-9_]+)=$/gm)].map((m) => m[1])
+  assert.ok(placeholders.length >= 4 && empties.length >= 3, 'the template changed shape: the README row must follow')
+  const readmeRow = read('infra/host/README.md').split('\n').find((l) => l.includes('templates/env/cd.env.tmpl')) ?? ''
+  assert.ok(!/every operator value/.test(readmeRow), 'the README row says every operator value is a placeholder: some ship empty')
+  for (const key of [...placeholders, ...empties]) assert.ok(readmeRow.includes(key), `the README row of the template does not name ${key}`)
+})
+
 test('the document names no address, no date, and keeps the two placeholders of the adoption steps', () => {
   const text = docText()
   assert.deepEqual(foreignAddresses(text), [], 'an address outside example.org, example.com, .invalid and .test is in the document')
@@ -518,7 +571,7 @@ test('every source path the document cites exists and defines its function, and 
     ['recordCaldavSyncFailure', 'modules/calendar/src/store/caldav-queue.ts'],
   ]
   for (const [name, rel] of functions) {
-    assert.ok(text.includes(name), `the document no longer names ${name}`)
+    assert.match(text, new RegExp(`\\b${name}\\b`), `the document no longer names ${name} (a longer name does not count)`)
     assert.ok(text.includes(rel), `the document no longer cites ${rel}`)
     assert.match(read(rel), new RegExp(`function ${name}\\b`), `${rel} does not define ${name}`)
   }
@@ -545,7 +598,7 @@ test('every source path the document cites exists and defines its function, and 
   const board = flat(subsection(section(text, 'Hand procedures'), 'The board declaration release'))
   assert.ok(board.includes('names no procedure and no runbook for moving existing boards') && board.includes('depends on the board plan'), 'the board section does not name the missing move procedure as a gap')
   assert.match(read('modules/board/README.md'), /nothing in this release writes it/, 'the board README no longer says the move step is reserved: the gap in the document may be closed')
-  assert.ok(!/board/i.test(read('gremion-ui/scripts/tenant-provision.ts')), 'tenant-provision.ts has a board verb now: replace the gap in the document by the procedure')
+  assert.ok(!/\bboard\b/i.test(read('gremion-ui/scripts/tenant-provision.ts')), 'tenant-provision.ts has a board verb now: replace the gap in the document by the procedure')
 })
 
 test('the pointers lead to the document and the old "in progress" row is gone', () => {
@@ -571,5 +624,5 @@ test('this file is collected by unit:node (a count assertion over the same glob 
   assert.ok(collected.includes('scripts/cd/cd-guards.test.mjs'), 'the sibling guard file is no longer collected')
   assert.ok(collected.length >= 20, `only ${collected.length} node test files collected: the glob emptied`)
   const declared = (readFileSync(path.join(ROOT, self), 'utf8').match(/^[ \t]*test(?:\.(?:skip|only|todo))?\(/gm) ?? []).length
-  assert.equal(declared, 17, `this file declares ${declared} tests, not the 17 that the count in this assertion knows`)
+  assert.equal(declared, 18, `this file declares ${declared} tests, not the 18 that the count in this assertion knows`)
 })

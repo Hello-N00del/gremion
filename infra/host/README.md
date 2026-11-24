@@ -36,7 +36,7 @@ programs are the family `gremion-cd`, and they are documented for the operator i
 | `lib/cd/*.sh` | one library per area, sourced in sorted order with `core.sh` first: `core` (config, state, locks, hold, block), `cmd-state` (`help`, `version`, `status`, `hold`, `resume`), `github` (pick-up), `classify`, `notify` and `watchdog`, `prepare`, `data` (timer guard, dump set, migrate stage), `modules` (module step), `leaves` (leaf step), `docker`, `colour`, `traffic`, `watch`, `rollback`, `commit`, `reconcile`, `adopt`, `driver` (tick, pipeline, failure policy, `release-now`, `rollback`, `reconcile`) |
 | `lib/cd/apply-root.sh` | the one script that runs as root, only from `gremion-cd-apply@.service`; never sourced and never run from a tick |
 | `templates/systemd/gremion-cd*.service`, `gremion-cd*.timer` | the tick (every five minutes), the watchdog (every ten), the boot resume and the root apply unit |
-| `templates/env/cd.env.tmpl` | the configuration template; every operator value is a `CHANGE_ME_OPERATOR_` placeholder |
+| `templates/env/cd.env.tmpl` | the configuration template; the four values an operator must set (`CD_REPO_URL`, `CD_MAIL_TO`, `CD_HOST_LABEL`, `CD_PROBE_HOST`) are `CHANGE_ME_OPERATOR_` placeholders, and `CD_PING_URL`, `CD_POLICY_ACK`, `CD_GITHUB_TOKEN_FILE` and `CD_PROOF_REPO` ship empty |
 
 Installed on a host as:
 
