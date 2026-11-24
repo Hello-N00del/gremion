@@ -49,7 +49,7 @@ CD_DRV_RESUME_ONLY=0   # 1 in `tick --resume-only` (the boot unit)
 CD_DRV_ROLLED=0        # 1 once a rollback has ended the release in this process
 CD_DRV_STARTED=0       # 1 once this process has started a release (an idle tick does one thing)
 CD_DRV_ATT=1           # the attempt number of the stage about to run
-CD_DRV_SWITCH_DONE=0   # 1 when a resumed switch stage found the new colour already serving
+CD_DRV_SWITCH_DONE=0   # the id of the release whose resumed switch stage found the new colour already serving (else 0)
 CD_DRV_RETRY_BACKOFF=(60 300 900)
 CD_DRV_RETRY_MAX=3
 
@@ -137,6 +137,8 @@ _cd_drv_next_stage() {
 # _cd_drv_end_release -- phase idle, no release. The hold, the live and previous records and
 # the blocks are left as the caller wrote them. Needs the cd lock.
 _cd_drv_end_release() {
+    # what a resumed switch stage found out belongs to the release that is over now
+    CD_DRV_SWITCH_DONE=0
     _cd_drv_set '.phase = "idle" | .release = null'
     rm -f "${CD_DATA}/release-ref" 2>/dev/null || true
 }
@@ -172,9 +174,15 @@ _cd_drv_keep_log() {
     cid="$(cd_svc_cid "app-${colour}" gremion-ui 2>/dev/null </dev/null)" || return 0
     [[ "$cid" =~ ^[0-9a-f]{12,64}$ ]] || return 0
     dir="${CD_ROOT}/logs"
-    mkdir -p "$dir" 2>/dev/null || return 0
+    # the directory is 0700 when this creates it, and a link in its place (or in place of the
+    # file) is refused: the log names tenants and must not be written through a planted link
+    [[ -L "$dir" ]] && return 0
+    cd_mkdir "$dir" 2>/dev/null || return 0
     f="${dir}/cd-failed-${sha12}.log"
-    ( umask 077; timeout 30 docker logs --tail 500 "$cid" >"$f" 2>&1 </dev/null ) || true
+    [[ -L "$f" ]] && return 0
+    rm -f -- "$f" 2>/dev/null || return 0
+    # noclobber: a link planted between the check and the write is not followed either
+    ( umask 077; set -C; timeout 30 docker logs --tail 500 "$cid" >"$f" 2>&1 </dev/null ) || true
     chmod 600 "$f" 2>/dev/null || true
     return 0
 }
@@ -372,6 +380,7 @@ _cd_drv_rollback_auto() {
 # else is left to go. The block, the hold and the mail are the sequence's.
 _cd_drv_after_rollback() {
     local rc="$1" rule="$2" kind
+    CD_DRV_SWITCH_DONE=0
     _cd_drv_load
     if [[ "$rc" != 0 ]]; then
         cd_hist rollback_returned rule="$rule" code="$rc" || true
@@ -684,8 +693,21 @@ _cd_drv_st_host_apply() {
     return "$rc"
 }
 _cd_drv_st_state_apply() {
-    local rc=0
+    local rc=0 rrc=0
     cd_adopt_apply_state "$R_TREE" || rc=$?
+    if ((rc == 0)); then
+        # The apply is done: its dump set (state-<tag>, the restore point of a half-run apply) has
+        # served. Left live it is a second live label, and the dump series check refuses the app
+        # snapshot of this very release. Whatever the retire says, the apply is not run again
+        # (it is done): a live set that cannot be retired is a hold of its own, and
+        # `resume --discard-dump` is the way out.
+        cd_data_dumpset_retire "state-${R_TAG}" </dev/null || rrc=$?
+        if ((rrc != 0)); then
+            cd_hist state_dumpset_retire_failed code="$rrc" sha12="$R_SHA12" || true
+            CD_DRV_WHY=state_dump_retire
+            rc=1
+        fi
+    fi
     cd_hostlock_release
     return "$rc"
 }
@@ -834,7 +856,7 @@ _cd_drv_st_switch() {
             command="gremion-cd status" key="unusable.${R_ID}"
     fi
     _cd_drv_begin switch 600
-    if ((CD_DRV_SWITCH_DONE == 0)); then
+    if [[ "$CD_DRV_SWITCH_DONE" != "$R_ID" ]]; then
         cd_traffic_switch "$R_TREE" "$R_COL" || rc=$?
     fi
     CD_DRV_SWITCH_DONE=0
@@ -900,6 +922,19 @@ _cd_drv_st_watch() {
     return 0
 }
 
+# _cd_drv_commit_closeout SHA12 MODE -- what a committed release ends, on the clean path and on
+# the one where a step after commit step 5 failed: the blocks it contains are closed as
+# superseded (a release-now of a descendant; an automatic release never contains an open block)
+# and the infrastructure retry record goes. Never fails: a block that cannot be closed is said.
+_cd_drv_commit_closeout() {
+    local sha12="$1" mode="$2"
+    if [[ "$mode" == manual ]]; then
+        cd_block_close_superseded "$sha12" || cd_err "driver: the blocks could not be closed"
+    fi
+    rm -f "$(_cd_drv_retry_file)" 2>/dev/null || true
+    return 0
+}
+
 # _cd_drv_st_commit -- the commit point and what follows it up to the release of the host
 # lock. On a committed release this is the forward finish of steps 6 to 10: cd_commit_promote
 # is idempotent and does only what is left.
@@ -919,6 +954,10 @@ _cd_drv_st_commit() {
         # LINE-1: after commit step 5 nothing goes back, whatever the step that failed
         if cd_release_committed; then
             cd_stage_fail commit host post_commit || true
+            # the release is live whatever step failed after step 5: what it supersedes is closed
+            # as on the clean path. Its hold is not cleared here on purpose: the failure hold
+            # below replaces a blocked or classifier hold, and stands until `resume`.
+            _cd_drv_commit_closeout "$R_SHA12" "$R_MODE"
             _cd_drv_policy_committed commit host post_commit
         elif [[ -z "$R_ID" || "$D_PHASE" == idle ]]; then
             # promote ran the rollback itself (commit.sh at CD_COMMIT_MAX_MIN) and ended the
@@ -943,13 +982,10 @@ _cd_drv_st_commit() {
         return 0
     fi
     # the blocks this release contains are superseded, and the hold of the manual path clears
-    if [[ "$R_MODE" == manual ]]; then
-        cd_block_close_superseded "$sha12" || cd_err "driver: the blocks could not be closed"
-    fi
+    _cd_drv_commit_closeout "$sha12" "$R_MODE"
     if [[ "$D_HOLD" == blocked ]] || _cd_drv_in_list "$D_HOLD" "$CD_DRV_CLASSIFIER_HOLDS"; then
         cd_hold_clear || true
     fi
-    rm -f "$(_cd_drv_retry_file)" 2>/dev/null || true
     rc=0
     cd_commit_prune || rc=$?
     if ((rc != 0)); then
@@ -1077,9 +1113,9 @@ _cd_drv_boundary() {
 # 15 seconds looks for the file to be gone (0) or for a rollback request (the sequence runs,
 # 1). Automatic rollback is OFF while it waits.
 _cd_drv_park() {
-    local n=0
-    _cd_drv_mail killswitch phase="$D_PHASE" sha12="$R_SHA12" stage="$R_STAGE" notes=rollback_off_lock_held \
-        command="gremion-cd status" key="killswitch.${R_ID}" every=3600
+    local n=0 phase="$D_PHASE" sha12="$R_SHA12" stage="$R_STAGE" rid="$R_ID" last now
+    _cd_drv_park_mail "$phase" "$sha12" "$stage" "$rid"
+    last="$(cd_now)" || last=0
     cd_hist killswitch_park stage="$R_STAGE" sha12="$R_SHA12" || true
     cd_heartbeat_start killswitch_park 3600 || true
     while cd_killswitch_active; do
@@ -1093,11 +1129,25 @@ _cd_drv_park() {
             cd_heartbeat_start killswitch_park 3600 || true
         fi
         cd_sleep 15
+        # the reminder: a release that stays parked for days says so every hour. The notifier's
+        # own `every` only de-duplicates a mail that is queued again, so it is queued again
+        # here, once per hour of the clock.
+        now="$(cd_now)" || now="$last"
+        if ((now - last >= 3600)); then
+            _cd_drv_park_mail "$phase" "$sha12" "$stage" "$rid"
+            last="$now"
+        fi
     done
     cd_heartbeat_stop
     cd_hist killswitch_cleared sha12="$R_SHA12" || true
     _cd_drv_load
     return 0
+}
+
+# _cd_drv_park_mail PHASE SHA12 STAGE RELEASE_ID -- the kill-switch mail of a parked release.
+_cd_drv_park_mail() {
+    _cd_drv_mail killswitch phase="$1" sha12="$2" stage="$3" notes=rollback_off_lock_held \
+        command="gremion-cd status" key="killswitch.${4}" every=3600
 }
 
 # _cd_drv_loop -- run the release from where the state says it is.
@@ -1185,7 +1235,7 @@ cd_pipeline_resume() {
                 rc=0
                 _cd_drv_switch_truth || rc=$?
                 if ((rc == 0)); then
-                    CD_DRV_SWITCH_DONE=1
+                    CD_DRV_SWITCH_DONE="$R_ID"
                 elif ((rc != 1)); then
                     cd_hist resume_crash stage=switch sha12="$R_SHA12" || true
                     _cd_drv_rollback_auto commit_stuck switch
@@ -1297,6 +1347,8 @@ _cd_drv_select() {
     local sha="$1" mode="$2" ws="$3" ref="${4:-}" sha12 now iso colour rc=0
     sha12="${sha:0:12}"
     CD_DRV_STARTED=1
+    # a new release has found nothing out yet, whatever the one before it did in this process
+    CD_DRV_SWITCH_DONE=0
     _cd_drv_load
     colour="$(_cd_drv_other "$D_LCOL")"
     now="$(cd_now)" || return 2
@@ -1374,12 +1426,25 @@ _cd_drv_candidate() {
     final="$(printf '%s' "$out" | jq -r '.final // false')"
     commits="$(printf '%s' "$out" | jq -r '.commits // ""')"
     tip12="$(printf '%s' "$out" | jq -r '(.tip // .sha // "")[0:12]')"
+    # the stored poll is read below (tip_unchanged keeps it): from the state as it is now
+    _cd_drv_load
     case "$verdict" in
         green) pv=green ;;
         pending | unknown) pv="$verdict" ;;
         none | hold)
             if [[ "$final" == true ]]; then
-                if [[ "$reason" == no_green_commit ]]; then pv=red; else pv=none; fi
+                if [[ "$reason" == no_green_commit ]]; then
+                    pv=red
+                elif [[ "$reason" == tip_unchanged ]]; then
+                    # github.sh answers this for a tip it judged on an earlier tick (stored red
+                    # or none) without asking again: it says nothing new, so the stored verdict
+                    # stays. Storing `none` here would end a red main after one tick, and the
+                    # watchdog's red_since with it.
+                    pv="$(printf '%s' "$CD_STATE_DOC" | jq -r '.poll.verdict // "none"')"
+                    [[ "$pv" =~ ^(green|red|pending|none|unknown)$ ]] || pv=none
+                else
+                    pv=none
+                fi
             else
                 pv=pending
             fi
@@ -1504,6 +1569,12 @@ _cd_drv_do_resume() {
         cd_hist resume_refused why=classifier_hold kind="$D_HOLD" || true
         return 0
     fi
+    # --accept-descendants is logged and mailed with its reason: a request without one is refused
+    # before anything below is done (the dump discard cannot be taken back)
+    if [[ "$accept" == true && -z "$reason" ]]; then
+        cd_hist resume_refused why=no_reason || true
+        return 0
+    fi
     cd_blocks_load
     nblocks="$(printf '%s' "$CD_BLOCKS_DOC" | jq -r '[.[] | select(.cleared == null)] | length')"
     if ((nblocks > 0)) && [[ "$accept" != true ]]; then
@@ -1533,7 +1604,6 @@ _cd_drv_do_resume() {
         fi
     fi
     if [[ "$accept" == true ]]; then
-        [[ -n "$reason" ]] || { cd_hist resume_refused why=no_reason || true; return 0; }
         cd_block_clear_all "$reason" || true
         _cd_drv_mail held hold=none reason=blocks_cleared key="blocks_cleared.$(cd_now)"
     fi
