@@ -713,7 +713,7 @@ pl_assert_boot_end() {
 @test "a release that changes the state tier is held and the mail names the exact release-now command" {
     pl_scn_green
     # the rendered compose of the state project differs between the live tree and the candidate
-    printf '{"services":{"postgres":{"image":"postgres:17"}}}\n' >"$DK/compose.state.${C_B:0:12}.json"
+    printf '{"services":{"cache":{"image":"example/cache:2"}}}\n' >"$DK/compose.state.${C_B:0:12}.json"
     run pl_tick
     echo "$output"
     pl_no_stubs
