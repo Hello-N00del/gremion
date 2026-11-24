@@ -16,7 +16,7 @@
 #   router, the TRD-440 fingerprint.
 handle_create() {
     local id="$1" slug="$2" operator="$3" args="$4" work="$5"
-    local cfg="${work}/tenant-config.json" dpia="${work}/dpia.json" v want_host got_host secondary why mod off='{}' platform panel control
+    local cfg="${work}/tenant-config.json" dpia="${work}/dpia.json" v want_host got_host secondary why mod off='{}' pinned='[]' platform panel control
     [[ -f "$args" ]] || die "create ${id}: no verified args" "$GREMION_EXIT_ASSERT"
     jq -e --arg s "$slug" '.slug == $s' "$args" >/dev/null \
         || die "create ${id}: the verified args name another customer than ${slug}" "$GREMION_EXIT_ASSERT"
@@ -50,7 +50,12 @@ handle_create() {
                     || die "create ${id}: the module ${mod} cannot be enabled for a customer on the secondary host ${got_host}: it runs on the shared chat or file services, which stay bound to the customer host ${want_host}; a secondary host is core-only (${SECONDARY_HOST_MODULES// /, }); nothing was created" "$GREMION_EXIT_ASSERT"
             done < <(jq -r '(.enable // [])[]' "$args")
             # a config reads every toggleable module as ON until it says otherwise: switch the others OFF
-            off="$(tr ' ' '\n' <<< "$SECONDARY_HOST_MODULES_OFF" | jq -R . | jq -sc 'map({key: ., value: false}) | from_entries')" \
+            # record them as pinned_off_modules too: the app pins those ids false on every read and write of the
+            # config, so the customer's own settings (a write, a reset to defaults) cannot switch them back on;
+            # the switches alone are a value the tenant may overwrite.
+            pinned="$(tr ' ' '\n' <<< "$SECONDARY_HOST_MODULES_OFF" | jq -R . | jq -sc '(.)')" \
+                || die "create ${id}: could not build the pinned-off module list of the secondary-host customer; nothing was created" "$GREMION_EXIT_ASSERT"
+            off="$(jq -c 'map({key: ., value: false}) | from_entries' <<< "$pinned")" \
                 || die "create ${id}: could not build the module switches of the secondary-host customer; nothing was created" "$GREMION_EXIT_ASSERT"
         fi
     elif [[ -n "$secondary" ]]; then
@@ -58,9 +63,10 @@ handle_create() {
     fi
     # brand.termMonths (the two semester start months, optional: an older stored request has none) becomes
     # brand.term_months, the key the app computes its semester label from; the label itself is never written.
-    jq -c --argjson off "$off" '{brand: ({product: .brand.product, org_short: .brand.orgShort}
+    jq -c --argjson off "$off" --argjson pinned "$pinned" '{brand: ({product: .brand.product, org_short: .brand.orgShort}
                     + (if .brand.termMonths then {term_months: {winter: .brand.termMonths.winter, summer: .brand.termMonths.summer}} else {} end)),
-            modules: $off}' "$args" | atomic_write "$cfg" 600 \
+            modules: $off}
+            + (if ($pinned | length) > 0 then {pinned_off_modules: $pinned} else {} end)' "$args" | atomic_write "$cfg" 600 \
         || die "create ${id}: could not write the tenant config" "$GREMION_EXIT_ASSERT"
     local -a argv=("$slug"
         --host "$(jq -r '.host' "$args")"

@@ -73,6 +73,16 @@ test('SCRIPTS: the host-side create reads the secondary host list from state.env
   assert.equal(count(ops, 'control_panel_key_of "$state" SECONDARY_TENANT_HOSTS'), 1, 'the module guard reads the list from state.env')
 })
 
+test('SCRIPTS: the switches of a core-only customer are enforced by the app, not only written once: create.sh stores pinned_off_modules, config.ts pins it and keeps it out of every update', () => {
+  const create = read('infra/host/lib/executor/handlers/create.sh')
+  assert.match(create, /pinned_off_modules: \$pinned/, 'create.sh writes the list into the tenant config')
+  assert.match(create, /pinned="\$\(tr ' ' .*\$SECONDARY_HOST_MODULES_OFF/, 'the list is SECONDARY_HOST_MODULES_OFF')
+  const cfg = read('gremion-ui/src/lib/server/config.ts')
+  assert.match(cfg, /configUpdateSchema = gremionConfigSchema\.omit\(\{ pinned_off_modules: true \}\)\.strict\(\)/, 'no settings update can write or empty the list')
+  assert.match(cfg, /stored\.pinned_off_modules\)/, 'the read path pins the listed modules off')
+  assert.match(cfg, /for \(const mod of current\.pinned_off_modules \?\? \[\]\)/, 'the write path pins the listed modules off from the STORED list')
+})
+
 test('SCRIPTS: every module manifest is either allowed on a secondary host or created switched OFF there (a new module cannot slip in switched on)', () => {
   const lib = read('infra/host/lib/common.sh')
   const listOf = (name) => (lib.match(new RegExp(`^${name}="([^"]*)"`, 'm'))?.[1] ?? '').split(/\s+/).filter(Boolean)

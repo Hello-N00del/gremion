@@ -804,7 +804,7 @@ create_refused_before_phase_a() {
     run "$EXEC" --once
     [ "$status" -eq 0 ] || { echo "status=$status $output"; steps; return 1; }
     run sed -n 2p "${GREMION_ROOT}/config-seen"
-    [ "$output" = '{"brand":{"product":"Ratsportal","org_short":"AR"},"modules":{"elections":false,"files":false,"messages":false,"newsletter":false,"vault":false,"votes":false}}' ] || { echo "$output"; return 1; }
+    [ "$output" = '{"brand":{"product":"Ratsportal","org_short":"AR"},"modules":{"elections":false,"files":false,"messages":false,"newsletter":false,"vault":false,"votes":false},"pinned_off_modules":["elections","files","messages","newsletter","vault","votes"]}' ] || { echo "$output"; return 1; }
     # the primary host, the same install: no module is written
     sed -i '/^PILOT_TENANT_HOST=/d; /^SECONDARY_TENANT_HOSTS=/d; /^PLATFORM_DOMAIN=/d' "${GREMION_ROOT}/etc/env/state.env"
     secondary_install rat.alpha.example 'canary.example.org'

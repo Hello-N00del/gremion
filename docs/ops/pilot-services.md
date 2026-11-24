@@ -321,7 +321,12 @@ enforces this instead of leaving it to the operator:
   `SECONDARY_HOST_MODULES` in `infra/host/lib/common.sh`);
 - the customer's tenant config is created with every other module switched off
   (`SECONDARY_HOST_MODULES_OFF`), because a config reads a module as on until it
-  says otherwise;
+  says otherwise, and with those ids listed as `pinned_off_modules`. The app pins
+  every listed module off on each read and write of the module switches, exactly
+  like the held-off set, and the list is not part of any settings update: neither
+  a settings change nor "Konfiguration zurücksetzen" by the customer's own IT
+  admin can switch such a module back on, and the provisioning worker and the
+  route gate read the pinned value;
 - the module enable (executor, council admin and break-glass alike) refuses the
   same modules for a customer registered on a secondary host;
 - `gremion-services wire <slug>` refuses a customer whose registered host is not
@@ -335,7 +340,8 @@ the deploy that first uses it: the realm's discovery document at the secondary
 host names that host as issuer; a login on it; the customer's edge router listed
 and enabled in `gremion-verify`; a CD run with `CD_PROBE_HOST` set to it. Removing
 a host from the list while a customer still lives on it leaves that customer
-running; the module guard is then inert for it (it applies only while the list is
+running, and the app keeps the modules off through `pinned_off_modules`; the host
+side module guard, however, is then inert for it (it applies only while the list is
 set), so decommission the customer first.
 
 ## Named residuals
