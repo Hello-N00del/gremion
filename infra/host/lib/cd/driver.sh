@@ -140,7 +140,16 @@ _cd_drv_end_release() {
     # what a resumed switch stage found out belongs to the release that is over now
     CD_DRV_SWITCH_DONE=0
     _cd_drv_set '.phase = "idle" | .release = null'
-    rm -f "${CD_DATA}/release-ref" "${CD_DATA}/hostlock-since" 2>/dev/null || true
+    rm -f "${CD_DATA}/release-ref" 2>/dev/null || true
+    _cd_drv_lock_forget
+}
+
+# _cd_drv_lock_forget -- the span of the host lock is over: the release ended, or it handed the lock
+# back on purpose (the state apply before the build, a park of the watch), so the next take starts
+# a span of its own. A lock that was lost by a kill is NOT forgotten here: the process that takes
+# the release over goes on counting, and what it reports is an upper bound.
+_cd_drv_lock_forget() {
+    rm -f "${CD_DATA}/hostlock-since" 2>/dev/null || true
     CD_HOSTLOCK_SINCE=''
 }
 
@@ -745,6 +754,7 @@ _cd_drv_st_state_apply() {
         fi
     fi
     cd_hostlock_release
+    _cd_drv_lock_forget
     return "$rc"
 }
 
@@ -945,6 +955,8 @@ _cd_drv_st_watch() {
         return 0
     fi
     if [[ "$D_PHASE" == parked ]]; then
+        # the park handed the host lock back: the span of the lock ends here
+        _cd_drv_lock_forget
         return 3
     fi
     if [[ "$D_PHASE" == rolling_back ]]; then

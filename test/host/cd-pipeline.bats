@@ -486,6 +486,25 @@ pl_assert_boot_end() {
     [ "$(pl_state .release.committed_at)" = null ]
 }
 
+@test "the host lock span of a release resumed from a park starts at the resume, not at the first take" {
+    pl_scn_green
+    pl_on outage '--max-time 12 http://127.0.0.1:18080/api/version' 'sed -i "s/^health=.*/health=unhealthy/" "$DK/ctr/c-state-postgres"; : >"$DK/public.fail.green"; : >"$DK/next.fail.blue"'
+    run pl_tick
+    [ "$(pl_state .phase)" = parked ]
+    # half an hour later the outage is over; the operator resumes
+    cd_advance 1800
+    rm -f "$DK/public.fail.green" "$DK/next.fail.blue"
+    sed -i 's/^health=.*/health=healthy/' "$DK/ctr/c-state-postgres"
+    run "${HOST_SRC}/bin/gremion-cd" resume
+    echo "$output"
+    run pl_tick
+    echo "$output"
+    pl_no_stubs
+    pl_assert_committed
+    # the park (a quarter of an hour of pause and the half hour after it) is no part of the span
+    [ "$(pl_mail_field "$(pl_mail_file released)" hostlock_min)" -lt 10 ]
+}
+
 @test "the watch: a rollback of the loop that fails ends the release too, the hold rollback_failed stands alone" {
     pl_scn_green
     # the pause cap triggers a rollback (the old colour answers ready through the loopback route), and the
@@ -509,10 +528,7 @@ pl_assert_boot_end() {
 
 @test "reconcile: every customer once, from the tree of current, with the host lock declared held and a request id of its own, the lock free between two children" {
     pl_scn_green
-    printf '0.4\n' >"$DK/tenant.sleep"
-    pl_lock_poller
     run pl_tick
-    touch "$DK/poller.stop"
     echo "$output"
     [ "$status" -eq 0 ]
     pl_no_stubs
@@ -523,8 +539,10 @@ pl_assert_boot_end() {
     [ "$(wc -l <"$DK/tenant.log")" -eq 3 ]
     # every call: the verb, the lock declared held, a request id, the NEW tree, the lock really held by the parent
     [ "$(grep -c "^tenant verb=reconcile held=1 request=set tree=${C_B:0:12} lockrc=1\$" "$DK/tenant.log")" -eq 3 ]
-    # the lock was free at least twice while the stage ran: between child one and two, and two and three
-    [ "$(wc -l <"$DK/gaps")" -ge 2 ]
+    # the lock was free at every look between two children (the timer guard asks the world's systemctl
+    # before each customer, and the shim notes what a second descriptor sees at that moment)
+    [ "$(grep -c '^free$' "$DK/between.lock")" -ge 2 ]
+    [ "$(grep -c '^held$' "$DK/between.lock" || true)" -eq 0 ]
     # the release is done and clean
     [ "$(pl_state .hold)" = null ]
     [ "$(pl_state .live.reconcile.ok)" -eq 3 ]

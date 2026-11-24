@@ -434,7 +434,12 @@ exec "$GH_REAL_GIT" "$@"'
     shim logger
     shim ionice
     shim renice
-    shim systemctl 'cat "$DK/timers.json" 2>/dev/null || exit 1'
+    # the timer list; while the reconcile stage runs (a customer has been reconciled and the stage has not
+    # ended) it also notes whether another descriptor can take the host lock at this very moment
+    shim systemctl 'cat "$DK/timers.json" 2>/dev/null || exit 1
+if [ -s "$DK/tenant.slugs" ] && ! grep -q "\"event\":\"reconciled\"" "$GREMION_ROOT/data/cd/history.jsonl" 2>/dev/null; then
+    if ( exec 7>>"$GREMION_ROOT/runtime/hostd.lock"; flock -n 7 ); then echo free >>"$DK/between.lock"; else echo held >>"$DK/between.lock"; fi
+fi'
     shim df 'printf "Filesystem 1024-blocks Used Available Capacity Mounted\nx 1 1 99999999 1%% /\n"'
     pl_script dump "${GREMION_ROOT}/bin/gremion-migration-dump"
     pl_script isolation "${GREMION_ROOT}/bin/gremion-isolation"
@@ -463,22 +468,6 @@ done
 cd_paths_init
 cd_cfg_load
 ${snippet}" pl-lib "$@"
-}
-
-# pl_lock_poller -- a second process that tries the host lock every 50 ms while the reconcile stage runs
-# (the first child has started and the stage has not ended) and notes each moment it got it, in $DK/gaps:
-# the moments the lock was free between two children
-pl_lock_poller() {
-    (
-        while [ ! -f "$DK/poller.stop" ]; do
-            if [ -s "$DK/tenant.slugs" ] && ! grep -q '"event":"reconciled"' "${GREMION_ROOT}/data/cd/history.jsonl" 2>/dev/null; then
-                if ( exec 7>>"${GREMION_ROOT}/runtime/hostd.lock"; flock -n 7 ); then echo 1 >>"$DK/gaps"; fi
-            fi
-            sleep 0.05
-        done
-    ) 3>&- >/dev/null 2>&1 </dev/null &
-    PL_POLL=$!
-    CD_BG_PIDS+=("$PL_POLL")
 }
 
 # pl_diag -- what a failed test leaves to read: the state, the history, the order of the world's calls
