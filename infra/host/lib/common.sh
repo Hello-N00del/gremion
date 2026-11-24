@@ -552,3 +552,80 @@ resolve_control_panel_host() {
     fi
     printf '%s' "$h"
 }
+
+# ---------------------------------------------------------------------------
+# SECONDARY_TENANT_HOSTS (state.env, optional): extra customer hosts, each a
+# core-only customer
+# ---------------------------------------------------------------------------
+# PILOT_TENANT_HOST is the install's one customer host: collabora, the call and
+# office URLs, the video relay, Synapse's and Nextcloud's login provider and the
+# leaves' public base URL carry it. The operator may allow further hosts, each for
+# a customer that knowingly has no chat, files, office editing, video or votes (the
+# modules that live on the shared Synapse and Nextcloud). The list is read from
+# state.env only, never from a request.
+
+# The modules a customer on a secondary host may enable: the leaves that keep their
+# data in their own database and never reach the shared Synapse or Nextcloud. DEFAULT
+# DENY: a module that is not named here (a new one included) is refused there.
+SECONDARY_HOST_MODULES="board calendar content publishing"
+
+# secondary_host_module_allowed <module> -> 0 when a customer on a secondary host may enable it.
+secondary_host_module_allowed() {
+    local m="${1:-}" a
+    [[ -n "$m" ]] || return 1
+    for a in $SECONDARY_HOST_MODULES; do
+        [[ "$m" == "$a" ]] && return 0
+    done
+    return 1
+}
+
+# secondary_hosts_has <list> <host> -> 0 when <host> equals ONE entry of the comma-separated
+# list, compared whole and case-insensitively (the right side is quoted: never a glob or a
+# substring). An empty host or an empty entry matches nothing.
+secondary_hosts_has() {
+    local list="${1:-}" h="${2:-}" e
+    local -a entries=()
+    [[ -n "$h" && -n "$list" ]] || return 1
+    h="${h,,}"
+    IFS=',' read -r -a entries <<< "$list"
+    for e in ${entries[@]+"${entries[@]}"}; do
+        [[ -n "$e" && "${e,,}" == "$h" ]] && return 0
+    done
+    return 1
+}
+
+# secondary_hosts_problem <list> <platform domain> <pilot host> <control host>
+# -> prints what is wrong with the list and returns 1; prints nothing and returns 0 when it
+# is acceptable (an empty list is: the feature is off). Every entry must be a lowercase DNS
+# host name (control_panel_host_problem: no scheme, port, path, wildcard, upper case, white
+# space, IP literal, trailing dot) that is not the platform domain, a platform host, the
+# customer host PILOT_TENANT_HOST or its video relay turn.<it>, nor the control panel's
+# host; no entry twice; no empty entry. Entries are named by position, never by value.
+secondary_hosts_problem() {
+    local list="${1:-}" apex="${2:-}" pilot="${3:-}" control="${4:-}" e why n=0 m
+    local -a entries=()
+    [[ -n "$list" ]] || return 0
+    if [[ "$list" == ,* || "$list" == *, || "$list" == *,,* ]]; then
+        printf 'it has an empty entry (a leading, doubled or trailing comma)'
+        return 1
+    fi
+    IFS=',' read -r -a entries <<< "$list"
+    for e in "${entries[@]}"; do
+        n=$((n + 1))
+        if ! why="$(control_panel_host_problem "$e" "$apex" "" "$pilot")"; then
+            printf 'entry %s: %s' "$n" "$why"
+            return 1
+        fi
+        if [[ -n "$control" && "$e" == "${control,,}" ]]; then
+            printf 'entry %s: it is the control panel host' "$n"
+            return 1
+        fi
+        for (( m = 1; m < n; m++ )); do
+            if [[ "${entries[m-1]}" == "$e" ]]; then
+                printf 'entry %s: it is a duplicate of entry %s' "$n" "$m"
+                return 1
+            fi
+        done
+    done
+    return 0
+}
