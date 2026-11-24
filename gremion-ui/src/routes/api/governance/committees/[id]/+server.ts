@@ -5,9 +5,12 @@ import type { RequestHandler } from './$types'
 import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
 import {
-  getOrgUnit, updateOrgUnit, deleteOrgUnit, hasMembers, hasElections, hasProtocols,
+  getOrgUnit, updateOrgUnit, deleteOrgUnit,
   listOrgUnitMembers, getChildOrgUnits, isMemberOf
 } from '$lib/server/governance/org-units-db'
+import {
+  getOrgUnitDependents, describeOrgUnitDependents, isForeignKeyViolation, ORG_UNIT_STILL_REFERENCED
+} from '$lib/server/governance/org-unit-dependents'
 import { canSeeOrgUnit, seesAllGovernance } from '$lib/server/governance/visibility'
 import { listRoles } from '$lib/server/governance/governance-db'
 import { deprovisionOrgUnit } from '$lib/server/governance/provisioning/orchestrator'
@@ -67,25 +70,24 @@ export const DELETE: RequestHandler = async ({ params, locals }) => {
   const unit = await getOrgUnit(params.id)
   if (!unit) return json({ success: false, error: 'Not found' }, { status: 404 })
 
-  if (await hasMembers(params.id)) {
-    return json({ success: false, error: 'Einheit hat noch Mitglieder und kann nicht gelöscht werden.' }, { status: 409 })
-  }
-  if ((await getChildOrgUnits(params.id)).length > 0) {
-    return json({ success: false, error: 'Einheit hat Untergruppen und kann nicht gelöscht werden.' }, { status: 409 })
-  }
-  if (await hasElections(params.id)) {
-    return json({ success: false, error: 'Einheit hat zugeordnete Wahlen und kann nicht gelöscht werden.' }, { status: 409 })
-  }
-  if (await hasProtocols(params.id)) {
-    return json({ success: false, error: 'Einheit hat zugeordnete Protokolle und kann nicht gelöscht werden.' }, { status: 409 })
-  }
+  // The database refusal comes first: nothing is torn down in Keycloak, Nextcloud
+  // or Matrix for a unit that still has records the database will not orphan.
+  const stillThere = describeOrgUnitDependents(await getOrgUnitDependents(params.id))
+  if (stillThere) return json({ success: false, error: stillThere }, { status: 409 })
 
   const report = await deprovisionOrgUnit(params.id)
   if (report.subsystems.some((s) => s.status === 'failed')) {
     // Keep the row so the teardown can be retried — no orphaned external resources lost.
     return json({ success: false, error: 'Abbau einzelner Dienste fehlgeschlagen.', data: { report } }, { status: 207 })
   }
-  await deleteOrgUnit(params.id) // CASCADE clears provisioning_resources + members
+  try {
+    await deleteOrgUnit(params.id) // CASCADE clears provisioning_resources + members
+  } catch (err) {
+    // A record appeared after the check above: still a refusal, never a raw 500.
+    if (!isForeignKeyViolation(err)) throw err
+    const error = describeOrgUnitDependents(await getOrgUnitDependents(params.id)) ?? ORG_UNIT_STILL_REFERENCED
+    return json({ success: false, error }, { status: 409 })
+  }
   await writeAuditEntry({
     userId: user.id, field: 'org_unit.delete', oldValue: unit.name, newValue: params.id
   })
