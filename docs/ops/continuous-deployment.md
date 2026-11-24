@@ -286,7 +286,7 @@ Every kind has a named way out.
 | `state_tier` | the classifier: the release changes the compose state project, the edge, a host program, shared SQL or the platform database chain | `release-now <sha12> --with-state` (see the platform migration case in [Hand procedures](#hand-procedures)) |
 | `unsupported_chain` | the classifier: a new file in a migration chain no runner of stage 1 applies, or a changed `runtime.database` declaration of a module | a hand upgrade, then `adopt --re-adopt --reason TEXT` |
 | `contract_migration` | the classifier: a contract-phase migration file | a hand upgrade, then `adopt --re-adopt --reason TEXT`; it cannot be waived |
-| `waived_migration` | the classifier: a migration file whose chain carries a waiver | a hand upgrade, then `adopt --re-adopt --reason TEXT`; it cannot be waived |
+| `waived_migration` | the classifier: the new tree carries a migration-lint waiver (`scripts/migrations/runner/lint-waivers.json`) that the live tree does not | a hand upgrade, then `adopt --re-adopt --reason TEXT`; it cannot be waived |
 | `ci_changed` | the classifier: the range changes `.github/workflows` | `release-now <sha12>` |
 | `chain_class_changed` | the classifier: the class of a migration chain differs between the live tree and the new tree | `release-now <sha12>` |
 | `batch_too_large` | the pick-up: more than `CD_MAX_BATCH` commits | `release-now <sha12>` |
@@ -391,8 +391,8 @@ new colour already serves the migrated schema, and `current` moves only at the c
 cost: customer operations from the panel queue (the executor claims nothing while the lock is
 held), and the nightly backup, the purge and the hourly Karenz run exit 3 if they meet it.
 
-The lock is let go earlier in two cases only: a rollback has completed, or the phase became
-`parked`. A `rollback` request is drained by the process that holds the locks, within one sample;
+The lock is let go earlier only when the release ends before the commit point (a teardown or a
+completed rollback) or when the phase becomes `parked`. A `rollback` request is drained by the process that holds the locks, within one sample;
 a `rollback` that meets a process holding only the cd lock, or nothing, takes the host lock first
 and waits up to `CD_LOCK_WAIT_S`.
 
@@ -578,9 +578,9 @@ cannot be confirmed gone leaves the reason `leaf_container_alive`, and the teard
 change runs beside it.
 
 **The scheduler's first-contact migration is redundant and ordered after.** The new colour starts
-only after the step has ended, so the leaf scheduler's first tick (about 30 seconds after the leaf
-starts) and any later cold start of a customer's pool run the same idempotent files on a database
-that already has them and change nothing. If the step fails, the release stops before `start`, so no
+only after the step has ended, so the leaf scheduler's first tick (within about a minute of the
+leaf starting) and any later cold start of a customer's pool run the same idempotent files on a
+database that already has them and change nothing. If the step fails, the release stops before `start`, so no
 scheduler ever migrates a half-migrated set.
 
 **The race with the old colour.** The old colour keeps serving during the step, and its leaf runs
@@ -635,8 +635,8 @@ Whether a duplicate dispatch is prevented, leaf by leaf, read from the code:
 
 ## Reconcile after the commit point
 
-After the commit point, the stage runs once for the release: for each customer, in the order the
-registry gives (a canary customer first, the probe host's), one `gremion-tenant reconcile` child
+After the commit point, the stage runs once for the release: for each customer, with a canary first (the
+customer the probe host belongs to) and the rest in sorted order, one `gremion-tenant reconcile` child
 under the host lock, which is taken and freed for every customer, with a fresh request id and a kill
 by label after every child. After each customer the public edge is probed, and after the stage it is
 probed for `CD_POST_RECONCILE_S`. The stage is bounded per customer by `CD_RECONCILE_TIMEOUT_S`, as a
@@ -813,28 +813,33 @@ What you see: the release stops in `state_apply` with the message that the relea
 migration, no dump set was taken (the refusal comes first), the hold is `failure` with the reason
 `state_apply_failed`, no block is written, and the mail is `stopped`. The `host_apply` stage ran before
 it, so the host programs of that release may already be installed; `status` shows no drift in that
-case. The next candidate is classified again and held again for the same reason.
+case. After `resume`, the next tick classifies the newest candidate again and holds it again for the same
+reason.
 
 The hand procedure, in a window:
 
 1. Hold automation so no tick starts a release while you work: `gremion-cd hold --reason TEXT`.
    (`touch etc/cd.disabled` does the same and also silences the mails.)
 2. Take a restore point for the platform database by hand: `gremion-migration-dump take --release
-   <label> --db gremion_platform`, with a label of your own. Check `gremion-migration-dump status`
-   first: it refuses a second live label, so the host must have no other live set.
+   pilot-<sha12> --db gremion_platform`, under the tag the new colour's env file will carry (that is
+   the release reference the one-shots dump under). Check `gremion-migration-dump status` first: it
+   refuses a second live label, so the host must have no other live set.
 3. Bring the host to the release with the host's own upgrade procedure (the one used for the first
    adoption, see [Adoption](#adoption) step 2). It must leave the end state that the next step reads:
    the new release is the active colour, the colour's env file names `pilot-<sha12>`, its containers
    run that tag's images, `releases/<sha12>` is a clean checkout whose head is that commit, `current`
-   points at it, and the public `/readyz` answers ready. The platform migration is applied by that
-   upgrade's own step, from the new image.
-4. Verify on the running system, not on the repository: `gremion-verify`, the public `/readyz`, one
+   points at it, and the public `/readyz` answers ready.
+4. With the new colour active, apply the platform migration with the call the state tier itself makes:
+   `gremion-tenant init`, run from the new release tree (`GREMION_RELEASE_DIR` names that tree). It
+   starts the one-shot of the active colour, so it now runs the new image's migrations. Skip it only if
+   your upgrade procedure has just run it; the call is meant to be repeatable.
+5. Verify on the running system, not on the repository: `gremion-verify`, the public `/readyz`, one
    customer's login page.
-5. `gremion-cd adopt --re-adopt --reason TEXT`. It needs `phase` idle or parked, re-reads the truth
+6. `gremion-cd adopt --re-adopt --reason TEXT`. It needs `phase` idle or parked, re-reads the truth
    as `adopt` does, rewrites `live`, `previous` and the manifest, keeps the blocks, the history and
    the mail marks, and is logged and mailed (`adopted`).
-6. `gremion-cd resume` to clear the hold you set. Then retire your hand dump with
-   `gremion-migration-dump switched --release <label>`, or discard it.
+7. `gremion-cd resume` to clear the hold you set. Then retire your hand dump with
+   `gremion-migration-dump switched --release pilot-<sha12>`, or discard it.
 
 A hand upgrade takes no CD watch window: nothing watches it for twenty minutes and nothing rolls it
 back. Watch it yourself with `gremion-cd status` and `gremion-verify` for as long as a watch would
@@ -847,13 +852,13 @@ For `unsupported_chain`, `contract_migration` and `waived_migration` the pipelin
 release. When you apply it by hand, the module databases it migrates have no dump from CD, because the
 dump set of a release is taken by the pipeline. The manual-dump marker that a new file of such a chain
 carries names exactly this step, so take it: for each module database the release changes,
-`gremion-migration-dump take --release <label> --db <database> --pg-service <service> --pg-user
-<role>`, where the service is the module's database server (a name ending in `-postgres`) and the role
+`gremion-migration-dump take --release pilot-<sha12> --db <database> --pg-service <service> --pg-user
+<role>` (the label is the tag the colour's env file carries), where the service is the module's database server (a name ending in `-postgres`) and the role
 is that server's superuser role (the two options come together or not at all). Then apply the files
 with `tenant-create module-upgrade --all`, run as a one-shot of the target colour with the compose
 shape the host fixes, `docker compose --env-file /opt/gremion/etc/env/app-<colour>.env run --rm
 --no-deps -T tenant-create module-upgrade --all` from the release tree. Retire the dump with
-`gremion-migration-dump switched --release <label>` once the switch has succeeded, then `adopt
+`gremion-migration-dump switched --release pilot-<sha12>` once the switch has succeeded, then `adopt
 --re-adopt --reason TEXT` and `resume`.
 
 ### The board declaration release and the freeze window
@@ -871,9 +876,10 @@ change. So from the first merge of a change that touches a host program, a compo
 a module declaration, until the hand upgrade has been done and `adopt --re-adopt` has recorded it, CD
 holds every candidate. Ordinary fixes merged inside the window are not lost: they ship in the first
 release after it, because the first tick after the re-adopt classifies the newest candidate against the
-new live release. Keep the window to one sitting. The changes of a plan that ends in such a release
-that touch only application code ship as ordinary releases before it; the release that changes the
-declaration is the last, and the hand upgrade of it takes no CD watch window.
+new live release. Keep the window to one sitting. When a series of changes ends in such a release, the ones that touch only application code ship as
+ordinary releases before it, and the one that changes the declaration comes last. The code cannot
+tell the order in which a series is merged: the order is the series' own release note. The hand
+upgrade of the last one takes no CD watch window, so the operator watches it by hand.
 
 ### A change of a chain class
 
@@ -952,8 +958,8 @@ council, and the following applies to releases that CD carries:
   releases" that rule 3 makes possible; it is not a mandate to ship often.
 - **A feature pull request carries its change list as a file.** The dated change list in German and in
   English that rule 1 requires is part of the pull request that makes the change, as a file in the
-  repository, so it reaches main in the same commit that CD releases. A feature without it is not
-  merged.
+  repository, so it reaches main in the same commit that CD releases. A feature pull request without
+  it is incomplete, and the reviewer sends it back.
 - **`CD_POLICY_ACK` records the agreement date.** The program does not start a release while the key is
   empty. The value is the date on which the council approved full adoption and continuous support and
   upgrades. It is set by the install on the host (`<agreement date>`), and the template ships it empty
