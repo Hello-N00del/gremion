@@ -81,6 +81,7 @@ following. Update the German text, then re-record the hash with
 | [ops/pilot-services.md](./ops/pilot-services.md) | The services a single-customer host runs beside the kernel: Nextcloud, Collabora, Matrix, LiveKit, Element Call and the three module leaves |
 | [ops/isolation-evidence.md](./ops/isolation-evidence.md) | Producing the cross-customer isolation evidence a module enable gate reads, and what a pass does and does not mean |
 | [ops/release-cadence.md](./ops/release-cadence.md) | The release cadence policy |
+| [ops/continuous-deployment.md](./ops/continuous-deployment.md) | The operator document of `gremion-cd`: what continuous deployment does and holds, every verb, config key, hold and mail kind, the dump set, the lock span, adoption, applying host programs in a window, the hand procedures, proof, and the release-cadence amendment |
 | [ops/release-signing.md](./ops/release-signing.md) | Signing a first-party image: the manual cosign step after local verify passes |
 | [ops/vendor-patch-notice.md](./ops/vendor-patch-notice.md) | The procedure for security-patch notices on bundled third-party systems |
 | [ops/postgres-major.md](./ops/postgres-major.md) | The pinned PostgreSQL major for release 1 and why |
