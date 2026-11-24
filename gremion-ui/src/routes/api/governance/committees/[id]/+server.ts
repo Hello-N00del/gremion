@@ -12,6 +12,7 @@ import { canSeeOrgUnit, seesAllGovernance } from '$lib/server/governance/visibil
 import { listRoles } from '$lib/server/governance/governance-db'
 import { deprovisionOrgUnit } from '$lib/server/governance/provisioning/orchestrator'
 import { writeAuditEntry } from '$lib/server/audit-db'
+import { malformedIdResponse } from '$lib/server/governance/route-ids'
 
 const updateSchema = z.object({
   name: z.string().min(1).max(200).optional(),
@@ -25,6 +26,8 @@ export const GET: RequestHandler = async ({ params, locals }) => {
   if (!user || !hasRole(user.roles, Role.Member)) {
     return json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
+  const malformedId = malformedIdResponse(params.id)
+  if (malformedId) return malformedId
   const unit = await getOrgUnit(params.id)
   if (!unit) return json({ success: false, error: 'Not found' }, { status: 404 })
   // R29-F104-KTWIN (kernel twin of F1-FIX-04 / S3#33, operator decision D-3):
@@ -49,6 +52,8 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
   if (!user || !hasRole(user.roles, Role.CouncilAdmin)) {
     return json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
+  const malformedId = malformedIdResponse(params.id)
+  if (malformedId) return malformedId
   const parsed = updateSchema.safeParse(await request.json())
   if (!parsed.success) {
     return json({ success: false, error: parsed.error.issues.map((i) => i.message).join(', ') }, { status: 400 })
@@ -64,6 +69,8 @@ export const DELETE: RequestHandler = async ({ params, locals }) => {
   if (!user || !hasRole(user.roles, Role.CouncilAdmin)) {
     return json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
+  const malformedId = malformedIdResponse(params.id)
+  if (malformedId) return malformedId
   const unit = await getOrgUnit(params.id)
   if (!unit) return json({ success: false, error: 'Not found' }, { status: 404 })
 
