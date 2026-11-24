@@ -1,5 +1,5 @@
 import { describe, test, expect, vi, beforeEach } from 'vitest'
-import { render } from '@testing-library/svelte'
+import { render, screen, fireEvent } from '@testing-library/svelte'
 
 // The poll page (/polls/[id]): German vote counts, a card whose title does not touch the
 // border, and a top-bar section label that is the poll title instead of the bare id.
@@ -75,5 +75,48 @@ describe('poll page load: top-bar section label', () => {
     getPollWithOptions.mockResolvedValue(poll([0], { title: '   ' }))
     const data = (await load(event('7'))) as { crumbOverrides: Record<string, string | null> }
     expect(data.crumbOverrides['7']).toBe('Umfrage')
+  })
+})
+
+describe('poll page accessibility', () => {
+  test('each radio is named by its option text alone, also when vote counts are shown', () => {
+    render(Page, { props: { data: { poll: poll([2, 0, 5], { voted: true }) } as never } })
+    const radios = screen.getAllByRole('radio')
+    expect(radios.map((r) => r.getAttribute('aria-labelledby') !== null)).toEqual([true, true, true])
+    expect(screen.getByRole('radio', { name: 'Option 1' })).toBeTruthy()
+    expect(screen.getByRole('radio', { name: 'Option 2' })).toBeTruthy()
+    expect(screen.getByRole('radio', { name: 'Option 3' })).toBeTruthy()
+  })
+
+  test('the radios are named by their texts, never by their numbers', () => {
+    render(Page, { props: { data: { poll: poll([0, 0, 0], { voted: false }) } as never } })
+    for (const n of ['1', '2', '3']) {
+      expect(screen.queryByRole('radio', { name: n })).toBeNull()
+    }
+  })
+})
+
+describe('poll page submit without a choice', () => {
+  test('says so in German next to the options and does not send anything', async () => {
+    const fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    render(Page, { props: { data: { poll: poll([0, 0], { voted: false }) } as never } })
+    expect(screen.queryByText('Bitte wähle eine Option aus.')).toBeNull()
+    await fireEvent.click(screen.getByRole('button', { name: 'Abstimmen' }))
+    const msg = screen.getByText('Bitte wähle eine Option aus.')
+    expect(msg).toBeTruthy()
+    // the message belongs to the group of options: a screen reader reads it with them
+    const group = screen.getByRole('group', { name: 'Abstimmungsoptionen' })
+    expect(group.getAttribute('aria-describedby')).toBe(msg.id)
+    expect(fetchSpy).not.toHaveBeenCalled()
+    vi.unstubAllGlobals()
+  })
+
+  test('the message goes away as soon as an option is chosen', async () => {
+    render(Page, { props: { data: { poll: poll([0, 0], { voted: false }) } as never } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Abstimmen' }))
+    expect(screen.getByText('Bitte wähle eine Option aus.')).toBeTruthy()
+    await fireEvent.click(screen.getByRole('radio', { name: 'Option 2' }))
+    expect(screen.queryByText('Bitte wähle eine Option aus.')).toBeNull()
   })
 })
