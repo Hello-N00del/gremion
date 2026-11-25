@@ -544,11 +544,15 @@ check_routers() {
 # a router added tomorrow is held to it the moment Traefik loads it. Later
 # /api/v1 routers (TRD-409) are no exception — they must pass this too.
 #
-# SUBJECT: every HTTP router except `*@internal` (Traefik's own: acme-http, api,
-# ping) and a router whose entryPoints are EXACTLY ["internaltest"] (the
-# loopback-only inactive-colour routers). A router with NO entryPoints listens
-# on every default entrypoint, so it is a subject too — exemption is by
-# evidence, never by absence. TCP/UDP routers on the public entrypoints are
+# SUBJECT: every HTTP router of the kernel's own compose projects except
+# `*@internal` (Traefik's own: acme-http, api, ping), a router whose entryPoints
+# are EXACTLY ["internaltest"] (the loopback-only inactive-colour routers) and
+# the router on EXACTLY ["ping"] that serves noop@internal (the traefik
+# container's own edge-labels router, on an entrypoint nothing publishes). A
+# router with NO entryPoints listens on every default entrypoint, so it is a
+# subject too — exemption is by evidence, never by absence. Routers another
+# compose project declares are not the kernel's to judge (see
+# classify_foreign_docker_objects). TCP/UDP routers on the public entrypoints are
 # refused outright (check_l4_routers, one exact exception: the video relay's
 # livekit-turn router): a TCP passthrough on websecure takes the connection
 # before any HTTP router, pin included, ever sees it.
