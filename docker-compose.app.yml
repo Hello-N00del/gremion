@@ -206,6 +206,7 @@ services:
       SYNAPSE_SERVER_NAME:      ${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}
       SYNAPSE_ADMIN_TOKEN:      ${SYNAPSE_ADMIN_TOKEN:-}
       SYNAPSE_ADMIN_BOT_USER_ID: ${SYNAPSE_ADMIN_BOT_USER_ID:-@gremion-admin-bot:${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}}
+      MATRIX_IDENTITY:          ${MATRIX_IDENTITY:-legacy}
       # The browser receives MATRIX_PUBLIC_URL and LIVEKIT_URL (the signalling
       # socket is routed at /livekit-sfu on the platform host, never the in-network
       # name); Element Call is a same-origin frame on the tenant host (CSP

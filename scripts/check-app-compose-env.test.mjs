@@ -124,7 +124,7 @@ function environmentOf(file, service) {
 
 const PILOT_UI_ENV = [
   'NEXTCLOUD_URL', 'NEXTCLOUD_ADMIN_USER', 'NEXTCLOUD_ADMIN_PASSWORD', 'MATRIX_URL', 'SYNAPSE_SERVER_NAME', 'LIVEKIT_URL',
-  'LIVEKIT_API_KEY', 'LIVEKIT_API_SECRET', 'SYNAPSE_ADMIN_TOKEN', 'SYNAPSE_ADMIN_BOT_USER_ID', 'MATRIX_PUBLIC_URL',
+  'LIVEKIT_API_KEY', 'LIVEKIT_API_SECRET', 'SYNAPSE_ADMIN_TOKEN', 'SYNAPSE_ADMIN_BOT_USER_ID', 'MATRIX_IDENTITY', 'MATRIX_PUBLIC_URL',
   'PUBLIC_ELEMENT_CALL_URL', 'COLLABORA_URL', 'ELEMENT_CALL_INTERNAL_URL', 'CALENDAR_BACKEND', 'CONTENT_BACKEND', 'NEWSLETTER_BACKEND',
   'CALENDAR_SERVICE_URL', 'CONTENT_SERVICE_URL', 'NEWSLETTER_SERVICE_URL', 'INTERNAL_CALENDAR_SECRET', 'INTERNAL_CONTENT_SECRET',
   'INTERNAL_NEWSLETTER_SECRET', 'PUBLIC_BASE_URL', 'BOARD_BACKEND', 'BOARD_SERVICE_URL', 'INTERNAL_BOARD_SECRET',
@@ -142,6 +142,11 @@ test('pilot env: gremion-ui carries every endpoint name the module code reads, a
   assert.match(env.MATRIX_PUBLIC_URL, /^https:\/\/\$\{PLATFORM_DOMAIN:\?PLATFORM_DOMAIN required\}$/)
   // Nextcloud's admin login stays out of gremion-public (#241)
   assert.doesNotMatch(serviceBlockWithoutComments('docker-compose.app.yml', 'gremion-public'), /NEXTCLOUD_ADMIN/)
+})
+
+test('the chat identity switch reaches gremion-ui and is OFF unless the host env sets it: MATRIX_IDENTITY defaults to legacy', () => {
+  const env = environmentOf('docker-compose.app.yml', 'gremion-ui')
+  assert.equal(env.MATRIX_IDENTITY, '${MATRIX_IDENTITY:-legacy}')
 })
 
 test('gremion-ui lifts the adapter-node body cap: a 1 MB upload is refused at the 512K default, so BODY_SIZE_LIMIT is 100M', () => {

@@ -67,7 +67,7 @@ beforeEach(() => {
       if (method === 'GET' && path === '/_matrix/client/v3/login') {
         return loginProbeStatus === 200 ? Response.json({ flows }) : Response.json({ errcode: 'M_UNKNOWN' }, { status: loginProbeStatus })
       }
-      if (/^\/_synapse\/admin\/v2\/users\//.test(path)) {
+      if (path.startsWith('/_synapse/admin/v2/users/')) {
         if (method === 'GET') return existingUser ? Response.json(existingUser) : Response.json({ errcode: 'M_NOT_FOUND' }, { status: 404 })
         return Response.json({})
       }
