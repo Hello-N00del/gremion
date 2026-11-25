@@ -1,4 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// The protocol routes read the CURRENT tenant's files switch (protocols/document-port.ts): this tenant has it on.
+vi.mock('$lib/server/config', async (orig) => ({
+  ...(await orig<typeof import('$lib/server/config')>()),
+  readConfig: () => ({ modules: { files: true } }),
+}))
 import type { Mock } from 'vitest'
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -476,7 +476,7 @@ enable_ran() { grep -q '^tc enable-module' "$ORDER"; }
     secondary_state
     registered rat.alpha.example
     local m
-    for m in votes files messaging publishing elections some-new-module; do
+    for m in votes files messaging publishing newsletter content elections some-new-module; do
         : > "$ORDER"
         module_args "$m"
         drive handle_enable_module
@@ -486,11 +486,11 @@ enable_ran() { grep -q '^tc enable-module' "$ORDER"; }
     done
 }
 
-@test "secondary host: the core modules (board, calendar, content) are enabled for a customer on a secondary host, without a registry read" {
+@test "secondary host: the core modules (board, calendar) are enabled for a customer on a secondary host, without a registry read" {
     secondary_state
     registered rat.alpha.example
     local m
-    for m in board calendar content; do
+    for m in board calendar; do
         : > "$ORDER"
         module_args "$m"
         drive handle_enable_module

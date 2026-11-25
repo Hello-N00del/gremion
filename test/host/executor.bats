@@ -690,7 +690,7 @@ create_refused_before_phase_a() {
 
 @test "secondary host: a host named in SECONDARY_TENANT_HOSTS runs the create with core modules" {
     secondary_install rat.pilot.example 'rat.alpha.example,other.example.org'
-    verdict_enable calendar board content
+    verdict_enable calendar board
     queue create
     run "$EXEC" --once
     [ "$status" -eq 0 ] || { echo "status=$status $output"; steps; return 1; }
@@ -731,7 +731,7 @@ create_refused_before_phase_a() {
 @test "secondary host: the module allow-set is core only: votes, files, messaging, anything unknown is refused BEFORE phase A, naming the module" {
     secondary_install rat.pilot.example 'rat.alpha.example'
     local m
-    for m in votes files messaging publishing elections finance some-new-module; do
+    for m in votes files messaging publishing newsletter content elections finance some-new-module; do
         verdict_enable calendar "$m"
         : > "$ORDER"
         queue create
@@ -804,7 +804,7 @@ create_refused_before_phase_a() {
     run "$EXEC" --once
     [ "$status" -eq 0 ] || { echo "status=$status $output"; steps; return 1; }
     run sed -n 2p "${GREMION_ROOT}/config-seen"
-    [ "$output" = '{"brand":{"product":"Ratsportal","org_short":"AR"},"modules":{"elections":false,"files":false,"messages":false,"newsletter":false,"vault":false,"votes":false},"pinned_off_modules":["elections","files","messages","newsletter","vault","votes"]}' ] || { echo "$output"; return 1; }
+    [ "$output" = '{"brand":{"product":"Ratsportal","org_short":"AR"},"modules":{"content":false,"elections":false,"files":false,"messages":false,"newsletter":false,"vault":false,"votes":false},"pinned_off_modules":["content","elections","files","messages","newsletter","vault","votes"]}' ] || { echo "$output"; return 1; }
     # the primary host, the same install: no module is written
     sed -i '/^PILOT_TENANT_HOST=/d; /^SECONDARY_TENANT_HOSTS=/d; /^PLATFORM_DOMAIN=/d' "${GREMION_ROOT}/etc/env/state.env"
     secondary_install rat.alpha.example 'canary.example.org'

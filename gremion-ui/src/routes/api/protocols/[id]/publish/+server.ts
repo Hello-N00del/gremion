@@ -9,7 +9,7 @@ import {
 } from '$lib/server/protocols/protocol-db'
 import { requireUuidParams } from '$lib/server/protocols/route-ids'
 import { convertOdtToHtml, convertOdtToPdf } from '$lib/server/documents/collabora-convert'
-import { getProtocolDocumentPort } from '$lib/server/modules/runtime-registry'
+import { getTenantProtocolDocumentPort } from '$lib/server/protocols/document-port'
 import { getDb } from '$lib/server/db'
 import { getQuorumContext } from '$lib/server/governance/quorum'
 import type { PgTransaction } from '$lib/server/db/tx'
@@ -84,7 +84,7 @@ export async function POST(event: RequestEvent) {
   // artefact: publish must use it, and any failure propagates (no silent
   // fallback to a different text). The body_html fallback applies only when
   // there is no ODT to read (files off, or never uploaded).
-  const docs = getProtocolDocumentPort()
+  const docs = getTenantProtocolDocumentPort()
   let bodyHtml = ''
   let publishedDir: string | undefined
   let pdfNextcloudPath: string | undefined

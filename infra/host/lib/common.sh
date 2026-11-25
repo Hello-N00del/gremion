@@ -566,13 +566,19 @@ resolve_control_panel_host() {
 
 # The modules a customer on a secondary host may enable: the leaves that keep their
 # data in their own database and never reach the shared Synapse or Nextcloud for what
-# they are for. DEFAULT DENY: a module that is not named here (a new one included) is
-# refused there. Left out on purpose: files, messaging and votes (shared Nextcloud
-# and Synapse, isolation evidence for two customers is still owed) and publishing (the
-# newsletter's whole output is mail whose unsubscribe links carry the leaf's public
-# base URL, which is PILOT_TENANT_HOST's: a secondary customer's subscribers would be
-# sent to the primary host).
-SECONDARY_HOST_MODULES="board calendar content"
+# they are for, and never write the customer host into a link. DEFAULT DENY: a module
+# that is not named here (a new one included) is refused there. Left out on purpose:
+# files, messaging and votes (shared Nextcloud and Synapse, isolation evidence for two
+# customers is still owed); publishing (the newsletter's whole output is mail whose
+# unsubscribe links carry the leaf's public base URL, which is PILOT_TENANT_HOST's); and
+# content, for the same two reasons: its e-mail channel builds the unsubscribe link from
+# that one process-wide base URL (a secondary customer's subscribers would be sent to the
+# primary host, where their token is unknown), and its news editor stores drafts in the
+# shared Nextcloud and opens them in the shared Collabora. Calendar stays: its pages and
+# data are the customer's own; only the optional CalDAV mirror into the shared Nextcloud
+# has no collection there (created by `gremion-services wire`, which refuses such a
+# customer), so nothing is written to the shared service.
+SECONDARY_HOST_MODULES="board calendar"
 
 # The same split in the app's own vocabulary: the manifest ids (config.modules keys) that a secondary-host
 # customer's tenant config is created with switched OFF. A customer's config reads every toggleable module as
@@ -580,7 +586,7 @@ SECONDARY_HOST_MODULES="board calendar content"
 # open. scripts/check-panel-host-reserved.test.mjs pins this list and SECONDARY_HOST_MODULES against the
 # manifests under modules/*/app: a manifest id that is in neither fails the check.
 # shellcheck disable=SC2034  # read by infra/host/lib/executor/handlers/create.sh, which sources this file
-SECONDARY_HOST_MODULES_OFF="elections files messages newsletter vault votes"
+SECONDARY_HOST_MODULES_OFF="content elections files messages newsletter vault votes"
 
 # secondary_host_module_allowed <module> -> 0 when a customer on a secondary host may enable it.
 secondary_host_module_allowed() {

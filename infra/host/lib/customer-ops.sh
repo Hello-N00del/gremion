@@ -547,7 +547,7 @@ secondary_host_module_guard() {
         die "${verb}: the module ${module} is refused for ${slug}: the registry has no customer row for it, so its host cannot be checked against the secondary hosts (SECONDARY_TENANT_HOSTS)" "$GREMION_EXIT_ASSERT"
     fi
     if [[ -n "$pilot" && "$reg" == "${pilot,,}" ]]; then return 0; fi
-    die "${verb}: the module ${module} cannot be enabled for ${slug}: its host is ${reg:-not registered} and not the install's customer host ${pilot:-(unset)} (PILOT_TENANT_HOST), so it is a core-only customer on a secondary host; ${module} runs on the shared chat or file services, which stay bound to the customer host (core modules: ${SECONDARY_HOST_MODULES// /, })" "$GREMION_EXIT_ASSERT"
+    die "${verb}: the module ${module} cannot be enabled for ${slug}: its host is ${reg:-not registered} and not the install's customer host ${pilot:-(unset)} (PILOT_TENANT_HOST), so it is a core-only customer on a secondary host; ${module} runs on the shared chat or file services or writes the install's customer host into its links, and those stay bound to that host (core modules: ${SECONDARY_HOST_MODULES// /, })" "$GREMION_EXIT_ASSERT"
 }
 
 customer_enable_module() {   # <slug> <module> --operator <uuid> [--actor-kind operator|person] [--dpia-json <file>]

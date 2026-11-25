@@ -49,7 +49,7 @@
       <input name="host" required autocomplete="off" placeholder="rat.musterstadt.de" value={String(values.host ?? data.expectedHost ?? '')} aria-invalid={errors.host ? 'true' : undefined} aria-describedby={data.expectedHost ? (secondaryHosts.length ? 'host-expected host-secondary' : 'host-expected') : undefined} />
       {#if data.expectedHost && secondaryHosts.length}
         <span id="host-expected" class="muted">Diese Installation ist für den Host <code>{data.expectedHost}</code> eingerichtet.</span>
-        <span id="host-secondary" class="muted">Zusätzlich erlaubt: {#each secondaryHosts as h, i}{#if i > 0}{', '}{/if}<code>{h}</code>{/each}; jeder andere Host wird beim Anlegen abgelehnt. Ein Mandant auf einem dieser zusätzlichen Hosts hat kein Chat, Dateien, Dokumentbearbeitung und Videokonferenz; auch Abstimmungen und Newsletter sind dort nicht verfügbar.</span>
+        <span id="host-secondary" class="muted">Zusätzlich erlaubt: {#each secondaryHosts as h, i}{#if i > 0}{', '}{/if}<code>{h}</code>{/each}; jeder andere Host wird beim Anlegen abgelehnt. Ein Mandant auf einem dieser zusätzlichen Hosts hat keinen Chat, keine Dateien, keine Dokumentbearbeitung und keine Videokonferenz; auch Abstimmungen, Inhalte und Newsletter sind dort nicht verfügbar.</span>
       {:else if data.expectedHost}<span id="host-expected" class="muted">Diese Installation ist für den Host <code>{data.expectedHost}</code> eingerichtet; jeder andere Host wird beim Anlegen abgelehnt.</span>{/if}
       {#if errors.host}<span class="err">{errors.host}</span>{/if}
     </label>

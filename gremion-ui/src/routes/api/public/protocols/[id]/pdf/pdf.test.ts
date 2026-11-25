@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+// The protocol routes read the CURRENT tenant's files switch (protocols/document-port.ts): this tenant has it on.
+vi.mock('$lib/server/config', async (orig) => ({
+  ...(await orig<typeof import('$lib/server/config')>()),
+  readConfig: () => ({ modules: { files: true } }),
+}))
+
 // boundary rule A3a-2: this route no longer imports protocols/protocol-wopi (which
 // pulled in the files module internals). downloadPublishedPdf comes from the
 // ProtocolDocumentPort registered in runtime-registry; the test registers a fake

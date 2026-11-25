@@ -307,17 +307,28 @@ to `etc/tenant-hosts.txt` (certificate and DNS checks), and point `CD_PROBE_HOST
 at it if it is to be the CD canary: the canary is the customer that owns the probe
 host, and the public probe asks only `/readyz` and the login page.
 
-**What it gives.** Login, board, calendar pages and content pages, each on the
-customer's own host, realm, and databases.
+**What it gives.** Login, board and calendar pages, each on the customer's own
+host, realm, and databases. The calendar's own data is the customer's; only its
+optional CalDAV mirror into the shared Nextcloud does not run for this customer:
+the collection it would write to is created by `gremion-services wire`, which
+refuses the customer, and the leaf cannot create one itself, so nothing is
+written to the shared service (a push that finds no collection fails and is
+given up after three attempts per entry).
 
 **What it does not give.** Chat, files, office editing, video (all on the shared
-Synapse and Nextcloud), votes (they run on the shared Nextcloud Polls) and the
-newsletter (its unsubscribe links carry `PILOT_TENANT_HOST`). The host side
-enforces this instead of leaving it to the operator:
+Synapse and Nextcloud), votes (they run on the shared Nextcloud Polls), the
+newsletter (its unsubscribe links carry `PILOT_TENANT_HOST`) and content pages:
+the content leaf builds the unsubscribe link of its e-mail channel from the one
+process-wide public base URL, so a secondary customer's subscribers would be
+sent to the primary host, where their token is unknown, and its news editor
+keeps drafts in the shared Nextcloud and opens them in the shared Collabora.
+Content may be allowed for a secondary host only after the leaf builds that link
+base from the customer's own host and the editor is isolated. The host side
+enforces all of this instead of leaving it to the operator:
 
 - the create accepts `PILOT_TENANT_HOST` and a listed host and refuses every other
   host, naming what is allowed; on a secondary host it refuses, before anything is
-  created, any module outside `board`, `calendar` and `content` (default deny:
+  created, any module outside `board` and `calendar` (default deny:
   `SECONDARY_HOST_MODULES` in `infra/host/lib/common.sh`);
 - the customer's tenant config is created with every other module switched off
   (`SECONDARY_HOST_MODULES_OFF`), because a config reads a module as on until it
@@ -327,6 +338,10 @@ enforces this instead of leaving it to the operator:
   a settings change nor "Konfiguration zurücksetzen" by the customer's own IT
   admin can switch such a module back on, and the provisioning worker and the
   route gate read the pinned value;
+- the protocol routes (create, editor URL, publish, public PDF, detail) are governance
+  and always on, so they read the current customer's files switch instead of the
+  build-wide document port: with it off, minutes live in the app only (the in-app
+  text), and the shared Nextcloud and Collabora are not called for that customer;
 - the module enable (executor, council admin and break-glass alike) refuses the
   same modules for a customer registered on a secondary host;
 - `gremion-services wire <slug>` refuses a customer whose registered host is not
@@ -338,11 +353,18 @@ Nextcloud and Synapse has not been produced, which is why those modules stay off
 for a secondary host. Until it exists, do not lift the refusals. Also owed after
 the deploy that first uses it: the realm's discovery document at the secondary
 host names that host as issuer; a login on it; the customer's edge router listed
-and enabled in `gremion-verify`; a CD run with `CD_PROBE_HOST` set to it. Removing
-a host from the list while a customer still lives on it leaves that customer
-running, and the app keeps the modules off through `pinned_off_modules`; the host
-side module guard, however, is then inert for it (it applies only while the list is
-set), so decommission the customer first.
+and enabled in `gremion-verify`; a CD run with `CD_PROBE_HOST` set to it.
+Decommission a secondary-host customer before removing its host from the list.
+
+**Operating notes.**
+
+- A secondary-host customer's tenant config file carries its `pinned_off_modules`
+  list: back it up and restore it as a whole.
+- The CD canary: with `CD_PROBE_HOST` set to the secondary host, the public probe
+  asks only that core-only customer's `/readyz` and login page. A canary on this
+  host cannot catch a regression in chat, files, office editing or video, which
+  stay bound to the primary customer; those still need the primary host's own
+  checks.
 
 ## Named residuals
 

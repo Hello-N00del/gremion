@@ -696,13 +696,13 @@ CASES
     [ "$status" -eq 1 ]
 }
 
-@test "secondary_host_module_allowed: only the core leaves are allowed on a secondary host; everything else, a module of the shared services first, is refused" {
+@test "secondary_host_module_allowed: only board and calendar are allowed on a secondary host; everything else, a module of the shared services or one that mails the primary host's links first, is refused" {
     local m
-    for m in board calendar content; do
+    for m in board calendar; do
         run_with 'secondary_host_module_allowed "$1"' "$m"
         [ "$status" -eq 0 ] || { echo "refused: ${m}"; return 1; }
     done
-    for m in publishing messaging files votes elections finance vault handover unknown-module ''; do
+    for m in content publishing newsletter messaging messages files votes elections finance vault handover unknown-module ''; do
         run_with 'secondary_host_module_allowed "$1"' "$m"
         [ "$status" -eq 1 ] || { echo "allowed: '${m}'"; return 1; }
     done

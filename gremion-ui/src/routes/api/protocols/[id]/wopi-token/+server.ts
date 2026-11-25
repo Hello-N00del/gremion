@@ -4,7 +4,7 @@ import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth'
 import { getProtocol } from '$lib/server/protocols/protocol-db'
 import { requireUuidParams } from '$lib/server/protocols/route-ids'
-import { getProtocolDocumentPort } from '$lib/server/modules/runtime-registry'
+import { getTenantProtocolDocumentPort } from '$lib/server/protocols/document-port'
 import { isMemberOf } from '$lib/server/governance/org-units-db'
 import { seesAllGovernance } from '$lib/server/governance/visibility'
 
@@ -35,7 +35,7 @@ export async function GET(event: RequestEvent) {
 
   if (!protocol.nextcloud_draft_path) throw error(400, 'Kein Entwurfsdokument vorhanden')
   // A3a-2: the WOPI editor URL is minted by the files module's document port.
-  const docs = getProtocolDocumentPort()
+  const docs = getTenantProtocolDocumentPort()
   if (!docs) throw error(503, 'Dokumentdienst nicht verfügbar')
   // The origin the browser has for this app: the editor posts its messages (save, close) to it.
   const tokenInfo = await docs.getDraftWopiToken(protocol.nextcloud_draft_path, {

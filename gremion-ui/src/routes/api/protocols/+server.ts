@@ -3,7 +3,7 @@ import type { RequestEvent } from '@sveltejs/kit'
 import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth'
 import { createProtocol, listProtocols, updateProtocol, deleteProtocol } from '$lib/server/protocols/protocol-db'
-import { getProtocolDocumentPort } from '$lib/server/modules/runtime-registry'
+import { getTenantProtocolDocumentPort } from '$lib/server/protocols/document-port'
 import { getOrgUnit, isMemberOf } from '$lib/server/governance/org-units-db'
 import { canSeeProtocol, seesAllGovernance } from '$lib/server/governance/visibility'
 
@@ -61,7 +61,7 @@ export async function POST(event: RequestEvent) {
     // Nextcloud draft ODT is an optional extra: with the document port present
     // it is created as before; if the port is absent, or Nextcloud is down, the
     // protocol is created without a draft (in-app only).
-    const docs = getProtocolDocumentPort()
+    const docs = getTenantProtocolDocumentPort()
     const protocol = await createProtocol({ committeeId, meetingDate, title, location, createdBy: user.id })
     if (!docs) return json({ protocol }, { status: 201 })
     let draftPath: string | null = null

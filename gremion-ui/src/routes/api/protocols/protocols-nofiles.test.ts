@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+// The protocol routes read the CURRENT tenant's files switch (protocols/document-port.ts): this tenant has it on.
+vi.mock('$lib/server/config', async (orig) => ({
+  ...(await orig<typeof import('$lib/server/config')>()),
+  readConfig: () => ({ modules: { files: true } }),
+}))
+
 // F1 (Q1): protocol create works with NO files ProtocolDocumentPort; the
 // in-app body is editable via PATCH (sanitized) while the protocol is a draft;
 // the public PDF route answers a clean 404 when no NC document exists.

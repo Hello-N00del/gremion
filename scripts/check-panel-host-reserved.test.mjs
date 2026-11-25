@@ -88,7 +88,11 @@ test('SCRIPTS: every module manifest is either allowed on a secondary host or cr
   const listOf = (name) => (lib.match(new RegExp(`^${name}="([^"]*)"`, 'm'))?.[1] ?? '').split(/\s+/).filter(Boolean)
   const allowed = listOf('SECONDARY_HOST_MODULES')
   const off = listOf('SECONDARY_HOST_MODULES_OFF')
-  assert.ok(allowed.length >= 3 && off.length >= 5, `both lists are found (${allowed.join(' ')}; ${off.join(' ')})`)
+  assert.ok(allowed.length >= 2 && off.length >= 5, `both lists are found (${allowed.join(' ')}; ${off.join(' ')})`)
+  // content builds its e-mail unsubscribe link from the one process-wide public base URL (the customer host) and its
+  // news editor stores drafts in the shared Nextcloud: neither works for a customer on another host, so it is OFF there
+  assert.deepEqual(allowed.filter((id) => ['content', 'newsletter', 'votes', 'files', 'messages'].includes(id)), [], 'a module that mails the primary host links or uses the shared services is not allowed on a secondary host')
+  assert.ok(off.includes('content'), 'content is created switched off for a secondary-host customer')
   // the manifest ids, as the app's own config keys them (modules/*/app/lib/modules/manifests, gremion-ui's core ones)
   const ids = new Set()
   const dirs = ['gremion-ui/src/lib/modules/manifests', ...readdirSync(join(ROOT, 'modules')).map((m) => `modules/${m}/app/lib/modules/manifests`)]
