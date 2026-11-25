@@ -28,6 +28,22 @@ describe('normalizePendingInput', () => {
     expect(normalizePendingInput({ moduleId: 'votes', action: 'enable' })).toEqual({ moduleId: 'votes', action: 'enable' })
   })
 
+  // The three bodies TabModules.svelte posts (switch-off with the typed name, switch-on with the DPIA answer, the
+  // restore without one) for EVERY module the council can switch: a body that is not kept leaves no cookie, and the
+  // way back then answers "gone". The cause of a lost carry is not in these shapes.
+  it('keeps what the settings page posts, for every switchable module', async () => {
+    const { SWITCHABLE_CATALOGUE_IDS } = await import('$lib/modules/catalogue-map')
+    expect(SWITCHABLE_CATALOGUE_IDS.size).toBeGreaterThan(0)
+    for (const moduleId of SWITCHABLE_CATALOGUE_IDS) {
+      const off = { moduleId, action: 'disable', confirm: 'Name des Moduls' }
+      const on = { moduleId, action: 'enable', dpia: { requiresDpia: false, documentRef: '' } }
+      const restore = { moduleId, action: 'enable' }
+      expect(normalizePendingInput(off), moduleId).toEqual(off)
+      expect(normalizePendingInput(on), moduleId).toEqual(on)
+      expect(normalizePendingInput(restore), moduleId).toEqual(restore)
+    }
+  })
+
   it('drops every field it does not know', () => {
     expect(normalizePendingInput({ moduleId: 'votes', action: 'enable', resume: true, tenant: 'other', dpia: null })).toEqual({ moduleId: 'votes', action: 'enable' })
     expect(normalizePendingInput({ moduleId: 'votes', action: 'enable', dpia: { requiresDpia: false, documentRef: 'a', extra: 1 } })).toEqual({

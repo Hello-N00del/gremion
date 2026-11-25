@@ -85,6 +85,9 @@ async function keepForSecondFactor({ locals, cookies }: Event, user: SessionUser
     } catch (err) {
       console.error('[settings/modules] the confirmed switch could not be kept for the second factor:', err instanceof Error ? err.message : err)
     }
+  } else {
+    // Nothing is kept, so the way back finds no cookie and the page says the action is gone: this line is the cause.
+    console.warn('[settings/modules] the body is not kept for the second factor (it is not a shape-valid switch)')
   }
   cookies.delete(PENDING_COOKIE, { path: PENDING_COOKIE_PATH })
 }

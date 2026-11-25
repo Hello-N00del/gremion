@@ -368,6 +368,17 @@ describe('POST /api/settings/modules: a switch confirmed before the second facto
     expect(cookies.values.has(COOKIE)).toBe(false)
   })
 
+  // Nothing kept means the way back will find no cookie and say "gone": the log is where the cause shows (this
+  // one, or a failed write, or a resume that found no cookie).
+  it('a body that is not kept is said in the log (the cause only, never the body)', async () => {
+    const log = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await confirmBeforeSecondFactor({ moduleId: 'nope-secret-module', action: 'enable' }, jar())
+    const lines = log.mock.calls.map((c) => c.join(' '))
+    expect(lines.some((l) => l.includes('not kept for the second factor'))).toBe(true)
+    expect(lines.join('\n')).not.toContain('nope-secret-module')
+    log.mockRestore()
+  })
+
   it('only the known fields are kept', async () => {
     const cookies = jar()
     await confirmBeforeSecondFactor({ ...DISABLE, extra: 'x', resume: false }, cookies)

@@ -7,8 +7,8 @@
 //   - the worker gate: during a release the background workers are safe in ONE process only, so a colour whose
 //     gate file says `off` must not write config.modules, run the replay hooks or migrate. A request on that
 //     colour reads what the other colour has written;
-//   - the single-flight per (worker, tenant): the pass is not safe to overlap with itself (the alignment checks and
-//     sets its "done" mark around awaits), so a request never runs beside the timer's tick or another request.
+//   - the single-flight per (worker, tenant): at most one pass per tenant runs in a process at a time, so a request
+//     never runs beside the timer's tick or another request.
 // When a guard says no, nothing runs and the caller carries on with what is stored.
 import type { TenantContext } from '$lib/server/tenant/context'
 import { runTenantTickNow, type TickNowResult } from '$lib/server/tenant/worker-fleet'
