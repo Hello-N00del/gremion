@@ -64,9 +64,13 @@
         (isUntalliedResolution(r) || checkResolutionAgainstAttendance(r, liveAttendance) !== null)))
   // The attendance as the roster shows it NOW: AttendanceSection reports it after
   // every saved click, so a decision is judged against the live roster and not the
-  // numbers of the page load (data.quorum).
+  // numbers of the page load (data.quorum). It starts as, and is reset to, the
+  // server's quorum whenever the load data changes (another protocol).
   // svelte-ignore state_referenced_locally
   let liveAttendance = $state<AttendanceBasis>({ ...data.quorum })
+  $effect.pre(() => {
+    liveAttendance = { ...data.quorum }
+  })
   let actionItems = $state<ProtocolActionItem[]>(data.actionItems)
   // (4) the real 422 body from a blocked publish, surfaced inline (not alert()).
   let publishError = $state<string | null>(null)

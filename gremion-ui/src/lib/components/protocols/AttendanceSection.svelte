@@ -16,9 +16,10 @@
     advisoryAttendance: AttendanceEntry[]
     isAdmin: boolean
     protocolId: string
-    // Told the saved attendance numbers (also on first render), so the rest of
-    // the page (the decision form) judges against the roster as it is now, not as
-    // it was when the page loaded.
+    // Told the saved attendance numbers after a saved change, so the rest of the
+    // page (the decision form) judges against the roster as it is now. Never told
+    // on first render or on a reseed from new load data: until a click is saved the
+    // page keeps the quorum the server computed with the load.
     onQuorum?: (q: { eligibleVotingCount: number; presentVotingCount: number; quorate: boolean }) => void
   } = $props()
 
@@ -28,9 +29,9 @@
   // protocol of the committee, browser back/forward), so the effect below
   // re-seeds the lists whenever the incoming rosters change.
   // svelte-ignore state_referenced_locally
-  let voting = $state<AttendanceEntry[]>(attendance)
+  let voting = $state.raw<AttendanceEntry[]>(attendance)
   // svelte-ignore state_referenced_locally
-  let advisory = $state<AttendanceEntry[]>(advisoryAttendance)
+  let advisory = $state.raw<AttendanceEntry[]>(advisoryAttendance)
   $effect.pre(() => {
     voting = attendance
     advisory = advisoryAttendance
@@ -43,7 +44,10 @@
   const present = $derived(voting.filter((e) => e.status === 'present').length)
   const quorate = $derived(eligible > 0 && present * 2 > eligible)
 
+  // `voting` is the incoming list until a saved click replaces it (the chips
+  // replace, never mutate), so a different reference means a real change.
   $effect(() => {
+    if (voting === attendance) return
     onQuorum?.({ eligibleVotingCount: eligible, presentVotingCount: present, quorate })
   })
 </script>
