@@ -340,7 +340,7 @@ realm_tokens() {
     sub="$(jq -r '.sub // ""' <<< "$claims" 2>/dev/null || true)"
     if [[ "$(jq -r '.iss // ""' <<< "$claims" 2>/dev/null || true)" != "$want_iss" ]]; then not_ready "${slug}: the token's issuer is not ${want_iss}"; return 1; fi
     if [[ -z "$sub" ]]; then not_ready "${slug}: the token has no subject (sub)"; return 1; fi
-    aud_ok="$(jq -r '((.aud // []) | if type == "array" then . else [.] end) as $a | (($a | index("gremion-ui")) != null) and (($a | index("nextcloud")) != null)' <<< "$claims" 2>/dev/null || echo false)"
+    aud_ok="$(jq -r '([(.aud // [])] | flatten) as $a | (($a | index("gremion-ui")) != null) and (($a | index("nextcloud")) != null)' <<< "$claims" 2>/dev/null || echo false)"
     if [[ "$aud_ok" != true ]]; then not_ready "${slug}: the token's audience lacks gremion-ui or nextcloud"; return 1; fi
     roles_ok="$(jq -r '((.realm_access.roles // []) | index("member")) != null' <<< "$claims" 2>/dev/null || echo false)"
     if [[ "$roles_ok" != true ]]; then not_ready "${slug}: the token does not carry the realm role member: the fixture user is not a member"; return 1; fi
@@ -505,9 +505,9 @@ sec_files() {
             ug[x]="[]"
         fi
         ids="$(jq -c --arg u "$UNIT" --argjson ug "${ug[$x]}" '
-            def gids: (.groups // {}) | if type == "object" then keys elif type == "array" then map(if type == "object" then (.gid // .group_id // .id // empty) else . end) else [] end;
+            def gids: (.groups // {}) | if type == "object" then keys elif type == "array" then map(if type == "object" then (.gid // .group_id // .id // empty) else (.) end) else [] end;
             [.[] | select((.mount_point // "" | ltrimstr("/")) == $u)
-                 | select((gids) as $g | any($ug[]; . as $m | ($g | index($m)) != null))
+                 | select((gids) as $g | (($g - ($g - $ug)) | length) > 0)
                  | .id] | unique' <<< "$folders" 2>/dev/null || echo '[]')"
         n="$(jq 'length' <<< "$ids")"
         case "$n" in
@@ -525,7 +525,7 @@ sec_files() {
         for x in 0 1; do
             y=$((1 - x))
             other="$(jq -c --argjson id "${fid[$y]}" --argjson ug "${ug[$x]}" '
-                def gids: (.groups // {}) | if type == "object" then keys elif type == "array" then map(if type == "object" then (.gid // .group_id // .id // empty) else . end) else [] end;
+                def gids: (.groups // {}) | if type == "object" then keys elif type == "array" then map(if type == "object" then (.gid // .group_id // .id // empty) else (.) end) else [] end;
                 [.[] | select(.id == $id) | gids[] | select(. as $g | $ug | index($g) != null)]' <<< "$folders" 2>/dev/null || echo '[]')"
             f="$(jq 'length' <<< "$other")"
             if [[ "$f" != 0 && "${fid[0]}" != "${fid[1]}" ]]; then
