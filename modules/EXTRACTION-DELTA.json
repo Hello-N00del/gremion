@@ -2380,6 +2380,60 @@
       "reason": "Karenz p2 t19: the votes page lists the sealed poll tallies after a finalized Karenz and a fresh enable; new kernel-side file with no counterpart at the tag",
       "owner": "TASK-205",
       "blob": "6753f146487ac8e5f5cedce75d5f701c378c1ba8"
+    },
+    {
+      "path": "modules/messaging/app/routes/element-call/[...path]/+server.ts",
+      "reason": "multi-tenant video: config.json and room/config.json name the requesting host's LiveKit token service (tenant primary host, 503 without one); every other asset unchanged",
+      "owner": "TASK-205",
+      "blob": "7abe7509633bbe03fdda54b022c535b319f71eb1"
+    },
+    {
+      "path": "modules/messaging/app/routes/element-call/[...path]/server.test.ts",
+      "reason": "multi-tenant video: tests for the per-host token service URL in the proxied Element Call config",
+      "owner": "TASK-205",
+      "blob": "89d9d7c9cd05115679bd10ba35e50796fe49698e"
+    },
+    {
+      "path": "modules/messaging/app/lib/components/VideoCallPip.svelte",
+      "reason": "multi-tenant video: in the browser the frame URL, parent URL and accepted message origin come from the page origin; the process env is the server-render fallback",
+      "owner": "TASK-205",
+      "blob": "55763563c6e592c342a9601ffd9c5448ea9f5d6f"
+    },
+    {
+      "path": "modules/messaging/app/lib/components/VideoCallPip.test.ts",
+      "reason": "multi-tenant video: the call frame on a secondary customer host; new kernel-side file with no counterpart at the tag",
+      "owner": "TASK-205",
+      "blob": "0da6f6928a99609f9a438c768553b692fb855454"
+    },
+    {
+      "path": "modules/messaging/app/lib/components/VideoCallPip.primary-host.test.ts",
+      "reason": "multi-tenant video: the call frame on the primary host equals the process env values; new kernel-side file with no counterpart at the tag",
+      "owner": "TASK-205",
+      "blob": "3e3276bd909d5c7c6fb486d90974005e83295b09"
+    },
+    {
+      "path": "modules/votes/app/lib/components/ballot/BallotStepper.svelte",
+      "reason": "multi-tenant video: in the browser the Helios return origin comes from the page origin; the process env is the server-render fallback",
+      "owner": "TASK-205",
+      "blob": "5a4166dc158841575c873fb8214ab7af9ddd5a15"
+    },
+    {
+      "path": "modules/votes/app/lib/components/ballot/BallotStepper.test.ts",
+      "reason": "multi-tenant video: the ballot stepper on a secondary customer host; new kernel-side file with no counterpart at the tag",
+      "owner": "TASK-205",
+      "blob": "54510aec47a465fbe16e5e5bfe5e06724f6aa8d8"
+    },
+    {
+      "path": "modules/elections/app/routes/elections/[id]/helios-cb/+page.svelte",
+      "reason": "multi-tenant video: the sign-in message to the embedding page is addressed to the page origin, not the process env host",
+      "owner": "TASK-205",
+      "blob": "662c972967a9bb8a2da8411336c0f35e9a36b906"
+    },
+    {
+      "path": "modules/elections/app/routes/elections/[id]/helios-cb/helios-cb.test.ts",
+      "reason": "multi-tenant video: the Helios callback on a secondary customer host; new kernel-side file with no counterpart at the tag",
+      "owner": "TASK-205",
+      "blob": "c55493f3da7dff2c28043fd8efb7505492452baf"
     }
   ]
 }
