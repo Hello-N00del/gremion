@@ -154,7 +154,7 @@ CFG=""
 
 # ---------------------------------------------------------------- the clean-up (armed first)
 
-# shellcheck disable=SC2317  # reached through cleanup(), which only the EXIT/INT/TERM trap calls
+# shellcheck disable=SC2317,SC2329  # reached through cleanup(), which only the EXIT/INT/TERM trap calls
 cleanup_client() {   # <index>: delete the temporary client of realm <index> by name, then read it back
     local i="$1" slug cid uuid n
     slug="${SLUG[$i]}"; cid="${CLIENT_ID[$i]}"
@@ -175,7 +175,7 @@ cleanup_client() {   # <index>: delete the temporary client of realm <index> by 
     printf 'cleanup: the temporary client %s is gone from realm %s\n' "$cid" "$slug"
 }
 
-# shellcheck disable=SC2317  # only the EXIT/INT/TERM trap calls it
+# shellcheck disable=SC2317,SC2329  # only the EXIT/INT/TERM trap calls it
 cleanup() {
     local rc=$? i
     trap - EXIT INT TERM
