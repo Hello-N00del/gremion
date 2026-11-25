@@ -88,7 +88,7 @@ function kcGroups(names: readonly string[]) {
 
 const ACTIVE_ASSIGNMENT = {
   id: 'assign-1',
-  role_id: 'role-1',
+  role_id: '00000000-0000-4000-8000-0000000000b1',
   user_keycloak_id: 'holder-1',
   start_date: new Date('2026-01-01'),
   end_date: new Date('2027-01-01'),
@@ -100,7 +100,7 @@ const ACTIVE_ASSIGNMENT = {
 
 function event(body: unknown, user: typeof ADMIN | typeof MEMBER = ADMIN) {
   return {
-    params: { id: 'ou-1', roleId: 'role-1' },
+    params: { id: '00000000-0000-4000-8000-0000000000a1', roleId: '00000000-0000-4000-8000-0000000000b1' },
     request: new Request('http://stura.test/api/governance/committees/ou-1/roles/role-1/revoke', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

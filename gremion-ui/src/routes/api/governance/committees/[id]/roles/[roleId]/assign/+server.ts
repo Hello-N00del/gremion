@@ -9,6 +9,7 @@ import {
 import { listOrgUnitMembers } from '$lib/server/governance/org-units-db'
 import { reconcileUserRoleGroups } from '$lib/server/governance/role-group-reconcile'
 import { getKeycloakAdminClientForCurrentTenant } from '$lib/server/keycloak-admin'
+import { malformedIdResponse } from '$lib/server/governance/route-ids'
 
 const assignSchema = z.object({
   userKeycloakId: z.string().min(1),
@@ -23,6 +24,8 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
   if (!user || !hasRole(user.roles, Role.CouncilAdmin)) {
     return json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
+  const malformedId = malformedIdResponse(params.id, params.roleId)
+  if (malformedId) return malformedId
   const body = await request.json()
   const parsed = assignSchema.safeParse(body)
   if (!parsed.success) {

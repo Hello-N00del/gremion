@@ -5,6 +5,7 @@
 import { error } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { requireContentRead } from '$lib/server/content/route-auth'
+import { requireContentId } from '$lib/server/content/ids'
 import { resolveContentBackendOr503 } from '$lib/server/content/backend/resolve'
 import { instagramRenderer } from '$lib/server/content/channels/instagram-renderer'
 import { renderSlidePng } from '$lib/server/content/carousel/render'
@@ -21,7 +22,7 @@ export const GET: RequestHandler = async (event) => {
   if (resolved instanceof Response) return resolved
   const backend = resolved
 
-  const id = event.params.id
+  const id = requireContentId(event.params.id)
   const post = await backend.getPost(id)
   if (!post) throw error(404, 'Not found')
 

@@ -6,6 +6,7 @@ import { NewsletterServiceError } from '$lib/server/newsletter/backend/service-c
 import { getKeycloakAdminClient } from '$lib/server/keycloak-admin'
 import { requireNewsletterSendNowRateLimit } from '$lib/server/rate-limit'
 import { writeAuditEntry } from '$lib/server/audit-db'
+import { parseRouteId } from '$lib/server/newsletter/route-ids'
 
 export const POST: RequestHandler = async ({ params, locals }) => {
   if (
@@ -14,8 +15,8 @@ export const POST: RequestHandler = async ({ params, locals }) => {
   ) {
     return json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
-  const id = parseInt(params.id, 10)
-  if (isNaN(id)) return json({ success: false, error: 'Invalid id' }, { status: 400 })
+  const id = parseRouteId(params.id)
+  if (id === null) return json({ success: false, error: 'Not found' }, { status: 404 })
 
   // T3.1: 3/hour ceiling — see gremion-ui/docs/rate-limit.md.
   const limited = requireNewsletterSendNowRateLimit(locals.user.id)

@@ -280,7 +280,14 @@ export class ServiceNewsletterClient implements NewsletterBackendPort {
       }
       return res.data
     } catch (err) {
-      if (err instanceof NewsletterServiceError && err.status === 404) {
+      // 404: unknown id. 400 with the id refusal ("invalid newsletter id"): the id
+      // names nothing. Every other 400 (tenant headers, tenant identity) is a
+      // configuration fault and must stay visible, so it is rethrown.
+      if (
+        err instanceof NewsletterServiceError &&
+        (err.status === 404 ||
+          (err.status === 400 && err.message.includes('invalid newsletter id')))
+      ) {
         return null
       }
       throw err

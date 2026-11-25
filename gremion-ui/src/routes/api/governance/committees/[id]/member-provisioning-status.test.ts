@@ -34,14 +34,14 @@ import { POST as provisionPOST } from './provision/+server'
 const ADMIN = { id: 'admin', roles: [Role.CouncilAdmin] }
 
 const report = (overall: 'ok' | 'degraded' | 'failed') => ({
-  orgUnitId: 'u1',
+  orgUnitId: '00000000-0000-4000-8000-0000000000a2',
   overall,
   subsystems: [{ subsystem: 'keycloak', status: overall === 'ok' ? 'ok' : 'failed', willRetry: true }],
 })
 
 function ev(body?: unknown) {
   return {
-    params: { id: 'u1', userId: 'kc-user' },
+    params: { id: '00000000-0000-4000-8000-0000000000a2', userId: 'kc-user' },
     locals: { auth: async () => ({ user: ADMIN }), tenant: null },
     request: new Request('http://localhost', { method: 'POST', body: JSON.stringify(body ?? {}) }),
   } as never

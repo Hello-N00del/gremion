@@ -1,8 +1,9 @@
-import { error, json } from '@sveltejs/kit'
+import { error, isHttpError, json } from '@sveltejs/kit'
 import type { RequestEvent, RequestHandler } from '@sveltejs/kit'
 import { resolveFilesBackendOr503 } from '$lib/server/files/backend/resolve'
 import { NextcloudResponseError } from '$lib/server/files/backend'
 import { buildWebdavPath } from '$lib/server/files/webdav-path'
+import { describeUpstreamFailure, throwBadGateway } from '$lib/server/files/upstream-failure'
 import { Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth'
 import { fileResponseContentType, isViewableFile } from '$lib/files/editable-types'
@@ -156,7 +157,6 @@ export const GET: RequestHandler = async (event) => {
       .filter((f) => f.path !== '')
     return json({ success: true, files })
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
     // #161: when Nextcloud rejects the bearer it returns an HTML login/error page
     // (or a 401) where WebDAV XML was expected — the non-reproducible
     // "<!DOCTYPE … is not valid JSON" failure that recurs "after concurrent
@@ -182,9 +182,10 @@ export const GET: RequestHandler = async (event) => {
     // as a clean status — not a 502. A 502 from this endpoint is re-wrapped by
     // the edge proxy as an HTML error page, and the client's res.json() then
     // throws "Unexpected token '<'". Map the upstream status through instead.
-    const upstream = /→ (40[34]):/.exec(msg)?.[1]
-    if (upstream) throw error(Number(upstream), msg)
-    throw error(502, msg)
+    // The upstream text names the internal DAV path (and with it the user's Nextcloud id): the
+    // caller gets a plain German message, the detail goes to the server log only.
+    const failure = describeUpstreamFailure(err, '[files:upstream]', { op: 'GET', requestPath: paramPath })
+    throw error(failure.status, failure.message)
   }
 }
 
@@ -208,8 +209,7 @@ export const PUT: RequestHandler = async (event) => {
     }
     return json({ success: true })
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    throw error(502, msg)
+    throwBadGateway(err, '[files:upstream]', { op: 'PUT', requestPath: paramPath })
   }
 }
 
@@ -227,8 +227,7 @@ export const DELETE: RequestHandler = async (event) => {
     await backend.delete(webdavPath, uname)
     return json({ success: true })
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    throw error(502, msg)
+    throwBadGateway(err, '[files:upstream]', { op: 'DELETE', requestPath: paramPath })
   }
 }
 
@@ -267,8 +266,7 @@ export const PATCH: RequestHandler = async (event) => {
     }
     return json({ success: true })
   } catch (err) {
-    if ((err as { status?: number }).status) throw err
-    const msg = err instanceof Error ? err.message : String(err)
-    throw error(502, msg)
+    if (isHttpError(err)) throw err
+    throwBadGateway(err, '[files:upstream]', { op: 'PATCH', requestPath: paramPath })
   }
 }

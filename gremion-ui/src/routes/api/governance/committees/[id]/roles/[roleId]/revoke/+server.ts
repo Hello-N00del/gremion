@@ -16,6 +16,7 @@ import {
 } from '$lib/server/governance/governance-db'
 import { reconcileUserRoleGroups } from '$lib/server/governance/role-group-reconcile'
 import { getKeycloakAdminClientForCurrentTenant } from '$lib/server/keycloak-admin'
+import { malformedIdResponse } from '$lib/server/governance/route-ids'
 
 // INV-3: a recall is only valid WITH a recorded free-text reason.
 const revokeSchema = z.object({
@@ -28,6 +29,8 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
   if (!user || !hasRole(user.roles, Role.CouncilAdmin)) {
     return json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
+  const malformedId = malformedIdResponse(params.id, params.roleId)
+  if (malformedId) return malformedId
   const body = await request.json()
   const parsed = revokeSchema.safeParse(body)
   if (!parsed.success) {

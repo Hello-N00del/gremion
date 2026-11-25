@@ -2,13 +2,14 @@ import { redirect, error } from '@sveltejs/kit'
 import type { PageServerLoad } from './$types'
 import { hasRole, Role } from '$lib/auth'
 import { resolveNewsletterBackendForPage } from '$lib/server/newsletter/backend/resolve'
+import { parseRouteId } from '$lib/server/newsletter/route-ids'
 
 export const load: PageServerLoad = async ({ locals, params, fetch }) => {
   if (!locals.user || !hasRole(locals.user.roles, Role.Finance)) {
     redirect(302, '/auth/login?error=forbidden')
   }
-  const id = parseInt(params.id, 10)
-  if (isNaN(id)) error(400, 'Invalid id')
+  const id = parseRouteId(params.id)
+  if (id === null) error(404, 'Newsletter not found')
   const backend = resolveNewsletterBackendForPage()
   const newsletter = await backend.getNewsletter(id)
   if (!newsletter) error(404, 'Newsletter not found')

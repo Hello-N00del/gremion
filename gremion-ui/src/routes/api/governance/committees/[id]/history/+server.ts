@@ -5,6 +5,7 @@ import type { SessionUser } from '$lib/auth/types'
 import { listHistory } from '$lib/server/governance/governance-db'
 import { getOrgUnit, isMemberOf } from '$lib/server/governance/org-units-db'
 import { canSeeOrgUnit } from '$lib/server/governance/visibility'
+import { malformedIdResponse } from '$lib/server/governance/route-ids'
 
 export const GET: RequestHandler = async ({ params, locals }) => {
   const session = await locals.auth()
@@ -12,6 +13,8 @@ export const GET: RequestHandler = async ({ params, locals }) => {
   if (!user || !hasRole(user.roles, Role.Member)) {
     return json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
+  const malformedId = malformedIdResponse(params.id)
+  if (malformedId) return malformedId
 
   const unit = await getOrgUnit(params.id)
   if (!unit) return json({ success: false, error: 'Not found' }, { status: 404 })

@@ -2,6 +2,7 @@ import { redirect, error } from '@sveltejs/kit'
 import type { PageServerLoad } from './$types'
 import { hasRole, Role } from '$lib/auth'
 import { resolveNewsletterBackendForPage } from '$lib/server/newsletter/backend/resolve'
+import { parseRouteId } from '$lib/server/newsletter/route-ids'
 import { createNextcloudClient } from '$lib/server/files/nextcloud-client'
 import { convertOdtToHtml } from '$lib/server/newsletter/collabora-convert'
 import { sanitizeRichHtml } from '$lib/server/security/html-sanitize'
@@ -10,8 +11,8 @@ export const load: PageServerLoad = async ({ locals, params }) => {
   if (!locals.user || !hasRole(locals.user.roles, Role.Finance)) {
     redirect(302, '/auth/login?error=forbidden')
   }
-  const id = parseInt(params.id, 10)
-  if (isNaN(id)) error(400, 'Invalid id')
+  const id = parseRouteId(params.id)
+  if (id === null) error(404, 'Newsletter not found')
   const backend = resolveNewsletterBackendForPage()
   const newsletter = await backend.getNewsletter(id)
   if (!newsletter) error(404, 'Not found')

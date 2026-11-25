@@ -4,6 +4,7 @@ import type { SessionUser } from '$lib/auth'
 import { getBeschlussregisterSettings } from '$lib/server/protocols/protocol-db'
 import { getDb } from '$lib/server/db'
 import { getOrgUnit } from '$lib/server/governance/org-units-db'
+import { requireCommitteeId } from '$lib/server/governance/route-ids'
 import { viewerCanSeeProtocol } from '$lib/server/governance/visibility'
 import { isUntalliedResolution, type ResolutionVoteFields } from '$lib/governance/resolution-vote-state'
 
@@ -20,6 +21,7 @@ function requireAuth(event: RequestEvent): SessionUser {
 // like a missing one, before any register read.
 export async function GET(event: RequestEvent) {
   const user = requireAuth(event)
+  requireCommitteeId(event.params.id)
   const committeeId = event.params.id!
   const unit = await getOrgUnit(committeeId)
   if (!unit || !(await viewerCanSeeProtocol(user, committeeId, unit, 'published'))) {

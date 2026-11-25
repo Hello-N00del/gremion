@@ -6,6 +6,7 @@ import type { SessionUser } from '$lib/auth/types'
 import { getOrgUnit } from '$lib/server/governance/org-units-db'
 import { provisionOrgUnit } from '$lib/server/governance/provisioning/orchestrator'
 import { writeAuditEntry } from '$lib/server/audit-db'
+import { malformedIdResponse } from '$lib/server/governance/route-ids'
 
 /** POST /api/governance/committees/[id]/provision — manual retry/reconcile. */
 export const POST: RequestHandler = async ({ params, locals }) => {
@@ -14,6 +15,8 @@ export const POST: RequestHandler = async ({ params, locals }) => {
   if (!user || !hasRole(user.roles, Role.CouncilAdmin)) {
     return json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
+  const malformedId = malformedIdResponse(params.id)
+  if (malformedId) return malformedId
   const unit = await getOrgUnit(params.id)
   if (!unit) return json({ success: false, error: 'Not found' }, { status: 404 })
 

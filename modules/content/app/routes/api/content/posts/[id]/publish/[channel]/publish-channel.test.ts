@@ -50,6 +50,10 @@ vi.mock('$lib/server/content/publish-errors', () => {
 import { POST } from './+server'
 import { ChannelNotPublishableError, TenantIdentityMismatchError } from '$lib/server/content/publish-errors'
 
+// Content ids are UUIDs; the route answers 404 for anything else before a backend call.
+const PID = '0b7c6f1e-4a8e-4c51-9f3a-2d1e8c7b6a50'
+const BAD_ID = 'not-a-uuid'
+
 type Ev = Parameters<typeof POST>[0]
 
 function makeEvent(opts: {
@@ -58,11 +62,11 @@ function makeEvent(opts: {
   channel?: string
 }): Ev {
   return {
-    request: new Request('http://stura.test/api/content/posts/p1/publish/email', {
+    request: new Request(`http://stura.test/api/content/posts/${PID}/publish/email`, {
       method: 'POST',
     }),
     locals: { user: opts.user ?? null },
-    params: { id: opts.id ?? 'p1', channel: opts.channel ?? 'email' },
+    params: { id: opts.id ?? PID, channel: opts.channel ?? 'email' },
   } as unknown as Ev
 }
 
@@ -105,7 +109,7 @@ describe('POST /api/content/posts/[id]/publish/[channel]', () => {
     )
     expect(res.status).toBe(200)
     expect(await res.json()).toMatchObject({ channel: 'portal', status: 'published', externalRef: '42' })
-    expect(mockPublish).toHaveBeenCalledWith('p1', 'portal')
+    expect(mockPublish).toHaveBeenCalledWith(PID, 'portal')
   })
 
   it('200s with the PublishResult on a successful email send', async () => {
@@ -156,7 +160,7 @@ describe('POST /api/content/posts/[id]/publish/[channel]', () => {
     )
     expect(res.status).toBe(200)
     expect(await res.json()).toMatchObject({ channel: 'instagram', status: 'scheduled' })
-    expect(mockPublish).toHaveBeenCalledWith('p1', 'instagram')
+    expect(mockPublish).toHaveBeenCalledWith(PID, 'instagram')
   })
 
   it('409s a disabled channel (inprocess throw or leaf 409 → ChannelNotPublishableError)', async () => {
@@ -186,5 +190,13 @@ describe('POST /api/content/posts/[id]/publish/[channel]', () => {
     )
     expect(res.status).toBe(422)
     expect(await res.json()).toMatchObject({ status: 'failed', detail: 'SMTP not configured' })
+  })
+
+  it('404s a malformed post id before any backend call', async () => {
+    mockPublish.mockResolvedValue({ channel: 'email', status: 'sent', recipientCount: 1, warnings: [] })
+    await expect(
+      POST(makeEvent({ user: { roles: ['member'], groups: ['publishers'], id: 'u1' }, id: BAD_ID })),
+    ).rejects.toMatchObject({ status: 404 })
+    expect(mockPublish).not.toHaveBeenCalled()
   })
 })

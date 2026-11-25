@@ -14,6 +14,7 @@
 import { error } from '@sveltejs/kit'
 import { createNextcloudClient } from '../nextcloud-client'
 import { serviceEnv } from '$lib/server/env/service-env'
+import { throwBadGateway } from '$lib/server/files/upstream-failure'
 import type { DavEntry, FilesBackendPort, UploadChunkInput, UploadChunkResult } from './port'
 
 export class InprocessFilesClient implements FilesBackendPort {
@@ -96,7 +97,8 @@ export class InprocessFilesClient implements FilesBackendPort {
     })
     if (!chunkRes.ok) {
       const snippet = await chunkRes.text().then((t) => t.slice(0, 200)).catch(() => '')
-      throw error(502, `Chunk upload failed: ${chunkRes.status} ${snippet}`)
+      // The response body can echo the DAV path and the user's Nextcloud id: log it, never answer it.
+      throwBadGateway(new Error(`Chunk upload failed: ${chunkRes.status} ${snippet}`), '[files:upstream]', { op: 'upload-chunk' })
     }
 
     const isLast = input.chunkIndex === input.totalChunks - 1
@@ -117,7 +119,7 @@ export class InprocessFilesClient implements FilesBackendPort {
       const moveRes = await fetch(sourceUrl, { method: 'MOVE', headers: moveHeaders })
       if (!moveRes.ok) {
         const snippet = await moveRes.text().then((t) => t.slice(0, 200)).catch(() => '')
-        throw error(502, `Chunk assembly failed: ${moveRes.status} ${snippet}`)
+        throwBadGateway(new Error(`Chunk assembly failed: ${moveRes.status} ${snippet}`), '[files:upstream]', { op: 'upload-chunk' })
       }
     }
 

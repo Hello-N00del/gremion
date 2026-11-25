@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { Role } from '$lib/auth'
+import { NextcloudResponseError } from '$lib/server/files/nextcloud-client'
 import type { SessionUser } from '$lib/auth'
 
 const { mockGetFileId, mockGetCollaboraEditorUrl, clientOpts } = vi.hoisted(() => ({
@@ -8,7 +9,8 @@ const { mockGetFileId, mockGetCollaboraEditorUrl, clientOpts } = vi.hoisted(() =
   mockGetCollaboraEditorUrl: vi.fn()
 }))
 
-vi.mock('$lib/server/files/nextcloud-client', () => ({
+vi.mock('$lib/server/files/nextcloud-client', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('$lib/server/files/nextcloud-client')>()),
   createNextcloudClient: (opts?: { webdavBearer?: string }) => {
     clientOpts.push(opts)
     return { getFileId: mockGetFileId, getCollaboraEditorUrl: mockGetCollaboraEditorUrl }
@@ -128,13 +130,76 @@ describe('GET /api/files/edit-token/[...path]', () => {
     ).rejects.toMatchObject({ status: 400 })
   })
 
-  it('propagates Nextcloud errors as 502', async () => {
-    mockGetFileId.mockRejectedValue(new Error('Nextcloud PROPFIND → 404: Not Found'))
+  // The shape the real client throws for a failed request: it carries a numeric `status`.
+  const UID = '3f0c9c1e-6a53-4f6e-9a3b-2f4a1c7d8e90'
+  const upstream = (status: number) =>
+    new NextcloudResponseError({
+      method: 'PROPFIND',
+      path: `/remote.php/dav/files/${UID}/missing.odt`,
+      status,
+      contentType: 'application/xml',
+      bodySnippet: '<d:error>sabre</d:error>'
+    })
+
+  async function failure(): Promise<{ status: number; text: string }> {
     const { GET } = await import('./+server')
-    await expect(
+    try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (GET as any)(makeEvent('missing.odt', [Role.Member]))
-    ).rejects.toMatchObject({ status: 502 })
+      await (GET as any)(makeEvent('missing.odt', [Role.Member]))
+    } catch (e) {
+      const err = e as { status?: number; body?: unknown }
+      return { status: err.status ?? 0, text: JSON.stringify(err.body ?? {}) }
+    }
+    throw new Error('GET did not fail')
+  }
+
+  function expectClean(text: string, log: { mock: { calls: unknown[][] } }) {
+    expect(text).not.toContain('remote.php')
+    expect(text).not.toContain(UID)
+    expect(text).not.toContain('Nextcloud PROPFIND')
+    expect(text).not.toContain('sabre')
+    expect(JSON.stringify(log.mock.calls)).toContain('remote.php')
+  }
+
+  // A missing file and a refused one are not a broken document store: the caller gets 404 and 403,
+  // each with a plain German message and without the DAV path or the user id.
+  it('answers 404 for a file that does not exist, without the DAV path or the user id', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    mockGetFileId.mockRejectedValue(upstream(404))
+    const out = await failure()
+    expect(out.status).toBe(404)
+    expect(out.text).toContain('Nicht gefunden')
+    expectClean(out.text, log)
+    log.mockRestore()
+  })
+
+  it('answers 403 for a file the person may not open, without the DAV path or the user id', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    mockGetFileId.mockRejectedValue(upstream(403))
+    const out = await failure()
+    expect(out.status).toBe(403)
+    expect(out.text).toContain('Kein Zugriff')
+    expectClean(out.text, log)
+    log.mockRestore()
+  })
+
+  it('answers 502 with the German message for any other upstream failure, and logs the detail', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    mockGetFileId.mockRejectedValue(upstream(500))
+    const out = await failure()
+    expect(out.status).toBe(502)
+    expect(out.text).toContain('Dokumentenspeicher')
+    expectClean(out.text, log)
+    log.mockRestore()
+  })
+
+  it('answers 502 when the editor URL cannot be minted (plain error without a status)', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    mockGetCollaboraEditorUrl.mockRejectedValue(new Error('connect ECONNREFUSED'))
+    const out = await failure()
+    expect(out.status).toBe(502)
+    expect(out.text).toContain('Dokumentenspeicher')
+    log.mockRestore()
   })
 
   it('returns 400 for .md (not supported by Collabora)', async () => {

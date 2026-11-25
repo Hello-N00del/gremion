@@ -5,6 +5,7 @@ import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
 import { removeMember } from '$lib/server/governance/provisioning/orchestrator'
 import { writeAuditEntry } from '$lib/server/audit-db'
+import { malformedIdResponse } from '$lib/server/governance/route-ids'
 
 export const DELETE: RequestHandler = async ({ params, locals }) => {
   const session = await locals.auth()
@@ -12,6 +13,8 @@ export const DELETE: RequestHandler = async ({ params, locals }) => {
   if (!user || !hasRole(user.roles, Role.CouncilAdmin)) {
     return json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
+  const malformedId = malformedIdResponse(params.id)
+  if (malformedId) return malformedId
   const report = await removeMember(params.id, params.userId)
   await writeAuditEntry({
     userId: user.id, field: 'org_unit.member.remove',

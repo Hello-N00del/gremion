@@ -15,10 +15,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { Role } from '$lib/auth/types'
 
 const UNITS: Record<string, { id: string; name: string; visibility: 'all_members' | 'committee_only' }> = {
-  'u-closed': { id: 'u-closed', name: 'Closed', visibility: 'committee_only' },
-  'u-open': { id: 'u-open', name: 'Open', visibility: 'all_members' },
+  '00000000-0000-4000-8000-0000000000c1': { id: '00000000-0000-4000-8000-0000000000c1', name: 'Closed', visibility: 'committee_only' },
+  '00000000-0000-4000-8000-0000000000c2': { id: '00000000-0000-4000-8000-0000000000c2', name: 'Open', visibility: 'all_members' },
 }
-const MEMBERSHIPS: Record<string, string[]> = { 'unit-member': ['u-closed'] }
+const MEMBERSHIPS: Record<string, string[]> = { 'unit-member': ['00000000-0000-4000-8000-0000000000c1'] }
 
 const h = vi.hoisted(() => ({
   listRoles: vi.fn(),
@@ -104,7 +104,7 @@ const ROSTER: Array<[string, Handler]> = [
 describe('committee roster endpoints follow D-3', () => {
   it.each(ROSTER)('%s: a Member outside a committee_only unit gets 404 and nothing is read', async (_n, handler) => {
     clearReads()
-    const { status, body } = await call(handler, STRANGER, 'u-closed')
+    const { status, body } = await call(handler, STRANGER, '00000000-0000-4000-8000-0000000000c1')
     expect(status).toBe(404)
     expect(body.success).toBe(false)
     expect(body.data).toBeUndefined()
@@ -116,38 +116,38 @@ describe('committee roster endpoints follow D-3', () => {
   })
 
   it.each(ROSTER)('%s: the 404 for a hidden unit equals the one for a missing unit', async (_n, handler) => {
-    const hidden = await call(handler, STRANGER, 'u-closed')
-    const missing = await call(handler, STRANGER, 'u-missing')
+    const hidden = await call(handler, STRANGER, '00000000-0000-4000-8000-0000000000c1')
+    const missing = await call(handler, STRANGER, '00000000-0000-4000-8000-0000000000c3')
     expect(hidden).toEqual(missing)
   })
 
   it.each(ROSTER)('%s: a Member outside an all_members unit still reads it', async (_n, handler) => {
-    expect((await call(handler, STRANGER, 'u-open')).status).toBe(200)
+    expect((await call(handler, STRANGER, '00000000-0000-4000-8000-0000000000c2')).status).toBe(200)
   })
 
   it.each(ROSTER)('%s: a member of the committee_only unit and a CouncilAdmin read it', async (_n, handler) => {
     for (const user of [UNIT_MEMBER, ADMIN]) {
-      expect((await call(handler, user, 'u-closed')).status).toBe(200)
+      expect((await call(handler, user, '00000000-0000-4000-8000-0000000000c1')).status).toBe(200)
     }
   })
 
   it.each(ROSTER)('%s: a Guest gets 403 before any read', async (_n, handler) => {
     clearReads()
-    expect((await call(handler, GUEST, 'u-open')).status).toBe(403)
+    expect((await call(handler, GUEST, '00000000-0000-4000-8000-0000000000c2')).status).toBe(403)
     expect(h.listOrgUnitMembers).not.toHaveBeenCalled()
   })
 
   it('a CouncilAdmin needs no membership query for the detail', async () => {
     const { isMemberOf } = await import('$lib/server/governance/org-units-db')
     vi.mocked(isMemberOf).mockClear()
-    await call(detailGET as Handler, ADMIN, 'u-closed')
+    await call(detailGET as Handler, ADMIN, '00000000-0000-4000-8000-0000000000c1')
     expect(isMemberOf).not.toHaveBeenCalled()
   })
 })
 
 describe('GET .../members: email addresses only for the unit and CouncilAdmins', () => {
   it('a Member outside an all_members unit sees the members but NO email address', async () => {
-    const { status, body } = await call(membersGET as Handler, STRANGER, 'u-open')
+    const { status, body } = await call(membersGET as Handler, STRANGER, '00000000-0000-4000-8000-0000000000c2')
     expect(status).toBe(200)
     const data = body.data as Array<Record<string, unknown>>
     expect(data).toHaveLength(2)
@@ -157,7 +157,7 @@ describe('GET .../members: email addresses only for the unit and CouncilAdmins',
 
   it('a member of the unit and a CouncilAdmin see the email addresses', async () => {
     for (const user of [UNIT_MEMBER, ADMIN]) {
-      const { status, body } = await call(membersGET as Handler, user, 'u-closed')
+      const { status, body } = await call(membersGET as Handler, user, '00000000-0000-4000-8000-0000000000c1')
       expect(status).toBe(200)
       expect((body.data as Array<{ email: string }>).map((m) => m.email)).toEqual([
         'kc-1@example.org',
