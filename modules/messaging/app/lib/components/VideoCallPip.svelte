@@ -33,12 +33,18 @@
   // Ref to whichever iframe is currently mounted (PiP or fullscreen).
   let iframeRef = $state<HTMLIFrameElement | null>(null)
 
-  const elementCallBase = env.PUBLIC_ELEMENT_CALL_URL ?? 'http://localhost:8085'
+  // One gremion-ui serves every customer host, so the process env (PUBLIC_*) names ONE of them. In the
+  // browser the frame is therefore derived from the page the user is on: the Element Call proxy lives under
+  // /element-call on every host, and a frame on any other origin is blocked by `frame-src 'self'`. The env
+  // values are only the server-render fallback (this component renders no frame until a call is started,
+  // which is client-side only).
+  const pageOrigin = typeof window !== 'undefined' ? window.location.origin : null
+  const elementCallBase = pageOrigin ? `${pageOrigin}/element-call` : (env.PUBLIC_ELEMENT_CALL_URL ?? 'http://localhost:8085')
   // Scheme+host+port only — used for postMessage targetOrigin and event.origin checks.
   // When element-call is proxied under /element-call/, the origin is the same as the
   // host page (localhost:3001) even though elementCallBase has a path component.
   const elementCallOrigin = (() => { try { return new URL(elementCallBase).origin } catch { return elementCallBase } })()
-  const parentUrl = env.PUBLIC_BASE_URL ?? 'http://localhost:3001'
+  const parentUrl = pageOrigin ?? env.PUBLIC_BASE_URL ?? 'http://localhost:3001'
   const WIDGET_ID = 'element-call-pip'
 
   // Tracks the open Document Picture-in-Picture window (Chrome 116+).
