@@ -58,6 +58,17 @@ set -euo pipefail
 #      room failed), waits for the app's own worker to retry them (up to GREMION_SERVICES_RETRY_WAIT_S, default
 #      150 s) and reports how many org units it repaired. Rows that fail again are reported, not an error.
 #
+# A customer on a SECONDARY host (registered on a host that is an entry of SECONDARY_TENANT_HOSTS in state.env,
+# not PILOT_TENANT_HOST) takes its own branch (wire_secondary): the issuer is its registered host's; step 1
+# runs; steps 2-5 do not (the shared chat service stays bound to the primary customer's realm: no secret copy,
+# no state.env write, no matrix start, no bot); step 6 registers the provider 'Keycloak-<slug>' (the primary's
+# 'Keycloak' is never touched), reads it back by identifier and prints its id, and keeps the app and office
+# checks (read only); 6b and 6c run for it; step 7 does not recreate gremion-ui. Before anything is written
+# the primary customer's provider 'Keycloak' must read back (checkBearer true, id 1: the primary is wired, so
+# the customer's provider cannot take id 1) and the bot token the running gremion-ui carries must be the one
+# of state.env; step 8 runs. A registered host that is neither the customer host nor listed is refused before
+# anything is written.
+#
 # It takes the host lock (runtime/hostd.lock, non-blocking, exit 3 when busy) like
 # the other mutating verbs, and under sudo hands every file it rewrites back to the
 # owner it had.
@@ -444,6 +455,147 @@ creation_order_finish() {
 # wire
 # ---------------------------------------------------------------------------
 
+# wire_nc_app_checks <nextcloud container> -- the apps the pilot needs are enabled (the image's install hooks end in
+# a warning, never in a failure) and both richdocuments URLs are set. Reads only.
+wire_nc_app_checks() {
+    local nc_c="$1"
+    local apps app
+    apps="$(docker exec -u www-data "$nc_c" php occ app:list --output=json)" \
+        || die "occ app:list failed" "$GREMION_EXIT_ASSERT"
+    for app in polls user_oidc richdocuments groupfolders; do
+        jq -e --arg a "$app" '.enabled | has($a)' <<< "$apps" >/dev/null 2>&1 \
+            || die "Nextcloud app ${app} is not enabled (the install hooks end in a warning: docker logs ${nc_c}; install it with occ app:install ${app})" "$GREMION_EXIT_ASSERT"
+    done
+    # the install hook sets both URLs (and warns on a failure); a missing one surfaces only when a browser opens an editor
+    local wopi_key
+    for wopi_key in wopi_url public_wopi_url; do
+        [[ -n "$(docker exec -u www-data "$nc_c" php occ config:app:get richdocuments "$wopi_key" 2>/dev/null | tr -d '[:space:]')" ]] \
+            || die "richdocuments ${wopi_key} is not set in Nextcloud (the install hook warns in docker logs ${nc_c}; set it with occ config:app:set richdocuments ${wopi_key} --value=<url>, see docs/ops/pilot-services.md)" "$GREMION_EXIT_ASSERT"
+    done
+}
+
+# wire_caldav_collection <slug> <nextcloud container> -- step 6b, shared by both branches.
+wire_caldav_collection() {
+    local slug="$1" nc_c="$2"
+    # The calendar leaf pushes each customer's events to one collection of the shared Nextcloud account
+    # (CALDAV_CALENDAR_TEMPLATE of its environment, read back from the running leaf) and has no way to
+    # create it. Created here by occ, which needs no credential on any argv; idempotent by listing first.
+    local cal_c cal_tpl cal_user cal_name cal_re cal_list
+    cal_c="$(docker ps -q --filter "label=com.docker.compose.project=${STACK}-app-${COLOUR}" \
+                          --filter "label=com.docker.compose.service=calendar-service")" \
+        || die "docker ps failed while looking for calendar-service of ${STACK}-app-${COLOUR}" "$GREMION_EXIT_ASSERT"
+    if [[ -z "${cal_c//[[:space:]]/}" ]]; then
+        info "no calendar-service runs in ${STACK}-app-${COLOUR} (calendar profile off): no CalDAV collection is created"
+    else
+        cal_c="$(container_of "${STACK}-app-${COLOUR}" calendar-service)"
+        cal_tpl="$(docker exec "$cal_c" printenv CALDAV_CALENDAR_TEMPLATE 2>/dev/null | tr -d '[:space:]' || true)"
+        [[ "$cal_tpl" == *"{slug}"* ]] \
+            || die "calendar-service carries no CALDAV_CALENDAR_TEMPLATE with a {slug} (docker exec ${cal_c} printenv): its CalDAV drain would refuse every customer" "$GREMION_EXIT_ASSERT"
+        cal_user="$(docker exec "$cal_c" printenv CALDAV_SHARED_USER 2>/dev/null | tr -d '[:space:]' || true)"
+        [[ -n "$cal_user" ]] || cal_user="$(docker exec "$cal_c" printenv NEXTCLOUD_ADMIN_USER 2>/dev/null | tr -d '[:space:]' || true)"
+        [[ -n "$cal_user" ]] || cal_user="admin"
+        cal_name="${cal_tpl//\{slug\}/${slug}}"
+        [[ "$cal_name" =~ ^[A-Za-z0-9._-]{1,64}$ ]] \
+            || die "the calendar name ${cal_name} (CALDAV_CALENDAR_TEMPLATE with the slug) is not one safe path segment" "$GREMION_EXIT_ASSERT"
+        [[ "$cal_user" =~ ^[A-Za-z0-9._@-]{1,64}$ ]] \
+            || die "the CalDAV owner account name of calendar-service is not a plain account name" "$GREMION_EXIT_ASSERT"
+        cal_list="$(docker exec -u www-data "$nc_c" php occ dav:list-calendars "$cal_user")" \
+            || die "occ dav:list-calendars ${cal_user} failed (does the account exist in Nextcloud? docker logs ${nc_c})" "$GREMION_EXIT_ASSERT"
+        cal_re="${cal_name//./\\.}"
+        if ! grep -Eq -- "^\| ${cal_re} " <<< "$cal_list"; then
+            docker exec -u www-data "$nc_c" php occ dav:create-calendar "$cal_user" "$cal_name" >/dev/null \
+                || die "occ dav:create-calendar ${cal_user} ${cal_name} failed (docker logs ${nc_c})" "$GREMION_EXIT_ASSERT"
+            cal_list="$(docker exec -u www-data "$nc_c" php occ dav:list-calendars "$cal_user")" \
+                || die "occ dav:list-calendars ${cal_user} (read-back) failed" "$GREMION_EXIT_ASSERT"
+        fi
+        grep -Eq -- "^\| ${cal_re} " <<< "$cal_list" \
+            || die "the CalDAV collection ${cal_name} of ${cal_user} is not listed after creating it (occ dav:list-calendars ${cal_user})" "$GREMION_EXIT_ASSERT"
+        ok "calendar: the CalDAV collection ${cal_name} of ${cal_user} exists (the leaf's drain target)"
+    fi
+}
+
+# wire_secondary <slug> <discovery URI> <nextcloud container> <nextcloud client secret file> <tenant secrets dir>
+# -- the wire of a customer on a SECONDARY host, after step 1 (the realm answers publicly on that host). It runs
+# only what is the customer's own on the shared Nextcloud and in the app, and none of the shared chat service's
+# steps (2-5: no synapse secret copy, no SYNAPSE_KEYCLOAK_* or profile write to state.env, no matrix start or
+# recreate, no bot) and nothing that is install-wide (the richdocuments activation and callback URL stay the
+# primary wire's; here the app and office settings are only read back):
+#   0.  (first, before anything is written) the primary customer is wired: the provider 'Keycloak' reads back (read
+#       only) with checkBearer true and user_oidc id 1, which NEXTCLOUD_OIDC_PROVIDER_ID defaults to. On an
+#       install whose primary wire never ran, this wire would otherwise register the first provider, take id 1
+#       and leave the primary wire dying at its own id-1 read-back on every rerun. Then the running gremion-ui
+#       carries the bot token of state.env (a gremion-ui older than the last write of state.env is stale; this
+#       is NOT the proof that the primary was wired: gremion-init-secrets writes one token to both before any
+#       wire). gremion-ui is NOT recreated: the mail login writes the customer's registry row
+#       (domain_profile.smtp) and its config.json, which the app re-reads within its resolution cache TTL (30 s,
+#       then the mail context's own 30 s); the relay password file sits in a live read-only bind mount. So no
+#       other customer's app restarts;
+#   6.  registers the user_oidc provider 'Keycloak-<slug>' (the primary customer keeps 'Keycloak': that
+#       identifier is never touched) with the realm's nextcloud client secret handed in BY NAME and
+#       --unique-uid=1 (the primary's 'Keycloak' uses raw ids, --unique-uid=0: a secondary realm must never be
+#       able to name an existing account of the primary customer, so its ids are hashed with its provider id),
+#       and reads it back BY IDENTIFIER: bearer validation on, unique-uid not off, the discovery URI the realm's
+#       own; prints its numeric id;
+#       the app list and the office URLs are checked as the primary wire checks them;
+#   6b. the customer's CalDAV collection; 6c. the mail login (mail_login_apply);
+#   8.  the creation order, as for any customer.
+wire_secondary() {
+    local slug="$1" discovery="$2" nc_c="$3" nc_file="$4" tsd="$5"
+    local ident="Keycloak-${slug}" prov prim pid keys ui_c token
+
+    # -- 0 (first, nothing is written before it). the primary customer is wired, and the running app is current --
+    wait_healthy "$nc_c" nextcloud
+    prim="$(docker exec -u www-data "$nc_c" php occ user_oidc:provider Keycloak --output=json 2>/dev/null)" \
+        || die "the primary customer is not wired: Nextcloud has no user_oidc provider 'Keycloak' (occ user_oidc:provider Keycloak --output=json failed). Run gremion-services wire for the primary customer first: this wire would otherwise take provider id 1, which the primary's provider needs. Nothing was written" "$GREMION_EXIT_ASSERT"
+    jq -e '.settings.checkBearer == true and (.id | tostring) == "1"' <<< "$prim" >/dev/null 2>&1 \
+        || die "the primary customer is not wired: the user_oidc provider 'Keycloak' reads back without checkBearer true or is not provider id 1. Run gremion-services wire for the primary customer again before this one. Nothing was written" "$GREMION_EXIT_ASSERT"
+    ui_c="$(container_of "${STACK}-app-${COLOUR}" gremion-ui)"
+    token="$(env_key "$STATE_ENV" SYNAPSE_ADMIN_TOKEN)"
+    [[ -n "$token" ]] || die "SYNAPSE_ADMIN_TOKEN is empty in ${STATE_ENV}" "$GREMION_EXIT_USAGE"
+    [[ "$(docker exec "$ui_c" printenv SYNAPSE_ADMIN_TOKEN 2>/dev/null | tr -d '[:space:]')" == "$token" ]] \
+        || die "the running gremion-ui's SYNAPSE_ADMIN_TOKEN is not the one recorded in state.env (docker exec ${ui_c} printenv): the running app is older than the last write of state.env (recreate it, for example by the primary customer's wire, then run this one again). Nothing was written" "$GREMION_EXIT_ASSERT"
+
+    # -- 6. the customer's own Nextcloud provider --
+    NEXTCLOUD_OIDC_CLIENT_SECRET="$(tr -d '\r\n' < "$nc_file")" \
+        docker exec -u www-data -e NEXTCLOUD_OIDC_CLIENT_SECRET "$nc_c" sh -c \
+        'php occ user_oidc:provider '"${ident}"' --clientid=nextcloud --clientsecret="$NEXTCLOUD_OIDC_CLIENT_SECRET" --discoveryuri='"${discovery}"' --unique-uid=1 --check-bearer=1 --bearer-provisioning=1' \
+        >/dev/null || die "occ user_oidc:provider ${ident} failed (nextcloud log: docker logs ${nc_c})" "$GREMION_EXIT_ASSERT"
+    wire_nc_app_checks "$nc_c"
+    prov="$(docker exec -u www-data "$nc_c" php occ user_oidc:provider "$ident" --output=json)" \
+        || die "occ user_oidc:provider ${ident} (read-back by identifier) failed" "$GREMION_EXIT_ASSERT"
+    jq -e --arg i "$ident" '((.identifier // $i) == $i) and (.settings.checkBearer == true)' <<< "$prov" >/dev/null 2>&1 \
+        || die "the user_oidc provider ${ident} read back without checkBearer true (or under another identifier): Nextcloud would answer 401 to every Bearer request of this customer" "$GREMION_EXIT_ASSERT"
+    # raw user ids (unique-uid off) would put this realm's ids into the namespace of the primary customer's
+    # accounts (provider 'Keycloak', raw Keycloak ids): only an explicit false/0 read-back is refused, an absent
+    # key is the app's default (hashed ids)
+    jq -e '(.settings.uniqueUid) as $u | ($u == false or $u == 0 or $u == "0" or $u == "false") | not' <<< "$prov" >/dev/null 2>&1 \
+        || die "the user_oidc provider ${ident} reads back with unique-uid off (raw user ids): an id signed by this customer's realm could then be the Nextcloud account id of another customer (the collection and the mail login are not set up)" "$GREMION_EXIT_ASSERT"
+    # the discovery URI is looked for among the values of the read-back, not under one key name: the key is
+    # Nextcloud's to name, and a wrong URI is what this check is for
+    if ! jq -e --arg d "$discovery" '[.. | strings] | any(. == $d)' <<< "$prov" >/dev/null 2>&1; then
+        keys="$(jq -r 'keys | join(",")' <<< "$prov" 2>/dev/null || true)"
+        die "the user_oidc provider ${ident} reads back with another discovery URI than ${discovery} (keys read back: ${keys:-none})" "$GREMION_EXIT_ASSERT"
+    fi
+    pid="$(jq -r '.id | tostring' <<< "$prov" 2>/dev/null || true)"
+    [[ "$pid" =~ ^[0-9]+$ ]] || die "the user_oidc provider ${ident} reads back without a numeric id" "$GREMION_EXIT_ASSERT"
+    docker exec "$nc_c" curl -fsS --max-time 15 -o /dev/null "$discovery" \
+        || die "the discovery URI is not reachable from inside the nextcloud container (a staging ACME certificate fails here): ${discovery}" "$GREMION_EXIT_ASSERT"
+    ok "nextcloud: provider ${ident} (checkBearer, id ${pid}), apps enabled, discovery reachable"
+
+    # -- 6b. the customer's CalDAV collection --
+    wire_caldav_collection "$slug" "$nc_c"
+
+    # -- 6c. the customer's mail login (MAIL_TRANSPORT=relay only) --
+    mail_login_apply "$slug" "$tsd"
+
+    info "gremion-ui is not recreated: the app re-reads the customer's row and config.json within about a minute, and no customer's app restarts"
+
+    # -- 8. the creation order: marked wired, failed unit resources retried --
+    creation_order_finish "$slug"
+
+    printf 'WIRE: ok %s\n' "$slug"
+}
+
 cmd_wire() {
     local slug="${1:-}"
     need_slug "$slug"
@@ -473,23 +625,32 @@ cmd_wire() {
     EDGE_BIND_IP="$edge_ip"; EDGE_HTTPS_PORT="$edge_port"
     bot_id="@${BOT_LOCALPART}:${platform}"
 
-    # -- the customer's host: the shared Synapse and Nextcloud are bound to ONE customer realm, the one of
-    # PILOT_TENANT_HOST. A customer registered on any other host (a secondary host, SECONDARY_TENANT_HOSTS) is
-    # core-only: wiring it would point the shared services at its realm and take them from the primary customer.
-    # Refused HERE, before any secret is copied, any key written or any container started. An unreadable
-    # registry or a customer row without a host is a refusal too (never read as "the primary host"); only a
-    # slug with no customer row at all goes on, as it always did, and is warned about at the end (step 8).
-    local reg_host reg_rc=0
+    # -- the customer's host: the shared Synapse is bound to ONE customer realm, the one of PILOT_TENANT_HOST
+    # (so is the primary customer's Nextcloud provider 'Keycloak'). A customer registered on another host takes the
+    # SECONDARY branch ONLY when that host is an entry of SECONDARY_TENANT_HOSTS (state.env): it gets its own
+    # Nextcloud provider, CalDAV collection and mail login and leaves the shared chat service and the primary
+    # customer's wiring alone. A host that is neither is refused HERE, before any secret is copied, any key written
+    # or any container started. An unreadable registry or a customer row without a host is a refusal too (never read
+    # as "the primary host"); only a slug with no customer row at all goes on, as it always did, and is warned about
+    # at the end (step 8).
+    local reg_host reg_rc=0 secondary=no secondary_list
     reg_host="$(customer_registered_host "$slug")" || reg_rc=$?
     (( reg_rc == 0 || reg_rc == 4 )) || exit "$reg_rc"
     if (( reg_rc == 0 )); then
         [[ -n "$reg_host" ]] \
             || die "the customer ${slug} has no registered host in the control database: it cannot be told from a secondary-host customer, which is core-only (the shared chat and file services stay bound to the primary customer); nothing was written or started" "$GREMION_EXIT_ASSERT"
-        [[ "$reg_host" == "${host,,}" ]] \
-            || die "the customer ${slug} is registered on ${reg_host}, not on this install's customer host ${host} (PILOT_TENANT_HOST): a secondary-host customer is core-only, and the shared chat and file services stay bound to the primary customer; wiring it would point Synapse and Nextcloud at its realm. Nothing was written or started" "$GREMION_EXIT_ASSERT"
+        if [[ "$reg_host" != "${host,,}" ]]; then
+            secondary_list="$(env_key "$STATE_ENV" SECONDARY_TENANT_HOSTS)"
+            secondary_hosts_has "$secondary_list" "$reg_host" \
+                || die "the customer ${slug} is registered on ${reg_host}, which is neither this install's customer host ${host} (PILOT_TENANT_HOST) nor an entry of SECONDARY_TENANT_HOSTS in state.env: a customer on another host is core-only, and the shared chat and file services stay bound to the primary customer; wiring it would point Synapse and Nextcloud at its realm. Nothing was written or started" "$GREMION_EXIT_ASSERT"
+            secondary=yes
+        fi
     fi
 
-    local issuer="https://${host}/auth/realms/${slug}"
+    # the realm's public host: the customer's own, which on the secondary branch is the registered one
+    local realm_host="$host"
+    if [[ "$secondary" == yes ]]; then realm_host="$reg_host"; fi
+    local issuer="https://${realm_host}/auth/realms/${slug}"
     local discovery="${issuer}/.well-known/openid-configuration"
 
     local tsd syn_file nc_file
@@ -497,7 +658,11 @@ cmd_wire() {
     [[ -n "$tsd" && "$tsd" == /* ]] || die "TENANT_SECRETS_DIR is not set (absolute) in ${APP_ENV}" "$GREMION_EXIT_USAGE"
     syn_file="${tsd}/tenant_${slug}_client_synapse"
     nc_file="${tsd}/tenant_${slug}_client_nextcloud"
-    [[ -s "$syn_file" ]] || die "the realm's synapse client secret is absent: ${syn_file} (was the create request for ${slug} run by this release?)" "$GREMION_EXIT_USAGE"
+    # the synapse client secret is the shared chat service's: a secondary customer has none and needs none
+    if [[ "$secondary" != yes ]]; then
+        [[ -s "$syn_file" ]] || die "the realm's synapse client secret is absent: ${syn_file} (was the create request for ${slug} run by this release?)" "$GREMION_EXIT_USAGE"
+    fi
+    # the nextcloud client secret registers the customer's provider (the primary's or its own): checked before any write
     [[ -s "$nc_file" ]] || die "the realm's nextcloud client secret is absent: ${nc_file} (the create request writes it only when it creates the realm, and reconcile does not add it: a realm created before the nextcloud client existed has none; create the client in the realm and write this file by hand, or re-create the customer)" "$GREMION_EXIT_USAGE"
 
     local nc_c
@@ -512,7 +677,13 @@ cmd_wire() {
         || die "the realm's discovery document is not reachable at ${discovery} through the edge (is the customer's router file written, and is the certificate publicly trusted? a staging ACME certificate fails here)" "$GREMION_EXIT_ASSERT"
     jq -e --arg i "$issuer" '.issuer == $i' <<< "$doc" >/dev/null 2>&1 \
         || die "the realm's discovery document names another issuer than ${issuer}: the realm or its frontendUrl was created for a different host" "$GREMION_EXIT_ASSERT"
-    ok "realm ${slug} answers at ${host} with the expected issuer"
+    ok "realm ${slug} answers at ${realm_host} with the expected issuer"
+
+    # -- the SECONDARY branch: steps 2-5 are the shared chat service's and do not run for this customer --
+    if [[ "$secondary" == yes ]]; then
+        wire_secondary "$slug" "$discovery" "$nc_c" "$nc_file" "$tsd"
+        return 0
+    fi
 
     # -- 2. the synapse client secret, 0600, where matrix mounts it --
     install -d -m 700 "${ROOT}/etc/secrets/synapse" || die "cannot create ${ROOT}/etc/secrets/synapse" "$GREMION_EXIT_ASSERT"
@@ -615,19 +786,7 @@ cmd_wire() {
     # activate-config resets the callback URL: Collabora must reach Nextcloud by its in-network name
     docker exec -u www-data "$nc_c" php occ config:app:set richdocuments wopi_callback_url --value=http://nextcloud >/dev/null \
         || die "occ config:app:set richdocuments wopi_callback_url failed" "$GREMION_EXIT_ASSERT"
-    local apps app
-    apps="$(docker exec -u www-data "$nc_c" php occ app:list --output=json)" \
-        || die "occ app:list failed" "$GREMION_EXIT_ASSERT"
-    for app in polls user_oidc richdocuments groupfolders; do
-        jq -e --arg a "$app" '.enabled | has($a)' <<< "$apps" >/dev/null 2>&1 \
-            || die "Nextcloud app ${app} is not enabled (the install hooks end in a warning: docker logs ${nc_c}; install it with occ app:install ${app})" "$GREMION_EXIT_ASSERT"
-    done
-    # the install hook sets both URLs (and warns on a failure); a missing one surfaces only when a browser opens an editor
-    local wopi_key
-    for wopi_key in wopi_url public_wopi_url; do
-        [[ -n "$(docker exec -u www-data "$nc_c" php occ config:app:get richdocuments "$wopi_key" 2>/dev/null | tr -d '[:space:]')" ]] \
-            || die "richdocuments ${wopi_key} is not set in Nextcloud (the install hook warns in docker logs ${nc_c}; set it with occ config:app:set richdocuments ${wopi_key} --value=<url>, see docs/ops/pilot-services.md)" "$GREMION_EXIT_ASSERT"
-    done
+    wire_nc_app_checks "$nc_c"
     local prov
     prov="$(docker exec -u www-data "$nc_c" php occ user_oidc:provider Keycloak --output=json)" \
         || die "occ user_oidc:provider Keycloak (read-back) failed" "$GREMION_EXIT_ASSERT"
@@ -638,41 +797,7 @@ cmd_wire() {
     ok "nextcloud: provider Keycloak (checkBearer, id 1), apps enabled, richdocuments active, discovery reachable"
 
     # -- 6b. the customer's CalDAV collection --
-    # The calendar leaf pushes each customer's events to one collection of the shared Nextcloud account
-    # (CALDAV_CALENDAR_TEMPLATE of its environment, read back from the running leaf) and has no way to
-    # create it. Created here by occ, which needs no credential on any argv; idempotent by listing first.
-    local cal_c cal_tpl cal_user cal_name cal_re cal_list
-    cal_c="$(docker ps -q --filter "label=com.docker.compose.project=${STACK}-app-${COLOUR}" \
-                          --filter "label=com.docker.compose.service=calendar-service")" \
-        || die "docker ps failed while looking for calendar-service of ${STACK}-app-${COLOUR}" "$GREMION_EXIT_ASSERT"
-    if [[ -z "${cal_c//[[:space:]]/}" ]]; then
-        info "no calendar-service runs in ${STACK}-app-${COLOUR} (calendar profile off): no CalDAV collection is created"
-    else
-        cal_c="$(container_of "${STACK}-app-${COLOUR}" calendar-service)"
-        cal_tpl="$(docker exec "$cal_c" printenv CALDAV_CALENDAR_TEMPLATE 2>/dev/null | tr -d '[:space:]' || true)"
-        [[ "$cal_tpl" == *"{slug}"* ]] \
-            || die "calendar-service carries no CALDAV_CALENDAR_TEMPLATE with a {slug} (docker exec ${cal_c} printenv): its CalDAV drain would refuse every customer" "$GREMION_EXIT_ASSERT"
-        cal_user="$(docker exec "$cal_c" printenv CALDAV_SHARED_USER 2>/dev/null | tr -d '[:space:]' || true)"
-        [[ -n "$cal_user" ]] || cal_user="$(docker exec "$cal_c" printenv NEXTCLOUD_ADMIN_USER 2>/dev/null | tr -d '[:space:]' || true)"
-        [[ -n "$cal_user" ]] || cal_user="admin"
-        cal_name="${cal_tpl//\{slug\}/${slug}}"
-        [[ "$cal_name" =~ ^[A-Za-z0-9._-]{1,64}$ ]] \
-            || die "the calendar name ${cal_name} (CALDAV_CALENDAR_TEMPLATE with the slug) is not one safe path segment" "$GREMION_EXIT_ASSERT"
-        [[ "$cal_user" =~ ^[A-Za-z0-9._@-]{1,64}$ ]] \
-            || die "the CalDAV owner account name of calendar-service is not a plain account name" "$GREMION_EXIT_ASSERT"
-        cal_list="$(docker exec -u www-data "$nc_c" php occ dav:list-calendars "$cal_user")" \
-            || die "occ dav:list-calendars ${cal_user} failed (does the account exist in Nextcloud? docker logs ${nc_c})" "$GREMION_EXIT_ASSERT"
-        cal_re="${cal_name//./\\.}"
-        if ! grep -Eq -- "^\| ${cal_re} " <<< "$cal_list"; then
-            docker exec -u www-data "$nc_c" php occ dav:create-calendar "$cal_user" "$cal_name" >/dev/null \
-                || die "occ dav:create-calendar ${cal_user} ${cal_name} failed (docker logs ${nc_c})" "$GREMION_EXIT_ASSERT"
-            cal_list="$(docker exec -u www-data "$nc_c" php occ dav:list-calendars "$cal_user")" \
-                || die "occ dav:list-calendars ${cal_user} (read-back) failed" "$GREMION_EXIT_ASSERT"
-        fi
-        grep -Eq -- "^\| ${cal_re} " <<< "$cal_list" \
-            || die "the CalDAV collection ${cal_name} of ${cal_user} is not listed after creating it (occ dav:list-calendars ${cal_user})" "$GREMION_EXIT_ASSERT"
-        ok "calendar: the CalDAV collection ${cal_name} of ${cal_user} exists (the leaf's drain target)"
-    fi
+    wire_caldav_collection "$slug" "$nc_c"
 
     # -- 6c. the customer's mail login (MAIL_TRANSPORT=relay only) --
     # Before the recreate below, which is what makes the app read the new row and config: no separate restart.

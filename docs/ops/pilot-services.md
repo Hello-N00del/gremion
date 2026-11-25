@@ -165,6 +165,41 @@ and the member import.
 8. the creation order (below): marks the customer wired and retries the unit
    resources that failed before the wiring.
 
+### A customer on a secondary host
+
+`wire <slug>` for a customer registered on a host listed in
+`SECONDARY_TENANT_HOSTS` (see "A secondary customer host" below) runs a narrower
+branch. The shared chat service stays bound to the primary customer's realm and
+the primary customer's Nextcloud provider `Keycloak` is never set, so:
+
+- step 1 checks the realm on the customer's registered host (issuer
+  `https://<registered host>/auth/realms/<slug>`);
+- steps 2 to 5 do not run: no synapse secret copy, no `state.env` write, no
+  `matrix` start or recreate, no bot;
+- before anything is written, the primary customer must be wired: the provider
+  `Keycloak` must read back (read only) with `checkBearer` true and id 1, and the
+  bot token the running `gremion-ui` carries must be the one in `state.env`.
+  On an install whose primary wire never ran, the secondary wire stops here
+  instead of taking provider id 1, which the primary's provider needs
+  (`NEXTCLOUD_OIDC_PROVIDER_ID` defaults to 1);
+- step 6 registers the provider `Keycloak-<slug>` with the realm's `nextcloud`
+  client secret and `--unique-uid=1` (the primary's `Keycloak` uses raw Keycloak
+  ids; a secondary realm's ids are hashed with its provider id, so it can never
+  name an existing account of the primary customer), reads it back by that
+  identifier (`checkBearer` true, unique-uid not off, the customer's discovery
+  URI), prints its numeric id, and keeps the app and office
+  checks (read only; `richdocuments:activate-config` and the callback URL stay
+  the primary wire's); 6b creates the customer's CalDAV collection and 6c the
+  mail login;
+- step 7 does not recreate `gremion-ui`: the mail login writes the customer's
+  registry row and `config.json`, which the app re-reads within about a minute,
+  so no other customer's app restarts;
+- step 8, the creation order, runs as for any customer.
+
+A registered host that is neither `PILOT_TENANT_HOST` nor listed is refused
+before anything is written. This is a host program (a CD state-tier hold): it
+reaches the install through the operator's apply.
+
 ### Step 8: the creation order (create, wire, seed)
 
 The order is create, then `wire`, then the vertical seed. Nothing forbids the
@@ -309,11 +344,13 @@ host, and the public probe asks only `/readyz` and the login page.
 
 **What it gives.** Login, board and calendar pages, each on the customer's own
 host, realm, and databases. The calendar's own data is the customer's; only its
-optional CalDAV mirror into the shared Nextcloud does not run for this customer:
-the collection it would write to is created by `gremion-services wire`, which
-refuses the customer, and the leaf cannot create one itself, so nothing is
-written to the shared service (a push that finds no collection fails and is
-given up after three attempts per entry).
+optional CalDAV mirror into the shared Nextcloud needs the customer's own
+collection, which `gremion-services wire <slug>` creates for it (the leaf cannot
+create one itself; a push that finds no collection fails and is given up after
+three attempts per entry). Until `wire` has run for the customer, nothing is
+written to the shared service. `wire` also gives the customer its own Nextcloud
+login provider and, under `MAIL_TRANSPORT=relay`, its mail login: see "A
+customer on a secondary host" under the wire steps above.
 
 **What it does not give.** Chat, files, office editing, video (all on the shared
 Synapse and Nextcloud), votes (they run on the shared Nextcloud Polls), the
@@ -344,9 +381,12 @@ enforces all of this instead of leaving it to the operator:
   text), and the shared Nextcloud and Collabora are not called for that customer;
 - the module enable (executor, council admin and break-glass alike) refuses the
   same modules for a customer registered on a secondary host;
-- `gremion-services wire <slug>` refuses a customer whose registered host is not
-  `PILOT_TENANT_HOST`, before it copies a secret, writes a key or starts a
-  container: the shared chat and file services stay bound to the primary customer.
+- `gremion-services wire <slug>` takes a customer registered on a listed secondary
+  host through its own, narrower branch (see "A customer on a secondary host"
+  under the wire steps), and refuses a customer whose registered host is neither
+  `PILOT_TENANT_HOST` nor an entry of `SECONDARY_TENANT_HOSTS`, before it copies
+  a secret, writes a key or starts a container: the shared chat and file
+  services stay bound to the primary customer.
 
 **Evidence still owed.** Isolation evidence for two customers on the shared
 Nextcloud and Synapse has not been produced, which is why those modules stay off
