@@ -78,7 +78,7 @@ afterAll(async () => {
 
 /** What a request sees: the reasons of every rejected call (empty when all succeeded). */
 function rejections(results: PromiseSettledResult<unknown>[]): string[] {
-  return results.flatMap((r) => (r.status === 'rejected' ? [String((r.reason as Error)?.message ?? r.reason)] : []))
+  return results.flatMap((r) => (r.status === 'rejected' ? [r.reason instanceof Error ? r.reason.message : JSON.stringify(r.reason)] : []))
 }
 
 describe('first contact under concurrency (integration)', () => {

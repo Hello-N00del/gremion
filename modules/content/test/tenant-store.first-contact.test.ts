@@ -33,7 +33,7 @@ vi.mock('postgres', () => {
   const factory = (url: string, _opts?: unknown) => {
     const run = (text: string, params: readonly unknown[]): unknown[] => {
       if (/SELECT count\(\*\) AS count FROM pg_database/i.test(text)) {
-        return [{ count: h.databases.has(String(params[0])) ? '1' : '0' }]
+        return [{ count: h.databases.has(typeof params[0] === 'string' ? params[0] : '') ? '1' : '0' }]
       }
       if (/pg_advisory_lock\(/i.test(text)) {
         h.log.push('LOCK@' + dbOf(url))
