@@ -45,7 +45,13 @@ export const load: PageServerLoad = mapBoardUnavailableForPage(async ({ locals, 
     .filter((o) => scoped.has(o.id) && !withBoard.has(o.id))
     .map((o) => ({ id: o.id, name: o.name }))
 
-  const selectedId = url.searchParams.get('board') ?? boards[0]?.id ?? null
+  // ?board=<id> naming a board outside the member's scope: say so instead of rendering the normal page with no
+  // board. allBoards is already limited to the member's scope, so an id it does not list is refused the same way
+  // whether the board exists elsewhere or never existed (the API's own answer tells those two apart, the page does not).
+  // An archived board in scope is not refused: it simply has no deck here.
+  const requestedId = url.searchParams.get('board') || null
+  const boardDenied = requestedId !== null && !allBoards.some((b) => b.id === requestedId)
+  const selectedId = boardDenied ? null : (requestedId ?? boards[0]?.id ?? null)
   const rawDeck = selectedId && boards.some((b) => b.id === selectedId) ? await backend.deckFor(selectedId) : null
 
   let deck: { board: BoardView & { org_unit_name: string }; stacks: StackView[]; cards: CardView[] } | null = null
@@ -102,6 +108,7 @@ export const load: PageServerLoad = mapBoardUnavailableForPage(async ({ locals, 
     })),
     archivedCount,
     creatable,
+    boardDenied,
     deck,
     members,
     me: user.id,
