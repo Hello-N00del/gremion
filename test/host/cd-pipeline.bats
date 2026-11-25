@@ -8,8 +8,8 @@
 # is missing or renamed shows up as a `stub ...` line in the call log. Every test ends with
 # pl_no_stubs. What is shimmed is outside the family: docker and curl (one world each, files under
 # $DK), git (the real one, recorded), logger, systemctl, and the programs the libraries look up by
-# path (gremion-switch, gremion-render and gremion-tenant inside the release trees, gremion-
-# migration-dump, gremion-isolation, gremion-verify and gremion-mail in the bin directory).
+# path (gremion-switch, gremion-render, gremion-tenant and gremion-isolation inside the release trees, gremion-
+# migration-dump, gremion-verify and gremion-mail in the bin directory).
 #
 # What a kill -9 means here: the program is killed from outside the libraries, by a hook file that
 # the docker shim evaluates at a named call (the program dies in the middle of that call), or by
