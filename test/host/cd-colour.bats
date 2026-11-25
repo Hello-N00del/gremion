@@ -1020,6 +1020,60 @@ ready_green() { call "cd_colour_ready green ${TAG_NEW} \"\$TREE\""; }
     [[ "$output" == *"rc=0"* ]]
 }
 
+# A customer without a public portal: the app answers its designed 404 and marks it
+# with a header, and the probe prints the answer after the status, one value per line.
+portal_case() { # COLOUR -- the probe, then the rc and the case it saw
+    run colour_lib "cd_colour_portal_probe ${1}; echo \"rc=\$? case=\${CD_COLOUR_PORTAL_CASE:-}\""
+}
+
+@test "portal probe: the designed no-portal answer (404 with the marker) passes, says so in one plain line and names the case" {
+    happy
+    printf '404\\nnone\n' > "$DK/portal.c-pub"
+    portal_case green
+    [[ "$output" == *"rc=0 case=none"* ]]
+    [[ "$output" == *"the green colour has no public portal"* ]]
+    [[ "$output" == *"not a failure"* ]]
+}
+
+@test "portal probe: the no-portal note is said once per colour in a process, the case every time" {
+    happy
+    printf '404\\nnone\n' > "$DK/portal.c-pub"
+    run colour_lib 'cd_colour_portal_probe green; cd_colour_portal_probe green; echo "case=${CD_COLOUR_PORTAL_CASE:-}"'
+    [[ "$output" == *"case=none"* ]]
+    [ "$(printf '%s\n' "$output" | grep -c 'has no public portal')" -eq 1 ]
+}
+
+@test "portal probe: a portal that answers is the case ok, with no claim that there is no portal" {
+    happy
+    portal_case green
+    [[ "$output" == *"rc=0 case=ok"* ]]
+    [[ "$output" != *"no public portal"* ]]
+}
+
+@test "portal probe: a 404 without the marker is below 500 as before and is not taken for a missing portal" {
+    happy
+    printf '404\\n\n' > "$DK/portal.c-pub"
+    portal_case green
+    [[ "$output" == *"rc=0 case=ok"* ]]
+    [[ "$output" != *"no public portal"* ]]
+}
+
+@test "portal probe: a 5xx is a broken portal even when the marker is on it" {
+    happy
+    printf '500\\nnone\n' > "$DK/portal.c-pub"
+    portal_case green
+    [[ "$output" == *"rc=1 case=broken"* ]]
+    [[ "$output" == *"the green portal is broken: it answered 500"* ]]
+    [[ "$output" != *"no public portal"* ]]
+}
+
+@test "ready: layer 2, a customer without a public portal passes the portal layer, in every round" {
+    happy
+    printf '404\\nnone\n' > "$DK/portal.c-pub"
+    ready_green
+    [[ "$output" == *"rc=0 "* ]]
+}
+
 @test "portal probe: a 500, a timeout and an unreachable container are failures" {
     happy
     printf '500\\n\n' > "$DK/portal.c-pub"

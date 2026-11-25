@@ -462,11 +462,12 @@ cd_colour_identity() {
 # The two requests run INSIDE the container with node. Neither script holds a secret:
 # the first reads INTERNAL_PUSH_SECRET from its own environment and prints the status
 # and the body (8 KiB at most); the second prints the status of the path it is given
-# as its one argument.
+# as its one argument, and on a second line the value of the x-gremion-portal header
+# (empty when the answer has none): the portal's own "this instance has no portal".
 # shellcheck disable=SC2016  # JavaScript, not shell
 _CD_COLOUR_JS_READYZ='const h=require("http");const s=process.env.INTERNAL_PUSH_SECRET||"";if(!s)process.exit(3);const q=h.get({host:"127.0.0.1",port:3000,path:"/readyz",headers:{authorization:"Bearer "+s}},r=>{let b="";r.setEncoding("utf8");r.on("data",d=>{if(b.length<8192)b+=d});r.on("end",()=>{process.stdout.write(r.statusCode+"\n"+b.slice(0,8192)+"\n")})});q.setTimeout(5000,()=>{q.destroy();process.exit(4)});q.on("error",()=>process.exit(5));'
 # shellcheck disable=SC2016
-_CD_COLOUR_JS_PORTAL='const h=require("http");const q=h.get({host:"127.0.0.1",port:3000,path:process.argv[1]},r=>{r.resume();r.on("end",()=>{process.stdout.write(String(r.statusCode)+"\n")})});q.setTimeout(8000,()=>{q.destroy();process.exit(4)});q.on("error",()=>process.exit(5));'
+_CD_COLOUR_JS_PORTAL='const h=require("http");const q=h.get({host:"127.0.0.1",port:3000,path:process.argv[1]},r=>{r.resume();r.on("end",()=>{process.stdout.write(String(r.statusCode)+"\n"+String(r.headers["x-gremion-portal"]||"").slice(0,16)+"\n")})});q.setTimeout(8000,()=>{q.destroy();process.exit(4)});q.on("error",()=>process.exit(5));'
 
 # _cd_colour_exec CID SCRIPT [ARG...] - node -e SCRIPT inside the container, stdout
 # only, bounded, stdin closed. No -i, no -t, no -e: nothing is handed to the container.
@@ -525,17 +526,43 @@ _cd_colour_base_path() {
 # container, a request of ${PUBLIC_BASE_PATH}/protokolle on loopback port 3000. No host
 # and no secret on any argv. Status below 500 passes (0); a 5xx, a timeout, an
 # unreachable server and an absent container fail (1); 4 docker; 2 a bad base path.
+# It sets CD_COLOUR_PORTAL_CASE (callers that discard the output read it) to
+#   ok      the portal answered below 500
+#   none    the customer has no public portal: the app answered its designed "no portal"
+#           404 and marked it with the x-gremion-portal header. That is not a failure of
+#           the release and not a broken live colour: it passes, with one plain line
+#           (once per colour in a process)
+#   broken  a 5xx (a marker on a 5xx is never believed)
+# and is empty when no answer was read.
+CD_COLOUR_PORTAL_CASE=''
+_CD_COLOUR_PORTAL_NOTED=''
 cd_colour_portal_probe() {
-    local colour="${1:-}" cid base out
+    local colour="${1:-}" cid base out status marker=''
+    CD_COLOUR_PORTAL_CASE=''
     _cd_colour_check_colour "$colour" cd_colour_portal_probe || return 2
     _cd_colour_check_env "$colour" cd_colour_portal_probe || return 2
     base="$(_cd_colour_base_path)" || return 2
     cid="$(cd_svc_cid "app-${colour}" gremion-public)" || return 4
     [[ -n "$cid" ]] || { _cd_colour_err "cd_colour_portal_probe: the ${colour} gremion-public container is not running"; return 1; }
     out="$(_cd_colour_exec "$cid" "$_CD_COLOUR_JS_PORTAL" "${base}/protokolle")" || { _cd_colour_err "cd_colour_portal_probe: no answer from the ${colour} portal"; return 1; }
-    out="${out%%$'\n'*}"
-    [[ "$out" =~ ^[1-5][0-9][0-9]$ ]] || { _cd_colour_err "cd_colour_portal_probe: no usable answer from the ${colour} portal"; return 1; }
-    [[ "$out" -lt 500 ]] || { _cd_colour_err "cd_colour_portal_probe: the ${colour} portal answered ${out}"; return 1; }
+    status="${out%%$'\n'*}"
+    [[ "$out" == *$'\n'* ]] && marker="${out#*$'\n'}"
+    marker="${marker%%$'\n'*}"
+    [[ "$status" =~ ^[1-5][0-9][0-9]$ ]] || { _cd_colour_err "cd_colour_portal_probe: no usable answer from the ${colour} portal"; return 1; }
+    if [[ "$status" -ge 500 ]]; then
+        CD_COLOUR_PORTAL_CASE=broken
+        _cd_colour_err "cd_colour_portal_probe: the ${colour} portal is broken: it answered ${status}"
+        return 1
+    fi
+    if [[ "$marker" == none ]]; then
+        CD_COLOUR_PORTAL_CASE=none
+        if [[ "$_CD_COLOUR_PORTAL_NOTED" != *" ${colour} "* ]]; then
+            _CD_COLOUR_PORTAL_NOTED="${_CD_COLOUR_PORTAL_NOTED} ${colour} "
+            _cd_colour_err "cd_colour_portal_probe: the ${colour} colour has no public portal (this instance has none set up, the app says so with its own 404): not a failure"
+        fi
+        return 0
+    fi
+    CD_COLOUR_PORTAL_CASE=ok
     return 0
 }
 

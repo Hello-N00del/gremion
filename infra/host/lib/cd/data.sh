@@ -974,7 +974,8 @@ _cd_data_unusable() {
 }
 
 # cd_data_live_portal_probe -- the portal list page of the LIVE colour, three tries after
-# migrate. One good answer is a pass. Three answers that are 500s or timeouts (the probe says
+# migrate. One good answer is a pass; so is the app's own "this customer has no public
+# portal" (CD_COLOUR_PORTAL_CASE=none), which is said in one line and is no break. Three answers that are 500s or timeouts (the probe says
 # 1 each time) set rollback_target=unusable and return 0 with a warning. A probe that cannot
 # say (docker unaskable, a bad base path) is no verdict: its code is returned and nothing is
 # recorded.
@@ -986,6 +987,10 @@ cd_data_live_portal_probe() {
         rc=0
         cd_colour_portal_probe "$colour" >/dev/null 2>&1 || rc=$?
         if ((rc == 0)); then
+            # a customer without a public portal passes the probe: say so, it is no break
+            if [[ "${CD_COLOUR_PORTAL_CASE:-}" == none ]]; then
+                _cd_data_err "portal probe: the live colour has no public portal (this instance has none set up); nothing to check"
+            fi
             return 0
         elif ((rc == 1)); then
             bad=$((bad + 1))
