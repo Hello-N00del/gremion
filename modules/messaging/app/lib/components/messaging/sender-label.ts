@@ -32,9 +32,21 @@ function titleCase(word: string): string {
   return word.charAt(0).toUpperCase() + word.slice(1)
 }
 
-/** A readable name from the id alone: the address part before the @, split at . _ -, capitalised. */
-export function fallbackSenderName(userId: string): string {
-  const decoded = decodeUsername(localpartOf(userId ?? ''))
+/**
+ * Drop the `<slug>.` prefix a namespaced chat identity carries (MATRIX_IDENTITY=namespaced). Only the
+ * given slug is stripped, never "whatever precedes the first dot": a legacy id such as max.mustermann
+ * keeps its dot, and the browser, which does not know the customer, passes no slug and sees no change.
+ */
+export function stripTenantPrefix(localpart: string, slug: string | null | undefined): string {
+  return slug && localpart.startsWith(`${slug}.`) ? localpart.slice(slug.length + 1) : localpart
+}
+
+/**
+ * A readable name from the id alone: the address part before the @, split at . _ -, capitalised.
+ * `slug` is the customer's slug in namespaced identity mode (the server passes it), else omitted.
+ */
+export function fallbackSenderName(userId: string, slug?: string | null): string {
+  const decoded = decodeUsername(stripTenantPrefix(localpartOf(userId ?? ''), slug))
   const beforeAt = decoded.split('@')[0] ?? ''
   const words = beforeAt.split(/[._\-\s]+/).filter(Boolean).map(titleCase)
   return words.length > 0 ? words.join(' ') : UNKNOWN

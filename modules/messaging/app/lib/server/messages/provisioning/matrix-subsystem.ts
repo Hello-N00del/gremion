@@ -6,6 +6,7 @@
 import type { KeycloakAdminClient } from '../../keycloak-admin'
 import type { OrgUnit } from '../../governance/org-units-db'
 import type { ProvisioningSubsystem } from '../../governance/provisioning/types'
+import { unitNameSlug } from '../matrix-namespace'
 
 interface MatrixDeps {
   matrix: {
@@ -41,17 +42,7 @@ interface MatrixUserInfo {
  * avoid collisions with unrelated rooms.
  */
 export function aliasLocalpart(name: string): string {
-  const slug = name
-    .toLowerCase()
-    .replace(/ä/g, 'ae')
-    .replace(/ö/g, 'oe')
-    .replace(/ü/g, 'ue')
-    .replace(/ß/g, 'ss')
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '') // strip any remaining diacritics (é→e)
-    .replace(/[^a-z0-9]+/g, '-') // any non-alphanumeric run → single '-'
-    .replace(/^-+|-+$/g, '') // trim leading/trailing '-'
-  return `stura-${slug}`
+  return `stura-${unitNameSlug(name)}`
 }
 
 /**
