@@ -788,6 +788,111 @@ function sha256hex(buf: Buffer): string {
   return createHash('sha256').update(buf).digest('hex')
 }
 
+// ── first contact: serialise creation and migration ───────────────────────────
+//
+// First contact of a customer creates its database and runs the leaf migrations. Two requests (or
+// two processes: an old and a new colour, two replicas) that meet a customer the leaf has never
+// seen must not both run CREATE DATABASE: the loser dies with 23505 on pg_database_datname_index
+// (or 42P04) and its caller used to get a 500. Three layers, each covering what the one before
+// cannot see:
+//   1. in this process, concurrent first requests for one customer share ONE flight (_firstContact);
+//   2. across processes, CREATE DATABASE runs under a session advisory lock held on the maintenance
+//      database, and the migrations run under one held on the customer database. The lock names
+//      differ from the one --migrate-only holds (migrate-only.ts), which calls storeFor() while it
+//      holds its own lock: sharing the name would deadlock the CD step against itself;
+//   3. a duplicate-database error that still arrives (a creator that takes no lock: an older
+//      colour) means the database exists, which is what the caller wanted: it is not a failure.
+
+/** Hashed to a bigint in SQL (hashtextextended). One lock for every CREATE DATABASE on the server:
+ *  concurrent creations of DIFFERENT databases also fight over the template (55006). */
+const CREATE_DB_LOCK = 'gremion.leaf.create-database'
+/** The lock the first-contact migrations (and the catalog table) of one database run under. */
+const FIRST_CONTACT_LOCK = 'gremion.leaf.first-contact'
+/** Bound of every wait for those locks (lock_timeout): a stuck holder ends the wait with 55P03. */
+const FIRST_CONTACT_LOCK_TIMEOUT_MS = 30_000
+/** Pause between the retries of a CREATE DATABASE that found the template busy. */
+const TEMPLATE_BUSY_RETRY_MS = 250
+const TEMPLATE_BUSY_MAX_ATTEMPTS = 4
+
+/**
+ * Run `fn` while holding a session advisory lock on a database of its own connection. The lock goes
+ * with the connection, so a failing `fn` can never leave it held. `url` names the database the lock
+ * lives in (advisory locks are per database): processes serialise only when they use the same one.
+ */
+async function withAdvisoryLock<T>(url: string, lockName: string, fn: (conn: Sql) => Promise<T>): Promise<T> {
+  const conn = postgres(url, {
+    max: 1,
+    prepare: false,
+    connect_timeout: 10,
+    onnotice: () => {},
+    connection: { lock_timeout: FIRST_CONTACT_LOCK_TIMEOUT_MS },
+  })
+  try {
+    await conn`SELECT pg_advisory_lock(hashtextextended(${lockName}, 0))`
+    return await fn(conn)
+  } finally {
+    await conn.end({ timeout: 5 }).catch(() => {})
+  }
+}
+
+function sqlstateOf(err: unknown): string | undefined {
+  if (typeof err !== 'object' || err === null) return undefined
+  const code = (err as { code?: unknown }).code
+  return typeof code === 'string' ? code : undefined
+}
+
+/** CREATE DATABASE lost a race to another creator of the same name. */
+function isDuplicateDatabase(err: unknown): boolean {
+  const code = sqlstateOf(err)
+  if (code === '42P04') return true // duplicate_database
+  if (code !== '23505') return false
+  const constraint = (err as { constraint_name?: unknown }).constraint_name
+  return constraint === 'pg_database_datname_index'
+}
+
+/** CREATE DATABASE found template1 in use by another creator (55006, object_in_use): retry. */
+function isTemplateBusy(err: unknown): boolean {
+  return sqlstateOf(err) === '55006'
+}
+
+/**
+ * Make sure database `dbName` exists. Safe to call concurrently, from this process and from others:
+ * exactly one caller creates it, the rest find it there.
+ */
+async function createDatabaseIfMissing(adminUrl: string, dbName: string): Promise<void> {
+  await withAdvisoryLock(adminUrl, CREATE_DB_LOCK, async (admin) => {
+    const exists = await admin<{ count: string }[]>`
+      SELECT count(*) AS count FROM pg_database WHERE datname = ${dbName}
+    `
+    if (Number(exists[0].count) > 0) return
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await admin.unsafe(`CREATE DATABASE "${dbName}"`)
+        return
+      } catch (err) {
+        if (isDuplicateDatabase(err)) return
+        if (isTemplateBusy(err) && attempt < TEMPLATE_BUSY_MAX_ATTEMPTS) {
+          await new Promise((resolve) => setTimeout(resolve, TEMPLATE_BUSY_RETRY_MS * attempt))
+          continue
+        }
+        throw err
+      }
+    }
+  })
+}
+
+/**
+ * First contacts in flight, keyed by everything that decides the outcome (customer id and slug, the
+ * server, the prefix, a test manifest). Concurrent callers with the same key await the same promise,
+ * so the work and the pool it registers exist once; a caller with another slug for the same id gets
+ * its own flight and meets the catalog binding (TenantIdentityMismatchError), not a borrowed pool.
+ */
+const _firstContact = new Map<string, Promise<Sql>>()
+
+function firstContactKey(tenant: TenantRef, pgUrl: string, dbPrefix: string, manifest?: Record<string, string>): string {
+  return JSON.stringify([tenant.id, tenant.slug, pgUrl, dbPrefix, manifest ?? null])
+}
+
 /**
  * Ensure the control DB (`content_control` / `content_control_test`)
  * exists and the `tenant_catalog` table is present. Idempotent.
@@ -817,29 +922,24 @@ async function ensureControlDb(adminUrl: string, dbPrefix: string): Promise<Sql>
     // 1. CREATE the control DB if it doesn't exist. Must connect to the admin
     //    maintenance DB (the URL as-is) because CREATE DATABASE cannot run
     //    inside a transaction and must be issued from a different database.
-    const admin = postgres(adminUrl, { max: 1, prepare: false })
-    try {
-      const exists = await admin<{ count: string }[]>`
-        SELECT count(*) AS count FROM pg_database WHERE datname = ${controlDbName}
-      `
-      if (Number(exists[0].count) === 0) {
-        await admin.unsafe(`CREATE DATABASE "${controlDbName}"`)
-      }
-    } finally {
-      await admin.end()
-    }
+    //    Two processes starting together race here; createDatabaseIfMissing serialises them.
+    await createDatabaseIfMissing(adminUrl, controlDbName)
 
     // 2. Connect to the control DB and ensure the catalog table.
     const ctrl = postgres(controlUrl, { max: 2, prepare: true })
     try {
-      await ctrl.unsafe(`
-        CREATE TABLE IF NOT EXISTS tenant_catalog (
-          tenant_id  UUID PRIMARY KEY,
-          slug       TEXT NOT NULL UNIQUE,
-          db_name    TEXT NOT NULL,
-          created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-        )
-      `)
+      // Concurrent CREATE TABLE IF NOT EXISTS from two processes can still collide on the catalogue
+      // (42P07, 23505 on pg_type): take the first-contact lock around it.
+      await withAdvisoryLock(controlUrl, FIRST_CONTACT_LOCK, async () => {
+        await ctrl.unsafe(`
+          CREATE TABLE IF NOT EXISTS tenant_catalog (
+            tenant_id  UUID PRIMARY KEY,
+            slug       TEXT NOT NULL UNIQUE,
+            db_name    TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+          )
+        `)
+      })
     } catch (err) {
       // Retry is now possible (see below), so a failed attempt MUST NOT leak
       // its pool — otherwise every retry would strand another connection pool.
@@ -913,17 +1013,7 @@ async function claimCatalog(ctrl: Sql, tenant: TenantRef, dbName: string): Promi
  * Ensure a per-tenant DB exists, creating it via the admin connection if absent.
  */
 async function ensureTenantDb(adminUrl: string, dbName: string): Promise<void> {
-  const admin = postgres(adminUrl, { max: 1, prepare: false })
-  try {
-    const exists = await admin<{ count: string }[]>`
-      SELECT count(*) AS count FROM pg_database WHERE datname = ${dbName}
-    `
-    if (Number(exists[0].count) === 0) {
-      await admin.unsafe(`CREATE DATABASE "${dbName}"`)
-    }
-  } finally {
-    await admin.end()
-  }
+  await createDatabaseIfMissing(adminUrl, dbName)
 }
 
 /**
@@ -1039,6 +1129,26 @@ export async function storeFor(tenant: TenantRef, options: StoreForOptions = {})
   const dbName = dbPrefix + tenant.slug
   assertNotMaintenanceDb(pgUrl, dbName)
 
+  // Concurrent first requests for one customer (and the other processes, below) must not each
+  // create the database: one flight per (customer, server), everyone else awaits it.
+  const key = firstContactKey(tenant, pgUrl, dbPrefix, options._overrideManifest)
+  const running = _firstContact.get(key)
+  if (running !== undefined) return running
+  const flight: Promise<Sql> = openFirstContact(tenant, pgUrl, dbPrefix, dbName, options).finally(() => {
+    if (_firstContact.get(key) === flight) _firstContact.delete(key)
+  })
+  _firstContact.set(key, flight)
+  return flight
+}
+
+/** The cold path of storeFor: bind the catalog, create the database, migrate, register the pool. */
+async function openFirstContact(
+  tenant: TenantRef,
+  pgUrl: string,
+  dbPrefix: string,
+  dbName: string,
+  options: StoreForOptions,
+): Promise<Sql> {
   // 2. Ensure the control DB + tenant_catalog table (idempotent).
   const ctrl = await ensureControlDb(pgUrl, dbPrefix)
 
@@ -1055,7 +1165,7 @@ export async function storeFor(tenant: TenantRef, options: StoreForOptions = {})
   // 6. Run migrations (verifies hashes; idempotent DDL). If hash verification
   //    fails, close the pool before rethrowing — no half-open pool left behind.
   try {
-    await runMigrations(sql, options._overrideManifest)
+    await withAdvisoryLock(tenantUrl, FIRST_CONTACT_LOCK, () => runMigrations(sql, options._overrideManifest))
   } catch (err) {
     await sql.end().catch(() => {})
     throw err
