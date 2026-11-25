@@ -769,10 +769,10 @@ Adoption is done once, by hand, on the live host. Nothing is enabled until the l
 3. As root, run `bash /opt/gremion/current/infra/host/bootstrap.sh cd`. It installs, as real files, every
    host program of `bin/` that needs nothing but the installed libraries, `lib/common.sh` and `lib/cd/*.sh`
    (the apply script is root-owned). `gremion-isolation`, `gremion-services` and `gremion-tenant` are not
-   installed: they source the release's own customer libraries and run from the release tree
-   (`/opt/gremion/current/infra/host/bin/<program>`); a copy of one that an earlier hand install left in
-   `bin/`, and the libraries put beside it (`lib/customer-ops.sh`, `lib/access-log.sh`, `lib/executor/db.sh`),
-   are removed. The stage renders
+   installed as copies: they source the release's own customer libraries, so `bin/` gets a launcher for each
+   that runs the program of the current release (`/opt/gremion/current/infra/host/bin/<program>`), and a copy
+   an earlier hand install left in `bin/` is replaced by it; the libraries put beside such a copy
+   (`lib/customer-ops.sh`, `lib/access-log.sh`, `lib/executor/db.sh`) are removed. The stage renders
    the six systemd units (`gremion-cd.service` and `.timer`, `gremion-cd-watchdog.service` and
    `.timer`, `gremion-cd-resume.service`, `gremion-cd-apply@.service`), creates `data/cd`, `runtime/cd`
    and `runtime/workers`, and writes `etc/cd.env` from the template when it is absent. It enables and

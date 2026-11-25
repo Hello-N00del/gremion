@@ -403,13 +403,18 @@ template_keys() {
     [ -f "${GREMION_ROOT}/lib/cd/core.sh" ]
 }
 
-@test "stage cd does not install the programs that run from the release tree, and every other program of bin/ is installed" {
+@test "stage cd installs a launcher, not a copy, for the programs that run from the release tree, and every other program of bin/ as a copy" {
     run_stage
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     local f
     for f in $TREE_RUN; do
         [ -f "${HOST_SRC}/bin/${f}" ] || { echo "the tree has no ${f}"; return 1; }
-        [ ! -e "${GREMION_ROOT}/bin/${f}" ] || { echo "installed: ${f}"; return 1; }
+        [ -f "${GREMION_ROOT}/bin/${f}" ] && [ ! -L "${GREMION_ROOT}/bin/${f}" ] || { echo "no launcher: ${f}"; return 1; }
+        ! cmp -s "${HOST_SRC}/bin/${f}" "${GREMION_ROOT}/bin/${f}" || { echo "a copy of the program is installed: ${f}"; return 1; }
+        [ "$(stat -c %a "${GREMION_ROOT}/bin/${f}")" = 755 ]
+        # it sources nothing and execs the program of the current release
+        ! grep -qE '^[[:space:]]*(\.|source)[[:space:]]' "${GREMION_ROOT}/bin/${f}"
+        grep -qF "current/infra/host/bin/${f}" "${GREMION_ROOT}/bin/${f}"
     done
     for f in "${HOST_SRC}"/bin/*; do
         is_tree_run "${f##*/}" && continue
@@ -429,10 +434,7 @@ installed_sources_resolve() {
     for f in "${GREMION_ROOT}"/bin/* "${GREMION_ROOT}"/lib/*.sh "${GREMION_ROOT}"/lib/cd/*.sh; do
         [ -f "$f" ] || continue
         while IFS= read -r stmt; do
-            stmt="${stmt#"${stmt%%[![:space:]]*}"}"
-            arg="${stmt#*[[:space:]]}"
-            arg="${arg%%[[:space:]]#*}"
-            arg="${arg//\"/}"
+            arg="${stmt//\"/}"
             n=$((n + 1))
             case "$arg" in
                 '$SCRIPT_DIR/../lib/'* | '${SCRIPT_DIR}/../lib/'*) target="${GREMION_ROOT}/lib/${arg#*/../lib/}" ;;
@@ -444,7 +446,9 @@ installed_sources_resolve() {
                 *) echo "cannot resolve '${arg}' in ${f}"; bad=1; continue ;;
             esac
             [ -f "$target" ] || { echo "${f} sources ${target}, which the stage did not install"; bad=1; }
-        done < <(grep -E '^[[:space:]]*(\.|source)[[:space:]]+[^[:space:]]' "$f" | grep -vE '^[[:space:]]*#')
+        done < <(grep -vE '^[[:space:]]*#' "$f" \
+            | grep -oE '(^|;|&&|\|\||!|\<if\>|\<then\>|\<do\>)[[:space:]]*(\.|source)[[:space:]]+("[^"]*"|\$[^[:space:];)]+|[^[:space:];)"]*(/|\.sh)[^[:space:];)"]*)' \
+            | sed -E 's/^([;&|!]|if|then|do|[[:space:]])*(\.|source)[[:space:]]+//')
     done
     # a walk that found nothing is no proof
     [ "$n" -ge 15 ] || { echo "the walker saw only ${n} source statements"; return 1; }
@@ -467,7 +471,31 @@ installed_sources_resolve() {
     [[ "$output" == *"/lib/common.sh, which the stage did not install"* ]]
 }
 
-@test "stage cd takes away what a hand install left (a copy of a tree-run program, the libraries put beside it), on a fresh install and on a re-run" {
+@test "stage cd: the installed-layout guard sees a source in the middle of a line, not only one that starts it" {
+    run_stage
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    printf '#!/usr/bin/env bash\nSCRIPT_DIR=x\nif ! . "$SCRIPT_DIR/../lib/inline-one.sh"; then :; fi\n[[ -f x ]] && . "${SCRIPT_DIR}/../lib/inline-two.sh"\n' > "${GREMION_ROOT}/bin/gremion-zz"
+    run installed_sources_resolve
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"lib/inline-one.sh, which the stage did not install"* ]]
+    [[ "$output" == *"lib/inline-two.sh, which the stage did not install"* ]]
+}
+
+@test "the launcher of a tree-run program runs the program of the current release with its arguments, and says so when no release is current" {
+    run_stage
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    run env GREMION_ROOT="${GREMION_ROOT}" "${GREMION_ROOT}/bin/gremion-tenant" status zz
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"gremion-tenant: ${GREMION_ROOT}/current/infra/host/bin/gremion-tenant is not there"* ]]
+    mkdir -p "${GREMION_ROOT}/current/infra/host/bin"
+    printf '#!/usr/bin/env bash\necho "tenant of current: $*"\nexit 7\n' > "${GREMION_ROOT}/current/infra/host/bin/gremion-tenant"
+    chmod +x "${GREMION_ROOT}/current/infra/host/bin/gremion-tenant"
+    run env GREMION_ROOT="${GREMION_ROOT}" "${GREMION_ROOT}/bin/gremion-tenant" status "a b"
+    [ "$status" -eq 7 ]
+    [ "$output" = "tenant of current: status a b" ]
+}
+
+@test "stage cd takes away what a hand install left (a copy of a tree-run program becomes the launcher, the libraries put beside it go), on a fresh install and on a re-run" {
     mkdir -p "${GREMION_ROOT}/bin" "${GREMION_ROOT}/lib/executor"
     local f
     for f in bin/gremion-tenant bin/gremion-isolation bin/gremion-services lib/customer-ops.sh lib/access-log.sh lib/executor/db.sh; do
@@ -476,8 +504,12 @@ installed_sources_resolve() {
     done
     run_stage
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
-    for f in bin/gremion-tenant bin/gremion-isolation bin/gremion-services lib/customer-ops.sh lib/access-log.sh lib/executor/db.sh; do
+    for f in lib/customer-ops.sh lib/access-log.sh lib/executor/db.sh; do
         [ ! -e "${GREMION_ROOT}/${f}" ] || { echo "still there: ${f}"; return 1; }
+    done
+    for f in $TREE_RUN; do
+        ! grep -q 'a hand copy' "${GREMION_ROOT}/bin/${f}" || { echo "the hand copy of ${f} is still there"; return 1; }
+        [ "$(stat -c %a "${GREMION_ROOT}/bin/${f}")" = 755 ]
     done
     [ ! -e "${GREMION_ROOT}/lib/executor" ]
     # what is installed is right (mode, bytes) and a second run changes nothing

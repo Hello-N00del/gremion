@@ -9,11 +9,13 @@
 //
 // THE RULE it pins. A program the stage installs resolves every `.` / `source` of a path built from
 // SCRIPT_DIR or a lib directory, transitively, to a file the same stage installs. A program that
-// needs the release's own libraries (customer-ops.sh and what that pulls in) is NOT installed: it
-// is listed in CD_TREE_RUN_PROGRAMS of bootstrap.sh and runs from the release tree, where program,
-// libraries and the code under test are one commit. The programs of lib/cd name installed programs
-// only through the install root (`<root>/bin/<name>`); one that names a tree-run program that way
-// would call a file the stage does not put there.
+// needs the release's own libraries (customer-ops.sh and what that pulls in) is NOT installed as a
+// copy: it is listed in CD_TREE_RUN_PROGRAMS of bootstrap.sh and runs from the release tree, where
+// program, libraries and the code under test are one commit (<root>/bin holds a launcher that
+// sources nothing and execs the current release's program, so the documented command still works).
+// The programs of lib/cd name installed programs only through the install root
+// (`<root>/bin/<name>`); one that names a tree-run program that way would run the LIVE release's
+// program where the candidate's is meant, so the gates use the candidate tree's own.
 //
 // A source expression the walker cannot resolve FAILS, it is never skipped: a scan that reaches
 // nothing reports clean. The canary tests prove the walker still fires.
@@ -66,13 +68,16 @@ export function installedSet(bootstrapText) {
 }
 
 // The source statements of a shell file: [{ line, arg }], comments and here-doc free enough for
-// these programs (a statement is a line that starts with `.` or `source` and a space).
+// these programs. A statement is `.` or `source` and a space at the start of a command: at the
+// start of a line, or after `;`, `&&`, `||`, `!`, `if`, `then`, `do` (so `if ! . "$x"; then` and
+// `[[ -f x ]] && . x` are seen, not only a line that begins with the dot).
 export function sourceStatements(text) {
   const out = []
   text.split('\n').forEach((raw, i) => {
-    const m = /^\s*(?:\.|source)\s+(\S.*?)\s*(?:#.*)?$/.exec(raw)
-    if (m === null || raw.trim().startsWith('#')) return
-    out.push({ line: i + 1, arg: m[1].replace(/^["']|["']$/g, '') })
+    if (raw.trim().startsWith('#')) return
+    for (const m of raw.matchAll(/(?:^|;|&&|\|\||!|\bif\b|\bthen\b|\bdo\b)\s*(?:\.|source)\s+("[^"]*"|'[^']*'|\$[^\s;)]+|[^\s;)"']*(?:\/|\.sh)[^\s;)"']*)/g)) {
+      out.push({ line: i + 1, arg: m[1].replace(/^["']|["']$/g, '') })
+    }
   })
   return out
 }
@@ -244,6 +249,24 @@ test('canary: an expression the walker does not know fails, it is not skipped', 
   const { problems } = walk({ installed, readFile: (r) => files.get(r) ?? null, exists: () => true })
   assert.equal(problems.length, 2)
   assert.match(problems[0], /cannot resolve the source expression/)
+})
+
+test('canary: a source in the middle of a line is seen (if ! ., && ., ; .), a dot that is no command is not', () => {
+  const text = [
+    'if ! . "$CD_LIB_DIR/${cd_lib_name}.sh"; then',
+    '[[ -f x ]] && . "$SCRIPT_DIR/../lib/inline.sh"',
+    'a=1; source "$SCRIPT_DIR/../lib/semi.sh"',
+    'cp x . && echo done',
+    'echo "see ./file.sh and . nothing"',
+  ].join('\n')
+  assert.deepEqual(
+    sourceStatements(text).map((s) => s.arg),
+    ['$CD_LIB_DIR/${cd_lib_name}.sh', '$SCRIPT_DIR/../lib/inline.sh', '$SCRIPT_DIR/../lib/semi.sh'],
+  )
+  const files = new Map([[`${HOST}/bin/gremion-x`, '[[ -f x ]] && . "$SCRIPT_DIR/../lib/inline.sh"\n']])
+  const { problems } = walk({ installed: new Set([`${HOST}/bin/gremion-x`]), readFile: (r) => files.get(r) ?? null, exists: () => true })
+  assert.equal(problems.length, 1)
+  assert.match(problems[0], /gremion-x:1: sources lib\/inline\.sh, which the cd stage does not install/)
 })
 
 test('canary: a comment that mentions a source line is no statement, a sibling program resolves to bin/', () => {
