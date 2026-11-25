@@ -476,7 +476,14 @@ when the realm emits none), the value the executor compares it with, not the gre
 server's clock; an ID token without either, or older than the 3600 s evidence window, also
 gets `401 STEP_UP_REQUIRED`.
 
-**The confirmed switch survives the step-up.** With that `401` the server keeps the confirmed
+**The second factor comes before the switch-off warning.** `GET /api/settings/modules?preview=<id>`
+(what the warning shows) answers the same `401 STEP_UP_REQUIRED` for a stale session, so the
+page goes to the second factor first and opens the warning when it is back; the admin then
+confirms once, and there is nothing to carry across the round trip. The POST still checks the
+second factor itself.
+
+**The confirmed switch survives the step-up** (a switch-on, the restore, or a switch-off whose
+second factor lapsed while the warning was open). With that `401` the server keeps the confirmed
 input for the round trip (tenant table `module_switch_pending`, migration `0065`): one row per
 person, found by the SHA-256 of a random handle that the browser holds in an HttpOnly,
 SameSite=Strict cookie scoped to `/api/settings/modules`. Back on the settings page, the page
