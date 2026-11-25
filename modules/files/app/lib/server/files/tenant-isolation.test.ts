@@ -47,6 +47,8 @@ import { GET as editToken } from '../../../routes/api/files/edit-token/[...path]
 import { load as editPage } from '../../../routes/files/edit/[...path]/+page.server'
 import { getFilesBackend } from './backend'
 import { createNextcloudClient } from './nextcloud-client'
+import { createNextcloudSubsystem } from './provisioning/nextcloud-subsystem'
+import type { OrgUnit } from '$lib/server/governance/org-units-db'
 
 // ---- the two customers' users ------------------------------------------------
 
@@ -82,6 +84,8 @@ class FakeNextcloud {
   readonly requests: Recorded[] = []
   private readonly fileIds = new Map<number, string>()
   private nextId = 100
+  /** the urlsrc Nextcloud hands out: richdocuments has ONE public_wopi_url, the primary host's */
+  urlsrc = 'https://a.example.org/office/browser/x/cool.html?'
 
   seed(uid: string, rel: string, content: string): void {
     this.files.set(`/remote.php/dav/files/${uid}/${rel}`, content)
@@ -124,7 +128,7 @@ class FakeNextcloud {
     // The single-use direct-view page carries its token in the path and no credential.
     if (rec.method === 'GET' && path === '/apps/richdocuments/direct/abc') {
       return new Response(
-        `<input type="hidden" id="initial-state-richdocuments-document" value="${b64({ token: 'wopi-tok', token_ttl: 1999999999, urlsrc: 'https://office.test/browser/x/cool.html?', fileId: '42' })}">` +
+        `<input type="hidden" id="initial-state-richdocuments-document" value="${b64({ token: 'wopi-tok', token_ttl: 1999999999, urlsrc: this.urlsrc, fileId: '42' })}">` +
           `<input type="hidden" id="initial-state-richdocuments-wopi_callback_url" value="${b64('http://nc.test')}">`,
         { status: 200 },
       )
@@ -429,7 +433,8 @@ describe('positive control: the editor page', () => {
     const m = nc.mark()
     const out = (await call(editPage as Handler, event(A, 'tok-A', { route: '/files/edit/', path: 'Docs/a-doc.docx' }))) as { editorUrl: string; fileName: string }
     expect(out.fileName).toBe('a-doc.docx')
-    expect(out.editorUrl).toContain('office.test')
+    // the request's own origin (this test's event is http://localhost) replaces the primary host
+    expect(out.editorUrl).toMatch(/^http:\/\/localhost\/office\/browser\/x\/cool\.html\?/)
     expect(nc.since(m).length).toBeGreaterThan(0)
     expectConfinedToA(nc.since(m))
   })
@@ -670,7 +675,198 @@ describe("LOAD /files/edit/[...path]: A cannot open an editor session for B's do
 })
 
 // ================================================================================
-// 3. coverage: the route table on disk against what was controlled and attacked
+// 3. the shared Nextcloud's GLOBAL group-folder list and the editor host
+// ================================================================================
+
+const UNIT_A = 'aaaaaaaa-0000-4000-8000-00000000000a'
+const UNIT_B = 'bbbbbbbb-0000-4000-8000-00000000000b'
+const orgUnit = (id: string, name: string): OrgUnit => ({
+  id, parent_id: null, kind: 'committee', name,
+  description: null, child_term: null, kind_label: null, authority: 'deciding',
+  visibility: 'all_members', wants_matrix_room: true, wants_nextcloud_folder: true, created_at: new Date(),
+})
+
+/** One Nextcloud, one group-folder list, as the groupfolders app keeps it for the whole instance. */
+class FakeGroupFolders {
+  readonly folders = new Map<number, { id: number; mount_point: string; groups: Record<string, number> }>()
+  readonly groups = new Set<string>()
+  readonly requests: string[] = []
+  private nextId = 7
+  constructor(private readonly shape: 'array' | 'object') {}
+
+  seed(mountPoint: string, groupIds: string[]): number {
+    const id = this.nextId++
+    this.folders.set(id, { id, mount_point: mountPoint, groups: Object.fromEntries(groupIds.map((g) => [g, 31])) })
+    return id
+  }
+  groupsOf(id: number): string[] {
+    return Object.keys(this.folders.get(id)?.groups ?? {})
+  }
+  folderOf(groupId: string): number[] {
+    return [...this.folders.values()].filter((f) => groupId in f.groups).map((f) => f.id)
+  }
+
+  async handle(input: string, init: RequestInit = {}): Promise<Response> {
+    const u = new URL(input)
+    const path = decodeURIComponent(u.pathname)
+    const method = String(init.method ?? 'GET')
+    const body = new URLSearchParams(typeof init.body === 'string' ? init.body : '')
+    this.requests.push(`${method} ${path}`)
+    const ok = (data: unknown) => Response.json({ ocs: { meta: { statuscode: 100 }, data } })
+    if (method === 'POST' && path === '/ocs/v1.php/cloud/groups') {
+      this.groups.add(body.get('groupid') ?? '')
+      return ok({})
+    }
+    if (method === 'GET' && path === '/index.php/apps/groupfolders/folders') {
+      // a folder without groups serialises its (empty) group map as [], as PHP does
+      const rows = [...this.folders.values()].map((f) => ({ ...f, groups: Object.keys(f.groups).length === 0 ? [] : f.groups }))
+      return ok(this.shape === 'array' ? rows : Object.fromEntries(rows.map((r) => [String(r.id), r])))
+    }
+    if (method === 'POST' && path === '/index.php/apps/groupfolders/folders') {
+      const id = this.nextId++
+      const f = { id, mount_point: body.get('mountpoint') ?? '', groups: {} }
+      this.folders.set(id, f)
+      return ok({ id, mount_point: f.mount_point })
+    }
+    const addGroup = /^\/index\.php\/apps\/groupfolders\/folders\/(\d+)\/groups$/.exec(path)
+    if (method === 'POST' && addGroup) {
+      const f = this.folders.get(Number(addGroup[1]))
+      if (!f) return new Response('not found', { status: 404 })
+      f.groups[body.get('group') ?? ''] = 0
+      return ok({ success: true })
+    }
+    const setPerm = /^\/index\.php\/apps\/groupfolders\/folders\/(\d+)\/groups\/([^/]+)$/.exec(path)
+    if (method === 'POST' && setPerm) {
+      const f = this.folders.get(Number(setPerm[1]))
+      if (!f || !(setPerm[2] in f.groups)) return new Response('not found', { status: 404 })
+      f.groups[setPerm[2]] = Number(body.get('permissions'))
+      return ok({ success: true })
+    }
+    return new Response('not implemented in the fake', { status: 501 })
+  }
+}
+
+function subsystemOn(fake: FakeGroupFolders) {
+  vi.stubGlobal('fetch', vi.fn((input: string | URL, init?: RequestInit) => fake.handle(String(input), init)))
+  return createNextcloudSubsystem({ nc: createNextcloudClient(), kc: { getUser: async () => { throw new Error('no member in this test') } } }, 1)
+}
+const ctx = { parentKeycloakGroupId: null }
+const folderIdOf = (externalId: string): number => Number(externalId.split(':')[0])
+
+for (const shape of ['array', 'object'] as const) {
+  describe(`group folders on the one shared Nextcloud (list answered as ${shape})`, () => {
+    it("two customers with a unit of the same name get two folders; B is never granted on A's folder", async () => {
+      const fake = new FakeGroupFolders(shape)
+      const sub = subsystemOn(fake)
+      const a = await sub.ensureResource(orgUnit(UNIT_A, 'Vorstand'), ctx, null)
+      const b = await sub.ensureResource(orgUnit(UNIT_B, 'Vorstand'), ctx, null)
+
+      expect(folderIdOf(a.externalId)).not.toBe(folderIdOf(b.externalId))
+      expect(fake.groupsOf(folderIdOf(a.externalId))).toEqual([`ou-${UNIT_A}`])
+      expect(fake.groupsOf(folderIdOf(b.externalId))).toEqual([`ou-${UNIT_B}`])
+      expect(fake.folderOf(`ou-${UNIT_B}`)).not.toContain(folderIdOf(a.externalId))
+      expect(fake.folders.size).toBe(2)
+    })
+
+    it('the order does not matter: B first, then A', async () => {
+      const fake = new FakeGroupFolders(shape)
+      const sub = subsystemOn(fake)
+      const b = await sub.ensureResource(orgUnit(UNIT_B, 'Vorstand'), ctx, null)
+      const a = await sub.ensureResource(orgUnit(UNIT_A, 'Vorstand'), ctx, null)
+      expect(fake.groupsOf(folderIdOf(b.externalId))).toEqual([`ou-${UNIT_B}`])
+      expect(fake.groupsOf(folderIdOf(a.externalId))).toEqual([`ou-${UNIT_A}`])
+    })
+
+    it("a retry after a lost external id adopts the unit's OWN folder (carrying its own group) and mints no duplicate", async () => {
+      const fake = new FakeGroupFolders(shape)
+      const other = fake.seed('Vorstand', [`ou-${UNIT_B}`])
+      const own = fake.seed('Vorstand', [`ou-${UNIT_A}`])
+      const sub = subsystemOn(fake)
+      const a = await sub.ensureResource(orgUnit(UNIT_A, 'Vorstand'), ctx, null)
+
+      expect(folderIdOf(a.externalId)).toBe(own)
+      expect(fake.folders.size).toBe(2)
+      expect(fake.groupsOf(other)).toEqual([`ou-${UNIT_B}`])
+    })
+
+    it('an end-to-end retry of the same unit stays on one folder', async () => {
+      const fake = new FakeGroupFolders(shape)
+      const sub = subsystemOn(fake)
+      const first = await sub.ensureResource(orgUnit(UNIT_A, 'Vorstand'), ctx, null)
+      const again = await sub.ensureResource(orgUnit(UNIT_A, 'Vorstand'), ctx, null)
+      expect(again.externalId).toBe(first.externalId)
+      expect(fake.folders.size).toBe(1)
+    })
+
+    it('a folder of the same name with no group at all is not adopted either', async () => {
+      const fake = new FakeGroupFolders(shape)
+      const stray = fake.seed('Vorstand', [])
+      const a = await subsystemOn(fake).ensureResource(orgUnit(UNIT_A, 'Vorstand'), ctx, null)
+      expect(folderIdOf(a.externalId)).not.toBe(stray)
+      expect(fake.groupsOf(stray)).toEqual([])
+    })
+  })
+}
+
+describe("getCollaboraEditorUrl: the editor URL names the request's own host", () => {
+  const A_HOST = 'https://a.example.org'
+  const B_HOST = 'https://b.example.org'
+  const editorUrlFor = (publicOrigin?: string) => createNextcloudClient().getCollaboraEditorUrl(100, A_ID, publicOrigin === undefined ? {} : { publicOrigin })
+
+  it("customer B's editor URL carries host B, not the primary host A; path and query are kept", async () => {
+    const a = await editorUrlFor(A_HOST)
+    const b = await editorUrlFor(B_HOST)
+    expect(a.editorUrl.startsWith(`${A_HOST}/office/browser/x/cool.html?WOPISrc=`)).toBe(true)
+    expect(b.editorUrl.startsWith(`${B_HOST}/office/browser/x/cool.html?WOPISrc=`)).toBe(true)
+    expect(b.editorUrl.slice(B_HOST.length)).toBe(a.editorUrl.slice(A_HOST.length))
+  })
+
+  it('single customer: the primary host as publicOrigin gives the byte-identical URL of an install without it', async () => {
+    const without = await editorUrlFor()
+    const withPrimary = await editorUrlFor(A_HOST)
+    expect(withPrimary.editorUrl).toBe(without.editorUrl)
+    expect(without.editorUrl.startsWith(`${A_HOST}/office/browser/x/cool.html?`)).toBe(true)
+  })
+
+  it('without publicOrigin the answer is untouched (host A, as before)', async () => {
+    expect((await editorUrlFor()).editorUrl.startsWith(`${A_HOST}/office/`)).toBe(true)
+  })
+
+  it('a port on the request origin is kept', async () => {
+    expect((await editorUrlFor('http://b.example.org:8443')).editorUrl.startsWith('http://b.example.org:8443/office/browser/x/cool.html?')).toBe(true)
+  })
+
+  for (const [what, origin] of [
+    ['a path', 'https://b.example.org/evil'],
+    ['a query', 'https://b.example.org/?x=1'],
+    ['userinfo', 'https://user:pw@b.example.org'],
+    ['userinfo with an at-sign trick', 'https://a.example.org@b.example.org'],
+    ['another scheme', 'ftp://b.example.org'],
+    ['a script scheme', 'javascript:alert(1)'],
+    ['a protocol-relative value', '//b.example.org'],
+  ] as const) {
+    it(`a publicOrigin with ${what} is refused before any upstream request`, async () => {
+      const m = nc.mark()
+      await expect(editorUrlFor(origin)).rejects.toThrow(/publicOrigin/)
+      expect(nc.since(m)).toEqual([])
+    })
+  }
+
+  for (const [what, urlsrc] of [
+    ['no /office/ prefix', 'https://a.example.org/browser/x/cool.html?'],
+    ['a prefix that only starts like it', 'https://a.example.org/officex/browser/x/cool.html?'],
+    ['a dot-dot out of /office/', 'https://a.example.org/office/../browser/x/cool.html?'],
+    ['an unparsable value', 'not a url'],
+  ] as const) {
+    it(`a urlsrc with ${what} is refused, never sent to another host`, async () => {
+      nc.urlsrc = urlsrc
+      await expect(editorUrlFor(B_HOST)).rejects.toThrow(/office/)
+    })
+  }
+})
+
+// ================================================================================
+// 4. coverage: the route table on disk against what was controlled and attacked
 // ================================================================================
 
 describe('coverage', () => {
