@@ -23,8 +23,8 @@ vi.mock('$lib/server/messages/backend', () => ({
 vi.mock('$lib/server/env/service-env', () => ({ serviceEnv: (name: string) => ({ MATRIX_URL: 'http://synapse.test:8008', SYNAPSE_SERVER_NAME: 'synapse.test' })[name] }))
 vi.mock('$lib/server/messages/auto-join', () => ({ autoJoinOwnUnitRooms: vi.fn() }))
 
-import { GET as tokenGet } from './matrix-token/+server'
-import { DELETE as deviceDelete } from './matrix-device/+server'
+import { GET as tokenGet } from './+server'
+import { DELETE as deviceDelete } from '../matrix-device/+server'
 
 const ACME = { id: 'tid-acme', slug: 'acme', issuer: 'https://id.example.org/realms/acme' } as unknown as TenantContext
 const USER = { id: 'sub-1', preferredUsername: 'alice', roles: [] }
