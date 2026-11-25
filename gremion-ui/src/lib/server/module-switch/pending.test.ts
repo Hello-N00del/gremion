@@ -6,7 +6,7 @@
 // database in pending.integration.test.ts.
 import { describe, expect, it, vi } from 'vitest'
 import type { Sql } from '@gremion/db'
-import { armPendingSwitch, checkPendingSwitch, claimPendingSwitch, normalizePendingInput, PENDING_COOKIE_PATH, PENDING_TTL_SECONDS, type PendingSwitch } from './pending'
+import { armPendingSwitch, checkPendingSwitch, claimPendingSwitch, normalizePendingInput, PENDING_COOKIE_MAX_AGE_SECONDS, PENDING_COOKIE_PATH, PENDING_TTL_SECONDS, type PendingSwitch } from './pending'
 
 const kept = (over: Partial<PendingSwitch> = {}): PendingSwitch => ({
   userId: 'u1',
@@ -112,5 +112,8 @@ describe('the handle', () => {
   it('waits no longer than the second factor stays fresh, on the module API path only', () => {
     expect(PENDING_TTL_SECONDS).toBeLessThanOrEqual(300)
     expect(PENDING_COOKIE_PATH).toBe('/api/settings/modules')
+    // the row, not the browser, ends the wait: the cookie lives a little longer, so an expiry is told as an expiry
+    expect(PENDING_COOKIE_MAX_AGE_SECONDS).toBeGreaterThan(PENDING_TTL_SECONDS)
+    expect(PENDING_COOKIE_MAX_AGE_SECONDS).toBeLessThanOrEqual(PENDING_TTL_SECONDS + 120)
   })
 })

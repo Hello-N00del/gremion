@@ -1,6 +1,7 @@
 import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import type { SessionUser } from '$lib/auth/types'
+import { evaluateStepUp } from '$lib/auth/step-up'
 import { SWITCHABLE_CATALOGUE_IDS } from '$lib/modules/catalogue-map'
 import { CouncilNotConfigured } from '$lib/server/module-switch/council-db'
 import {
@@ -9,8 +10,8 @@ import {
   claimPendingSwitch,
   normalizePendingInput,
   PENDING_COOKIE,
+  PENDING_COOKIE_MAX_AGE_SECONDS,
   PENDING_COOKIE_PATH,
-  PENDING_TTL_SECONDS,
   type PendingRefusal,
   type PendingSwitch,
 } from '$lib/server/module-switch/pending'
@@ -18,7 +19,7 @@ import { loadOperatorModules } from '$lib/server/module-switch/operator-modules'
 import { previewSwitchOff } from '$lib/server/module-switch/preview'
 import { runModuleSwitchPass } from '$lib/server/module-switch/reconciler'
 import { loadModuleOverview, mayManageModules, submitModuleSwitch, type SwitchContext, type SwitchInput } from '$lib/server/module-switch/service'
-import { MODULE_SWITCH_REQUIRED_LOA } from '$lib/server/module-switch/step-up'
+import { MODULE_SWITCH_REQUIRED_LOA, moduleSwitchStepUpFreshnessSeconds } from '$lib/server/module-switch/step-up'
 
 // Karenz phase 1: council module self-service.
 //   GET  /api/settings/modules                    -> the switchable modules and their state, plus operatorModules (the others the customer has)
@@ -54,6 +55,16 @@ function resumeRefused(reason: PendingRefusal, pending?: PendingSwitch | null): 
   return json({ success: false, ...RESUME_REFUSAL[reason], ...target }, { status: 409 })
 }
 
+/**
+ * A refused resume, with the cause in the log. The page's text is one sentence per refusal; this line tells
+ * apart the causes behind it (no cookie, no row, another person's row, expired, no newer second factor, no
+ * token pair). Only the cause is logged: never the handle, the person or the switch.
+ */
+function refusedResume(reason: PendingRefusal, why: string, pending?: PendingSwitch | null): Response {
+  console.warn(`[settings/modules] resume refused: ${why}`)
+  return resumeRefused(reason, pending)
+}
+
 type Event = Parameters<RequestHandler>[0]
 type Tokens = { idToken?: string; accessToken?: string }
 
@@ -69,7 +80,7 @@ async function keepForSecondFactor({ locals, cookies }: Event, user: SessionUser
   if (input !== null) {
     try {
       const handle = await armPendingSwitch(locals.tenant.db, { userId: user.id, authTime: user.authTime, input })
-      cookies.set(PENDING_COOKIE, handle, { path: PENDING_COOKIE_PATH, httpOnly: true, sameSite: 'strict', maxAge: PENDING_TTL_SECONDS })
+      cookies.set(PENDING_COOKIE, handle, { path: PENDING_COOKIE_PATH, httpOnly: true, sameSite: 'strict', maxAge: PENDING_COOKIE_MAX_AGE_SECONDS })
       return
     } catch (err) {
       console.error('[settings/modules] the confirmed switch could not be kept for the second factor:', err instanceof Error ? err.message : err)
@@ -83,7 +94,7 @@ async function resume({ locals, cookies }: Event, user: SessionUser, tokens: Tok
   const handle = cookies.get(PENDING_COOKIE)
   // The handle is spent whatever happens next (the row goes with the claim below).
   cookies.delete(PENDING_COOKIE, { path: PENDING_COOKIE_PATH })
-  if (!handle) return resumeRefused('gone')
+  if (!handle) return refusedResume('gone', 'no-cookie')
 
   let claimed: PendingSwitch | null
   try {
@@ -94,9 +105,13 @@ async function resume({ locals, cookies }: Event, user: SessionUser, tokens: Tok
   }
   const check = checkPendingSwitch(claimed, user, MODULE_SWITCH_REQUIRED_LOA)
   // Another person's switch is answered like an unknown one, and names nothing.
-  if (!check.ok) return resumeRefused(check.reason, check.reason === 'gone' ? null : claimed)
+  if (!check.ok) {
+    // 'gone' covers an unknown row and another person's row: told apart in the log only
+    const why = check.reason === 'gone' ? (claimed === null ? 'no-row' : 'other-user') : check.reason
+    return refusedResume(check.reason, why, check.reason === 'gone' ? null : claimed)
+  }
   const { pending } = check
-  if (!tokens.idToken || !tokens.accessToken) return resumeRefused('unconfirmed', pending)
+  if (!tokens.idToken || !tokens.accessToken) return refusedResume('unconfirmed', 'no-token-pair', pending)
 
   const target = { moduleId: pending.input.moduleId, action: pending.input.action }
   try {
@@ -105,7 +120,7 @@ async function resume({ locals, cookies }: Event, user: SessionUser, tokens: Tok
     const result = await submitModuleSwitch(ctx, pending.input, { newKey: () => pending.idempotencyKey })
     if (result.ok) return json({ success: true, resumed: true, requestId: result.requestId, ...target }, { status: 201 })
     // Never a second round trip from here: the confirmed switch is spent, the admin starts over.
-    if (result.code === 'STEP_UP_REQUIRED') return resumeRefused('unconfirmed', pending)
+    if (result.code === 'STEP_UP_REQUIRED') return refusedResume('unconfirmed', 'second-factor-not-fresh', pending)
     return json({ success: false, code: result.code, error: result.message, ...target }, { status: result.status })
   } catch (err) {
     console.error('[settings/modules] resumed switch failed:', err instanceof Error ? err.message : err)
@@ -164,6 +179,14 @@ export const GET: RequestHandler = async ({ url, locals }) => {
       if (!SWITCHABLE_CATALOGUE_IDS.has(preview)) {
         return json({ success: false, code: 'MODULE_NOT_SWITCHABLE', error: 'Dieses Modul kann nicht von der Gremiumsverwaltung geschaltet werden.' }, { status: 422 })
       }
+      // The warning is where the switch-off is confirmed, so the second factor comes BEFORE it opens: the admin
+      // confirms once, after the round trip, and nothing has to be carried across it. This only decides whether
+      // the dialog may open; the POST checks the second factor again on its own.
+      const decision = evaluateStepUp({ loa: user.loa, authTime: user.authTime }, MODULE_SWITCH_REQUIRED_LOA, {
+        nowMs: Date.now(),
+        freshnessSeconds: moduleSwitchStepUpFreshnessSeconds(),
+      })
+      if (!decision.ok) return stepUp()
       return json({ success: true, data: await previewSwitchOff(locals.tenant, preview) })
     }
     // The switchable modules (with their switches) and, next to them, the ones the customer has that the council cannot switch.
