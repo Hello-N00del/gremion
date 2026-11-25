@@ -413,7 +413,7 @@ template_keys() {
         ! cmp -s "${HOST_SRC}/bin/${f}" "${GREMION_ROOT}/bin/${f}" || { echo "a copy of the program is installed: ${f}"; return 1; }
         [ "$(stat -c %a "${GREMION_ROOT}/bin/${f}")" = 755 ]
         # it sources nothing and execs the program of the current release
-        ! grep -qE '^[[:space:]]*(\.|source)[[:space:]]' "${GREMION_ROOT}/bin/${f}"
+        ! grep -qE '^[[:space:]]*(\.|source)[[:space:]]' "${GREMION_ROOT}/bin/${f}" || { echo "the launcher of ${f} sources a file"; return 1; }
         grep -qF "current/infra/host/bin/${f}" "${GREMION_ROOT}/bin/${f}"
     done
     for f in "${HOST_SRC}"/bin/*; do
