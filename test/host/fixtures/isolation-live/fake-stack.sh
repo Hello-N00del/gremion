@@ -107,6 +107,8 @@ route_nextcloud() { # method path bearer
     psub="${BASH_REMATCH[1]}"
     sub="$(jwt_claim "$bearer" .sub)"
     if [[ "$method" != PROPFIND ]]; then reply 405 '{}'; return 0; fi
+    # dav-own-fail: the own folder does not answer either (the positive control of the WebDAV denial fails)
+    if sw dav-own-fail; then reply 404 '<d:error/>'; return 0; fi
     if [[ "$sub" == "$psub" ]] || sw dav-open; then reply 207 '<d:multistatus xmlns:d="DAV:"/>'; else reply 404 '<d:error/>'; fi
     return 0
 }
@@ -120,6 +122,8 @@ route_platform() { # method path bearer data
         /_matrix/client/v3/rooms/*/messages*|/_matrix/client/v3/rooms/*/send/*)
             [[ "$bearer" == MXTOK.* ]] || { reply 401 '{"errcode":"M_UNKNOWN_TOKEN"}'; return 0; }
             s="${bearer#MXTOK.}"
+            # matrix-own-fail: the own room is refused too (the positive control of the Matrix denial fails)
+            if sw matrix-own-fail; then reply 403 '{"errcode":"M_FORBIDDEN","error":"not in room"}'; return 0; fi
             room="${path#/_matrix/client/v3/rooms/}"; room="${room%%/*}"
             room="${room//%21/!}"; room="${room//%3A/:}"; room="${room//%3a/:}"
             if [[ "$room" == "!room-${s}:${PLAT}" ]] || sw matrix-open; then
@@ -227,7 +231,7 @@ route_customer() { # host method path bearer data
             if [[ "$ef" == "isoprobe-${s}.odt" ]] || sw editor-open; then
                 reply 200 "{\"token\":\"t\",\"tokenTtl\":1,\"editorUrl\":\"https://${eh}/office/browser/x/cool.html?WOPISrc=x\"}"
             elif sw editor-502; then reply 502 '{}'
-            else reply 404 '{}'; fi ;;
+            else reply 404 '{}'; fi ;;   # the route maps a Nextcloud 404 or 403 for a file the caller's own root lacks to 404 or 403
         "GET /api/auth/matrix-token")
             mx="@u-${s}:${PLAT}"
             if sw same-mxid; then mx="@u-shared:${PLAT}"; fi
@@ -294,7 +298,10 @@ fake_occ() { # args after `php occ`
             fi ;;
         user:info)
             sub="$2"; realm="${2#sub-}"
-            if sw user-in-no-group; then printf '{"user_id":"%s","groups":[]}' "$sub"; else printf '{"user_id":"%s","groups":["ou-%s"]}' "$sub" "$realm"; fi ;;
+            # user-in-both-groups: the probe user of one customer is in the folder groups of both (ids stay different)
+            if sw user-in-no-group; then printf '{"user_id":"%s","groups":[]}' "$sub"
+            elif sw user-in-both-groups; then printf '{"user_id":"%s","groups":["ou-%s","ou-%s"]}' "$sub" "$A" "$B"
+            else printf '{"user_id":"%s","groups":["ou-%s"]}' "$sub" "$realm"; fi ;;
         *) return 1 ;;
     esac
 }

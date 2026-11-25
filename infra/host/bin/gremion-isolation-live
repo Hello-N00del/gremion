@@ -87,8 +87,10 @@ set -euo pipefail
 #               (the send is only tried when the read was refused)
 #   files       each customer's folder is identified by its group-folder id, read with occ through the
 #               groups of the fixture user -- never by the mount name, which is the unit name in both
-#               customers. PASS needs two different folder ids and no shared folder group; ONE folder
-#               id for both customers is a FAIL. Besides: A's own folder lists and serves A's file,
+#               customers. PASS needs two different folder ids, each the ONLY folder of that name in the
+#               groups of its customer's fixture user (a user whose groups carry two folders of that name
+#               FAILS, so a shared folder group does not go unseen); ONE folder id for both customers is a
+#               FAIL. Besides: A's own folder lists and serves A's file,
 #               A's bearer on B's user root at http://nextcloud and the app API for B's file answer
 #               403 or 404.
 #               The rule is the same on every release and reports what the install really holds: two
@@ -97,7 +99,10 @@ set -euo pipefail
 #               Writes are not attempted: a refused write cannot be told from a successful one without
 #               trying it, and a failed denial would write into the other customer.
 #   office      the own editor URL is on A's host (its origin is https://<A's host>); the editor URL for B's
-#               file is refused (403 or 404, no editorUrl). SAVE AND CLOSE stay unproven until a person
+#               file is refused (403 or 404, no editorUrl). The edit-token route resolves the file in the
+#               CALLER's own Nextcloud root, where B's file name is simply absent: Nextcloud answers 404 and
+#               the route passes it on as 404 (a 403 as 403). A 5xx is no refusal and FAILS; this needs the
+#               release whose route maps those answers. SAVE AND CLOSE stay unproven until a person
 #               opens a document of each customer by hand on its own host.
 #   calendar    own event 200; B's event id on A's host 404; B's event is not in A's listing
 #   polls       own poll 200; B's poll id on A's host 404; B's poll is not in A's listing
@@ -460,7 +465,7 @@ sec_polls() { sec_by_id polls "/api/polls" "/api/polls/" "poll"; }
 
 # files: each folder by its group-folder id, read with occ through the groups of the fixture user
 sec_files() {
-    local x y fid=("" "") ug=("[]" "[]") folders rdy=(0 0) ids n gj f other
+    local x y fid=("" "") ug=("[]" "[]") folders rdy=(0 0) ids n gj
     sec_begin files
     FILE_FIXTURE=(3 3)   # 3: not established (the section's own control failed: office probes anyway)
     if no_bearer files; then s_ne "the files route takes no Bearer on this release"; FILE_FIXTURE=(2 2); sec_end; return 0; fi
@@ -531,16 +536,6 @@ sec_files() {
         else
             s_ok "${SLUG[0]} resolves folder ${fid[0]}, ${SLUG[1]} resolves folder ${fid[1]} (through the groups of the probe user, not the mount name)"
         fi
-        for x in 0 1; do
-            y=$((1 - x))
-            other="$(jq -c --argjson id "${fid[$y]}" --argjson ug "${ug[$x]}" '
-                def gids: (.groups // {}) | if type == "object" then keys elif type == "array" then map(if type == "object" then (.gid // .group_id // .id // empty) else (.) end) else [] end;
-                [.[] | select(.id == $id) | gids[] | select(. as $g | $ug | index($g) != null)]' <<< "$folders" 2>/dev/null || echo '[]')"
-            f="$(jq 'length' <<< "$other")"
-            if [[ "$f" != 0 && "${fid[0]}" != "${fid[1]}" ]]; then
-                s_fail "$(dir_label "$x"): the probe user of ${SLUG[$x]} is in a group of folder ${fid[$y]} (${SLUG[$y]}'s)"
-            fi
-        done
     fi
     sec_end
 }
@@ -583,8 +578,8 @@ sec_chat() {
     if no_bearer chat; then s_ne "the chat routes take no Bearer on this release"; CHAT_NE=1; sec_end; return 0; fi
     for x in 0 1; do
         MXT[x]=""; MXID[x]=""; ROOM[x]=""
-        # the module gate owns /api/messages, not /api/auth/matrix-token: ask the gated route first, so a
-        # customer without messaging reads NOT-ENABLED and not a failed Matrix session
+        # ask the module-gated route first, so a customer without messaging reads NOT-ENABLED and not a
+        # failed Matrix session
         api_get "$x" "/api/messages/rooms"
         if ! own_ok "${SLUG[$x]}: own room list"; then
             if [[ "$SEC_V" == NOT-ENABLED ]]; then CHAT_NE=1; fi

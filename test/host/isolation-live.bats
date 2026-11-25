@@ -328,7 +328,7 @@ all_sections_pass() {
     refute_recorded curl '/api/calendar/'
 }
 
-@test "a customer without messaging reads chat and call as NOT-ENABLED (exit 3), asked through the gated route first" {
+@test "a customer without messaging reads chat and call as NOT-ENABLED (exit 3), asked through the module-gated route first" {
     sw_on moddis-messages
     probe "$A" "$B"
     [ "$status" -eq 3 ]
@@ -473,6 +473,22 @@ all_sections_pass() {
     section_is files FAIL
 }
 
+@test "files: the own folder not answering over WebDAV is no positive control, so the section FAILS" {
+    sw_on dav-own-fail
+    probe "$A" "$B"
+    [ "$status" -eq 1 ]
+    section_is files FAIL
+    grep -q 'positive control failed' <<< "$output"
+}
+
+@test "files: a probe user whose groups carry both customers' folders FAILS, though the folder ids differ" {
+    sw_on user-in-both-groups
+    probe "$A" "$B"
+    [ "$status" -eq 1 ]
+    section_is files FAIL
+    grep -q "groups carry 2 folders" <<< "$output"
+}
+
 @test "files: an isoprobe user that is in no folder group is NOT-READY, not a pass" {
     sw_on user-in-no-group
     probe "$A" "$B"
@@ -501,6 +517,13 @@ all_sections_pass() {
     probe "$A" "$B"
     [ "$status" -eq 1 ]
     section_is office FAIL
+}
+
+@test "office: the refusal the edit-token route really gives for a file the own root lacks is 404, and PASSES" {
+    probe "$A" "$B"
+    [ "$status" -eq 0 ]
+    section_is office PASS
+    grep -q 'refused (404)' <<< "$output"
 }
 
 @test "office: a 502 for the other customer's file is not a refusal and FAILS" {
@@ -534,6 +557,16 @@ all_sections_pass() {
     probe "$A" "$B"
     [ "$status" -eq 1 ]
     section_is chat FAIL
+}
+
+@test "chat: the own room refused too is no positive control, so the section FAILS and nothing is sent" {
+    sw_on matrix-own-fail
+    probe "$A" "$B"
+    [ "$status" -eq 1 ]
+    section_is chat FAIL
+    grep -q 'positive control failed' <<< "$output"
+    [ ! -e "${FAKE_DIR}/sent-${A}" ]
+    [ ! -e "${FAKE_DIR}/sent-${B}" ]
 }
 
 @test "chat: a Matrix token that can read the other customer's room FAILS, and nothing is sent into it" {
