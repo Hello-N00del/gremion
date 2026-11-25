@@ -123,9 +123,109 @@ trusted() {
     # (`! cmd` never fails a bats test, so the status is checked explicitly.)
     run grep -E '^[[:space:]]*NEXTCLOUD_OVERWRITE(HOST|PROTOCOL):' <<<"$block"
     [ "$status" -eq 1 ]
-    run grep -E '^[[:space:]]*NEXTCLOUD_PUBLIC_HOSTS:[[:space:]]+\$\{PILOT_TENANT_HOST' <<<"$block"
+    # The customer host and every secondary customer host (SECONDARY_TENANT_HOSTS, empty: the customer host alone).
+    run grep -E '^[[:space:]]*NEXTCLOUD_PUBLIC_HOSTS:[[:space:]]+\$\{PILOT_TENANT_HOST:-\}\$\{SECONDARY_TENANT_HOSTS:\+,\$\{SECONDARY_TENANT_HOSTS\}\}[[:space:]]*$' <<<"$block"
     [ "$status" -eq 0 ]
     # The forwarded host is honoured from a trusted proxy only: both address families of the state network.
     run grep -E '^[[:space:]]*NEXTCLOUD_TRUSTED_PROXIES:.*STATE_V4_SUBNET.*STATE_V6_SUBNET' <<<"$block"
     [ "$status" -eq 0 ]
+}
+
+# --- several customer hosts on one Nextcloud and one Collabora --------------------------------------------
+# docker compose is not available in the bats runner, so the interpolation is proved in two steps. The compose
+# values use only ${VAR:-x} and ${VAR:+x}, which a POSIX shell expands with the very same meaning, so the tests
+# expand the value text that stands in docker-compose.yml. The fixtures under test/fixtures/multihost were written
+# from `docker compose config --format json` of the same file (single-customer.env: the file as it was before the
+# secondary hosts, so the unchanged single-customer rendering is a golden; two-secondary.env: PILOT_TENANT_HOST
+# a.example.test, SECONDARY_TENANT_HOSTS b.example.test,c.example.test), so the shell expansion is held to what
+# compose itself renders.
+
+FIXTURES="$REPO_ROOT/test/fixtures/multihost"
+
+# service_block <service> -- the lines of the service in docker-compose.yml
+service_block() {
+    awk -v s="  $1:" '$0==s{f=1;next} f&&/^  [a-z]/{f=0} f' "$COMPOSE"
+}
+
+# expand_value <text> -- the text with its ${...} expanded by a shell, from PILOT / SECONDARY (when set in the test)
+expand_value() {
+    env -i PATH="$PATH" ${PILOT+PILOT_TENANT_HOST="$PILOT"} ${SECONDARY+SECONDARY_TENANT_HOSTS="$SECONDARY"} \
+        sh -c 'eval "printf %s \"$1\""' _ "$1"
+}
+
+# rendered_env -- the relevant environment of nextcloud and collabora as KEY=VALUE lines (the fixtures' format)
+rendered_env() {
+    local line key val
+    while IFS= read -r line; do
+        key="${line%%:*}"; key="${key//[[:space:]]/}"
+        val="${line#*:}"; val="${val#"${val%%[![:space:]]*}"}"
+        printf 'nextcloud.%s=%s\n' "$key" "$(expand_value "$val")"
+    done < <(service_block nextcloud | grep -E '^      (NEXTCLOUD_PUBLIC_HOSTS|COLLABORA_PUBLIC_URL):')
+    # collabora's environment: a list of KEY=VALUE entries (a map of KEY: value is read the same way)
+    while IFS= read -r line; do
+        printf 'collabora.%s\n' "$(expand_value "$line")"
+    done < <(service_block collabora | awk '
+        /^    environment:/ { f = 1; next }
+        f && /^    [a-z]/ { f = 0 }
+        f && /^      - / { sub(/^      - /, ""); print; next }
+        f && /^      [A-Za-z0-9_]+:/ {
+            k = $0; sub(/^ +/, "", k); sub(/:.*/, "", k)
+            v = $0; sub(/^ +[A-Za-z0-9_]+: */, "", v); gsub(/^"|"$/, "", v)
+            print k "=" v
+        }')
+}
+
+sorted_rendered() { rendered_env | LC_ALL=C sort; }
+
+@test "multihost compose: with SECONDARY_TENANT_HOSTS unset the rendering of both services is the single-customer golden" {
+    PILOT=a.example.test
+    run sorted_rendered
+    [ "$status" -eq 0 ]
+    [ -n "$output" ]
+    [ "$output" = "$(cat "$FIXTURES/single-customer.env")" ]
+}
+
+@test "multihost compose: with SECONDARY_TENANT_HOSTS set but empty the rendering is the same golden" {
+    PILOT=a.example.test SECONDARY=
+    run sorted_rendered
+    [ "$status" -eq 0 ]
+    [ "$output" = "$(cat "$FIXTURES/single-customer.env")" ]
+}
+
+@test "multihost compose: NEXTCLOUD_PUBLIC_HOSTS equals PILOT_TENANT_HOST exactly when there are no secondary hosts" {
+    PILOT=a.example.test
+    run sorted_rendered
+    [ "$status" -eq 0 ]
+    grep -qxF 'nextcloud.NEXTCLOUD_PUBLIC_HOSTS=a.example.test' <<<"$output"
+}
+
+@test "multihost compose: NEXTCLOUD_PUBLIC_HOSTS lists the customer host and every secondary host" {
+    PILOT=a.example.test SECONDARY=b.example.test,c.example.test
+    run sorted_rendered
+    [ "$status" -eq 0 ]
+    grep -qxF 'nextcloud.NEXTCLOUD_PUBLIC_HOSTS=a.example.test,b.example.test,c.example.test' <<<"$output"
+}
+
+@test "multihost compose: the shell expansion matches what docker compose rendered for two secondary hosts" {
+    PILOT=a.example.test SECONDARY=b.example.test,c.example.test
+    run sorted_rendered
+    [ "$status" -eq 0 ]
+    [ "$output" = "$(cat "$FIXTURES/two-secondary.env")" ]
+}
+
+@test "multihost compose: Collabora gets no server_name when there are secondary hosts, so it names the host of each request" {
+    PILOT=a.example.test SECONDARY=b.example.test
+    run sorted_rendered
+    [ "$status" -eq 0 ]
+    [ "$(grep -c '^collabora\.server_name=' <<<"$output" || true)" = "0" ]
+    # the WOPI host stays the one literal in-network name, and the rest of the service is unchanged
+    grep -qxF 'collabora.aliasgroup1=http://nextcloud:80' <<<"$output"
+    grep -qxF 'collabora.extra_params=--o:ssl.enable=false --o:ssl.termination=true --o:net.service_root=/office' <<<"$output"
+}
+
+@test "multihost compose: Collabora keeps server_name = the customer host without secondary hosts" {
+    PILOT=a.example.test
+    run sorted_rendered
+    [ "$status" -eq 0 ]
+    grep -qxF 'collabora.server_name=a.example.test' <<<"$output"
 }
