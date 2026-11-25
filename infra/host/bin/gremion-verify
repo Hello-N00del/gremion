@@ -717,6 +717,12 @@ check_router_universal() {
         mapfile -t mws < <(jq -r '.middlewares // [] | .[]' <<<"$r")
         for m in "${mws[@]}"; do
             q="$(qualify_ref "$m" "$name")"
+            # A middleware only another compose project declares is not the kernel's: whatever its
+            # name says it is, it cannot be the pin, the HSTS or the rate limit the kernel owes.
+            if foreign_mw_p "$q"; then
+                fail "router $name: middleware $q is declared by another compose project (not a kernel project of stack ${STACK}), so it cannot stand for a kernel middleware"
+                continue
+            fi
             chain+=("$q")
             base="${q%%@*}"
             [[ "$base" == edge-hostpin-* ]] && pins+=("$q")
