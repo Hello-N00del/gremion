@@ -537,6 +537,9 @@ wire_caldav_collection() {
 #       and reads it back BY IDENTIFIER: bearer validation on, unique-uid not off, the discovery URI the realm's
 #       own; prints its numeric id;
 #       the app list and the office URLs are checked as the primary wire checks them;
+#   6a. records that id in the customer's registry row, merged into nc_target.providerId (the keys it holds
+#       stay), and reads it back: the app creates this customer's Nextcloud accounts under it, where the
+#       primary customer keeps NEXTCLOUD_OIDC_PROVIDER_ID. The primary wire writes nothing of the kind;
 #   6b. the customer's CalDAV collection; 6c. the mail login (mail_login_apply);
 #   8.  the creation order, as for any customer.
 wire_secondary() {
@@ -581,6 +584,20 @@ wire_secondary() {
     docker exec "$nc_c" curl -fsS --max-time 15 -o /dev/null "$discovery" \
         || die "the discovery URI is not reachable from inside the nextcloud container (a staging ACME certificate fails here): ${discovery}" "$GREMION_EXIT_ASSERT"
     ok "nextcloud: provider ${ident} (checkBearer, id ${pid}), apps enabled, discovery reachable"
+
+    # -- 6a. the customer's provider id, recorded in its own registry row (nc_target.providerId) --
+    # The app creates this customer's Nextcloud accounts under it (the env value NEXTCLOUD_OIDC_PROVIDER_ID is the
+    # primary customer's provider). MERGED into nc_target, so the keys the row holds stay; the id is a psql variable.
+    local nn got
+    nn="$(prov_psql "$PROV_PG_CONTROL" "WITH u AS (UPDATE tenant SET nc_target = nc_target || jsonb_build_object('providerId', (:'pid')::int), updated_at = now() WHERE slug = :'slug' RETURNING 1) SELECT count(*) FROM u;" -v slug="$slug" -v pid="$pid")" \
+        || die "the registry row of ${slug} could not be updated with the Nextcloud provider id (nc_target.providerId, control database ${PROV_PG_CONTROL})" "$GREMION_EXIT_ASSERT"
+    [[ "${nn//[[:space:]]/}" == 1 ]] \
+        || die "nc_target.providerId of the registry row of ${slug} was not written (rows updated: ${nn//[[:space:]]/})" "$GREMION_EXIT_ASSERT"
+    got="$(prov_psql "$PROV_PG_CONTROL" "SELECT nc_target->>'providerId' FROM tenant WHERE slug = :'slug';" -v slug="$slug")" \
+        || die "the registry row of ${slug} could not be read back (nc_target.providerId)" "$GREMION_EXIT_ASSERT"
+    [[ "${got//[[:space:]]/}" == "$pid" ]] \
+        || die "the registry row of ${slug} reads back nc_target.providerId '${got//[[:space:]]/}', not the provider id ${pid} of ${ident}" "$GREMION_EXIT_ASSERT"
+    ok "registry: nc_target.providerId of ${slug} is ${pid} (the app re-reads the row within its resolution cache TTL)"
 
     # -- 6b. the customer's CalDAV collection --
     wire_caldav_collection "$slug" "$nc_c"
