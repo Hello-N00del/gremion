@@ -30,6 +30,11 @@ export interface GroupFolderResult {
   mountPoint: string
 }
 
+/** A group folder as the instance-wide list reports it: the ids of the groups that may open it. */
+export interface GroupFolderListing extends GroupFolderResult {
+  groups: string[]
+}
+
 /**
  * Typed error for a non-OK Nextcloud response. Carries the structured fields the
  * files API needs to instrument the intermittent "<!DOCTYPE … is not valid JSON"
@@ -307,16 +312,20 @@ export class NextcloudClient {
   /** List all group folders known to this NC instance.
    *  NC returns an id-keyed object on older versions and an array on newer ones —
    *  both shapes are normalised.  A `null`/`false` data field (empty install)
-   *  is treated as an empty list. */
-  async listGroupFolders(): Promise<GroupFolderResult[]> {
+   *  is treated as an empty list.  Every folder carries the ids of its groups:
+   *  NC reports them as an object keyed by group id (group id -> permissions), or
+   *  as an empty array for a folder nobody was granted on yet. The list spans the
+   *  whole instance, so a caller that adopts a folder must check the groups too:
+   *  the mount point alone does not tell whose folder it is. */
+  async listGroupFolders(): Promise<GroupFolderListing[]> {
     const res = await this.request('GET', '/index.php/apps/groupfolders/folders?format=json')
     const json = await res.json()
     const data = json?.ocs?.data ?? null
     if (!data) return []
-    const entries: Array<{ id: number; mount_point: string }> = Array.isArray(data)
+    const entries: Array<{ id: number; mount_point: string; groups?: unknown }> = Array.isArray(data)
       ? data
       : Object.values(data)
-    return entries.map((e) => ({ id: Number(e.id), mountPoint: e.mount_point }))
+    return entries.map((e) => ({ id: Number(e.id), mountPoint: e.mount_point, groups: groupIdsOf(e.groups) }))
   }
 
   async createGroupFolder(mountPoint: string): Promise<GroupFolderResult> {
@@ -655,6 +664,11 @@ export class NextcloudClient {
    * still opens. A failure of createDirect itself (Nextcloud down) is not
    * retried.
    *
+   * richdocuments keeps ONE public_wopi_url, the primary host's, so `doc.urlsrc` names that host
+   * for every customer, and the browser of a customer on another host may not frame it
+   * (frame-src 'self'). With `opts.publicOrigin` the origin of `urlsrc` is therefore replaced by it
+   * (see onOrigin); without it the URL is returned as Nextcloud gave it.
+   *
    * Returns { editorUrl, tokenTtl } where:
    *   - editorUrl: full Collabora URL with WOPISrc + access_token + access_token_ttl
    *   - tokenTtl:  Unix seconds timestamp when the WOPI token expires */
@@ -663,6 +677,10 @@ export class NextcloudClient {
     userId: string,
     opts: { publicOrigin?: string } = {}
   ): Promise<{ editorUrl: string; tokenTtl: number }> {
+    // a value that is set but is not a bare http(s) origin never reaches Nextcloud and never names the editor host
+    if (opts.publicOrigin && !isBareOrigin(opts.publicOrigin)) {
+      throw new Error('getCollaboraEditorUrl: publicOrigin is not a bare http(s) origin (scheme, host, optional port)')
+    }
     const forwarded = forwardedOriginHeaders(opts.publicOrigin)
     let state: EditorState
     if (Object.keys(forwarded).length === 0) {
@@ -684,8 +702,10 @@ export class NextcloudClient {
       callbackUrl.replace(/\/$/, '') +
       `/index.php/apps/richdocuments/wopi/files/${doc.fileId}`
 
+    const urlsrc = opts.publicOrigin ? onOrigin(doc.urlsrc, opts.publicOrigin) : doc.urlsrc
+
     const editorUrl =
-      `${doc.urlsrc}WOPISrc=${encodeURIComponent(wopiSrc)}` +
+      `${urlsrc}WOPISrc=${encodeURIComponent(wopiSrc)}` +
       `&access_token=${encodeURIComponent(doc.token)}` +
       `&access_token_ttl=${doc.token_ttl * 1000}`
 
@@ -721,6 +741,14 @@ export class NextcloudClient {
   }
 }
 
+/** The group ids of a group folder's `groups` field: the keys of the id -> permissions object, or the
+ *  strings of a plain list. An empty array (how PHP serialises an empty map) or anything else is none. */
+function groupIdsOf(groups: unknown): string[] {
+  if (Array.isArray(groups)) return groups.filter((g): g is string => typeof g === 'string')
+  if (groups && typeof groups === 'object') return Object.keys(groups)
+  return []
+}
+
 /** The direct-view page answered with an error or without editor state (as opposed to createDirect failing). */
 class EditorPageError extends Error {}
 
@@ -742,6 +770,45 @@ export function forwardedOriginHeaders(origin: string | undefined): Record<strin
   if (url.protocol !== 'https:' && url.protocol !== 'http:') return {}
   if (!/^[a-z0-9.-]+(:\d{1,5})?$/.test(url.host)) return {}
   return { 'X-Forwarded-Host': url.host, 'X-Forwarded-Proto': url.protocol.slice(0, -1) }
+}
+
+/** An http(s) origin and nothing else: scheme, plain host, optional port. No userinfo, path, query or
+ *  fragment, and exactly what `URL.origin` would print (so no trailing slash). */
+function isBareOrigin(origin: string): boolean {
+  if (Object.keys(forwardedOriginHeaders(origin)).length === 0) return false
+  try {
+    return new URL(origin).origin === origin
+  } catch {
+    return false
+  }
+}
+
+/** Collabora's path on every host: the /office router (net.service_root). */
+const OFFICE_PATH = '/office/'
+
+/** `urlsrc` with its origin replaced by `origin`; path, query and fragment are kept. The path must be
+ *  below /office/ once the URL parser has resolved dot segments: anything else is not Collabora's
+ *  address and is refused, never sent on to another host. `origin` is a bare origin (isBareOrigin). */
+function onOrigin(urlsrc: string, origin: string): string {
+  let parsed: URL
+  try {
+    parsed = new URL(urlsrc)
+  } catch {
+    throw new Error('Nextcloud editor state: urlsrc is not an absolute URL; expected an address below /office/')
+  }
+  if (!parsed.pathname.startsWith(OFFICE_PATH)) {
+    throw new Error('Nextcloud editor state: urlsrc is not below /office/; refusing to move it to the request host')
+  }
+  // the primary host asking for itself keeps the URL byte for byte
+  if (parsed.origin === origin) return urlsrc
+  // everything after the authority is kept as Nextcloud wrote it: URL.search drops a bare trailing
+  // "?", and the caller appends its parameters straight onto it
+  const authority = /^[a-z][a-z0-9+.-]*:\/\/[^/\\?#]*/i.exec(urlsrc)
+  const rest = authority ? urlsrc.slice(authority[0].length) : ''
+  if (!rest.startsWith('/')) {
+    throw new Error('Nextcloud editor state: urlsrc has no path below /office/; refusing to move it to the request host')
+  }
+  return origin + rest
 }
 
 /** Extract and JSON-parse a Nextcloud initial-state value from HTML.
