@@ -1,5 +1,6 @@
 <script lang="ts">
   import { untrack } from 'svelte'
+  import { invalidateAll } from '$app/navigation'
   import { Button } from '$lib/components/ui/button'
   import { Input } from '$lib/components/ui/input'
   import { Label } from '$lib/components/ui/label'
@@ -62,6 +63,25 @@
     console.warn('[settings/modules] refresh failed:', why)
   }
 
+  /** Did any module's on/off state change between two lists? The server reports the state the gate has (a pending request keeps the old one). */
+  function stateChanged(before: ModuleOverview, after: ModuleOverview): boolean {
+    const was = new Map(before.modules.map((m) => [m.moduleId, m.enabled]))
+    return after.modules.some((m) => was.has(m.moduleId) && was.get(m.moduleId) !== m.enabled)
+  }
+
+  /**
+   * The navigation comes from the root layout load (config.modules), which does not run again while this page stays
+   * open: ask for it, or the entry of a module that was just switched off stays in the rail (and one that was
+   * switched on does not appear). A failed reload is only logged: the list on this page is right either way.
+   */
+  async function reloadShell(): Promise<void> {
+    try {
+      await invalidateAll()
+    } catch (err) {
+      console.warn('[settings/modules] the navigation could not be reloaded:', err instanceof Error ? err.message : err)
+    }
+  }
+
   async function refresh(): Promise<void> {
     try {
       const res = await fetch(API)
@@ -76,9 +96,12 @@
         refreshFailed(res.status)
         return
       }
-      overview = body.data as ModuleOverview
+      const next = body.data as ModuleOverview
+      const switched = overview !== null && stateChanged(overview, next)
+      overview = next
       load = 'ready'
       stale = false
+      if (switched) void reloadShell()
     } catch (err) {
       refreshFailed(err instanceof Error ? err.message : err)
     }

@@ -3,6 +3,12 @@ import { render, fireEvent, screen, waitFor, within } from '@testing-library/sve
 import type { KarenzView, ModuleOverview, ModuleOverviewItem } from '$lib/modules/switch-preview'
 import TabModules from './TabModules.svelte'
 
+// The root layout load builds the navigation from config.modules. It does not run again while the admin stays on
+// this page, so the page asks for it once a module's state has changed (invalidateAll), or the entry of a module
+// that was just switched off stays in the rail until the next full navigation.
+const nav = vi.hoisted(() => ({ invalidateAll: vi.fn(async () => {}) }))
+vi.mock('$app/navigation', () => nav)
+
 // Karenz phase 1, Task 12: the settings section "Module". A council admin switches a module ON; the
 // switch OFF is rendered inert until phase 2. Every server answer is a double here: the page shows
 // what the server said and never claims a switch before the request is applied.
@@ -153,6 +159,45 @@ describe('TabModules.svelte', () => {
     const settled = getCount(calls)
     await new Promise((r) => setTimeout(r, 120))
     expect(getCount(calls)).toBe(settled)
+  })
+
+  describe('the navigation follows a module that was switched', () => {
+    afterEach(() => nav.invalidateAll.mockClear())
+
+    it('reloads the shell data once, when a pending switch-off turns into off; the first load and an unchanged poll do not', async () => {
+      const pending = ok(overview([item({ enabled: true, pending: [{ requestId: 'r1', action: 'disable', state: 'succeeded' }] })]))
+      const off = ok(overview([item({ enabled: false, pending: [] })]))
+      const { calls } = fetchDouble([pending, pending, off])
+      render(TabModules, { props: { pollMs: 15 } })
+      expect(await screen.findByText('Anfrage wird ausgeführt')).toBeTruthy()
+      expect(nav.invalidateAll).not.toHaveBeenCalled()
+      await waitFor(() => expect(screen.queryByText('Anfrage wird ausgeführt')).toBeNull())
+      await waitFor(() => expect(nav.invalidateAll).toHaveBeenCalledTimes(1))
+      // the poll stopped with the pending request: nothing reloads again
+      const settled = getCount(calls)
+      await new Promise((r) => setTimeout(r, 100))
+      expect(getCount(calls)).toBe(settled)
+      expect(nav.invalidateAll).toHaveBeenCalledTimes(1)
+    })
+
+    it('reloads after a switch-on too (the entry comes back)', async () => {
+      const pending = ok(overview([item({ enabled: false, pending: [{ requestId: 'r1', action: 'enable', state: 'applying' }] })]))
+      const on = ok(overview([item({ enabled: true, pending: [] })]))
+      fetchDouble([pending, on])
+      render(TabModules, { props: { pollMs: 15 } })
+      await screen.findByText('Anfrage wird ausgeführt')
+      await waitFor(() => expect(nav.invalidateAll).toHaveBeenCalledTimes(1))
+    })
+
+    it('a failed reload of the shell never breaks the page', async () => {
+      nav.invalidateAll.mockRejectedValueOnce(new Error('offline'))
+      const pending = ok(overview([item({ enabled: true, pending: [{ requestId: 'r1', action: 'disable', state: 'queued' }] })]))
+      const off = ok(overview([item({ enabled: false, pending: [] })]))
+      fetchDouble([pending, off])
+      render(TabModules, { props: { pollMs: 15 } })
+      await waitFor(() => expect(nav.invalidateAll).toHaveBeenCalledTimes(1))
+      expect(await screen.findByText('Ausgeschaltet')).toBeTruthy()
+    })
   })
 
   it('while a request is pending the module offers no second switch', async () => {
