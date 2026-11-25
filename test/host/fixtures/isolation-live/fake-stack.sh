@@ -13,19 +13,21 @@ D="${FAKE_DIR:?FAKE_DIR is not set}"
 UNIT="${FAKE_UNIT:-isoprobe}"
 USERN="${FAKE_USER:-isoprobe}"
 PLAT="plat.example.org"
-A="alpha-rat"
-B="beta-fox"
+A="${FAKE_A:-alpha-rat}"
+B="${FAKE_B:-beta-fox}"
+HA="${FAKE_HOST_A:-alpha.example.org}"
+HB="${FAKE_HOST_B:-beta.example.org}"
 
 sw() { [[ -f "$D/sw/$1" ]]; }
 other() { if [[ "$1" == "$A" ]]; then printf '%s' "$B"; else printf '%s' "$A"; fi; }
 realm_of_host() {
     case "$1" in
-        alpha.example.org) printf '%s' "$A" ;;
-        beta.example.org) printf '%s' "$B" ;;
+        "$HA") printf '%s' "$A" ;;
+        "$HB") printf '%s' "$B" ;;
         *) printf '' ;;
     esac
 }
-host_of_realm() { if [[ "$1" == "$A" ]]; then printf 'alpha.example.org'; else printf 'beta.example.org'; fi; }
+host_of_realm() { if [[ "$1" == "$A" ]]; then printf '%s' "$HA"; else printf '%s' "$HB"; fi; }
 b64u() { base64 -w0 | tr '+/' '-_' | tr -d '='; }
 mkjwt() { printf '%s.%s.TOKMARK' "$(printf '{"alg":"RS256"}' | b64u)" "$(printf '%s' "$1" | b64u)"; }
 jwt_claim() { # <token> <jq filter>
@@ -179,7 +181,7 @@ route_customer() { # host method path bearer data
         /api/polls*) word=polls ;;
         /api/calendar/*) word=calendar ;;
         /api/files/*) word=files ;;
-        /api/messages/*|/api/auth/matrix-token*) word=messages ;;
+        /api/messages/*) word=messages ;;
     esac
     if [[ -n "$word" ]] && sw "moddis-${word}"; then reply 403 'Module disabled'; return 0; fi
     o="$(other "$s")"

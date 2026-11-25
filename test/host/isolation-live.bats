@@ -313,6 +313,16 @@ all_sections_pass() {
     refute_recorded curl '/api/calendar/'
 }
 
+@test "a customer without messaging reads chat and call as NOT-ENABLED (exit 3), asked through the gated route first" {
+    sw_on moddis-messages
+    probe "$A" "$B"
+    [ "$status" -eq 3 ]
+    section_is chat NOT-ENABLED
+    section_is call NOT-ENABLED
+    section_is files PASS
+    refute_recorded curl '/api/auth/matrix-token'
+}
+
 @test "a FAIL outranks a NOT-ENABLED: both present exit 1" {
     sw_on moddis-polls
     sw_on calendar-open
@@ -344,6 +354,27 @@ all_sections_pass() {
     probe "$A" "$B"
     [ "$status" -eq 1 ]
     section_is calendar FAIL
+}
+
+@test "calendar and polls: a slug that is a prefix of the other slug is not mistaken for a leak" {
+    printf 'SECRET-alpha' > "${GREMION_ROOT}/tenant-secrets/tenant_alpha_client_gremion-admin"
+    # shellcheck disable=SC2016  # the backticks are Traefik rule syntax
+    printf 'http:
+  routers:
+    tenant-alpha:
+      rule: "Host(`alpha.example.org`)"
+' > "${GREMION_ROOT}/etc/edge/tenant-alpha.yml"
+    # shellcheck disable=SC2016
+    printf 'http:
+  routers:
+    tenant-alpha-rat:
+      rule: "Host(`alpharat.example.org`)"
+' > "${GREMION_ROOT}/etc/edge/tenant-alpha-rat.yml"
+    export FAKE_A=alpha FAKE_B=alpha-rat FAKE_HOST_A=alpha.example.org FAKE_HOST_B=alpharat.example.org
+    probe alpha alpha-rat
+    [ "$status" -eq 0 ]
+    section_is calendar PASS
+    section_is polls PASS
 }
 
 @test "polls: the other customer's poll answering 200 FAILS" {

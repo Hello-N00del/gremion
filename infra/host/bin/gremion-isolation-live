@@ -91,11 +91,9 @@ set -euo pipefail
 #               id for both customers is a FAIL. Besides: A's own folder lists and serves A's file,
 #               A's bearer on B's user root at http://nextcloud and the app API for B's file answer
 #               403 or 404.
-#               Before and after the folder-adoption change of the sibling unit (mt-nc-folder-office:
-#               adopt a folder by the unit's group, not by its mount point): the rule is the same
-#               on any release, it reports what the install really holds. Run on a release without that
-#               change it reports the install's actual state; run on one with it, distinct ids and no
-#               shared group prove the two customers hold separate folders.
+#               The rule is the same on every release and reports what the install really holds: two
+#               different folder ids and no shared group PASS (the probe users' units hold separate
+#               folders), one folder id for both FAILs. A PASS says nothing about other units.
 #               Writes are not attempted: a refused write cannot be told from a successful one without
 #               trying it, and a failed denial would write into the other customer.
 #   office      the own editor URL is on A's host (its origin is https://<A's host>); the editor URL for B's
@@ -419,13 +417,13 @@ sec_by_id() {   # <name> <list path> <item path prefix> <noun>
         y=$((1 - x))
         api_get "$x" "$listp"
         if own_ok "${SLUG[$x]}: own ${noun} listing"; then
-            id="$(jq -r --arg t "isoprobe-${SLUG[$x]}" '[.data[]? | select((.title // "") | contains($t))][0].id // empty' <<< "$R_BODY" 2>/dev/null || true)"
+            id="$(jq -r --arg t "isoprobe-${SLUG[$x]}" '[.data[]? | select((.title // "") | test("(^|[^a-z0-9-])" + $t + "($|[^a-z0-9-])"))][0].id // empty' <<< "$R_BODY" 2>/dev/null || true)"
             if [[ -z "$id" ]]; then
                 s_nr "no ${noun} titled isoprobe-${SLUG[$x]} on ${SLUG[$x]}: the operator makes it"
             else
                 ids[x]="$id"; rdy[x]=1
             fi
-            if jq -e --arg t "isoprobe-${SLUG[$y]}" 'any(.data[]?; (.title // "") | contains($t))' <<< "$R_BODY" >/dev/null 2>&1; then
+            if jq -e --arg t "isoprobe-${SLUG[$y]}" 'any(.data[]?; (.title // "") | test("(^|[^a-z0-9-])" + $t + "($|[^a-z0-9-])"))' <<< "$R_BODY" >/dev/null 2>&1; then
                 s_fail "$(dir_label "$x"): the ${noun} of ${SLUG[$y]} is listed on ${SLUG[$x]}'s host"
             fi
         fi
@@ -574,20 +572,23 @@ sec_chat() {
     if no_bearer chat; then s_ne "the chat routes take no Bearer on this release"; CHAT_NE=1; sec_end; return 0; fi
     for x in 0 1; do
         MXT[x]=""; MXID[x]=""; ROOM[x]=""
-        api_get "$x" "/api/auth/matrix-token"
-        if ! own_ok "${SLUG[$x]}: own Matrix session"; then
+        # the module gate owns /api/messages, not /api/auth/matrix-token: ask the gated route first, so a
+        # customer without messaging reads NOT-ENABLED and not a failed Matrix session
+        api_get "$x" "/api/messages/rooms"
+        if ! own_ok "${SLUG[$x]}: own room list"; then
             if [[ "$SEC_V" == NOT-ENABLED ]]; then CHAT_NE=1; fi
             continue
         fi
+        rid="$(jq -r --arg u "$UNIT" '[.data[]? | select((.name // "") == $u)][0].roomId // empty' <<< "$R_BODY" 2>/dev/null || true)"
+        if [[ -z "$rid" ]]; then s_nr "no chat room named ${UNIT} for ${SLUG[$x]}: the operator makes the unit and the user joins it"; continue; fi
+        ROOM[x]="$rid"
+        api_get "$x" "/api/auth/matrix-token"
+        own_ok "${SLUG[$x]}: own Matrix session" || continue
         MXT[x]="$(jq -r '.data.matrixToken // empty' <<< "$R_BODY" 2>/dev/null || true)"
         MXID[x]="$(jq -r '.data.matrixUserId // empty' <<< "$R_BODY" 2>/dev/null || true)"
         R_BODY=""
         if [[ -z "${MXT[$x]}" || -z "${MXID[$x]}" ]]; then s_fail "${SLUG[$x]}: the Matrix session carries no token or user id"; MXT[x]=""; continue; fi
-        api_get "$x" "/api/messages/rooms"
-        own_ok "${SLUG[$x]}: own room list" || continue
-        rid="$(jq -r --arg u "$UNIT" '[.data[]? | select((.name // "") == $u)][0].roomId // empty' <<< "$R_BODY" 2>/dev/null || true)"
-        if [[ -z "$rid" ]]; then s_nr "no chat room named ${UNIT} for ${SLUG[$x]}: the operator makes the unit and the user joins it"; continue; fi
-        ROOM[x]="$rid"; rdy[x]=1
+        rdy[x]=1
     done
     if [[ -n "${MXID[0]}" && "${MXID[0]}" == "${MXID[1]}" ]]; then s_fail "the same Matrix user id (${MXID[0]}) on both customers"; fi
     if [[ -n "${ROOM[0]}" && "${ROOM[0]}" == "${ROOM[1]}" ]]; then s_fail "the same room id (${ROOM[0]}) for the unit of both customers"; fi
