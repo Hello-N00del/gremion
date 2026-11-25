@@ -752,6 +752,31 @@ describe("an administration action on B's room as A is refused before any Matrix
 // namespaces it. Everything here goes through the real clients, the real routes, the real
 // provisioning adapter and the real erasure hook; only the homeserver is the fake.
 
+describe('a request without a Keycloak access token for the exchange', () => {
+  const bare = (path: string) => {
+    const e = ev(A_SHARED, ALICE, 'alice') as { locals: { auth: unknown }; request: Request; url: URL }
+    e.url = new URL(`http://localhost${path}`)
+    e.request = new Request(e.url)
+    e.locals.auth = async () => ({ user: ALICE })
+    return e as never
+  }
+
+  it('the room list and the live stream answer 502 as they always did (a missing token is not a 401 here)', async () => {
+    await expect(route(A_SHARED, roomsGet, bare('/api/messages/rooms'))).rejects.toMatchObject({ status: 502 })
+    await expect(route(A_SHARED, syncGet, bare('/api/messages/sync'))).rejects.toMatchObject({ status: 502 })
+  })
+
+  it('and the same with MATRIX_IDENTITY=namespaced', async () => {
+    process.env.MATRIX_IDENTITY = 'namespaced'
+    try {
+      await expect(route(A_SHARED, roomsGet, bare('/api/messages/rooms'))).rejects.toMatchObject({ status: 502 })
+      await expect(route(A_SHARED, syncGet, bare('/api/messages/sync'))).rejects.toMatchObject({ status: 502 })
+    } finally {
+      delete process.env.MATRIX_IDENTITY
+    }
+  })
+})
+
 describe('namespaced chat identity: two customers on one shared homeserver', () => {
   const NS_A = { id: 'tid-a', slug: 'acme', issuer: 'https://id.example.org/realms/acme' } as unknown as TenantContext
   const NS_B = { id: 'tid-b', slug: 'beta', issuer: 'https://id.example.org/realms/beta' } as unknown as TenantContext

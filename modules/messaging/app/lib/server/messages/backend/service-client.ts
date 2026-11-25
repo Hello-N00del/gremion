@@ -343,6 +343,9 @@ export class ServiceMessagesClient implements MessagesBackendPort {
    *  disagree. Same console.error seam the sibling backend/resolve.ts uses; the
    *  request body is NEVER logged (it carries userToken/keycloakJwt). */
   async leafJson<T>(op: string, path: string, body: unknown, idempotent = false): Promise<T> {
+    // MATRIX_IDENTITY=namespaced is not supported through the leaf: every operation, the soft
+    // resolveMatrixCreds included, is refused here before a request leaves.
+    refuseNamespacedServiceBackend()
     const url = `${resolveServiceUrl()}${path}`
     // Resolved BEFORE the timer/try below: buildHeaders throws on missing
     // INTERNAL_MESSAGES_SECRET (fail-closed config error), and that must not be

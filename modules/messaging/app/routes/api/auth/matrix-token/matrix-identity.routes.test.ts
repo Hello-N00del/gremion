@@ -81,6 +81,30 @@ describe('GET /api/auth/matrix-token: the id used when whoami does not answer', 
     await expect(runWithTenant(ACME, () => tokenGet(tokenEvent()))).rejects.toMatchObject({ status: 503 })
   })
 
+  test('a token that is not this customer\'s (403) reaches the client as it is', async () => {
+    process.env.MATRIX_IDENTITY = 'namespaced'
+    let refusal: unknown
+    try {
+      error(403, 'Die Anmeldung gehört nicht zu diesem Mandanten.')
+    } catch (e) {
+      refusal = e
+    }
+    h.getMatrixToken.mockRejectedValue(refusal)
+    await expect(runWithTenant(ACME, () => tokenGet(tokenEvent()))).rejects.toMatchObject({ status: 403 })
+  })
+
+  test('any other HTTP error of the exchange (a 401, say) is still a 502 as before', async () => {
+    let missing: unknown
+    try {
+      error(401, 'No Keycloak access token in session')
+    } catch (e) {
+      missing = e
+    }
+    h.getMatrixToken.mockRejectedValue(missing)
+    const res = (await runWithTenant(ACME, () => tokenGet(tokenEvent()))) as Response
+    expect(res.status).toBe(502)
+  })
+
   test('any other failure is still a 502 with the same message as before', async () => {
     h.getMatrixToken.mockRejectedValue(new Error('boom'))
     const res = (await runWithTenant(ACME, () => tokenGet(tokenEvent()))) as Response

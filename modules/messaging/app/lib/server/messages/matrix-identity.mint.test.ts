@@ -260,6 +260,19 @@ describe('chat is refused while the homeserver offers another way to log in', ()
     }
   })
 
+  test('every operation of the service client is refused, and the soft credential lookup degrades to nothing, before any request', async () => {
+    process.env.MESSAGES_BACKEND = 'service'
+    process.env.MESSAGES_SERVICE_URL = 'http://messages-service:8080'
+    try {
+      await expect(as(ACME, () => getMessagesBackend().synapse().forceJoinRoom('!r:synapse.test', '@acme.alice:synapse.test'))).rejects.toMatchObject(refusal)
+      const event = { request: new Request('http://localhost/api/video/token', { headers: { Authorization: `Bearer ${token({})}` } }), locals: {} } as never
+      expect(await as(ACME, () => getMessagesBackend().resolveMatrixCreds(event))).toEqual({ userId: '', accessToken: '' })
+      expect(calls).toEqual([])
+    } finally {
+      delete process.env.MESSAGES_SERVICE_URL
+    }
+  })
+
   test('an unknown MATRIX_IDENTITY value refuses chat instead of falling back to the legacy identity', async () => {
     process.env.MATRIX_IDENTITY = 'namespace'
     await expect(mint(ACME, token({}))).rejects.toThrow(/MATRIX_IDENTITY/)

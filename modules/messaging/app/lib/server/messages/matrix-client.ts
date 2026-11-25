@@ -184,8 +184,8 @@ class MatrixClient {
   //      renamed), then the Synapse admin API issues a login for it that the homeserver itself ends at
   //      now + MATRIX_TOKEN_TTL_MS (valid_until_ms).
   //
-  // That endpoint takes no device_id, so there is NO device continuity: every mint is a new device
-  // and `deviceId` is ignored. The check of step 1 runs before the cache is read, so a cached token
+  // That endpoint takes no device_id and the token belongs to no device (device-less), so there is NO
+  // device continuity and `deviceId` is ignored. The check of step 1 runs before the cache is read, so a cached token
   // is never handed to a token of another customer.
   private async mintNamespacedToken(keycloakJwt: string): Promise<string> {
     const tenant = getTenant()

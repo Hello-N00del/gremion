@@ -9,7 +9,7 @@
 //   - messages run in the held service mode (MESSAGES_BACKEND=service), whose leaf still logs in by JWT.
 //
 // The reason goes to the server log, the user gets a neutral sentence.
-import { error } from '@sveltejs/kit'
+import { error, isHttpError } from '@sveltejs/kit'
 import { matrixIdentityMode } from './matrix-namespace'
 
 const UNAVAILABLE = 'Der Chat ist derzeit nicht verfügbar. Bitte die Administration informieren.'
@@ -27,6 +27,16 @@ const probing = new Map<string, Promise<void>>()
 function refuse(reason: string): never {
   console.error(`[chat-identity] chat refused: ${reason}`)
   throw error(503, UNAVAILABLE)
+}
+
+/**
+ * True for the errors a namespaced token exchange throws on purpose: 503 (chat not available) and 403
+ * (the token is not this customer's, has no username, or the account is deactivated). The routes that
+ * wrap a failed exchange in a 502 let exactly these through; every other error, a 401 for a missing
+ * session token included, is wrapped as before.
+ */
+export function isChatRefusal(e: unknown): boolean {
+  return isHttpError(e) && (e.status === 503 || e.status === 403)
 }
 
 const SERVICE_REASON = 'MESSAGES_BACKEND=service still logs in by JWT'

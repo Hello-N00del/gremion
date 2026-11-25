@@ -205,7 +205,8 @@ class SynapseAdminClient {
   // Get a Matrix access token for any user via admin API.
   // POST /_synapse/admin/v1/users/{userId}/login
   // `validUntilMs` (epoch ms) makes the homeserver itself end the token; without it the body is empty,
-  // as it always was. The endpoint takes no device_id: every call creates a device of its own.
+  // as it always was. The endpoint takes no device_id and the token belongs to no device (a device-less
+  // token): a client that needs a device, for end-to-end encryption keys, cannot use it.
   async getUserLoginToken(localpart: string, opts: { validUntilMs?: number } = {}): Promise<string> {
     const userId = `@${localpart}:${this.serverName}`
     const res = await this.apiRequest(
