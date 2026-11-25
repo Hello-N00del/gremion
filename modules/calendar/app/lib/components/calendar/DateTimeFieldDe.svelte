@@ -18,6 +18,8 @@
     label: string
     /** Names the text input itself when no <label for> points at it. */
     inputLabel?: string
+    /** A reason the form refuses this field (e.g. the end lies before the start); '' for none. */
+    error?: string
     class?: string
   }
 
@@ -27,6 +29,7 @@
     dateOnly = false,
     label,
     inputLabel,
+    error = '',
     class: className = ''
   }: Props = $props()
 
@@ -85,8 +88,8 @@
       autocomplete="off"
       placeholder={dateOnly ? 'TT.MM.JJJJ' : 'TT.MM.JJJJ HH:MM'}
       aria-label={inputLabel}
-      aria-invalid={invalid ? 'true' : undefined}
-      aria-describedby={invalid ? `${id}-hint` : undefined}
+      aria-invalid={invalid || error ? 'true' : undefined}
+      aria-describedby={invalid ? `${id}-hint` : error ? `${id}-error` : undefined}
       bind:value={text}
       oninput={typed}
       onblur={tidy}
@@ -116,6 +119,8 @@
     <p class="hint" id="{id}-hint" role="status">
       Bitte im Format {dateOnly ? 'TT.MM.JJJJ' : 'TT.MM.JJJJ HH:MM'} eingeben.
     </p>
+  {:else if error}
+    <p class="hint" id="{id}-error" role="alert">{error}</p>
   {/if}
 </div>
 
