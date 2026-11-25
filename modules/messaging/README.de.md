@@ -1,4 +1,4 @@
-<!-- i18n-sync: source=README.md sha256=c7ddf09fbd91729e16c1b5bb238015e3caf17bd7580814af7ad9b2b003455f06 -->
+<!-- i18n-sync: source=README.md sha256=915d234a6a11b7cda88a6d0147a2c35c9a5325671640a18e100c949fe2860b8c -->
 [English](./README.md) | **Deutsch**
 
 # messaging
