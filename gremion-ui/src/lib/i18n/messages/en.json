@@ -232,6 +232,7 @@
   "settings.modules.submitting": "Sending request …",
   "settings.modules.error.generic": "The request could not be made.",
   "settings.modules.error.network": "No connection to the server.",
+  "settings.modules.error.stepUp": "The two-factor check was not completed. Please try again.",
   "settings.modules.failure": "Request not carried out: %reason%",
   "settings.modules.notice.running": "Request is being carried out",
   "settings.modules.notice.on": "Module %module% is switched on",

@@ -34,6 +34,7 @@
   const API = '/api/settings/modules'
   const STEP_UP = '/auth/step-up?returnTo=/settings/module'
   const RESUME_MARK = 'gremion.module-switch.resume'
+  const REOPEN_MARK = 'gremion.module-switch.reopen'
   const RESUME_MARK_MAX_AGE_MS = 15 * 60_000
 
   type Load = 'loading' | 'ready' | 'notConfigured' | 'error'
@@ -107,14 +108,35 @@
     }
   }
 
-  /** Leave for the second factor; the mark tells this page, once it is back, that a switch is waiting on the server. */
-  function toStepUp(): void {
+  /**
+   * Leave for the second factor. Two kinds of mark, both without content:
+   *  - no module: a confirmed switch is waiting on the server; once back, this page asks for it to be carried out;
+   *  - a module id (the preview asked for the second factor BEFORE the warning opened): nothing was confirmed yet,
+   *    the mark only says whose warning to open again, so the admin confirms once, after the round trip.
+   */
+  function toStepUp(reopenFor?: string): void {
     try {
-      sessionStorage.setItem(RESUME_MARK, Date.now().toString())
+      if (reopenFor === undefined) sessionStorage.setItem(RESUME_MARK, Date.now().toString())
+      else sessionStorage.setItem(REOPEN_MARK, `${Date.now()}:${reopenFor}`)
     } catch {
-      // no tab storage: the switch is repeated by hand after the second factor
+      // no tab storage: the action is repeated by hand after the second factor
     }
     navigate(STEP_UP)
+  }
+
+  /** The module whose warning to open again after the second factor, once; a stale or malformed mark is dropped. */
+  function takeReopenMark(): string | null {
+    try {
+      const left = sessionStorage.getItem(REOPEN_MARK)
+      if (left === null) return null
+      sessionStorage.removeItem(REOPEN_MARK)
+      const at = left.indexOf(':')
+      if (at < 1) return null
+      const age = Date.now() - Number(left.slice(0, at))
+      return Number.isFinite(age) && age >= 0 && age <= RESUME_MARK_MAX_AGE_MS ? left.slice(at + 1) : null
+    } catch {
+      return null
+    }
   }
 
   /**
@@ -167,8 +189,13 @@
   $effect(() => {
     untrack(() => {
       void (async () => {
+        const reopen = takeReopenMark()
         if (takeResumeMark()) await resumeKept()
         await refresh()
+        // back from the second factor that the warning asked for: open that module's warning again (once; if the
+        // second factor is still missing, onDisable says so instead of leaving a second time)
+        const m = reopen === null ? undefined : overview?.modules.find((x) => x.moduleId === reopen)
+        if (m && m.enabled && m.pending.length === 0 && overview?.disableAvailable) await onDisable(m, true)
       })()
     })
   })
@@ -260,12 +287,19 @@
     void enable(m, { requiresDpia: dpiaAnswer === 'yes', documentRef: dpiaRef.trim() })
   }
 
-  async function onDisable(m: ModuleOverviewItem) {
+  async function onDisable(m: ModuleOverviewItem, backFromSecondFactor = false) {
     busyId = m.moduleId
     setError(m.moduleId, null)
     try {
       const res = await fetch(`${API}?preview=${encodeURIComponent(m.moduleId)}`)
       const body = await res.json().catch(() => null)
+      if (res.status === 401 && body?.error === 'STEP_UP_REQUIRED') {
+        // The warning is where the switch-off is confirmed: the second factor comes first, the warning after it.
+        // Back from it and still refused: say so, never a second round trip by itself.
+        if (backFromSecondFactor) setError(m.moduleId, $t('settings.modules.error.stepUp'))
+        else toStepUp(m.moduleId)
+        return
+      }
       if (!res.ok || !body?.success) {
         setError(m.moduleId, String(body?.error ?? $t('settings.modules.error.generic')))
         return
