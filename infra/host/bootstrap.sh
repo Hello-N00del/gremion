@@ -86,7 +86,9 @@ Stages:
                + gremion-purge.timer (daily, TRD-144/145)
                + gremion-access-purge.timer (daily, TRD-092)
                + gremion-karenz.timer (hourly, module Karenz finalization)
-  cd           the continuous-deployment programs: bin/*, lib/common.sh and lib/cd/*.sh
+  cd           the continuous-deployment programs: bin/* (but gremion-isolation,
+               gremion-services and gremion-tenant, which source the release's own
+               libraries and run from the release tree), lib/common.sh and lib/cd/*.sh
                as real files, the six gremion-cd units and etc/cd.env (only if absent);
                enables nothing, starts nothing   (installs from a release checkout,
                not part of 'all'; also what gremion-cd-apply@.service re-runs)
@@ -1104,11 +1106,30 @@ stage_timers() {
 # ──────────────────────────────────────────────────────────────────────────
 # cd — the host programs of continuous deployment (gremion-cd)
 #
-# Installs from THIS source tree (a release checkout) as real files: every program of bin/,
-# lib/common.sh and lib/cd/*.sh (lib/cd/apply-root.sh, the one script that runs as root, is
-# root-owned in a root-owned directory; see the note at the directories on what that is worth), renders the six gremion-cd units, makes the data and
+# Installs from THIS source tree (a release checkout) as real files: every program of bin/ that
+# is self-contained (see CD_TREE_RUN_PROGRAMS), lib/common.sh and lib/cd/*.sh (lib/cd/apply-root.sh,
+# the one script that runs as root, is root-owned in a root-owned directory; see the note at the
+# directories on what that is worth), renders the six gremion-cd units, makes the data and
 # runtime directories and writes etc/cd.env from the template when it is absent. It ENABLES and
 # STARTS nothing: that is the operator's step (docs/ops/continuous-deployment.md).
+#
+# WHAT IS NOT INSTALLED, AND WHY. A program of bin/ that sources lib/customer-ops.sh (and through
+# it lib/executor/db.sh, lib/access-log.sh) needs libraries that belong to the RELEASE: the
+# customer lifecycle code and the compose files, images and one-shots it drives are one commit.
+# Those programs run from the release tree (<root>/current/infra/host/bin, or the candidate tree
+# the pipeline is working on), the way gremion-executor sources the same libraries from
+# GREMION_RELEASE_DIR and the timers run <root>/current/infra/host/ops. Installing a copy of the
+# program without the libraries left a file that fails on its first line; installing the libraries
+# too would be a second copy of the customer code, outside what apply-root.sh backs up and restores
+# and a version behind the tree it works on. The rule that keeps this honest is a test:
+# scripts/cd/cd-installed-libs.test.mjs walks every `.` of every installed program and fails,
+# naming the file, when a sourced library is not installed here.
+#
+# TRUST. What is installed is the deploy user's (programs 0755, libraries 0644; only
+# lib/cd/apply-root.sh is root's) and nothing that runs as root sources it: apply-root.sh sources
+# nothing, and this script, which runs as root, reads only the SOURCE tree. The tree-run programs
+# are the candidate release's own code, which the pipeline already builds images from and the
+# executor already sources; they are run by the deploy user, never by root.
 #
 # It is run twice in a host's life: by hand at the first adoption, and by
 # lib/cd/apply-root.sh (the unit gremion-cd-apply@<sha12>.service) at every later apply of
@@ -1118,6 +1139,26 @@ stage_timers() {
 
 CD_UNITS=(gremion-cd.service gremion-cd.timer gremion-cd-watchdog.service gremion-cd-watchdog.timer
     gremion-cd-resume.service 'gremion-cd-apply@.service')
+
+# The programs of bin/ that are NOT installed: each sources libraries of the release (customer-ops.sh
+# and what it pulls in) that the install does not copy. They run from the release tree. The guard
+# scripts/cd/cd-installed-libs.test.mjs reads this list, requires every other program to be
+# self-contained, and requires every entry here to need the exemption.
+CD_TREE_RUN_PROGRAMS=(gremion-isolation gremion-services gremion-tenant)
+
+# Files of an earlier hand install: a copy of a tree-run program under <root>/bin and the
+# libraries someone put beside it so that it would start. Nothing installed sources them any more,
+# and a copy of customer code that nothing keeps current is a trap. Removed by exact name.
+CD_STALE_LIBS=(lib/customer-ops.sh lib/access-log.sh lib/executor/db.sh)
+
+# cd_is_tree_run <program name> -- 0 when the program is one that runs from the release tree.
+cd_is_tree_run() {
+    local p
+    for p in "${CD_TREE_RUN_PROGRAMS[@]}"; do
+        [[ "$p" == "$1" ]] && return 0
+    done
+    return 1
+}
 
 # install_cd_file <mode> <uid:gid> <src> <dest>
 # A temp file beside <dest>, then rename: the inode a running bash holds is never changed.
@@ -1199,9 +1240,24 @@ stage_cd() {
     n=0
     for f in "$sbin"/*; do
         [[ -f "$f" ]] || continue
+        # a program that runs from the release tree is not installed, and a copy a hand install
+        # left is taken away: it would source libraries that are not here
+        if cd_is_tree_run "${f##*/}"; then
+            if [[ -e "${root}/bin/${f##*/}" || -L "${root}/bin/${f##*/}" ]]; then
+                rm -f -- "${root}/bin/${f##*/}" && ok "removed ${root}/bin/${f##*/}, it runs from the release tree"
+            fi
+            continue
+        fi
         install_cd_file 0755 "$dep" "$f" "${root}/bin/${f##*/}"
         n=$((n + 1))
     done
+    for f in "${CD_STALE_LIBS[@]}"; do
+        if [[ -e "${root}/${f}" || -L "${root}/${f}" ]]; then
+            rm -f -- "${root}/${f}" && ok "removed ${root}/${f}, no installed program sources it"
+        fi
+    done
+    # the directory of the hand-placed executor library, only when it is empty now
+    rmdir -- "${root}/lib/executor" 2>/dev/null || true
     install_cd_file 0644 "$dep" "$slib/common.sh" "${root}/lib/common.sh"
     for f in "$slib"/cd/*.sh; do
         [[ -f "$f" ]] || continue
@@ -1239,8 +1295,15 @@ stage_cd() {
     [[ "$n" -ge 2 ]] || die "only ${n} files were installed" 1
     for f in "$sbin"/*; do
         [[ -f "$f" ]] || continue
+        if cd_is_tree_run "${f##*/}"; then
+            [[ ! -e "${root}/bin/${f##*/}" && ! -L "${root}/bin/${f##*/}" ]] || die "${root}/bin/${f##*/} is still there, it runs from the release tree" 1
+            continue
+        fi
         [[ -f "${root}/bin/${f##*/}" && ! -L "${root}/bin/${f##*/}" ]] || die "${root}/bin/${f##*/} is not a real file" 1
         cmp -s "$f" "${root}/bin/${f##*/}" || die "${root}/bin/${f##*/} differs from the tree" 1
+    done
+    for f in "${CD_STALE_LIBS[@]}"; do
+        [[ ! -e "${root}/${f}" && ! -L "${root}/${f}" ]] || die "${root}/${f} is still there" 1
     done
     cmp -s "$slib/common.sh" "${root}/lib/common.sh" || die "${root}/lib/common.sh differs from the tree" 1
     for f in "$slib"/cd/*.sh; do
