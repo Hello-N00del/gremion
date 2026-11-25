@@ -395,7 +395,7 @@ foreign_protected_hosts() {
         | select((.name | endswith("@internal")) | not)
         | select((.name | ascii_downcase) as $n | ($ex | index($n)) == null)
         | select((.entryPoints // []) as $e | $e != ["internaltest"] and $e != ["ping"])
-        | (.rule // "") | scan("host(?:header)?\\(`([^`]+)`\\)"; "i") | .[0]
+        | (.rule // "") | match("host(?:header)?\\(`([^`]+)`\\)"; "gi") | .captures[0].string
         | ascii_downcase | select(endswith(".invalid") | not) | . + "\ta host of the kernel'"'"'s own routers"' 2>/dev/null || true
 }
 
@@ -431,7 +431,7 @@ check_foreign_docker_objects() {
             fail "foreign router ${name} (compose project ${project}) claims ${token} (${protected[$token]}): only the kernel's own routers may answer it: ${rule}"
         done
         # a HostRegexp that matches one (Oniguruma, the nearest the shell has to Traefik's RE2)
-        mapfile -t tokens < <(printf '%s' "$rule" | jq -Rr 'scan("hostregexp\\(`([^`]*)`"; "i") | .[0]')
+        mapfile -t tokens < <(printf '%s' "$rule" | jq -Rr 'match("hostregexp\\(`([^`]*)`"; "gi") | .captures[0].string')
         for re in "${tokens[@]}"; do
             [[ -n "$re" ]] || continue
             for h in "${!protected[@]}"; do
