@@ -1166,7 +1166,8 @@ CD_LEFTOVER_LIBS=(lib/customer-ops.sh lib/access-log.sh lib/executor/db.sh)
 # cd_launcher_text <program name> -- the whole text of <root>/bin/<name> for a tree-run program.
 # It sources nothing: it finds the program of the current release and execs it, so that program,
 # its libraries and the release it works on are one commit. The root is GREMION_ROOT when set, else
-# the directory above the launcher's own (a host whose root is not /opt/gremion needs no variable).
+# the directory above the launcher's own real path, links followed (a host whose root is not
+# /opt/gremion needs no variable, and a PATH entry that links to <root>/bin works).
 cd_launcher_text() {
     cat <<EOF
 #!/usr/bin/env bash
@@ -1176,7 +1177,8 @@ cd_launcher_text() {
 set -euo pipefail
 root="\${GREMION_ROOT:-}"
 if [[ -z "\$root" ]]; then
-    root="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")/.." && pwd)" || exit 2
+    self="\$(readlink -f -- "\${BASH_SOURCE[0]}")" || exit 2
+    root="\$(dirname -- "\$(dirname -- "\$self")")"
 fi
 prog="\${root}/current/infra/host/bin/$1"
 if [[ ! -f "\$prog" || ! -x "\$prog" ]]; then

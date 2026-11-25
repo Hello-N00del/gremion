@@ -557,6 +557,12 @@ echo "isolation of: $0"
     run env -u GREMION_ROOT "${GREMION_ROOT}/bin/gremion-isolation" run
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     [ "$output" = "isolation of: ${GREMION_ROOT}/current/infra/host/bin/gremion-isolation" ]
+    # called through a link (a PATH entry that points at <root>/bin), the root is still the launcher's own
+    mkdir -p "${BATS_TEST_TMPDIR}/pathdir"
+    ln -s "${GREMION_ROOT}/bin/gremion-isolation" "${BATS_TEST_TMPDIR}/pathdir/gremion-isolation"
+    run env -u GREMION_ROOT "${BATS_TEST_TMPDIR}/pathdir/gremion-isolation" run
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [ "$output" = "isolation of: ${GREMION_ROOT}/current/infra/host/bin/gremion-isolation" ]
     # a root that is set wins (the same as every other program of the host)
     mkdir -p "${BATS_TEST_TMPDIR}/other/current/infra/host/bin"
     printf '#!/usr/bin/env bash
