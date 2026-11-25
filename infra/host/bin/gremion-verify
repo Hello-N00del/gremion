@@ -462,6 +462,8 @@ check_foreign_docker_objects() {
         info "foreign docker ${kind} ${name} (compose project ${project}, not a kernel project of stack ${STACK}): informational, not judged"
     done < <(printf '%s\n' "${FOREIGN_LISTED[@]}" | sort)
     while IFS=$'\t' read -r h why; do
+        # a fully-qualified spelling (trailing dot) is the same host: tokens of a rule are read the same way
+        while [[ "$h" == *. ]]; do h="${h%.}"; done
         [[ -n "$h" ]] || continue
         # the first reason wins: platform and control panel are listed before a customer
         [[ -n "${protected[$h]+x}" ]] || protected["$h"]="$why"
@@ -476,7 +478,7 @@ check_foreign_docker_objects() {
         # a quoted token (backtick, or double quote as Traefik also reads it) equal to a protected host
         # (any letter case, any matcher)
         claimed=""
-        mapfile -t tokens < <(printf '%s' "$rule" | jq -Rr 'scan("`([^`]*)`|\"((?:[^\"\\\\]|\\\\.)*)\"") | if .[0] != null then .[0] else (.[1] | gsub("\\\\(?<c>.)"; .c)) end | ascii_downcase')
+        mapfile -t tokens < <(printf '%s' "$rule" | jq -Rr 'scan("`([^`]*)`|\"((?:[^\"\\\\]|\\\\.)*)\"") | if .[0] != null then .[0] else (.[1] | gsub("\\\\(?<c>.)"; .c)) end | ascii_downcase | sub("\\.+$"; "")')
         for token in "${tokens[@]}"; do
             [[ -n "$token" && -n "${protected[$token]+x}" ]] || continue
             case " $claimed " in *" $token "*) continue ;; esac
@@ -488,7 +490,9 @@ check_foreign_docker_objects() {
         for re in "${tokens[@]}"; do
             [[ -n "$re" ]] || continue
             for h in "${!protected[@]}"; do
-                if n="$(jq -n --arg re "$re" --arg h "$h" '$h | test($re; "i")' 2>/dev/null)"; then
+                # the bare name AND its fully-qualified spelling (trailing dot): the edge matches a request for
+                # the bare name against a rule written either way, so a pattern that fits only one still claims it
+                if n="$(jq -n --arg re "$re" --arg h "$h" '(($h | test($re; "i")) or (($h + ".") | test($re; "i")))' 2>/dev/null)"; then
                     [[ "$n" != "true" ]] \
                         || fail "foreign router ${name} (compose project ${project}) has a HostRegexp(\`${re}\`) that matches ${h} (${protected[$h]}): only the kernel's own routers may answer it"
                 else
@@ -561,35 +565,6 @@ check_routers() {
         SERVICES_TO_CHECK["$qualified"]=1
     done
 }
-
-# ── The router universal (TASK-034a; spec B §3 post-condition) ───────────────
-#
-# Asserted over EVERY router Traefik's API reports, never over a list of names:
-# a router added tomorrow is held to it the moment Traefik loads it. Later
-# /api/v1 routers (TRD-409) are no exception — they must pass this too.
-#
-# SUBJECT: every router except `*@internal` (Traefik's own: acme-http, api,
-# ping) and a router whose entryPoints are EXACTLY ["internaltest"] (the
-# loopback-only inactive-colour routers). A router with NO entryPoints listens
-# on every default entrypoint, so it is a subject too — exemption is by
-# evidence, never by absence.
-#
-# Each subject must carry:
-#   - a non-empty tls.certResolver. A bare `tls: {}` does not inherit the
-#     entrypoint's resolver and silently serves the default certificate;
-#   - a rule naming exactly ONE literal Host() and no HostRegexp — a pattern
-#     or a second host cannot be pinned to one value;
-#   - exactly ONE edge-hostpin-* middleware, FIRST in its chain, whose
-#     X-Forwarded-Host (read from the middleware Traefik actually loaded) is
-#     that literal host. Traefik only sets X-Forwarded-Host when it is absent
-#     and only strips it from untrusted peers; the pin is what makes the header
-#     edge-authoritative, and first is what keeps every later middleware from
-#     seeing a client-supplied value;
-#   - an HSTS middleware (edge-hsts-platform|edge-hsts-custom with stsSeconds
-#     > 0) and a tiered edge-ratelimit-* middleware that IS a rate limiter.
-#     Names alone are not trusted: an HSTS-named middleware with no max-age is
-#     not HSTS.
-# Zero subjects is itself a failure: a universal over nothing proves nothing.
 
 # ── The router universal (TASK-034a; spec B §3 post-condition) ───────────────
 #
