@@ -17,7 +17,7 @@
 // (rooms-plan.md S2.1).
 import { getMatrixClient } from '../matrix-client'
 import { getSynapseAdmin } from '../synapse-admin'
-import { aliasLocalpart } from '../provisioning/matrix-subsystem'
+import { currentArchiveAliasLocalpart, currentArchiveAliasPrefix, currentUnitAliasLocalpart } from '../matrix-namespace'
 import {
   applyReadOnlyPowerLevels, capturePrior, isReadOnlyLevels, readPowerLevels, restorePowerLevels, sanitizePrior,
   type ArchivePriorPowerLevels, type PowerLevelsContent,
@@ -85,15 +85,15 @@ function serverName(): string {
 }
 
 function canonicalAlias(unitName: string): string {
-  return `#${aliasLocalpart(unitName)}:${serverName()}`
+  return `#${currentUnitAliasLocalpart(unitName)}:${serverName()}`
 }
 
-/** #stura-archiv-<slug>-<yyyymmddhhmm> — a fresh alias per archive so re-archiving
- *  (after a completed-then-somehow-reopened cycle) never collides with a prior one. */
+/** #stura-archiv-<slug>-<yyyymmddhhmm> (MATRIX_IDENTITY=namespaced: #stura-archiv.<customer>.<slug>-<ts>) — a
+ *  fresh alias per archive so re-archiving (after a completed-then-somehow-reopened cycle) never collides
+ *  with a prior one. */
 function freshArchiveAlias(unitName: string): string {
-  const slug = aliasLocalpart(unitName).replace(/^stura-/, '')
   const ts = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12)
-  return `#stura-archiv-${slug}-${ts}:${serverName()}`
+  return `#${currentArchiveAliasLocalpart(unitName, ts)}:${serverName()}`
 }
 
 export interface CreateRoomResult {
@@ -214,7 +214,7 @@ async function archiveMatrixSide(unitId: string, unitName: string, roomId: strin
       prior = capturePrior(current)
     }
   }
-  const keptAlias = existing?.org_unit_id === unitId && typeof existing.archive_alias === 'string' && existing.archive_alias.startsWith('#stura-archiv-')
+  const keptAlias = existing?.org_unit_id === unitId && typeof existing.archive_alias === 'string' && existing.archive_alias.startsWith(currentArchiveAliasPrefix())
     ? existing.archive_alias : null
   const archiveAlias = keptAlias ?? freshArchiveAlias(unitName)
   await mc.setRoomState(roomId, ROOM_ARCHIVE_MARKER_TYPE, '', {
@@ -328,7 +328,7 @@ async function unarchiveMatrixSide(
   if (!holder) await mc.putRoomAlias(canonical, roomId)
 
   const current = (await mc.getRoomState(roomId, 'm.room.canonical_alias')) as { alias?: unknown } | null
-  const stateAlias = typeof current?.alias === 'string' && current.alias.startsWith('#stura-archiv-') ? current.alias : null
+  const stateAlias = typeof current?.alias === 'string' && current.alias.startsWith(currentArchiveAliasPrefix()) ? current.alias : null
   // The archive alias is removed BEFORE the canonical alias is overwritten, and while the marker still
   // names it (the marker is overwritten last): a failure here is retried with both sources intact. Two sources:
   // the alias the marker minted (an archive that died between the directory PUT and the canonical_alias
@@ -377,7 +377,7 @@ export async function unarchiveRoom(
     }
     let aliasRestored = true
     try {
-      const markerAlias = typeof marker.archive_alias === 'string' && marker.archive_alias.startsWith('#stura-archiv-') ? marker.archive_alias : null
+      const markerAlias = typeof marker.archive_alias === 'string' && marker.archive_alias.startsWith(currentArchiveAliasPrefix()) ? marker.archive_alias : null
       aliasRestored = (await unarchiveMatrixSide(unit, roomId, prior, markerAlias)).aliasRestored
       // One transaction: a failure leaves either no row or the finished one, never a due 'pending' row
       // without an external id that the provisioning worker would act on.

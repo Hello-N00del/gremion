@@ -111,7 +111,7 @@ import { POST as roomArchive } from '../../../routes/api/messages/rooms/[roomId]
 import { POST as roomUnarchive } from '../../../routes/api/messages/rooms/[roomId]/unarchive/+server'
 import { GET as roomUnit } from '../../../routes/api/messages/rooms/[roomId]/unit/+server'
 import { getMessagesBackend } from './backend'
-import { listOverview } from './admin/room-admin'
+import { archiveRoom, listOverview, unarchiveRoom } from './admin/room-admin'
 import { __resetMatrixCachesForTests, evictMatrixClient, getMatrixClient } from './matrix-client'
 import { __resetSynapseAdminForTests, getSynapseAdmin } from './synapse-admin'
 import { createMatrixSubsystem } from './provisioning/matrix-subsystem'
@@ -849,6 +849,9 @@ describe('namespaced chat identity: two customers on one shared homeserver', () 
     const a = (await subsystem(NS_A).ensureResource(unit, CTX, null)).externalId!
     await subsystem(NS_A).addMember(a, 'kc-alice')
     const tokenB = await mint(NS_B, 'alice')
+    // B's alice is her own account, not A's: the id behind her token is not a member of A's room.
+    expect(sharedSynapse.tokens.get(tokenB)).toBe('@beta.alice:synapse.test')
+    expect(sharedSynapse.rooms.get(a)!.members.has(sharedSynapse.tokens.get(tokenB)!)).toBe(false)
     expect(await as(NS_B, () => getMatrixClient().getJoinedRooms(tokenB))).toEqual([])
     await expect(as(NS_B, () => getMatrixClient().getMessages(tokenB, a))).rejects.toThrow(/403/)
   })
@@ -902,6 +905,77 @@ describe('namespaced chat identity: two customers on one shared homeserver', () 
       const m = net.mark()
       expect((await subsystem(NS_A).ensureResource(unit, CTX, '!known:synapse.test')).externalId).toBe('!known:synapse.test')
       expect(net.since(m)).toEqual([])
+    })
+  })
+
+  // Room administration derives its aliases through the same switch as provisioning: archiving a
+  // unit's room removes the alias provisioning gave it, and the archive and restore never touch an
+  // alias of the legacy namespace, which on a shared homeserver may belong to another customer.
+  describe('room administration addresses the aliases provisioning gave the room', () => {
+    const adminUnit = { id: 'u1', name: 'Gremium u1' } as unknown as OrgUnit
+    const UNIT_ALIAS = (slug: string) => `#stura.${slug}.gremium-u1:synapse.test`
+    const archiveAliasOf = (roomId: string) => [...sharedSynapse.rooms.get(roomId)!.aliases].filter((a) => a.startsWith('#stura-archiv'))
+    /** The unit's room as provisioning made it, and the customer's ledger row for it. */
+    const provisioned = async (t: TenantContext): Promise<string> => {
+      const id = (await subsystem(t).ensureResource(adminUnit, CTX, null)).externalId!
+      LEDGER.rooms.set(t.id, new Map([[adminUnit.id, id]]))
+      return id
+    }
+    /** Archives the unit's room; the released ledger row stays as an empty id (the unit still exists, it has no active room). */
+    const archive = async (t: TenantContext) => {
+      await as(t, () => archiveRoom('u1', { userId: 'admin' }))
+      LEDGER.rooms.get(t.id)!.set(adminUnit.id, '')
+    }
+
+    it('archiving removes the unit alias from the room, gives it an archive alias of its customer, and touches no legacy alias', async () => {
+      const room = await provisioned(NS_A)
+      const m = net.mark()
+      await archive(NS_A)
+      const aliases = [...sharedSynapse.rooms.get(room)!.aliases]
+      expect(aliases).not.toContain(UNIT_ALIAS('acme'))
+      expect(aliases).toHaveLength(1)
+      expect(aliases[0]).toMatch(/^#stura-archiv\.acme\.gremium-u1-\d{12}:synapse\.test$/)
+      expect(net.since(m).filter((r) => r.path.includes('directory/room') && /#stura-(archiv-|gremium)/.test(r.path))).toEqual([])
+    })
+
+    it('after the archive the unit does not adopt its own archived room: it gets a new one', async () => {
+      const archived = await provisioned(NS_A)
+      await archive(NS_A)
+      const again = (await subsystem(NS_A).ensureResource(adminUnit, CTX, null)).externalId!
+      expect(again).not.toBe(archived)
+      expect([...sharedSynapse.rooms.get(again)!.aliases]).toEqual([UNIT_ALIAS('acme')])
+    })
+
+    it('two customers archiving a unit of the same name get two archive aliases and archive only their own room', async () => {
+      const a = await provisioned(NS_A)
+      const b = await provisioned(NS_B)
+      await archive(NS_A)
+      expect(archiveAliasOf(b)).toEqual([])
+      expect([...sharedSynapse.rooms.get(b)!.aliases]).toEqual([UNIT_ALIAS('beta')])
+      await archive(NS_B)
+      expect(archiveAliasOf(a)).toHaveLength(1)
+      expect(archiveAliasOf(b)).toHaveLength(1)
+      expect(archiveAliasOf(a)[0]).not.toBe(archiveAliasOf(b)[0])
+      expect(archiveAliasOf(b)[0]).toMatch(/^#stura-archiv\.beta\./)
+    })
+
+    it("restoring puts the customer's own unit alias back, removes the archive alias and never creates a legacy alias", async () => {
+      const room = await provisioned(NS_A)
+      await archive(NS_A)
+      const m = net.mark()
+      await as(NS_A, () => unarchiveRoom('u1', room, { userId: 'admin' }))
+      expect([...sharedSynapse.rooms.get(room)!.aliases]).toEqual([UNIT_ALIAS('acme')])
+      expect(net.since(m).filter((r) => r.method !== 'GET' && r.path.includes('directory/room') && r.path.includes('#stura-gremium'))).toEqual([])
+    })
+
+    it("an archive alias of another customer in the room state is not taken for the restore to delete", async () => {
+      const room = await provisioned(NS_A)
+      await archive(NS_A)
+      const foreign = '#stura-archiv.beta.gremium-u1-202601010000:synapse.test'
+      sharedSynapse.rooms.get(room)!.state.set('m.room.canonical_alias', { sender: sharedSynapse.bot, content: { alias: foreign } })
+      sharedSynapse.rooms.get(room)!.aliases.add(foreign)
+      await as(NS_A, () => unarchiveRoom('u1', room, { userId: 'admin' }))
+      expect([...sharedSynapse.rooms.get(room)!.aliases]).toContain(foreign)
     })
   })
 

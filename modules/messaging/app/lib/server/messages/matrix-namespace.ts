@@ -82,6 +82,42 @@ export function unitAliasLocalpart(slug: string, name: string): string {
   return `stura.${slug}.${unitNameSlug(name)}`
 }
 
+/**
+ * The alias localpart of a unit room's archive alias: `stura-archiv.<slug>.<unit name slug>-<ts>`
+ * (namespaced). It carries the customer: on a shared homeserver the alias directory is global, so an
+ * archive alias without it would collide between two customers archiving a same-named unit within
+ * the same minute. The `stura-archiv.` prefix cannot be taken for a unit alias (`stura.`).
+ */
+export function archiveAliasLocalpart(slug: string, name: string, ts: string): string {
+  assertSlug(slug)
+  return `stura-archiv.${slug}.${unitNameSlug(name)}-${ts}`
+}
+
+/**
+ * The unit alias localpart of the request's customer under the identity switch: `stura-<unit>` in
+ * legacy mode (the same as provisioning's aliasLocalpart, unchanged), `stura.<slug>.<unit>` in
+ * namespaced mode. Provisioning and room administration both derive the alias through this.
+ */
+export function currentUnitAliasLocalpart(name: string): string {
+  return matrixIdentityMode() === 'namespaced' ? unitAliasLocalpart(getTenant().slug, name) : `stura-${unitNameSlug(name)}`
+}
+
+/** The archive alias localpart of the request's customer under the identity switch (`ts` is yyyymmddhhmm). */
+export function currentArchiveAliasLocalpart(name: string, ts: string): string {
+  return matrixIdentityMode() === 'namespaced'
+    ? archiveAliasLocalpart(getTenant().slug, name, ts)
+    : `stura-archiv-${unitNameSlug(name)}-${ts}`
+}
+
+/**
+ * What an archive alias of the request's customer starts with, `#` included: `#stura-archiv-` in
+ * legacy mode, `#stura-archiv.<slug>.` in namespaced mode, so an archive alias of another customer
+ * found in room state is never taken for one of this customer's.
+ */
+export function currentArchiveAliasPrefix(): string {
+  return matrixIdentityMode() === 'namespaced' ? `#stura-archiv.${getTenant().slug}.` : '#stura-archiv-'
+}
+
 export { stripTenantPrefix }
 
 /** The Keycloak username a localpart of this customer stands for (prefix stripped, _hh undone). */

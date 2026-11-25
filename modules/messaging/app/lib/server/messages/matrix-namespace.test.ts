@@ -3,6 +3,10 @@ import { afterEach, describe, expect, test } from 'vitest'
 import { runWithTenant, type TenantContext } from '$lib/server/tenant/context'
 import {
   TENANT_MARKER_TYPE,
+  archiveAliasLocalpart,
+  currentArchiveAliasLocalpart,
+  currentArchiveAliasPrefix,
+  currentUnitAliasLocalpart,
   currentMatrixLocalpart,
   displayUsername,
   escapeUsername,
@@ -143,5 +147,38 @@ describe('currentMatrixLocalpart', () => {
   test('namespaced outside a tenant scope throws (no ambient customer)', () => {
     process.env.MATRIX_IDENTITY = 'namespaced'
     expect(() => currentMatrixLocalpart('alice')).toThrow(/No tenant context/)
+  })
+})
+
+describe('the alias of a unit room and of its archive, under the identity switch', () => {
+  test('archiveAliasLocalpart carries the customer: stura-archiv.<slug>.<unit>-<ts>', () => {
+    expect(archiveAliasLocalpart('acme', 'Vorstand', '202611251200')).toBe('stura-archiv.acme.vorstand-202611251200')
+    expect(archiveAliasLocalpart('acme', 'Vorstand', '202611251200')).not.toBe(archiveAliasLocalpart('beta', 'Vorstand', '202611251200'))
+    expect(() => archiveAliasLocalpart('Bad.Slug', 'Vorstand', '202611251200')).toThrow(/slug/)
+  })
+
+  test('legacy: exactly the aliases of the legacy namespace, no tenant context read', () => {
+    expect(currentUnitAliasLocalpart('Finanzen & Büro')).toBe(aliasLocalpart('Finanzen & Büro'))
+    expect(currentUnitAliasLocalpart('Vorstand')).toBe('stura-vorstand')
+    expect(currentArchiveAliasLocalpart('Vorstand', '202611251200')).toBe('stura-archiv-vorstand-202611251200')
+    expect(currentArchiveAliasPrefix()).toBe('#stura-archiv-')
+  })
+
+  test('namespaced: the unit and archive aliases of the request customer, and its own archive prefix', () => {
+    process.env.MATRIX_IDENTITY = 'namespaced'
+    runWithTenant(tenant('acme'), () => {
+      expect(currentUnitAliasLocalpart('Vorstand')).toBe('stura.acme.vorstand')
+      expect(currentArchiveAliasLocalpart('Vorstand', '202611251200')).toBe('stura-archiv.acme.vorstand-202611251200')
+      expect(currentArchiveAliasPrefix()).toBe('#stura-archiv.acme.')
+      expect(`#${currentArchiveAliasLocalpart('Vorstand', '202611251200')}:srv`.startsWith(currentArchiveAliasPrefix())).toBe(true)
+    })
+    runWithTenant(tenant('beta'), () => {
+      expect('#stura-archiv.acme.vorstand-202611251200:srv'.startsWith(currentArchiveAliasPrefix())).toBe(false)
+    })
+  })
+
+  test('namespaced outside a tenant scope throws (no ambient customer)', () => {
+    process.env.MATRIX_IDENTITY = 'namespaced'
+    expect(() => currentUnitAliasLocalpart('Vorstand')).toThrow(/No tenant context/)
   })
 })
