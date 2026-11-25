@@ -79,6 +79,11 @@ const READ_FAILED = {
   retained: 'Die aufbewahrten Unterlagen konnten nicht aufgelistet werden.',
 } as const
 
+/** The steps that put a sealed copy where people read it: one `publish:<sink>:<record>` per copy and sink, and the list of them. */
+const isPublishStep = (step: string): boolean => step.startsWith('publish:')
+
+const PUBLISH_FAILED = 'Die schreibgeschützte Kopie konnte noch nicht im Dokumentenordner abgelegt werden. Der Vorgang wird automatisch wiederholt; die Kopie bleibt bis dahin hier zum Herunterladen.'
+
 function logRead(tenant: TenantContext, what: string, err: unknown): void {
   console.error(`[module-switch] ${tenant.slug}: the Karenz view could not read ${what}:`, err instanceof Error ? err.message : err)
 }
@@ -100,7 +105,14 @@ export async function buildKarenzView(tenant: TenantContext, row: KarenzRowView,
     problems.push(READ_FAILED.steps)
   }
   for (const s of steps) {
-    if (s.state === 'failed') problems.push(`Schritt ${s.step} fehlgeschlagen: ${s.lastError ?? 'ohne Angabe'}`)
+    if (s.state !== 'failed') continue
+    if (isPublishStep(s.step)) {
+      // Said once, in plain words (the problems are de-duplicated below). A restoring row never publishes again,
+      // so the failure of the off period would only linger there: the pass retries it on open and finalizing rows.
+      if (row.state !== 'restoring') problems.push(PUBLISH_FAILED)
+      continue
+    }
+    problems.push(`Schritt ${s.step} fehlgeschlagen: ${s.lastError ?? 'ohne Angabe'}`)
   }
 
   try {
