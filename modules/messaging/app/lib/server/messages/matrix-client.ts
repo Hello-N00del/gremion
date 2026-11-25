@@ -252,7 +252,10 @@ class MatrixClient {
   // alias so future reseeds can adopt it via getRoomIdByAlias. If the alias is
   // already taken (M_ROOM_IN_USE — a race or a legacy room), the existing room
   // is resolved and returned instead of throwing.
-  async createRoom(name: string, topic: string, aliasLocalpart?: string): Promise<string> {
+  // `opts.tenantId` (namespaced identity only): the room is created with the initial state event
+  // org.gremion.tenant { tenant_id }, and a room found behind a taken alias is adopted only when it
+  // carries that marker (roomBelongsToTenant); without `opts` the call is what it always was.
+  async createRoom(name: string, topic: string, aliasLocalpart?: string, opts: { tenantId?: string } = {}): Promise<string> {
     const body: Record<string, unknown> = {
       name,
       topic,
@@ -270,6 +273,9 @@ class MatrixClient {
       },
     }
     if (aliasLocalpart) body.room_alias_name = aliasLocalpart
+    if (opts.tenantId) {
+      body.initial_state = [{ type: TENANT_MARKER_TYPE, state_key: '', content: { tenant_id: opts.tenantId } }]
+    }
 
     const res = await fetch(this.baseUrl + '/_matrix/client/v3/createRoom', {
       method: 'POST',
@@ -283,11 +289,26 @@ class MatrixClient {
       if (err.errcode === 'M_ROOM_IN_USE' && aliasLocalpart) {
         const serverName = this.adminBotUserId.split(':')[1] ?? ''
         const existing = await this.getRoomIdByAlias(`#${aliasLocalpart}:${serverName}`)
-        if (existing) return existing
+        if (existing) {
+          if (opts.tenantId && !(await this.roomBelongsToTenant(existing, opts.tenantId))) {
+            throw new Error(`Matrix room alias #${aliasLocalpart} is held by a room that does not belong to this tenant (${opts.tenantId}); not adopted`)
+          }
+          return existing
+        }
       }
       throw new Error(`Matrix POST /_matrix/client/v3/createRoom → ${res.status}: ${err.error ?? ''}`)
     }
     return (await res.json() as { room_id: string }).room_id
+  }
+
+  // Namespaced identity: does this room carry the org.gremion.tenant marker of `tenantId`, written by
+  // the admin bot (a room member cannot write it: state events need power level 50)? A room without
+  // the marker, with another customer's, or with one somebody else wrote is not this tenant's.
+  async roomBelongsToTenant(roomId: string, tenantId: string): Promise<boolean> {
+    const marker = await this.getRoomStateEvent(roomId, TENANT_MARKER_TYPE)
+    if (!marker || marker.sender === '' || marker.sender !== this.adminBotUserId) return false
+    const content = marker.content as { tenant_id?: unknown } | null
+    return typeof content?.tenant_id === 'string' && content.tenant_id === tenantId
   }
 
   // Invite a user to a room as the admin bot. IDEMPOTENT: Synapse returns

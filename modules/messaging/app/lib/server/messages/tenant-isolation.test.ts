@@ -23,6 +23,10 @@
  *      with a homeserver per tenant only; room aliases on ONE shared homeserver
  *      are outside what this file shows.
  *
+ * With MATRIX_IDENTITY=namespaced (the last part of this file) the same fake also keeps ONE global
+ * user directory and ONE global alias directory, and answers the admin login, the account, room
+ * creation, deactivation and login-flow requests the namespaced identity makes.
+ *
  * It shows app-layer scoping against ONE shared Synapse. It does NOT show that a
  * second customer can be added to a running installation, and it does not
  * exercise Synapse itself (docs/ops/isolation-evidence.md says so; a live
@@ -51,6 +55,11 @@ const ENV = vi.hoisted(
 )
 vi.mock('$env/dynamic/private', () => ({ env: ENV }))
 vi.mock('$lib/server/env/service-env', () => ({ serviceEnv: (name: string) => ENV[name] }))
+/** The Keycloak account of the erased subject, by tenant: `username` is what the hook derives the Matrix id from. */
+const KC = vi.hoisted(() => ({ username: 'alice' }))
+vi.mock('$lib/server/keycloak-admin', () => ({
+  getKeycloakAdminClientForCurrentTenant: () => ({ getUser: async () => ({ username: KC.username }), listUsers: async () => [] }),
+}))
 
 // ---- the per-tenant ledger of the room administration (the tenant's own database) ----
 
@@ -104,6 +113,10 @@ import { getMessagesBackend } from './backend'
 import { listOverview } from './admin/room-admin'
 import { __resetMatrixCachesForTests, evictMatrixClient, getMatrixClient } from './matrix-client'
 import { __resetSynapseAdminForTests, getSynapseAdmin } from './synapse-admin'
+import { createMatrixSubsystem } from './provisioning/matrix-subsystem'
+import { messagingErasureHook } from './erasure'
+import { TENANT_MARKER_TYPE } from './matrix-namespace'
+import type { OrgUnit } from '$lib/server/governance/org-units-db'
 
 // ---- two customers ---------------------------------------------------------------
 
@@ -145,6 +158,13 @@ interface Room {
 class FakeSynapse {
   readonly rooms = new Map<string, Room>()
   readonly tokens = new Map<string, string>()
+  /** The homeserver's ONE user directory (localpart-qualified ids). */
+  readonly users = new Map<string, { displayname?: string; deactivated: boolean; erased: boolean }>()
+  /** Login flows GET /login lists. */
+  flows: Array<{ type: string }> = [{ type: 'm.login.password' }]
+  /** The bodies of every admin login-as-user request, by user id. */
+  readonly adminLogins: Array<{ userId: string; body: Record<string, unknown> }> = []
+  roomSeq = 0
   logins = 0
   constructor(
     readonly host: string,
@@ -203,6 +223,7 @@ class FakeSynapses {
       server.tokens.set(access, uid)
       return json(200, { access_token: access, user_id: uid })
     }
+    if (method === 'GET' && path === '/_matrix/client/v3/login') return json(200, { flows: server.flows })
     if (kind === 'unknown' || kind === 'none') return json(401, { errcode: 'M_UNKNOWN_TOKEN', error: 'unknown token' })
 
     let m: RegExpExecArray | null
@@ -270,6 +291,57 @@ class FakeSynapses {
       const room = server.rooms.get(m[1]!)
       if (room) room.deleted = true
       return json(200, { delete_id: 'd' })
+    }
+    // ---- what the namespaced identity adds: accounts, admin login, room creation, join, erasure ----
+    if ((m = /^\/_synapse\/admin\/v2\/users\/(.+)$/.exec(path))) {
+      if (kind !== 'admin') return json(403)
+      const id = m[1]!
+      if (method === 'GET') {
+        const u = server.users.get(id)
+        return u ? json(200, { name: id, deactivated: u.deactivated, displayname: u.displayname }) : json(404, { errcode: 'M_NOT_FOUND' })
+      }
+      if (method === 'PUT') {
+        const prior = server.users.get(id)
+        server.users.set(id, { displayname: (body.displayname as string | undefined) ?? prior?.displayname, deactivated: body.deactivated === true, erased: prior?.erased ?? false })
+        return json(200, { name: id })
+      }
+    }
+    if ((m = /^\/_synapse\/admin\/v1\/users\/(.+)\/login$/.exec(path)) && method === 'POST') {
+      if (kind !== 'admin') return json(403)
+      const id = m[1]!
+      if (!server.users.has(id)) return json(404, { errcode: 'M_NOT_FOUND' })
+      server.adminLogins.push({ userId: id, body })
+      const access = `mx-${server.host}-${++server.logins}`
+      server.tokens.set(access, id)
+      return json(200, { access_token: access })
+    }
+    if ((m = /^\/_synapse\/admin\/v1\/deactivate\/(.+)$/.exec(path)) && method === 'POST') {
+      if (kind !== 'admin') return json(403)
+      const u = server.users.get(m[1]!)
+      if (!u) return json(404, { errcode: 'M_NOT_FOUND' })
+      u.deactivated = true
+      u.erased = body.erase === true
+      return json(200, { id_server_unbind_result: 'no-support' })
+    }
+    if ((m = /^\/_synapse\/admin\/v1\/join\/(.+)$/.exec(path)) && method === 'POST') {
+      if (kind !== 'admin') return json(403)
+      const room = server.rooms.get(m[1]!)
+      const who = String(body.user_id)
+      if (!room || !server.users.has(who)) return json(404)
+      room.members.add(who)
+      return json(200, { room_id: m[1] })
+    }
+    if (path === '/_matrix/client/v3/createRoom' && method === 'POST') {
+      if (kind !== 'admin') return json(403)
+      const aliasName = body.room_alias_name as string | undefined
+      const alias = aliasName ? `#${aliasName}:${server.serverName}` : undefined
+      if (alias && [...server.rooms.values()].some((r) => r.aliases.has(alias))) return json(400, { errcode: 'M_ROOM_IN_USE', error: 'Room alias already taken' })
+      const id = `!new-${++server.roomSeq}:${server.serverName}`
+      server.room(id, String(body.name), [server.bot], alias)
+      for (const e of (body.initial_state as Array<{ type: string; state_key: string; content: unknown }> | undefined) ?? []) {
+        server.rooms.get(id)!.state.set(e.type, { sender: server.bot, content: e.content })
+      }
+      return json(200, { room_id: id })
     }
     if (path === '/_matrix/media/v3/upload' && method === 'POST') return kind === 'user' ? json(200, { content_uri: 'mxc://synapse.test/m1' }) : json(403)
     return json(404, { errcode: 'M_UNRECOGNIZED', error: `the fake does not implement ${method} ${path}` })
@@ -666,5 +738,178 @@ describe("an administration action on B's room as A is refused before any Matrix
       expect(res.status).toBe(403)
     }
     expect(net.since(m)).toEqual([])
+  })
+})
+
+
+// ================================================================================
+// 6. MATRIX_IDENTITY=namespaced: two customers on ONE shared homeserver
+// ================================================================================
+//
+// The recording fake keeps ONE user directory and ONE alias directory for the homeserver, so a
+// username or a unit name that two customers share is the same key for both unless the app
+// namespaces it. Everything here goes through the real clients, the real routes, the real
+// provisioning adapter and the real erasure hook; only the homeserver is the fake.
+
+describe('namespaced chat identity: two customers on one shared homeserver', () => {
+  const NS_A = { id: 'tid-a', slug: 'acme', issuer: 'https://id.example.org/realms/acme' } as unknown as TenantContext
+  const NS_B = { id: 'tid-b', slug: 'beta', issuer: 'https://id.example.org/realms/beta' } as unknown as TenantContext
+  const nsJwt = (t: TenantContext, username: string, over: Record<string, unknown> = {}) =>
+    `h.${Buffer.from(JSON.stringify({ sub: `sub-${t.slug}-${username}`, preferred_username: username, iss: t.issuer, exp: Math.floor(Date.now() / 1000) + 3600, ...over })).toString('base64url')}.s`
+  const unit = { id: 'u1', name: 'Vorstand' } as unknown as OrgUnit
+  const kc = { getUser: async (id: string) => ({ id, username: id.replace(/^kc-/, ''), firstName: 'Vorname', lastName: 'Nachname' }) }
+  const subsystem = (t: TenantContext) =>
+    as(t, () => createMatrixSubsystem({ matrix: getMatrixClient(), synapse: getSynapseAdmin(), kc: kc as never }, 'synapse.test', { slug: t.slug, tenantId: t.id }))
+  const CTX = { parentKeycloakGroupId: null }
+  const ALIAS_A = '#stura.acme.vorstand:synapse.test'
+  const mint = (t: TenantContext, username: string) => as(t, () => getMatrixClient().getMatrixToken(nsJwt(t, username)))
+  /** A room somebody else made that carries the alias customer A's unit would claim. */
+  const stray = (state?: { sender: string; content: unknown }): string => {
+    sharedSynapse.room('!stray:synapse.test', 'Vorstand', ['@someone:synapse.test'], ALIAS_A)
+    if (state) sharedSynapse.rooms.get('!stray:synapse.test')!.state.set(TENANT_MARKER_TYPE, state)
+    return '!stray:synapse.test'
+  }
+
+  beforeEach(() => {
+    process.env.MATRIX_IDENTITY = 'namespaced'
+  })
+  afterEach(() => {
+    delete process.env.MATRIX_IDENTITY
+  })
+
+  it('the same unit name in two customers gives two rooms with two aliases, each carrying its customer', async () => {
+    const a = await subsystem(NS_A).ensureResource(unit, CTX, null)
+    const b = await subsystem(NS_B).ensureResource(unit, CTX, null)
+    expect(a.externalId).not.toBe(b.externalId)
+    expect([...sharedSynapse.rooms.get(a.externalId!)!.aliases]).toEqual([ALIAS_A])
+    expect([...sharedSynapse.rooms.get(b.externalId!)!.aliases]).toEqual(['#stura.beta.vorstand:synapse.test'])
+    expect(sharedSynapse.rooms.get(a.externalId!)!.state.get(TENANT_MARKER_TYPE)).toEqual({ sender: sharedSynapse.bot, content: { tenant_id: 'tid-a' } })
+    expect(sharedSynapse.rooms.get(b.externalId!)!.state.get(TENANT_MARKER_TYPE)).toEqual({ sender: sharedSynapse.bot, content: { tenant_id: 'tid-b' } })
+  })
+
+  it('the same username in two customers gives two accounts; each is a member of its own room only', async () => {
+    const a = (await subsystem(NS_A).ensureResource(unit, CTX, null)).externalId!
+    const b = (await subsystem(NS_B).ensureResource(unit, CTX, null)).externalId!
+    await subsystem(NS_A).addMember(a, 'kc-alice')
+    await subsystem(NS_B).addMember(b, 'kc-alice')
+    expect([...sharedSynapse.users.keys()].sort()).toEqual(['@acme.alice:synapse.test', '@beta.alice:synapse.test'])
+    expect([...sharedSynapse.rooms.get(a)!.members]).toContain('@acme.alice:synapse.test')
+    expect([...sharedSynapse.rooms.get(a)!.members]).not.toContain('@beta.alice:synapse.test')
+    expect([...sharedSynapse.rooms.get(b)!.members]).toContain('@beta.alice:synapse.test')
+    expect([...sharedSynapse.rooms.get(b)!.members]).not.toContain('@acme.alice:synapse.test')
+  })
+
+  it('the account provisioning joins is the account the login mints: a member finds its room through the real route', async () => {
+    const a = (await subsystem(NS_A).ensureResource(unit, CTX, null)).externalId!
+    const b = (await subsystem(NS_B).ensureResource(unit, CTX, null)).externalId!
+    await subsystem(NS_A).addMember(a, 'kc-alice')
+    await subsystem(NS_B).addMember(b, 'kc-alice')
+    const tokenA = await mint(NS_A, 'alice')
+    expect(sharedSynapse.tokens.get(tokenA)).toBe('@acme.alice:synapse.test')
+    expect(sharedSynapse.rooms.get(a)!.members.has(sharedSynapse.tokens.get(tokenA)!)).toBe(true)
+
+    const listFor = async (t: TenantContext) => {
+      const token = nsJwt(t, 'alice')
+      const e = ev(t, user('kc-alice'), 'x', { headers: { Authorization: `Bearer ${token}` } }) as { locals: { auth: unknown } }
+      e.locals.auth = async () => ({ user: user('kc-alice'), accessToken: token })
+      const res = (await route(t, roomsGet, e as never)) as Response
+      return ((await res.json()) as { data: { roomId: string }[] }).data.map((r) => r.roomId)
+    }
+    expect(await listFor(NS_A)).toEqual([a])
+    expect(await listFor(NS_B)).toEqual([b])
+  })
+
+  it("customer B's alice has no way into A's room: her token is not a member and reads nothing", async () => {
+    const a = (await subsystem(NS_A).ensureResource(unit, CTX, null)).externalId!
+    await subsystem(NS_A).addMember(a, 'kc-alice')
+    const tokenB = await mint(NS_B, 'alice')
+    expect(await as(NS_B, () => getMatrixClient().getJoinedRooms(tokenB))).toEqual([])
+    await expect(as(NS_B, () => getMatrixClient().getMessages(tokenB, a))).rejects.toThrow(/403/)
+  })
+
+  it("B's erasure of its alice deactivates B's account and leaves A's alice alone", async () => {
+    const a = (await subsystem(NS_A).ensureResource(unit, CTX, null)).externalId!
+    const b = (await subsystem(NS_B).ensureResource(unit, CTX, null)).externalId!
+    await subsystem(NS_A).addMember(a, 'kc-alice')
+    await subsystem(NS_B).addMember(b, 'kc-alice')
+    KC.username = 'alice'
+    const res = await as(NS_B, () => messagingErasureHook.erase({ tenantId: 'tid-b', subjectId: 'kc-alice', db: null } as never))
+    expect(res).toEqual({ status: 'erased', counts: { matrix_accounts: 1 } })
+    expect(sharedSynapse.users.get('@beta.alice:synapse.test')).toMatchObject({ deactivated: true, erased: true })
+    expect(sharedSynapse.users.get('@acme.alice:synapse.test')).toMatchObject({ deactivated: false, erased: false })
+  })
+
+  describe("a room found by alias is adopted only when it is this customer's", () => {
+    it('without a marker: refused, nothing created, nothing joined', async () => {
+      const id = stray()
+      const before = sharedSynapse.rooms.size
+      await expect(subsystem(NS_A).ensureResource(unit, CTX, null)).rejects.toThrow(/tid-a|Mandant|tenant/i)
+      expect(sharedSynapse.rooms.size).toBe(before)
+      expect(sharedSynapse.rooms.get(id)!.members.size).toBe(1)
+    })
+
+    it('with the marker of another customer: refused', async () => {
+      stray({ sender: sharedSynapse.bot, content: { tenant_id: 'tid-b' } })
+      await expect(subsystem(NS_A).ensureResource(unit, CTX, null)).rejects.toThrow(/Mandant|tenant/i)
+    })
+
+    it('with a marker that the bot did not write: refused', async () => {
+      stray({ sender: '@someone:synapse.test', content: { tenant_id: 'tid-a' } })
+      await expect(subsystem(NS_A).ensureResource(unit, CTX, null)).rejects.toThrow(/Mandant|tenant/i)
+    })
+
+    it('with the marker of this customer: adopted, no second room', async () => {
+      const id = stray({ sender: sharedSynapse.bot, content: { tenant_id: 'tid-a' } })
+      const before = sharedSynapse.rooms.size
+      expect((await subsystem(NS_A).ensureResource(unit, CTX, null)).externalId).toBe(id)
+      expect(sharedSynapse.rooms.size).toBe(before)
+    })
+
+    it('the creation path that runs into a taken alias adopts nothing either, and adopts with the right marker', async () => {
+      const id = stray()
+      await expect(as(NS_A, () => getMatrixClient().createRoom('Vorstand', 'T', 'stura.acme.vorstand', { tenantId: 'tid-a' }))).rejects.toThrow(/Mandant|tenant/i)
+      sharedSynapse.rooms.get(id)!.state.set(TENANT_MARKER_TYPE, { sender: sharedSynapse.bot, content: { tenant_id: 'tid-a' } })
+      expect(await as(NS_A, () => getMatrixClient().createRoom('Vorstand', 'T', 'stura.acme.vorstand', { tenantId: 'tid-a' }))).toBe(id)
+    })
+
+    it('a ledger hit still short-circuits: an existing room id is reused without any homeserver request', async () => {
+      const m = net.mark()
+      expect((await subsystem(NS_A).ensureResource(unit, CTX, '!known:synapse.test')).externalId).toBe('!known:synapse.test')
+      expect(net.since(m)).toEqual([])
+    })
+  })
+
+  describe('whose token it is', () => {
+    it("B's token presented in A's scope is refused: no account is made for A, no login is minted", async () => {
+      await expect(as(NS_A, () => getMatrixClient().getMatrixToken(nsJwt(NS_B, 'alice')))).rejects.toMatchObject({ status: 403 })
+      expect(sharedSynapse.users.size).toBe(0)
+      expect(sharedSynapse.adminLogins).toEqual([])
+    })
+
+    it('the login carries an expiry the homeserver enforces, and no device', async () => {
+      const before = Date.now()
+      await mint(NS_A, 'alice')
+      expect(sharedSynapse.adminLogins).toHaveLength(1)
+      const body = sharedSynapse.adminLogins[0]!.body
+      expect(Object.keys(body)).toEqual(['valid_until_ms'])
+      expect(body.valid_until_ms as number).toBeGreaterThanOrEqual(before + 3_600_000)
+      expect(body.valid_until_ms as number).toBeLessThanOrEqual(Date.now() + 3_600_000)
+    })
+
+    it('while the homeserver offers a JWT login, no customer gets a Matrix token and no account is made', async () => {
+      sharedSynapse.flows = [{ type: 'm.login.password' }, { type: 'org.matrix.login.jwt' }]
+      await expect(mint(NS_A, 'alice')).rejects.toMatchObject({ status: 503 })
+      await expect(mint(NS_B, 'alice')).rejects.toMatchObject({ status: 503 })
+      expect(sharedSynapse.users.size).toBe(0)
+      expect(sharedSynapse.adminLogins).toEqual([])
+    })
+
+    it('an erased account is not brought back by a login with a token that is still valid', async () => {
+      await subsystem(NS_B).addMember((await subsystem(NS_B).ensureResource(unit, CTX, null)).externalId!, 'kc-alice')
+      KC.username = 'alice'
+      await as(NS_B, () => messagingErasureHook.erase({ tenantId: 'tid-b', subjectId: 'kc-alice', db: null } as never))
+      await expect(mint(NS_B, 'alice')).rejects.toMatchObject({ status: 403 })
+      expect(sharedSynapse.users.get('@beta.alice:synapse.test')).toMatchObject({ deactivated: true })
+    })
   })
 })
