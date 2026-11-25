@@ -212,10 +212,10 @@ route_customer() { # host method path bearer data
             if sw no-file; then fl=""; fi
             reply 200 "{\"success\":true,\"files\":[${fl}]}" ;;
         "GET /api/files/${UNIT}/"*)
-            fn="${path#/api/files/${UNIT}/}"
+            fn="${path#"/api/files/${UNIT}/"}"
             if [[ "$fn" == "isoprobe-${s}.odt" ]] || sw shared-folder || sw files-open; then reply 200 'odt'; else reply 404 '{}'; fi ;;
         "GET /api/files/edit-token/${UNIT}/"*)
-            ef="${path#/api/files/edit-token/${UNIT}/}"; eh="$host"
+            ef="${path#"/api/files/edit-token/${UNIT}/"}"; eh="$host"
             if sw editor-origin-wrong; then eh="$(host_of_realm "$o")"; fi
             if [[ "$ef" == "isoprobe-${s}.odt" ]] || sw editor-open; then
                 reply 200 "{\"token\":\"t\",\"tokenTtl\":1,\"editorUrl\":\"https://${eh}/office/browser/x/cool.html?WOPISrc=x\"}"

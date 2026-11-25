@@ -156,6 +156,7 @@ CFG=""
 
 # ---------------------------------------------------------------- the clean-up (armed first)
 
+# shellcheck disable=SC2317  # reached through cleanup(), which only the EXIT/INT/TERM trap calls
 cleanup_client() {   # <index>: delete the temporary client of realm <index> by name, then read it back
     local i="$1" slug cid uuid n
     slug="${SLUG[$i]}"; cid="${CLIENT_ID[$i]}"
@@ -176,6 +177,7 @@ cleanup_client() {   # <index>: delete the temporary client of realm <index> by 
     printf 'cleanup: the temporary client %s is gone from realm %s\n' "$cid" "$slug"
 }
 
+# shellcheck disable=SC2317  # only the EXIT/INT/TERM trap calls it
 cleanup() {
     local rc=$? i
     trap - EXIT INT TERM
@@ -421,7 +423,7 @@ sec_by_id() {   # <name> <list path> <item path prefix> <noun>
             if [[ -z "$id" ]]; then
                 s_nr "no ${noun} titled isoprobe-${SLUG[$x]} on ${SLUG[$x]}: the operator makes it"
             else
-                ids[$x]="$id"; rdy[$x]=1
+                ids[x]="$id"; rdy[x]=1
             fi
             if jq -e --arg t "isoprobe-${SLUG[$y]}" 'any(.data[]?; (.title // "") | contains($t))' <<< "$R_BODY" >/dev/null 2>&1; then
                 s_fail "$(dir_label "$x"): the ${noun} of ${SLUG[$y]} is listed on ${SLUG[$x]}'s host"
@@ -566,7 +568,7 @@ sec_office() {
 }
 
 sec_chat() {
-    local x y path rdy=(0 0) rid rooms read_ok enc txn
+    local x y rdy=(0 0) rid read_ok enc txn
     sec_begin chat
     CHAT_NE=0
     if no_bearer chat; then s_ne "the chat routes take no Bearer on this release"; CHAT_NE=1; sec_end; return 0; fi
