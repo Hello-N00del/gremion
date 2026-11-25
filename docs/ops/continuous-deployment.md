@@ -996,7 +996,10 @@ seen once.
 - **The migrated schema and the old colour.** After the migrate stage only two signals can see a
   migration that the old colour cannot live with: the portal list page of the live colour, which reads the
   gremion database, and the 5xx count. Nothing unauthenticated reaches the customers' silo databases or
-  `control`. The protection is the expand-only rule of the chains plus the dump.
+  `control`. The protection is the expand-only rule of the chains plus the dump. On an install whose
+  customer has no public portal set up, the portal answers its own 404 with an `x-gremion-portal: none`
+  header; the probe passes with one plain line saying so, and that signal is then absent (only the 5xx
+  count remains). A 5xx is always a failure.
 - **The quiet-night window.** `CD_QUIET_WINDOWS` keeps releases away from the nightly jobs; the Karenz
   run at minute 17 is not guarded.
 - **A release in flight when the CD process dies** leaves a gap of up to five minutes with both locks
