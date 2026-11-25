@@ -162,6 +162,23 @@ describe('protocol page: a decision that does not fit the meeting', () => {
     expect(resolutionPosts()).toHaveLength(0)
   })
 
+  it('keeps the quorum the server loaded until an attendance change is saved (roster list not the basis)', async () => {
+    const data = { ...pageData('absent'), attendance: [], quorum: { eligibleVotingCount: 3, presentVotingCount: 2, quorate: true } }
+    render(Page, { props: { data: data as never } })
+    await enterDecision(2)
+    await waitFor(() => expect(resolutionPosts()).toHaveLength(1))
+  })
+
+  it('takes the quorum of new load data over a roster edited on the previous protocol', async () => {
+    const { rerender } = render(Page, { props: { data: pageData('present') as never } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Anna Beispiel: anwesend' }))
+    await waitFor(() => screen.getByRole('button', { name: 'Anna Beispiel: abwesend' }))
+    // another protocol of the committee, quorate at load: the earlier click does not carry over
+    await rerender({ data: pageData('present') as never })
+    await enterDecision(2)
+    await waitFor(() => expect(resolutionPosts()).toHaveLength(1))
+  })
+
   it('shows the server refusal as it is when the server judges differently', async () => {
     resolutionAnswer = new Response(
       JSON.stringify({ message: 'Die Stimmen (2) übersteigen die Zahl der anwesenden stimmberechtigten Mitglieder (1).' }),
