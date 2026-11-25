@@ -13,6 +13,7 @@
 import { currentTenantId } from '$lib/server/tenant/context'
 import { getKeycloakAdminClientForCurrentTenant } from '$lib/server/keycloak-admin'
 import { fallbackSenderName, isShowableName, localpartOf } from '$lib/components/messaging/sender-label'
+import { displayUsername, identitySlug } from './matrix-namespace'
 
 /** The identity data this resolver needs from a member: nothing but the name parts. */
 export interface NameParts {
@@ -56,12 +57,18 @@ export function createSenderNameResolver(
     now?: () => number
     /** Called once per failed lookup (a failure is cached for the negative TTL, so this is rate-limited). */
     onError?: (error: unknown) => void
+    /** MATRIX_IDENTITY=namespaced: the customer's slug, which prefixes every localpart of its members. */
+    slug?: string | null
   } = {},
 ): SenderNameResolver {
   const ttl = opts.ttlMs ?? TTL_MS
   const negTtl = opts.negativeTtlMs ?? NEGATIVE_TTL_MS
   const budget = opts.budgetMs ?? BUDGET_MS
   const now = opts.now ?? (() => Date.now())
+  const slug = opts.slug ?? null
+  // The Keycloak username behind a Matrix id: the localpart as it is, or in namespaced mode without the
+  // customer prefix and with the _hh encoding undone.
+  const usernameOf = (id: string): string => (slug ? displayUsername(slug, localpartOf(id)) : localpartOf(id))
   const cache = new Map<string, Entry>()
   const inflight = new Map<string, Promise<string | null>>()
 
@@ -98,7 +105,7 @@ export function createSenderNameResolver(
       const work = (async () => {
         for (let i = 0; i < unique.length; i += CONCURRENCY) {
           const chunk = unique.slice(i, i + CONCURRENCY)
-          const names = await Promise.all(chunk.map((id) => fetchName(localpartOf(id))))
+          const names = await Promise.all(chunk.map((id) => fetchName(usernameOf(id))))
           chunk.forEach((id, j) => {
             if (names[j] != null) resolved.set(id, names[j]!)
           })
@@ -117,7 +124,7 @@ export function createSenderNameResolver(
       }
       work.catch(() => {})
       const out = new Map<string, string>()
-      for (const id of unique) out.set(id, resolved.get(id) ?? fallbackSenderName(id))
+      for (const id of unique) out.set(id, resolved.get(id) ?? fallbackSenderName(id, slug))
       return out
     },
     clear: () => {
@@ -131,6 +138,15 @@ export function createSenderNameResolver(
 // bounded registry (oldest dropped first); the TTL bounds how long a dropped tenant's names live.
 const REGISTRY_MAX = 32
 const registry = new Map<string, SenderNameResolver>()
+
+/** The slug to strip in namespaced mode, else null. Display only: never throws. */
+function slugForDisplay(): string | null {
+  try {
+    return identitySlug()
+  } catch {
+    return null
+  }
+}
 
 function errorKind(e: unknown): string {
   const name = e instanceof Error ? e.name : typeof e
@@ -162,7 +178,7 @@ export function getSenderNameResolver(): SenderNameResolver {
         const [user] = await admin.listUsers({ username, exact: true, max: 1 })
         return user ?? null
       },
-      { onError: (e) => warnLookupFailed(tenantId, e) },
+      { onError: (e) => warnLookupFailed(tenantId, e), slug: slugForDisplay() },
     )
     if (registry.size >= REGISTRY_MAX) {
       const oldest = registry.keys().next().value
@@ -224,7 +240,7 @@ export async function withSenderNames<T extends object>(
   return messages.map((m) => {
     const sender = senderOf(m)
     if (sender === null) return m
-    return { ...m, senderDisplayName: names.get(sender) ?? fallbackSenderName(sender) }
+    return { ...m, senderDisplayName: names.get(sender) ?? fallbackSenderName(sender, slugForDisplay()) }
   })
 }
 

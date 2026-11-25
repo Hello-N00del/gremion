@@ -101,6 +101,7 @@ vi.mock('$lib/server/audit-db', () => ({
 }))
 
 import { GET as roomsGet } from '../../../routes/api/messages/rooms/+server'
+import { GET as syncGet } from '../../../routes/api/messages/sync/+server'
 import { GET as messagesGet, POST as messagesPost } from '../../../routes/api/messages/rooms/[roomId]/messages/+server'
 import { POST as readPost } from '../../../routes/api/messages/rooms/[roomId]/read/+server'
 import { PUT as typingPut } from '../../../routes/api/messages/rooms/[roomId]/typing/+server'
@@ -902,6 +903,19 @@ describe('namespaced chat identity: two customers on one shared homeserver', () 
       await expect(mint(NS_B, 'alice')).rejects.toMatchObject({ status: 503 })
       expect(sharedSynapse.users.size).toBe(0)
       expect(sharedSynapse.adminLogins).toEqual([])
+    })
+
+    it('the room list and the live stream answer 503 while the homeserver offers a JWT login, not a 502', async () => {
+      sharedSynapse.flows = [{ type: 'org.matrix.login.jwt' }]
+      const evFor = (path: string) => {
+        const token = nsJwt(NS_A, 'alice')
+        const e = ev(NS_A, user('kc-alice'), 'x', { headers: { Authorization: `Bearer ${token}` } }) as { locals: { auth: unknown }; url: URL }
+        e.locals.auth = async () => ({ user: user('kc-alice'), accessToken: token })
+        e.url = new URL(`http://localhost${path}`)
+        return e as never
+      }
+      await expect(route(NS_A, roomsGet, evFor('/api/messages/rooms'))).rejects.toMatchObject({ status: 503 })
+      await expect(route(NS_A, syncGet, evFor('/api/messages/sync'))).rejects.toMatchObject({ status: 503 })
     })
 
     it('an erased account is not brought back by a login with a token that is still valid', async () => {

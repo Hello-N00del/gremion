@@ -1,4 +1,4 @@
-import { error } from '@sveltejs/kit'
+import { error, isHttpError } from '@sveltejs/kit'
 import type { RequestEvent, RequestHandler } from '@sveltejs/kit'
 import { getMessagesBackend } from '$lib/server/messages/backend'
 import type { SessionUser } from '$lib/auth'
@@ -29,6 +29,8 @@ export const GET: RequestHandler = async (event) => {
     const keycloakJwt = await getKeycloakJwt(event)
     matrixToken = await mc.getMatrixToken(keycloakJwt)
   } catch (e) {
+    // A refusal of the token exchange (503: chat not available) is passed on as it is.
+    if (isHttpError(e)) throw e
     const msg = e instanceof Error ? e.message : String(e)
     throw error(502, `Matrix authentication failed: ${msg}`)
   }

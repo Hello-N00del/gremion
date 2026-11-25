@@ -1,8 +1,9 @@
-import { json } from '@sveltejs/kit'
+import { isHttpError, json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { serviceEnv } from '$lib/server/env/service-env'
 import { getMessagesBackend } from '$lib/server/messages/backend'
 import { autoJoinOwnUnitRooms } from '$lib/server/messages/auto-join'
+import { currentMatrixLocalpart } from '$lib/server/messages/matrix-namespace'
 
 /**
  * GET /api/auth/matrix-token
@@ -54,7 +55,7 @@ export const GET: RequestHandler = async ({ request, url, locals }) => {
     } catch {
       // Fall back to username-based ID if whoAmI fails (non-fatal)
       const matrixServerName = serviceEnv('SYNAPSE_SERVER_NAME') ?? 'localhost'
-      matrixUserId = `@${user.preferredUsername ?? user.id}:${matrixServerName}`
+      matrixUserId = `@${currentMatrixLocalpart(user.preferredUsername ?? user.id)}:${matrixServerName}`
     }
 
     // First-login backfill (fire-and-forget, never fails the token exchange).
@@ -87,6 +88,8 @@ export const GET: RequestHandler = async ({ request, url, locals }) => {
       }
     })
   } catch (err) {
+    // A refusal of the exchange (503: chat not available) reaches the client as it is.
+    if (isHttpError(err)) throw err
     const msg = err instanceof Error ? err.message : String(err)
     return json({ success: false, error: `Matrix token exchange failed: ${msg}` }, { status: 502 })
   }
