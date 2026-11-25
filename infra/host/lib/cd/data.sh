@@ -273,9 +273,35 @@ _cd_data_timer_next() {
     printf '%s\n' "$raw"
 }
 
+# _cd_data_timer_off UNIT -- 0 when the timer is installed, DISABLED and INACTIVE: it will never
+# run, so it has no next elapse and cannot elapse inside a lock span. 1 for everything else: a
+# timer that is enabled or active (its elapse should be readable and is not), a unit file that
+# does not exist, a masked one, an answer that is incomplete or cannot be read. Only a unit that
+# says all three of "loaded", "inactive" and "disabled" is off; one call, bounded.
+_cd_data_timer_off() {
+    local unit="$1" out line load="" active="" ufs=""
+    out="$(timeout -k 5 15 systemctl show --property=LoadState --property=ActiveState --property=UnitFileState --no-pager "$unit" </dev/null 2>/dev/null)" || return 1
+    while IFS= read -r line; do
+        case "$line" in
+            LoadState=*) load="${line#LoadState=}" ;;
+            ActiveState=*) active="${line#ActiveState=}" ;;
+            UnitFileState=*) ufs="${line#UnitFileState=}" ;;
+            *) ;;
+        esac
+    done <<<"$out"
+    [[ "$load" == loaded && "$active" == inactive && "$ufs" == disabled ]]
+}
+
 # cd_data_timer_guard SPAN_MIN -- may a lock span of SPAN_MIN minutes from now start? 0 when it
 # fits before the next backup and the next purge, 3 when it does not (waiting, no failure), 2
 # when no timer data is readable (unknown is never a pass).
+#
+# A timer that is switched off (installed, disabled, inactive: see _cd_data_timer_off) has no
+# next elapse because it will never run. It cannot overlap anything: the guard says so in one
+# line and leaves it out. The units named so are left in CD_DATA_TIMERS_OFF ("backup", "purge",
+# space separated; reset by every call) for the selftest to report. A timer that is enabled or
+# active but has no readable next elapse, a unit file that is missing and a timer list that
+# cannot be read stay unknown.
 #
 # A timer overlaps when its next elapse lies in [now, now + SPAN_MIN + its longest run]. The
 # interval is wider than the overlap itself needs: the longest run is added because a
@@ -287,7 +313,8 @@ _cd_data_timer_next() {
 # guarded; the guard says so on stdout (the status verb discards stdout today).
 cd_data_timer_guard() {
     local span="${1:-}" now json bmax pmax unit next max rc=0
-    local -A nexts=()
+    local -A nexts=() off=()
+    CD_DATA_TIMERS_OFF=""
     if ! _cd_data_int "$span" || ((10#$span < 1)); then
         _cd_data_err "timer guard: the span is not a whole number of minutes"
         return 2
@@ -302,13 +329,24 @@ cd_data_timer_guard() {
         return 2
     }
     for unit in "$_CD_DATA_BACKUP_TIMER" "$_CD_DATA_PURGE_TIMER"; do
-        next="$(_cd_data_timer_next "$unit" "$json" "$now")" || {
+        if next="$(_cd_data_timer_next "$unit" "$json" "$now")"; then
+            nexts[$unit]="$next"
+        elif _cd_data_timer_off "$unit"; then
+            off[$unit]=1
+            if [[ "$unit" == "$_CD_DATA_BACKUP_TIMER" ]]; then
+                CD_DATA_TIMERS_OFF="${CD_DATA_TIMERS_OFF:+${CD_DATA_TIMERS_OFF} }backup"
+                printf 'lock span: the backup timer is switched off (disabled and inactive); it cannot elapse inside the span\n'
+            else
+                CD_DATA_TIMERS_OFF="${CD_DATA_TIMERS_OFF:+${CD_DATA_TIMERS_OFF} }purge"
+                printf 'lock span: the purge timer is switched off (disabled and inactive); it cannot elapse inside the span\n'
+            fi
+        else
             _cd_data_err "timer guard: no usable next elapse for ${unit} (unknown is not a pass)"
             return 2
-        }
-        nexts[$unit]="$next"
+        fi
     done
     for unit in "$_CD_DATA_BACKUP_TIMER" "$_CD_DATA_PURGE_TIMER"; do
+        [[ -z "${off[$unit]:-}" ]] || continue
         next="${nexts[$unit]}"
         if [[ "$unit" == "$_CD_DATA_BACKUP_TIMER" ]]; then max=$((10#$bmax)); else max=$((10#$pmax)); fi
         # a next elapse older than the longest run is a stale answer, not a verdict
@@ -974,7 +1012,8 @@ _cd_data_unusable() {
 }
 
 # cd_data_live_portal_probe -- the portal list page of the LIVE colour, three tries after
-# migrate. One good answer is a pass. Three answers that are 500s or timeouts (the probe says
+# migrate. One good answer is a pass; so is the app's own "this customer has no public
+# portal" (CD_COLOUR_PORTAL_CASE=none), which is said in one line and is no break. Three answers that are 500s or timeouts (the probe says
 # 1 each time) set rollback_target=unusable and return 0 with a warning. A probe that cannot
 # say (docker unaskable, a bad base path) is no verdict: its code is returned and nothing is
 # recorded.
@@ -986,6 +1025,10 @@ cd_data_live_portal_probe() {
         rc=0
         cd_colour_portal_probe "$colour" >/dev/null 2>&1 || rc=$?
         if ((rc == 0)); then
+            # a customer without a public portal passes the probe: say so, it is no break
+            if [[ "${CD_COLOUR_PORTAL_CASE:-}" == none ]]; then
+                _cd_data_err "portal probe: the live colour has no public portal (this instance has none set up); nothing to check"
+            fi
             return 0
         elif ((rc == 1)); then
             bad=$((bad + 1))

@@ -3,6 +3,7 @@
   import { Button } from '$lib/components/ui/button'
   import { computeResult, type MajorityRule } from '$lib/governance/compute-result'
   import { isUntalliedResolution } from '$lib/governance/resolution-vote-state'
+  import { checkResolutionAgainstAttendance, type AttendanceBasis } from '$lib/governance/resolution-plausibility'
 
   interface Resolution {
     id?: string
@@ -24,7 +25,7 @@
     decision_rule_params?: { fraction?: number } | null
   }
 
-  let { resolution, isAdmin, protocolId, eligibleVotingCount = 0, startEditing = false, error = null, onSave, onDelete, onCancel }: {
+  let { resolution, isAdmin, protocolId, eligibleVotingCount = 0, attendance = null, startEditing = false, error = null, onSave, onDelete, onCancel }: {
     resolution: Resolution
     isAdmin: boolean
     protocolId: string
@@ -32,6 +33,11 @@
     // server is still the authority. Defaults to 0 so the row renders even before
     // the roster is known (only the `absolute` preview depends on it).
     eligibleVotingCount?: number
+    // The attendance as the roster shows it now. With it the form refuses, before
+    // sending, what the server refuses too: a decision of a meeting that is not
+    // beschlussfähig, or more votes than members present. Without it (null) only
+    // the server judges.
+    attendance?: AttendanceBasis | null
     // An unsaved draft (no id) opens as the entry form; Abbrechen then discards it
     // through `onCancel` instead of just closing the editor.
     startEditing?: boolean
@@ -52,6 +58,8 @@
 
   // A new decision is stored with all three counts; a cleared field is not a 0.
   let countsMissing = $state(false)
+  // Why the decision does not fit the meeting (server wording, shared rule).
+  let misfit = $state<string | null>(null)
   // True while onSave is pending: the save cannot be repeated or cancelled.
   let saving = $state(false)
 
@@ -71,6 +79,13 @@
       draft.adoption_mode !== 'acclamation' &&
       (countIsBlank(draft.votes_yes) || countIsBlank(draft.votes_no) || countIsBlank(draft.votes_abstain))
     if (countsMissing) return
+    misfit = attendance
+      ? (checkResolutionAgainstAttendance(
+          { ...draft, adoption_mode: draft.adoption_mode ?? resolution.adoption_mode },
+          attendance,
+        )?.message ?? null)
+      : null
+    if (misfit) return
     saving = true
     try {
       const ok = await onSave(draft)
@@ -84,6 +99,7 @@
     if (saving) return
     textMissing = false
     countsMissing = false
+    misfit = null
     editing = false
     onCancel?.()
   }
@@ -160,12 +176,12 @@
 {#if editing && isAdmin}
   <div class="rounded-md border p-3 space-y-2">
     <Input bind:value={draft.text} placeholder="Beschlusstext" aria-label="Beschlusstext" aria-invalid={textMissing || undefined} />
-    {#if textMissing || countsMissing || error}
+    {#if textMissing || countsMissing || misfit || error}
       <p role="alert" class="text-sm text-red-700">{textMissing
         ? 'Bitte den Beschlusstext eingeben.'
         : countsMissing
           ? 'Bitte alle drei Stimmzahlen angeben (0, wenn niemand so gestimmt hat).'
-          : error}</p>
+          : (misfit ?? error)}</p>
     {/if}
     <div class="flex flex-wrap items-center gap-2">
       <!-- Visible labels (finding 7): the tally fields were announced only by
@@ -196,8 +212,12 @@
         </select>
       {/if}
     </div>
-    <!-- INV-5: result is computed, not chosen. Shown read-only, tagged 'berechnet'. -->
-    {#if draftHasNoVote}
+    <!-- INV-5: result is computed, not chosen. Shown read-only, tagged 'berechnet'.
+         Not while a refusal is shown: next to "Nicht beschlussfähig" a computed
+         "Angenommen" would read as if the decision had been taken. -->
+    {#if misfit || error}
+      <!-- the refusal above says why nothing is stored -->
+    {:else if draftHasNoVote}
       <!-- Nothing counted yet: a computed "Abgelehnt" for 0/0/0 would read as a
            decision that was never taken (finding 7). -->
       <div class="text-sm text-ink-muted">Ergebnis: noch keine Abstimmung</div>

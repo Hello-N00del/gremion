@@ -322,6 +322,10 @@ services:
       #                          above); else the platform domain.
       ORIGIN:                      https://${PUBLIC_PORTAL_HOST:-public.${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}}
       GREMION_PUBLIC_DB_URL:       postgresql://gremion_public_reader:${PUBLIC_DB_PASSWORD}@postgres-${STACK:?STACK required}:5432/${PUBLIC_PORTAL_DB_NAME:-${GREMION_DB_NAME:-gremion}}
+      # 1 when the host named the portal database (PUBLIC_PORTAL_DB_NAME), empty when it
+      # did not. Unnamed, a database without portal tables means "no portal for this
+      # instance" (a clean 404); named, the same failure is a real failure (a 500).
+      PORTAL_DB_EXPLICIT:          ${PUBLIC_PORTAL_DB_NAME:+1}
       PUBLIC_CONTACT_NAME:         ${PUBLIC_CONTACT_NAME:-}
       PUBLIC_CONTACT_ADDRESS:      ${PUBLIC_CONTACT_ADDRESS:-}
       PUBLIC_CONTACT_EMAIL:        ${PUBLIC_CONTACT_EMAIL:-}
@@ -428,6 +432,10 @@ services:
       # Shown on "Neuer Mandant" as the host this install is built for (the host-side create refuses any other);
       # empty: no hint.
       PILOT_TENANT_HOST: ${PILOT_TENANT_HOST:-}
+      # Further customer hosts (SECONDARY_TENANT_HOSTS, optional, comma-separated), each for a core-only customer: shown on
+      # "Neuer Mandant" with the note that such a customer has no chat, files, office editing, video, votes, content or newsletter. A hint only:
+      # the host-side create reads the list from state.env and decides. Empty: no secondary host.
+      SECONDARY_TENANT_HOSTS: ${SECONDARY_TENANT_HOSTS:-}
       # "Neuer Mandant" refuses the platform's reserved names and the panel's own host (CONTROL_PANEL_HOST, else
       # control.<PLATFORM_DOMAIN>) as a customer host, before a request is written.
       PLATFORM_DOMAIN: ${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}

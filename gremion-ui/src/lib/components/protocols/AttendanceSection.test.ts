@@ -121,4 +121,29 @@ describe('AttendanceSection', () => {
     expect(String(url)).toContain('p-2')
     expect(String(init.body)).not.toContain('"present"')
   })
+
+  // The page keeps the quorum the server loaded until the roster really changes:
+  // a roster that is empty or differs from the server's count must not overwrite it.
+  test('onQuorum is silent on render and on reseed, and reports only a saved change', async () => {
+    stubFetch(200)
+    const onQuorum = vi.fn()
+    const { getByRole, rerender } = render(AttendanceSection, { props: { ...props(), onQuorum } })
+    expect(onQuorum).not.toHaveBeenCalled()
+    await rerender({ attendance: [], advisoryAttendance: [], protocolId: 'p-2', onQuorum })
+    expect(onQuorum).not.toHaveBeenCalled()
+    await rerender({ ...props(), onQuorum })
+    expect(onQuorum).not.toHaveBeenCalled()
+    await fireEvent.click(getByRole('button', { name: 'Anna Beispiel: anwesend' }))
+    await waitFor(() => expect(onQuorum).toHaveBeenCalledTimes(1))
+    expect(onQuorum).toHaveBeenLastCalledWith({ eligibleVotingCount: 3, presentVotingCount: 1, quorate: false })
+  })
+
+  test('a failed save reports nothing', async () => {
+    stubFetch(500)
+    const onQuorum = vi.fn()
+    const { getByRole } = render(AttendanceSection, { props: { ...props(), onQuorum } })
+    await fireEvent.click(getByRole('button', { name: 'Anna Beispiel: anwesend' }))
+    await waitFor(() => expect(getByRole('button', { name: 'Anna Beispiel: anwesend' })).toBeTruthy())
+    expect(onQuorum).not.toHaveBeenCalled()
+  })
 })

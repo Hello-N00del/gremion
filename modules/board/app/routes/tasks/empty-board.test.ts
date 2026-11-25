@@ -44,3 +44,20 @@ describe('a failed board create', () => {
     expect(body).toContain('createError = null')
   })
 })
+
+// A board id the member may not see used to show the normal page and no reason. The page says why, in
+// words, outside every if-block like the create error so it shows with or without boards of their own.
+describe('a board the member may not see', () => {
+  it('shows a German no-access note from data.boardDenied, announced as an alert', () => {
+    const at = src.indexOf('{#if data.boardDenied}')
+    expect(at).toBeGreaterThan(-1)
+    const end = src.indexOf('{/if}', at)
+    const note = src.slice(at, end)
+    expect(note).toContain('role="alert"')
+    expect(note).toContain('Kein Zugriff auf dieses Board')
+    // top level: before the empty/non-empty split of the page
+    const before = src.slice(0, at)
+    expect((before.match(/\{#if /g) ?? []).length - (before.match(/\{\/if\}/g) ?? []).length).toBe(0)
+    expect(at).toBeLessThan(src.indexOf('{#if data.boards.length === 0}'))
+  })
+})

@@ -36,7 +36,7 @@ import {
   getTenantReadiness,
   _resetReadinessForTests,
 } from './readiness'
-import { forEachActiveTenant, _resetWorkerFleetForTests } from './worker-fleet'
+import { forEachActiveTenant, runTenantTickNow, _resetWorkerFleetForTests } from './worker-fleet'
 
 const tenantRow = (id: string, slug: string) =>
   ({ id, slug, status: 'active' }) as unknown as Tenant
@@ -354,5 +354,102 @@ describe('forEachActiveTenant — the worker gate', () => {
     release()
     await running
     expect(done.length).toBeGreaterThan(0)
+  })
+})
+
+// A pass that a REQUEST runs for one tenant (the module settings page asks for the reconciler pass it waits on)
+// is the same work as the tick's. It must meet the same two guards: the worker gate (a gated colour runs no
+// background work at all, a request does not change that) and the per-(worker, tenant) single-flight (a request
+// never overlaps the tick, nor another request).
+describe('runTenantTickNow — the on-demand run of a worker tick for one tenant', () => {
+  function latch() {
+    let release!: () => void
+    const hold = new Promise<void>((r) => {
+      release = r
+    })
+    let entered!: () => void
+    const inside = new Promise<void>((r) => {
+      entered = r
+    })
+    return { release, hold, entered, inside }
+  }
+
+  it('gate ON, nothing in flight: runs the work once, inside that tenant scope, and returns its value', async () => {
+    const seen: string[] = []
+    const out = await runTenantTickNow('test-worker', ctxFor('tid-beta', 'beta'), () => {
+      seen.push(currentTenantId())
+      return 7
+    })
+    expect(out).toEqual({ ran: true, value: 7 })
+    expect(seen).toEqual(['tid-beta'])
+  })
+
+  it('gate OFF: the work does not run, and the answer says why', async () => {
+    vi.mocked(isWorkerGateOff).mockResolvedValue(true)
+    const work = vi.fn()
+    const out = await runTenantTickNow('test-worker', ctxFor('tid-beta', 'beta'), work)
+    expect(out).toEqual({ ran: false, reason: 'gate-off' })
+    expect(work).not.toHaveBeenCalled()
+  })
+
+  it('a gate read that throws counts as ON, like the tick', async () => {
+    vi.mocked(isWorkerGateOff).mockRejectedValue(new Error('boom'))
+    const out = await runTenantTickNow('test-worker', ctxFor('tid-beta', 'beta'), () => 1)
+    expect(out).toEqual({ ran: true, value: 1 })
+  })
+
+  it('skips while the timer tick of the SAME (worker, tenant) is in flight', async () => {
+    const l = latch()
+    const tick = forEachActiveTenant('test-worker', async (ctx) => {
+      if (ctx.slug !== 'beta') return
+      l.entered()
+      await l.hold
+    })
+    await l.inside
+    const work = vi.fn()
+    const out = await runTenantTickNow('test-worker', ctxFor('tid-beta', 'beta'), work)
+    expect(out).toEqual({ ran: false, reason: 'in-flight' })
+    expect(work).not.toHaveBeenCalled()
+    l.release()
+    await tick
+  })
+
+  it('the timer tick skips the tenant while an on-demand run holds it (the guard is shared both ways)', async () => {
+    const l = latch()
+    const now = runTenantTickNow('test-worker', ctxFor('tid-beta', 'beta'), async () => {
+      l.entered()
+      await l.hold
+    })
+    await l.inside
+    const ticked: string[] = []
+    await forEachActiveTenant('test-worker', (ctx) => {
+      ticked.push(ctx.slug)
+    })
+    expect(ticked).toEqual(['default'])
+    l.release()
+    await now
+  })
+
+  it('two on-demand runs for one tenant do not overlap; another tenant or worker label is not blocked', async () => {
+    const l = latch()
+    const first = runTenantTickNow('test-worker', ctxFor('tid-beta', 'beta'), async () => {
+      l.entered()
+      await l.hold
+    })
+    await l.inside
+    expect(await runTenantTickNow('test-worker', ctxFor('tid-beta', 'beta'), () => 1)).toEqual({ ran: false, reason: 'in-flight' })
+    expect(await runTenantTickNow('test-worker', ctxFor('tid-default', 'default'), () => 2)).toEqual({ ran: true, value: 2 })
+    expect(await runTenantTickNow('other-worker', ctxFor('tid-beta', 'beta'), () => 3)).toEqual({ ran: true, value: 3 })
+    l.release()
+    await first
+  })
+
+  it('releases the key after a throw, and the throw reaches the caller', async () => {
+    await expect(
+      runTenantTickNow('test-worker', ctxFor('tid-beta', 'beta'), () => {
+        throw new Error('pass failed')
+      }),
+    ).rejects.toThrow('pass failed')
+    expect(await runTenantTickNow('test-worker', ctxFor('tid-beta', 'beta'), () => 1)).toEqual({ ran: true, value: 1 })
   })
 })

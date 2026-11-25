@@ -130,6 +130,39 @@ export async function forEachActiveTenant(
   }
 }
 
+export type TickNowResult<T> = { ran: true; value: T } | { ran: false; reason: 'gate-off' | 'in-flight' }
+
+/**
+ * Run a worker's per-tenant work ONCE, NOW, for a tenant a REQUEST already resolved, under the same two guards the
+ * timer tick has: the worker gate (a colour whose gate file says `off` runs no background work, and a request is no
+ * way around that) and the single-flight per (label, tenantId), shared with forEachActiveTenant, so a request never
+ * overlaps the timer's tick of that worker for that tenant nor another request. When either guard says no, the work
+ * does not run and the answer says why; the caller then reads what the owner of the work has written so far.
+ * A throw of `fn` reaches the caller (after the key is released). The readiness gate is not repeated: the request
+ * resolved the tenant through the resolution seam, which holds it.
+ */
+export async function runTenantTickNow<T>(
+  label: string,
+  ctx: TenantContext,
+  fn: (ctx: TenantContext) => T | Promise<T>,
+): Promise<TickNowResult<T>> {
+  let gateOff = false
+  try {
+    gateOff = await isWorkerGateOff()
+  } catch {
+    gateOff = false // never a stopped fleet because the gate could not be read (same rule as the tick)
+  }
+  if (gateOff) return { ran: false, reason: 'gate-off' }
+  const key = `${label}::${ctx.id}`
+  if (_inFlight.has(key)) return { ran: false, reason: 'in-flight' }
+  _inFlight.add(key)
+  try {
+    return { ran: true, value: await runWithTenant(ctx, () => fn(ctx)) }
+  } finally {
+    _inFlight.delete(key)
+  }
+}
+
 /** Test-only: clear the module-scoped single-flight registry between cases. */
 export function _resetWorkerFleetForTests(): void {
   _inFlight.clear()

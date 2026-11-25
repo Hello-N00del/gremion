@@ -3,6 +3,12 @@ import { render, fireEvent, screen, waitFor, within } from '@testing-library/sve
 import type { KarenzView, ModuleOverview, ModuleOverviewItem } from '$lib/modules/switch-preview'
 import TabModules from './TabModules.svelte'
 
+// The root layout load builds the navigation from config.modules. It does not run again while the admin stays on
+// this page, so the page asks for it once a module's state has changed (invalidateAll), or the entry of a module
+// that was just switched off stays in the rail until the next full navigation.
+const nav = vi.hoisted(() => ({ invalidateAll: vi.fn(async () => {}) }))
+vi.mock('$app/navigation', () => nav)
+
 // Karenz phase 1, Task 12: the settings section "Module". A council admin switches a module ON; the
 // switch OFF is rendered inert until phase 2. Every server answer is a double here: the page shows
 // what the server said and never claims a switch before the request is applied.
@@ -153,6 +159,45 @@ describe('TabModules.svelte', () => {
     const settled = getCount(calls)
     await new Promise((r) => setTimeout(r, 120))
     expect(getCount(calls)).toBe(settled)
+  })
+
+  describe('the navigation follows a module that was switched', () => {
+    afterEach(() => nav.invalidateAll.mockClear())
+
+    it('reloads the shell data once, when a pending switch-off turns into off; the first load and an unchanged poll do not', async () => {
+      const pending = ok(overview([item({ enabled: true, pending: [{ requestId: 'r1', action: 'disable', state: 'succeeded' }] })]))
+      const off = ok(overview([item({ enabled: false, pending: [] })]))
+      const { calls } = fetchDouble([pending, pending, off])
+      render(TabModules, { props: { pollMs: 15 } })
+      expect(await screen.findByText('Anfrage wird ausgeführt')).toBeTruthy()
+      expect(nav.invalidateAll).not.toHaveBeenCalled()
+      await waitFor(() => expect(screen.queryByText('Anfrage wird ausgeführt')).toBeNull())
+      await waitFor(() => expect(nav.invalidateAll).toHaveBeenCalledTimes(1))
+      // the poll stopped with the pending request: nothing reloads again
+      const settled = getCount(calls)
+      await new Promise((r) => setTimeout(r, 100))
+      expect(getCount(calls)).toBe(settled)
+      expect(nav.invalidateAll).toHaveBeenCalledTimes(1)
+    })
+
+    it('reloads after a switch-on too (the entry comes back)', async () => {
+      const pending = ok(overview([item({ enabled: false, pending: [{ requestId: 'r1', action: 'enable', state: 'applying' }] })]))
+      const on = ok(overview([item({ enabled: true, pending: [] })]))
+      fetchDouble([pending, on])
+      render(TabModules, { props: { pollMs: 15 } })
+      await screen.findByText('Anfrage wird ausgeführt')
+      await waitFor(() => expect(nav.invalidateAll).toHaveBeenCalledTimes(1))
+    })
+
+    it('a failed reload of the shell never breaks the page', async () => {
+      nav.invalidateAll.mockRejectedValueOnce(new Error('offline'))
+      const pending = ok(overview([item({ enabled: true, pending: [{ requestId: 'r1', action: 'disable', state: 'queued' }] })]))
+      const off = ok(overview([item({ enabled: false, pending: [] })]))
+      fetchDouble([pending, off])
+      render(TabModules, { props: { pollMs: 15 } })
+      await waitFor(() => expect(nav.invalidateAll).toHaveBeenCalledTimes(1))
+      expect(await screen.findByText('Ausgeschaltet')).toBeTruthy()
+    })
   })
 
   it('while a request is pending the module offers no second switch', async () => {
@@ -599,5 +644,108 @@ describe('TabModules.svelte: the switch confirmed before the second factor is ca
     expect((await screen.findByTestId('module-resume-error')).textContent).toContain('Keine Verbindung zum Server.')
     expect(await screen.findByText('Abstimmungen')).toBeTruthy()
     expect(posted).toBe(1)
+  })
+})
+
+// The warning is where the switch-off is confirmed, so the second factor is asked for BEFORE it opens: the
+// preview answers 401 STEP_UP_REQUIRED for a session without a fresh one, the page leaves for the sign-in service
+// and opens the warning when it is back. The admin confirms once, after the round trip; nothing confirmed has to
+// be carried across it. The mark only names the module whose warning to open again: it executes nothing, and the
+// POST checks the second factor on its own.
+describe('TabModules.svelte: the second factor comes before the switch-off warning', () => {
+  const REOPEN = 'gremion.module-switch.reopen'
+  const RESUME = 'gremion.module-switch.resume'
+  const STEP_UP = '/auth/step-up?returnTo=/settings/module'
+  const preview = {
+    moduleId: 'votes',
+    moduleLabel: 'Abstimmungen',
+    confirmPhrase: 'Abstimmungen',
+    deletes: [{ key: 'all', label: 'Abstimmungen-Daten', count: null, unit: '' }],
+    retained: [],
+    graceDays: 30,
+    finalDeletionAt: null,
+    recoverable: true,
+  }
+  const stale = () => reply(401, { error: 'STEP_UP_REQUIRED', requiredLoa: 2 })
+  const leaveReopen = (moduleId: string, agoMs = 40_000) => sessionStorage.setItem(REOPEN, `${Date.now() - agoMs}:${moduleId}`)
+
+  /** The list always answers; the preview answers with `previewReply`. Every call is recorded. */
+  function server(previewReply: () => Response) {
+    const calls: { url: string; method: string }[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        calls.push({ url, method: init?.method ?? 'GET' })
+        if ((init?.method ?? 'GET') === 'POST') return reply(201, { success: true, requestId: 'r1' })
+        if (url.includes('?preview=')) return previewReply()
+        return ok(overview([item({ enabled: true })], { disableAvailable: true }))
+      }),
+    )
+    return calls
+  }
+
+  it('a preview that asks for the second factor sends the browser there at once, with no warning and nothing posted', async () => {
+    let markWhenLeaving: string | null = null
+    const navigate = vi.fn(() => {
+      markWhenLeaving = sessionStorage.getItem(REOPEN)
+    })
+    const calls = server(stale)
+    render(TabModules, { props: { pollMs: 10_000, navigate } })
+    await fireEvent.click(await screen.findByRole('button', { name: 'Ausschalten' }))
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith(STEP_UP))
+    expect(markWhenLeaving).toMatch(/^\d+:votes$/)
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect(calls.some((c) => c.method === 'POST')).toBe(false)
+    // no resume mark: there is nothing kept on the server to carry out
+    expect(sessionStorage.getItem(RESUME)).toBeNull()
+  })
+
+  it('back from the second factor the warning of that module opens by itself; the admin confirms once', async () => {
+    leaveReopen('votes')
+    const navigate = vi.fn()
+    const calls = server(() => ok(preview))
+    render(TabModules, { props: { pollMs: 10_000, navigate } })
+    expect(await screen.findByRole('alertdialog')).toBeTruthy()
+    expect(screen.getByLabelText(/Namen des Moduls/)).toBeTruthy()
+    expect(navigate).not.toHaveBeenCalled()
+    expect(calls.filter((c) => c.method === 'POST')).toHaveLength(0)
+    // read once: a reload does not open it again
+    expect(sessionStorage.getItem(REOPEN)).toBeNull()
+    await fireEvent.input(screen.getByLabelText(/Namen des Moduls/), { target: { value: 'Abstimmungen' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Modul ausschalten' }))
+    await waitFor(() => expect(calls.filter((c) => c.method === 'POST')).toHaveLength(1))
+  })
+
+  it('if the second factor is still not there when the page is back it says so and does not leave again', async () => {
+    leaveReopen('votes')
+    const navigate = vi.fn()
+    server(stale)
+    render(TabModules, { props: { pollMs: 10_000, navigate } })
+    expect((await screen.findByRole('alert')).textContent).toContain('Zwei-Faktor-Prüfung wurde nicht abgeschlossen')
+    expect(navigate).not.toHaveBeenCalled()
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+  })
+
+  it.each([
+    ['left long ago', () => leaveReopen('votes', 16 * 60_000)],
+    ['from the future', () => leaveReopen('votes', -60_000)],
+    ['not a time and a module', () => sessionStorage.setItem(REOPEN, 'votes')],
+    ['a module the list does not have', () => leaveReopen('nope')],
+  ])('a mark %s opens nothing and is dropped', async (_name, leave) => {
+    leave()
+    const calls = server(() => ok(preview))
+    render(TabModules, { props: { pollMs: 10_000 } })
+    expect(await screen.findByText('Abstimmungen')).toBeTruthy()
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect(calls.some((c) => c.url.includes('?preview='))).toBe(false)
+    expect(sessionStorage.getItem(REOPEN)).toBeNull()
+  })
+
+  it('a mark for a module that is no longer on opens nothing', async () => {
+    leaveReopen('votes')
+    vi.stubGlobal('fetch', vi.fn(async () => ok(overview([item({ enabled: false })], { disableAvailable: true }))))
+    render(TabModules, { props: { pollMs: 10_000 } })
+    expect(await screen.findByText('Abstimmungen')).toBeTruthy()
+    expect(screen.queryByRole('alertdialog')).toBeNull()
   })
 })

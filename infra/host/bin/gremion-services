@@ -473,6 +473,22 @@ cmd_wire() {
     EDGE_BIND_IP="$edge_ip"; EDGE_HTTPS_PORT="$edge_port"
     bot_id="@${BOT_LOCALPART}:${platform}"
 
+    # -- the customer's host: the shared Synapse and Nextcloud are bound to ONE customer realm, the one of
+    # PILOT_TENANT_HOST. A customer registered on any other host (a secondary host, SECONDARY_TENANT_HOSTS) is
+    # core-only: wiring it would point the shared services at its realm and take them from the primary customer.
+    # Refused HERE, before any secret is copied, any key written or any container started. An unreadable
+    # registry or a customer row without a host is a refusal too (never read as "the primary host"); only a
+    # slug with no customer row at all goes on, as it always did, and is warned about at the end (step 8).
+    local reg_host reg_rc=0
+    reg_host="$(customer_registered_host "$slug")" || reg_rc=$?
+    (( reg_rc == 0 || reg_rc == 4 )) || exit "$reg_rc"
+    if (( reg_rc == 0 )); then
+        [[ -n "$reg_host" ]] \
+            || die "the customer ${slug} has no registered host in the control database: it cannot be told from a secondary-host customer, which is core-only (the shared chat and file services stay bound to the primary customer); nothing was written or started" "$GREMION_EXIT_ASSERT"
+        [[ "$reg_host" == "${host,,}" ]] \
+            || die "the customer ${slug} is registered on ${reg_host}, not on this install's customer host ${host} (PILOT_TENANT_HOST): a secondary-host customer is core-only, and the shared chat and file services stay bound to the primary customer; wiring it would point Synapse and Nextcloud at its realm. Nothing was written or started" "$GREMION_EXIT_ASSERT"
+    fi
+
     local issuer="https://${host}/auth/realms/${slug}"
     local discovery="${issuer}/.well-known/openid-configuration"
 

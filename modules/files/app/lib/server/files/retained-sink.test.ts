@@ -18,6 +18,8 @@ const h = vi.hoisted(() => ({
   filesOn: { value: true as boolean | undefined },
   holders: {} as Record<string, Array<{ userId: string; email: string; displayName: string; roles: string[] }>>,
   holderRoles: [] as unknown[],
+  holderOptions: [] as unknown[],
+  absentRoles: { value: [] as string[] },
   holderFailure: { value: false },
   skipped: {} as Record<string, Array<{ userId: string; reason: 'disabled' | 'no-email' }>>,
 }))
@@ -25,10 +27,11 @@ vi.mock('$lib/server/config', () => ({
   readConfig: () => ({ modules: h.filesOn.value === undefined ? {} : { files: h.filesOn.value } }),
 }))
 vi.mock('$lib/server/governance/role-holders', () => ({
-  listRoleHolders: async (tenant: { id: string }, roles: readonly string[]) => {
+  listRoleHolders: async (tenant: { id: string }, roles: readonly string[], _kc?: unknown, options?: unknown) => {
     h.holderRoles.push([...roles])
+    h.holderOptions.push(options)
     if (h.holderFailure.value) throw new Error('keycloak down')
-    return { holders: h.holders[tenant.id] ?? [], skipped: h.skipped[tenant.id] ?? [] }
+    return { holders: h.holders[tenant.id] ?? [], skipped: h.skipped[tenant.id] ?? [], absentRoles: h.absentRoles.value }
   },
 }))
 
@@ -196,6 +199,8 @@ describe('filesRetainedSink', () => {
     h.filesOn.value = true
     h.holders = {}
     h.holderRoles = []
+    h.holderOptions = []
+    h.absentRoles.value = []
     h.holderFailure.value = false
     h.skipped = {}
     sink = await import('./retained-sink')
@@ -247,6 +252,37 @@ describe('filesRetainedSink', () => {
     expect([...nc.groups.get('gremion-retained-tenant-a')!].sort()).toEqual(['u1', 'u2'])
     // asked for exactly the five roles that may read retained records
     expect(h.holderRoles[0]).toEqual(['council-admin', 'vorstand', 'finance', 'auditor', 'it-admin'])
+  })
+
+  // A freshly created customer's realm carries council-admin, vorstand and it-admin; finance and auditor are
+  // vocabulary roles no module mints, so Keycloak answers 404 for them (the live failure of publish:files).
+  // Nobody can hold a role that does not exist, so those two are optional; the three base roles are not.
+  it('names finance and auditor optional (a realm may not carry them) and the three base-realm roles required', async () => {
+    const t = makeTenant('tenant-a')
+    h.holders['tenant-a'] = [holder('u1')]
+    await publish(t, 'r1', 'a.ndjson', '1\n')
+    expect(h.holderOptions[0]).toEqual({ optionalRoles: ['finance', 'auditor'] })
+    expect(sink.RETAINED_OPTIONAL_ROLES).toEqual(['finance', 'auditor'])
+  })
+
+  it('a realm without those roles does not fail the publish, and the missing roles are named in a warning', async () => {
+    const t = makeTenant('tenant-a')
+    h.holders['tenant-a'] = [holder('u1')]
+    h.absentRoles.value = ['finance', 'auditor']
+    await publish(t, 'r1', 'a.ndjson', '1\n')
+    const warned = vi.mocked(console.warn).mock.calls.flat().join(' ')
+    expect(warned).toContain('finance')
+    expect(warned).toContain('auditor')
+    expect(warned).toContain('tenant-a')
+    expect([...nc.files.values()]).toEqual(['1\n'])
+  })
+
+  it('no warning when every role exists', async () => {
+    const t = makeTenant('tenant-a')
+    h.holders['tenant-a'] = [holder('u1')]
+    vi.mocked(console.warn).mockClear()
+    await publish(t, 'r1', 'a.ndjson', '1\n')
+    expect(vi.mocked(console.warn).mock.calls.flat().join(' ')).not.toContain('does not carry')
   })
 
   it('the readers can read but never write; only the service account writes, through a group of its own', async () => {

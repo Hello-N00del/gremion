@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { listRoleHolders, NOTIFY_ROLES } from './role-holders'
-import type { KcUser } from '$lib/server/keycloak-admin'
+import { KcAdminError, type KcUser } from '$lib/server/keycloak-admin'
 
 function kcUser(over: Partial<KcUser> & { id: string }): KcUser {
   return {
@@ -67,7 +67,7 @@ describe('listRoleHolders', () => {
 
   it('an empty realm role yields empty holders and no throw', async () => {
     const r = await listRoleHolders(tenant, undefined, fakeKc({}))
-    expect(r).toEqual({ holders: [], skipped: [] })
+    expect(r).toEqual({ holders: [], skipped: [], absentRoles: [] })
   })
 
   it('a Keycloak 500 on one role rejects the whole call', async () => {
@@ -103,5 +103,40 @@ describe('listRoleHolders', () => {
     const r = await listRoleHolders(tenant, ['vorstand'], fakeKc({ vorstand: [u, u] }))
     expect(r.holders).toHaveLength(1)
     expect(r.holders[0]!.roles).toEqual(['vorstand'])
+  })
+})
+
+// A realm carries only the roles it was created with: the base realm has council-admin, vorstand and it-admin, and
+// no module mints finance or auditor. A caller that reads a vocabulary role (the retained-copy readers) names it
+// optional: a role the realm does not carry has no holders. A role that is NOT named optional still fails loudly,
+// and so does every other failure, optional role or not.
+describe('listRoleHolders: optional roles', () => {
+  const noRole = () => new KcAdminError(404, '{"error":"Could not find role"}')
+
+  it('an optional role the realm does not carry has no holders and is reported as absent; the other roles are read', async () => {
+    const kc = fakeKc({ 'council-admin': [kcUser({ id: 'u1' })], finance: noRole(), auditor: noRole() })
+    const r = await listRoleHolders(tenant, ['council-admin', 'finance', 'auditor'], kc, { optionalRoles: ['finance', 'auditor'] })
+    expect(r.holders.map((h) => h.userId)).toEqual(['u1'])
+    expect(r.absentRoles).toEqual(['finance', 'auditor'])
+  })
+
+  it('a required role that is missing still throws', async () => {
+    const kc = fakeKc({ vorstand: noRole() })
+    await expect(listRoleHolders(tenant, ['vorstand', 'finance'], kc, { optionalRoles: ['finance'] })).rejects.toBeInstanceOf(KcAdminError)
+  })
+
+  it('an optional role that fails for any other reason (HTTP 500, a timeout) still throws: no partial list', async () => {
+    await expect(
+      listRoleHolders(tenant, ['finance'], fakeKc({ finance: new KcAdminError(500, 'boom') }), { optionalRoles: ['finance'] }),
+    ).rejects.toBeInstanceOf(KcAdminError)
+    await expect(
+      listRoleHolders(tenant, ['finance'], fakeKc({ finance: new Error('timeout') }), { optionalRoles: ['finance'] }),
+    ).rejects.toThrow('timeout')
+  })
+
+  it('without the option nothing changes: a missing role throws, and absentRoles is empty when every role exists', async () => {
+    await expect(listRoleHolders(tenant, ['finance'], fakeKc({ finance: noRole() }))).rejects.toBeInstanceOf(KcAdminError)
+    const r = await listRoleHolders(tenant, ['vorstand'], fakeKc({}))
+    expect(r.absentRoles).toEqual([])
   })
 })

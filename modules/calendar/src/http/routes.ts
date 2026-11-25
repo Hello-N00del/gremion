@@ -139,7 +139,9 @@ export const RecurrenceSchema = z
   })
   .nullable()
 
-const CreateEventSchema = z.object({
+const END_BEFORE_START_MESSAGE = 'Das Ende darf nicht vor dem Beginn liegen.'
+
+const CreateEventFields = z.object({
   title: z.string().min(1).max(500),
   description: z.string().nullable().optional().default(null),
   location: z.string().nullable().optional().default(null),
@@ -156,7 +158,13 @@ const CreateEventSchema = z.object({
   recurrence: RecurrenceSchema.optional().default(null),
 })
 
-const UpdateEventSchema = z.object({
+// An end equal to the start stays valid: an all-day event is one date.
+const CreateEventSchema = CreateEventFields.refine((e) => e.endAt.getTime() >= e.startAt.getTime(), {
+  message: END_BEFORE_START_MESSAGE,
+  path: ['endAt'],
+})
+
+const UpdateEventFields = z.object({
   title: z.string().min(1).max(500).optional(),
   description: z.string().nullable().optional(),
   location: z.string().nullable().optional(),
@@ -169,6 +177,11 @@ const UpdateEventSchema = z.object({
   committeeIds: z.array(z.string()).optional(),
   recurrence: RecurrenceSchema.optional(),
 })
+
+const UpdateEventSchema = UpdateEventFields.refine(
+  (e) => !e.startAt || !e.endAt || e.endAt.getTime() >= e.startAt.getTime(),
+  { message: END_BEFORE_START_MESSAGE, path: ['endAt'] },
+)
 
 const CreateEventTypeSchema = z.object({
   name: z.string().min(1).max(255),
@@ -299,6 +312,14 @@ export function buildApiRoutes(storeFn: StoreFn): Route[] {
 
         const existing = await getEvent(sql, id)
         if (!existing) return sendError(res, 404, 'not found')
+
+        // A body that names one side only is compared with the stored other side.
+        if (
+          (body.startAt || body.endAt) &&
+          (body.endAt ?? existing.endAt).getTime() < (body.startAt ?? existing.startAt).getTime()
+        ) {
+          return sendError(res, 400, END_BEFORE_START_MESSAGE)
+        }
 
         const updated = await sql.begin(async (tx) => {
           const result = await updateEvent(tx as unknown as Sql, id, body)

@@ -8,8 +8,15 @@ import Page from './+page.svelte'
 
 const DATA = { key: '0192f0c4-0000-7000-8000-00000000000a', modules: [], expectedHost: null, disabled: null }
 
-function html(form?: unknown): string {
-  return render(Page, { props: { data: DATA, form } as never }).body
+function html(form?: unknown, data: Record<string, unknown> = DATA): string {
+  return render(Page, { props: { data, form } as never }).body
+}
+
+/** The text of the host field's hints, markup and comments stripped. */
+function hostHints(data: Record<string, unknown>): string {
+  const label = html(undefined, data).match(/<label[^>]*>(?:(?!<\/label>)[\s\S])*?name="host"[\s\S]*?<\/label>/)
+  if (!label) throw new Error('no Host field in the form')
+  return label[0].replace(/<input[^>]*>/g, '').replace(/<!--[\s\S]*?-->/g, '').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim()
 }
 
 /** The `<select name=...>` element with its options, as raw markup. */
@@ -97,5 +104,39 @@ describe('Neuer Mandant semester selects', () => {
     }
     expect(markup).toContain('id="err-term"')
     expect(markup).toContain('Die beiden Monate müssen verschieden sein.')
+  })
+})
+
+describe('Neuer Mandant host field: the secondary customer hosts', () => {
+  const PRIMARY = { ...DATA, expectedHost: 'rat.proof.example' }
+
+  it('without secondary hosts the sentence is the one it always was, and no secondary note is shown', () => {
+    for (const data of [PRIMARY, { ...PRIMARY, secondaryHosts: [] }]) {
+      const text = hostHints(data)
+      expect(text).toContain('Diese Installation ist für den Host rat.proof.example eingerichtet; jeder andere Host wird beim Anlegen abgelehnt.')
+      expect(text).not.toContain('Zusätzlich erlaubt')
+      expect(text).not.toContain('Videokonferenz')
+    }
+  })
+
+  it('with secondary hosts it names them and says plainly what a customer on such a host does not have', () => {
+    const text = hostHints({ ...PRIMARY, secondaryHosts: ['canary.example.org', 'test.example.net'] })
+    expect(text).toContain('Diese Installation ist für den Host rat.proof.example eingerichtet.')
+    expect(text).toContain('Zusätzlich erlaubt: canary.example.org, test.example.net')
+    expect(text).toContain('jeder andere Host wird beim Anlegen abgelehnt')
+    expect(text).toContain('hat keinen Chat, keine Dateien, keine Dokumentbearbeitung und keine Videokonferenz')
+    expect(text).toContain('Abstimmungen, Inhalte und Newsletter')
+  })
+
+  it('the note is described by the field (aria-describedby names every hint) and the host stays preset to the customer host', () => {
+    const markup = html(undefined, { ...PRIMARY, secondaryHosts: ['canary.example.org'] })
+    expect(markup).toMatch(/name="host"[^>]*aria-describedby="host-expected host-secondary"/)
+    expect(markup).toContain('id="host-secondary"')
+    expect(markup).toMatch(/name="host"[^>]*value="rat\.proof\.example"/)
+  })
+
+  it('no customer host known: no hint at all, the secondary hosts are not shown on their own', () => {
+    const text = hostHints({ ...DATA, expectedHost: null, secondaryHosts: ['canary.example.org'] })
+    expect(text).toBe('Host')
   })
 })

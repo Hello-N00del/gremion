@@ -134,13 +134,22 @@ case " $* " in
   *" exec "*"psql "*)
     # the control database: the SQL arrives on stdin, every value as -v name=value; the tenant row is a file
     sql="$(cat)"
-    printf "%s\n--\n" "$sql" >> "$GREMION_ROOT/psql-sql.log"
+    # the registered-host READ (the secondary-host guard) is logged on its own: psql-sql.log is what the tests
+    # use to show that no WRITE ran after a refusal
+    case "$sql" in *"tenant_domain"*) ;; *) printf "%s\n--\n" "$sql" >> "$GREMION_ROOT/psql-sql.log" ;; esac
     row="$GREMION_ROOT/tenant-row.json"
     prev=""; for a in "$@"; do
       if [ "$prev" = "-v" ]; then k="${a%%=*}"; v="${a#*=}"; eval "V_$k=\$v"; fi
       prev="$a"
     done
     case "$sql" in
+      *"tenant_domain"*)
+        # the customer'"'"'s REGISTERED host (primary tenant_domain): the pilot host unless a switch file says otherwise
+        printf "%s\n--\n" "$sql" >> "$GREMION_ROOT/host-query.log"
+        if [ -f "$GREMION_ROOT/psql-fails" ]; then exit 1; fi
+        if [ -f "$GREMION_ROOT/no-tenant-row" ]; then exit 0; fi
+        if [ -f "$GREMION_ROOT/registered-host" ]; then printf "host=%s\n" "$(cat "$GREMION_ROOT/registered-host")"; exit 0; fi
+        echo "host=pilot.guard.example.org"; exit 0 ;;
       *"__kernel"*)
         # the customer kernel database name, derived from the registry row (the first step of the creation-order repair)
         if [ -f "$GREMION_ROOT/no-tenant-row" ]; then exit 0; fi
@@ -838,4 +847,63 @@ exec ${real_stat} \"\$@\""
     [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
     [[ "$output" == *"no registry row"* ]] || { echo "$output"; return 1; }
     [ "$(jq -r '.[0].status' "${GREMION_ROOT}/ledger.json")" = failed ]
+}
+
+# ---------------------------------------------------------------------------
+# a customer on a SECONDARY host is core-only: wire refuses it, so the shared Synapse and Nextcloud stay
+# bound to the primary customer's realm
+# ---------------------------------------------------------------------------
+
+# nothing_started_or_written -- what a refusing wire leaves behind: no docker call that changes anything,
+# no key in state.env, no secret copy, no tenant row change
+nothing_started_or_written() {
+    [ ! -s "$ORDER" ] || { echo "the wire did something: $(cat "$ORDER")"; return 1; }
+    [ -z "$(sed -n 's/^SYNAPSE_KEYCLOAK_ISSUER_URL=//p' "${GREMION_ROOT}/etc/env/state.env")" ] || return 1
+    [ -z "$(sed -n 's/^SYNAPSE_KEYCLOAK_FETCH_URL=//p' "${GREMION_ROOT}/etc/env/state.env")" ] || return 1
+    [ "$(sed -n 's/^SYNAPSE_ADMIN_TOKEN=//p' "${GREMION_ROOT}/etc/env/state.env")" = placeholder-not-the-token ] || return 1
+    [ ! -e "${GREMION_ROOT}/etc/secrets/synapse" ] || return 1
+    [ ! -e "${GREMION_ROOT}/tenant-secrets/relay-smtp-password" ] || return 1
+    [ "$(jq -c . "${GREMION_ROOT}/tenant-row.json")" = '{"residencyZone":"eu"}' ] || return 1
+    # the one thing the program may have done is READ the registered host
+    [ -s "${GREMION_ROOT}/host-query.log" ] || { echo "the registered host was never read"; return 1; }
+}
+
+@test "wire refuses a customer whose registered host is not PILOT_TENANT_HOST, before it writes or starts anything, and says why" {
+    printf 'canary.guard.example.org' > "${GREMION_ROOT}/registered-host"
+    wire
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"core-only"* ]] || { echo "$output"; return 1; }
+    [[ "$output" == *"canary.guard.example.org"* && "$output" == *"pilot.guard.example.org"* ]] || { echo "$output"; return 1; }
+    [[ "$output" == *"chat and file services stay bound to the primary customer"* ]] || { echo "$output"; return 1; }
+    nothing_started_or_written
+    grep -q 'is_primary' "${GREMION_ROOT}/host-query.log" || { cat "${GREMION_ROOT}/host-query.log"; return 1; }
+}
+
+@test "wire: the secondary-host refusal comes before the secret-file checks (the message is the core-only one, not 'secret absent')" {
+    printf 'canary.guard.example.org' > "${GREMION_ROOT}/registered-host"
+    rm -f "${GREMION_ROOT}/tenant-secrets/tenant_${SLUG}_client_synapse" "${GREMION_ROOT}/tenant-secrets/tenant_${SLUG}_client_nextcloud"
+    wire
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"core-only"* ]] || { echo "$output"; return 1; }
+    [[ "$output" != *"client secret is absent"* ]] || { echo "$output"; return 1; }
+}
+
+@test "wire fails closed: a customer row without a primary host, and a registry that cannot be read, each refuse before anything is written" {
+    : > "${GREMION_ROOT}/registered-host"
+    wire
+    [ "$status" -eq 1 ] || { echo "empty host: status=$status $output"; return 1; }
+    [[ "$output" == *"no registered host"* ]] || { echo "$output"; return 1; }
+    nothing_started_or_written
+    rm -f "${GREMION_ROOT}/registered-host"
+    : > "${GREMION_ROOT}/psql-fails"
+    wire
+    [ "$status" -eq 1 ] || { echo "unreadable registry: status=$status $output"; return 1; }
+    nothing_started_or_written
+}
+
+@test "wire: a customer registered on PILOT_TENANT_HOST is wired as before (the guard reads the host and lets the primary through)" {
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [ -s "${GREMION_ROOT}/host-query.log" ] || { echo "the registered host was not read"; return 1; }
+    grep -q 'compose bootstrap=1 :: .*up -d matrix' "$ORDER"
 }

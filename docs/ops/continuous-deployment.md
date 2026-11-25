@@ -404,6 +404,15 @@ would, the release waits for the next tick: that is waiting, not a failure. If t
 be read, the answer is "unknown", which is also a stop. The reconcile stage asks the same question
 before each customer, with the cap of one child plus a minute.
 
+A timer that is switched off is not an unknown. A host that runs without the nightly backup has the
+backup timer installed but disabled and inactive; such a timer will never run, so it has no next
+elapse and cannot overlap the span. The guard asks `systemctl show` for the state of a timer whose
+next elapse it cannot read, and only a unit that is loaded, disabled and inactive counts as switched
+off: it is left out of the check, the guard says so in one line ("the backup timer is switched off"),
+and `selftest` reports `timers` as ok with the same note. An enabled or active timer without a
+readable next elapse, a next elapse in the past, a unit file that does not exist (or is masked) and a
+timer list that cannot be read are still "unknown" and still a stop.
+
 **The Karenz exception.** The hourly Karenz run (minute 17) cannot be avoided by a span of this
 length and is not guarded. It exits 3 if it meets the held lock and runs again an hour later.
 
@@ -996,7 +1005,12 @@ seen once.
 - **The migrated schema and the old colour.** After the migrate stage only two signals can see a
   migration that the old colour cannot live with: the portal list page of the live colour, which reads the
   gremion database, and the 5xx count. Nothing unauthenticated reaches the customers' silo databases or
-  `control`. The protection is the expand-only rule of the chains plus the dump.
+  `control`. The protection is the expand-only rule of the chains plus the dump. On an install whose
+  customer has no public portal set up, the portal answers its own 404 with an `x-gremion-portal: none`
+  header; the probe passes with one plain line saying so, and that signal is then absent (only the 5xx
+  count remains). The portal gives that answer only when `PUBLIC_PORTAL_DB_NAME` is not set and the
+  database it reads holds none of the portal tables (`protocols`, `org_units`); one missing table beside
+  an existing one, or any failure on a named database, stays a 5xx. A 5xx is always a failure.
 - **The quiet-night window.** `CD_QUIET_WINDOWS` keeps releases away from the nightly jobs; the Karenz
   run at minute 17 is not guarded.
 - **A release in flight when the CD process dies** leaves a gap of up to five minutes with both locks

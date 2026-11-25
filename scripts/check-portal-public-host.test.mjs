@@ -88,6 +88,14 @@ test('portal compose, database: PUBLIC_PORTAL_DB_NAME wins, then GREMION_DB_NAME
   assert.equal(dsn.password, legacy.password, 'still the same credential reference')
 })
 
+test('portal compose, PORTAL_DB_EXPLICIT: set only when the host names the portal database', () => {
+  const tenantDb = 't_0123456789abcdef0123456789abcdef__kernel'
+  assert.equal(renderWith({}).portal.PORTAL_DB_EXPLICIT ?? '', '', 'unnamed: the portal may answer "no portal"')
+  assert.equal(renderWith({ PUBLIC_PORTAL_DB_NAME: '' }).portal.PORTAL_DB_EXPLICIT ?? '', '', 'an empty key is unnamed')
+  assert.equal(renderWith({ GREMION_DB_NAME: 'kernel_default' }).portal.PORTAL_DB_EXPLICIT ?? '', '', 'GREMION_DB_NAME alone does not name it')
+  assert.equal(renderWith({ PUBLIC_PORTAL_DB_NAME: tenantDb }).portal.PORTAL_DB_EXPLICIT, '1', 'named: a missing table is a failure')
+})
+
 test('portal compose, main-app link: an explicit PUBLIC_MAIN_APP_URL wins, else the customer host, else the platform domain', () => {
   const pilot = renderWith({ PILOT_TENANT_HOST: 'pilot.guard.example.org' })
   assert.equal(pilot.portal.PUBLIC_MAIN_APP_URL, 'https://pilot.guard.example.org', 'Login and the protocol PDFs go to the customer host')

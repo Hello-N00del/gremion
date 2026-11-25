@@ -730,7 +730,7 @@ CD_ST_FAILS=()
 CD_ST_WARNS=()
 CD_ST_FIRST_FAIL=''
 
-_cd_st_ok() { cd_info "ok    $1"; }
+_cd_st_ok() { cd_info "ok    $1${2:+: $2}"; }
 _cd_st_warn() {
     CD_ST_WARNS+=("$1")
     cd_info "warn  $1: $2"
@@ -866,7 +866,7 @@ _cd_st_check_probe() {
 }
 
 _cd_st_check_timers() {
-    local rc=0 span
+    local rc=0 span note="" w
     if ! declare -F cd_data_timer_guard >/dev/null 2>&1; then
         _cd_st_fail timers "data.sh is not installed"
         return 0
@@ -874,7 +874,14 @@ _cd_st_check_timers() {
     span="$(cd_cfg CD_LOCK_SPAN_MAX_MIN)" || { _cd_st_fail timers "the config is not loaded"; return 0; }
     cd_data_timer_guard "$span" >/dev/null 2>&1 </dev/null || rc=$?
     case "$rc" in
-        0) _cd_st_ok timers ;;
+        0)
+            # a timer that is switched off cannot elapse: not a failure, and said in the line
+            # shellcheck disable=SC2086  # a space separated word list, split on purpose
+            for w in ${CD_DATA_TIMERS_OFF:-}; do
+                note="${note:+${note}; }${w} timer is switched off"
+            done
+            _cd_st_ok timers "$note"
+            ;;
         3) _cd_st_warn timers "a span of ${span} minutes started now would overlap a timer (the timers exist)" ;;
         *) _cd_st_fail timers "the next elapse of the backup or purge timer cannot be read (a timer is missing from systemctl list-timers?)" ;;
     esac

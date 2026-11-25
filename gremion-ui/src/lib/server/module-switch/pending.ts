@@ -29,6 +29,12 @@ export const PENDING_COOKIE = 'gremion_module_switch_pending'
 export const PENDING_COOKIE_PATH = '/api/settings/modules'
 /** How long a confirmed switch waits for the second factor (the same window as the step-up freshness default). */
 export const PENDING_TTL_SECONDS = 300
+/**
+ * How long the browser keeps the cookie: a minute LONGER than the row. The row (on the database clock) is what ends
+ * the wait. With equal lifetimes a round trip that ran over was met by a cookie the browser had just dropped, and
+ * answered "gone" (nothing was ever kept) instead of "expired", which is what happened.
+ */
+export const PENDING_COOKIE_MAX_AGE_SECONDS = PENDING_TTL_SECONDS + 60
 
 const CONFIRM_MAX = 200
 const DOCUMENT_REF_MAX = 500

@@ -6,6 +6,7 @@
 // lookup asks Keycloak and never a local table.
 import {
   getKeycloakAdminClient,
+  KcAdminError,
   type KeycloakAdminClient,
   type KcUser
 } from '$lib/server/keycloak-admin'
@@ -27,6 +28,22 @@ export interface RoleHolders {
   holders: RoleHolder[]
   /** People who hold a role but cannot be mailed; the caller reports them, never drops them silently. */
   skipped: { userId: string; reason: 'disabled' | 'no-email' }[]
+  /**
+   * Optional roles (see ListRoleHoldersOptions) the realm does not carry; the caller reports them, never drops them
+   * silently. listRoleHolders always sets it (empty without the option); optional only so a hand-made value (a test
+   * double of a caller that does not read it) need not spell it out.
+   */
+  absentRoles?: string[]
+}
+
+export interface ListRoleHoldersOptions {
+  /**
+   * Roles of the vocabulary that a realm may not carry (finance, auditor: no module mints them, the base realm has
+   * only council-admin, vorstand and it-admin). Keycloak answers 404 for a role that does not exist, and nobody can
+   * hold it, so for these ONLY a 404 means "no holders" (named in absentRoles). Any other failure, and a 404 on a
+   * role not named here, still throws.
+   */
+  optionalRoles?: readonly string[]
 }
 
 function displayNameOf(u: KcUser): string {
@@ -44,9 +61,26 @@ function displayNameOf(u: KcUser): string {
 export async function listRoleHolders(
   tenant: TenantContext,
   roles: readonly string[] = NOTIFY_ROLES,
-  kc: Pick<KeycloakAdminClient, 'listRealmRoleMembers'> = getKeycloakAdminClient(tenant)
+  kc: Pick<KeycloakAdminClient, 'listRealmRoleMembers'> = getKeycloakAdminClient(tenant),
+  options: ListRoleHoldersOptions = {}
 ): Promise<RoleHolders> {
-  const perRole = await Promise.all(roles.map(async (role) => ({ role, members: await kc.listRealmRoleMembers(role) })))
+  const optional = new Set(options.optionalRoles ?? [])
+  const absentRoles: string[] = []
+  const perRole = await Promise.all(
+    roles.map(async (role) => {
+      try {
+        return { role, members: await kc.listRealmRoleMembers(role) }
+      } catch (err) {
+        if (optional.has(role) && err instanceof KcAdminError && err.status === 404) {
+          absentRoles.push(role)
+          return { role, members: [] as readonly KcUser[] }
+        }
+        throw err
+      }
+    })
+  )
+  // the order the roles were asked for, whatever order the lookups finished in
+  absentRoles.sort((a, b) => roles.indexOf(a) - roles.indexOf(b))
 
   const heldRoles = new Map<string, string[]>()
   const firstSeen = new Map<string, KcUser>()
@@ -73,5 +107,5 @@ export async function listRoleHolders(
     }
     holders.push({ userId, email, displayName: displayNameOf(u), roles: heldRoles.get(userId) ?? [] })
   }
-  return { holders, skipped }
+  return { holders, skipped, absentRoles }
 }

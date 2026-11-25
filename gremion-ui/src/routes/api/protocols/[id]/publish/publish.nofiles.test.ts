@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+// The protocol routes read the CURRENT tenant's files switch (protocols/document-port.ts): this tenant has it on.
+vi.mock('$lib/server/config', async (orig) => ({
+  ...(await orig<typeof import('$lib/server/config')>()),
+  readConfig: () => ({ modules: { files: true } }),
+}))
+
 // F1 (operator ruling Q1, 2026-10-21): publish (= adoption) must work with NO
 // files ProtocolDocumentPort and with Nextcloud down. The protocol body lives
 // in-app (protocols.body_html). INV-5 quorum + the audit_log adoption record
@@ -35,7 +41,7 @@ const base = {
 // A counted resolution with a recorded vote, as listResolutions returns it.
 const counted = {
   id: 'r1', result: 'passed', adoption_mode: 'tally', required_majority: 'simple',
-  votes_yes: 2, votes_no: 0, votes_abstain: 1,
+  votes_yes: 2, votes_no: 0, votes_abstain: 0,
 }
 const ev = () => ({
   locals: { user: { id: 'u1', roles: ['council-admin'] } },

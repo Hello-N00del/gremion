@@ -287,6 +287,85 @@ gives its ICE servers to the client, so no client change is involved.
   passthrough. A second TCP router next to it, a UDP router, and any router when
   `PILOT_TENANT_HOST` is unset stay failures.
 
+## A secondary customer host (canary or test customer)
+
+The install has ONE customer host, `PILOT_TENANT_HOST`: Collabora, the call and
+office URLs, the video relay, the leaves' public base URL, and the shared Synapse
+and Nextcloud (bound by `wire` to that customer's realm) all carry it. The
+operator may allow further hosts for customers that knowingly run **core-only**,
+for example a canary or test customer beside the real one.
+
+**Switch it on.** Add `SECONDARY_TENANT_HOSTS=canary.example.org` (comma-separated
+lowercase DNS names, no scheme, port, path or wildcard) to `etc/env/state.env`, and
+the same line to both `app-<colour>.env` so that "Neuer Mandant" shows it (the
+panel only displays the list; the host-side create reads `state.env` and nothing
+the request says). `gremion-validate-env` refuses a malformed list, a duplicate,
+the platform domain, a platform host, the control panel host, `PILOT_TENANT_HOST`
+and its `turn.` relay host. Empty or absent means exactly one customer host, as
+before. Redeploy, create the customer from the panel with that host, add the host
+to `etc/tenant-hosts.txt` (certificate and DNS checks), and point `CD_PROBE_HOST`
+at it if it is to be the CD canary: the canary is the customer that owns the probe
+host, and the public probe asks only `/readyz` and the login page.
+
+**What it gives.** Login, board and calendar pages, each on the customer's own
+host, realm, and databases. The calendar's own data is the customer's; only its
+optional CalDAV mirror into the shared Nextcloud does not run for this customer:
+the collection it would write to is created by `gremion-services wire`, which
+refuses the customer, and the leaf cannot create one itself, so nothing is
+written to the shared service (a push that finds no collection fails and is
+given up after three attempts per entry).
+
+**What it does not give.** Chat, files, office editing, video (all on the shared
+Synapse and Nextcloud), votes (they run on the shared Nextcloud Polls), the
+newsletter (its unsubscribe links carry `PILOT_TENANT_HOST`) and content pages:
+the content leaf builds the unsubscribe link of its e-mail channel from the one
+process-wide public base URL, so a secondary customer's subscribers would be
+sent to the primary host, where their token is unknown, and its news editor
+keeps drafts in the shared Nextcloud and opens them in the shared Collabora.
+Content may be allowed for a secondary host only after the leaf builds that link
+base from the customer's own host and the editor is isolated. The host side
+enforces all of this instead of leaving it to the operator:
+
+- the create accepts `PILOT_TENANT_HOST` and a listed host and refuses every other
+  host, naming what is allowed; on a secondary host it refuses, before anything is
+  created, any module outside `board` and `calendar` (default deny:
+  `SECONDARY_HOST_MODULES` in `infra/host/lib/common.sh`);
+- the customer's tenant config is created with every other module switched off
+  (`SECONDARY_HOST_MODULES_OFF`), because a config reads a module as on until it
+  says otherwise, and with those ids listed as `pinned_off_modules`. The app pins
+  every listed module off on each read and write of the module switches, exactly
+  like the held-off set, and the list is not part of any settings update: neither
+  a settings change nor "Konfiguration zurücksetzen" by the customer's own IT
+  admin can switch such a module back on, and the provisioning worker and the
+  route gate read the pinned value;
+- the protocol routes (create, editor URL, publish, public PDF, detail) are governance
+  and always on, so they read the current customer's files switch instead of the
+  build-wide document port: with it off, minutes live in the app only (the in-app
+  text), and the shared Nextcloud and Collabora are not called for that customer;
+- the module enable (executor, council admin and break-glass alike) refuses the
+  same modules for a customer registered on a secondary host;
+- `gremion-services wire <slug>` refuses a customer whose registered host is not
+  `PILOT_TENANT_HOST`, before it copies a secret, writes a key or starts a
+  container: the shared chat and file services stay bound to the primary customer.
+
+**Evidence still owed.** Isolation evidence for two customers on the shared
+Nextcloud and Synapse has not been produced, which is why those modules stay off
+for a secondary host. Until it exists, do not lift the refusals. Also owed after
+the deploy that first uses it: the realm's discovery document at the secondary
+host names that host as issuer; a login on it; the customer's edge router listed
+and enabled in `gremion-verify`; a CD run with `CD_PROBE_HOST` set to it.
+Decommission a secondary-host customer before removing its host from the list.
+
+**Operating notes.**
+
+- A secondary-host customer's tenant config file carries its `pinned_off_modules`
+  list: back it up and restore it as a whole.
+- The CD canary: with `CD_PROBE_HOST` set to the secondary host, the public probe
+  asks only that core-only customer's `/readyz` and login page. A canary on this
+  host cannot catch a regression in chat, files, office editing or video, which
+  stay bound to the primary customer; those still need the primary host's own
+  checks.
+
 ## Named residuals
 
 - **Leaf events.** The kernel NATS admits only the keys tenant-create holds,

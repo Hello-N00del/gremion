@@ -32,6 +32,13 @@ set -euo pipefail
 #                                     module_app_password_board, the file the board
 #                                     module role is set from (absent file: no
 #                                     finding): exit 1.
+#   6. secondary customer hosts    -- SECONDARY_TENANT_HOSTS (optional; the extra hosts of
+#                                     core-only customers), when a file declares it with a
+#                                     value: every entry a lowercase DNS name that is no scheme,
+#                                     port, path, wildcard or duplicate, and not the platform
+#                                     domain, a platform host, the control panel host or
+#                                     PILOT_TENANT_HOST (nor its turn. relay host); the list needs
+#                                     PILOT_TENANT_HOST. Empty or absent: nothing is judged: exit 1.
 #
 # Alias equality is judged WITHIN one file. A pair split across files (e.g.
 # app-blue.env's AUTH_KEYCLOAK_SECRET against state.env's
@@ -226,6 +233,28 @@ check_template_keys() {
     [[ "$__gve_failures" -gt "$before" ]] || ok "template keys: all ${n} declared, operator keys filled"
 }
 
+# SECONDARY_TENANT_HOSTS is an OPTIONAL key (a comment in the templates, so an older env file stays valid):
+# judged only when a file declares it with a value. The host-side create reads it from state.env alone
+# and refuses a malformed list outright; this finds the same fault at deploy time. Findings name the key
+# and the entry's position, never a host.
+check_secondary_tenant_hosts() {
+    local list="${SECONDARY_TENANT_HOSTS-}" control why n
+    [[ -n "$list" ]] || return 0
+    if [[ -z "${PILOT_TENANT_HOST-}" ]]; then
+        fail "SECONDARY_TENANT_HOSTS is set but PILOT_TENANT_HOST is empty: a secondary host is an addition to the install's customer host"
+        return 0
+    fi
+    # the control host is THE resolver's answer; when CONTROL_PANEL_HOST is itself refused (gremion-render says
+    # so), the raw value still must not be reused as a customer host
+    control="$(resolve_control_panel_host)" || control="${CONTROL_PANEL_HOST-}"
+    if ! why="$(secondary_hosts_problem "$list" "${PLATFORM_DOMAIN-}" "${PILOT_TENANT_HOST-}" "$control")"; then
+        fail "SECONDARY_TENANT_HOSTS is refused: ${why}"
+        return 0
+    fi
+    n="$(tr ',' '\n' <<< "$list" | grep -c . || true)"
+    ok "SECONDARY_TENANT_HOSTS: ${n} host(s), each a lowercase DNS name distinct from the customer, platform and control hosts"
+}
+
 main() {
     parse_args "$@"
     need_cmd grep sed
@@ -250,6 +279,7 @@ main() {
     check_compose_files
     check_aliases
     check_board_app_password
+    check_secondary_tenant_hosts
     if [[ "$__gve_failures" -gt 0 ]]; then
         die "VALIDATE-ENV: ${__gve_failures} problem(s) in $(basename "$__gve_env_file")" "$GREMION_EXIT_ASSERT"
     fi

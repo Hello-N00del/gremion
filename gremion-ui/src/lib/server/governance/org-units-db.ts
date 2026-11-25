@@ -212,7 +212,7 @@ export async function setSubsystemWanted(
  *     a warning, so the cleanup that did not happen is visible.
  * The log carries a count or an error class, never an id or a name.
  */
-async function deleteBoardsAfterCommit(orgUnitId: string): Promise<void> {
+export async function deleteBoardsAfterCommit(orgUnitId: string): Promise<void> {
   const provider = getDataProvider('board:delete-org-unit-boards')
   if (!provider) return
   try {
@@ -347,21 +347,6 @@ export async function isMemberOf(orgUnitId: string, userKeycloakId: string): Pro
   return rows.length > 0
 }
 
-export async function hasMembers(orgUnitId: string): Promise<boolean> {
-  const rows = await getDb()`SELECT 1 FROM org_unit_members WHERE org_unit_id = ${orgUnitId} LIMIT 1`
-  return rows.length > 0
-}
-
-export async function hasElections(orgUnitId: string): Promise<boolean> {
-  const rows = await getDb()`SELECT 1 FROM committee_elections WHERE org_unit_id = ${orgUnitId} LIMIT 1`
-  return rows.length > 0
-}
-
-export async function hasProtocols(orgUnitId: string): Promise<boolean> {
-  const rows = await getDb()`SELECT 1 FROM protocols WHERE committee_id = ${orgUnitId} LIMIT 1`
-  return rows.length > 0
-}
-
 export async function getOrgUnitIdsForUser(userKeycloakId: string): Promise<readonly string[]> {
   const rows = await getDb()<Array<{ org_unit_id: string }>>`
     SELECT org_unit_id FROM org_unit_members WHERE user_keycloak_id = ${userKeycloakId}`
@@ -467,9 +452,6 @@ export const orgUnitsDb = {
   addMember: addOrgUnitMember,
   removeMember: removeOrgUnitMember,
   isMemberOf,
-  hasMembers,
-  hasElections,
-  hasProtocols,
   getIdsForUser: getOrgUnitIdsForUser,
   getMemberCounts,
   buildTree: buildOrgTree

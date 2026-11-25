@@ -499,9 +499,61 @@ _assert_fingerprint() {
     fi
 }
 
+# customer_registered_host <slug> -- the customer's PRIMARY host as the control registry holds it
+# (tenant_domain, is_primary; the registry lowercases it), read from the state project's postgres as its
+# own user. Prints the host and returns 0 (empty: the customer row has no primary host); returns 4 when
+# there is no customer row; every other failure dies, so a caller never mistakes an unreadable registry
+# for a customer on the primary host. The slug is a psql variable, never interpolated.
+customer_registered_host() {
+    local slug="$1" state="${ROOT}/etc/env/state.env" stack pguser cdb ids n out
+    need_slug "$slug"
+    stack="$(env_key "$state" STACK)"
+    pguser="$(env_key "$state" POSTGRES_USER)"
+    cdb="$(env_key "$state" CONTROL_DB_NAME)"; cdb="${cdb:-control}"
+    [[ -n "$stack" ]] || die "STACK is empty in ${state}" "$GREMION_EXIT_USAGE"
+    [[ "$pguser" =~ ^[A-Za-z0-9_]+$ ]] || die "POSTGRES_USER in ${state} is not a plain role name" "$GREMION_EXIT_USAGE"
+    [[ "$cdb" =~ ^[A-Za-z0-9_]+$ ]] || die "CONTROL_DB_NAME in ${state} is not a plain database name" "$GREMION_EXIT_USAGE"
+    ids="$(docker ps -q --filter "label=com.docker.compose.project=${stack}-state" \
+                        --filter "label=com.docker.compose.service=postgres")" \
+        || die "docker ps failed while looking for the state postgres" "$GREMION_EXIT_ASSERT"
+    n="$(grep -c . <<< "$ids" || true)"
+    [[ "$n" == 1 ]] || die "expected exactly one running postgres in ${stack}-state, found ${n}" "$GREMION_EXIT_ASSERT"
+    out="$(printf '%s\n' "SELECT 'host=' || coalesce((SELECT d.host FROM tenant_domain d WHERE d.tenant_id = t.id AND d.is_primary), '') FROM tenant t WHERE t.slug = :'slug';" \
+        | docker exec -i "${ids//[[:space:]]/}" psql -X -U "$pguser" -d "$cdb" -tAq -v ON_ERROR_STOP=1 -v slug="$slug" -f -)" \
+        || die "the registered host of ${slug} could not be read from the control database ${cdb}" "$GREMION_EXIT_ASSERT"
+    out="${out//[[:space:]]/}"
+    [[ -n "$out" ]] || return 4
+    [[ "$out" =~ ^host=([a-z0-9.-]*)$ ]] \
+        || die "the control database answered something else than a host for ${slug}" "$GREMION_EXIT_ASSERT"
+    printf '%s' "${BASH_REMATCH[1]}"
+}
+
+# secondary_host_module_guard <verb> <slug> <module> -- a customer on a SECONDARY host (state.env
+# SECONDARY_TENANT_HOSTS) is core-only: a module outside secondary_host_module_allowed lives on the shared
+# Synapse or Nextcloud, which stay bound to PILOT_TENANT_HOST, and is refused for it BEFORE the container
+# verb runs (the break-glass path, the executor and a council admin's request all pass through here).
+# Inert, and reading nothing from the registry, while no secondary host is configured or for a core module:
+# a primary customer's enable is exactly what it was.
+secondary_host_module_guard() {
+    local verb="$1" slug="$2" module="$3" state="${ROOT}/etc/env/state.env" secondary pilot reg rc=0
+    [[ -f "$state" ]] || return 0
+    secondary="$(control_panel_key_of "$state" SECONDARY_TENANT_HOSTS)" || exit $?
+    [[ -n "$secondary" ]] || return 0
+    secondary_host_module_allowed "$module" && return 0
+    pilot="$(control_panel_key_of "$state" PILOT_TENANT_HOST)" || exit $?
+    reg="$(customer_registered_host "$slug")" || rc=$?
+    if (( rc != 0 && rc != 4 )); then exit "$rc"; fi
+    if (( rc == 4 )); then
+        die "${verb}: the module ${module} is refused for ${slug}: the registry has no customer row for it, so its host cannot be checked against the secondary hosts (SECONDARY_TENANT_HOSTS)" "$GREMION_EXIT_ASSERT"
+    fi
+    if [[ -n "$pilot" && "$reg" == "${pilot,,}" ]]; then return 0; fi
+    die "${verb}: the module ${module} cannot be enabled for ${slug}: its host is ${reg:-not registered} and not the install's customer host ${pilot:-(unset)} (PILOT_TENANT_HOST), so it is a core-only customer on a secondary host; ${module} runs on the shared chat or file services or writes the install's customer host into its links, and those stay bound to that host (core modules: ${SECONDARY_HOST_MODULES// /, })" "$GREMION_EXIT_ASSERT"
+}
+
 customer_enable_module() {   # <slug> <module> --operator <uuid> [--actor-kind operator|person] [--dpia-json <file>]
     local slug="${1:-}" before
     _module_args enable_module "$@"
+    secondary_host_module_guard enable_module "$slug" "$MODULE_ID"
     active_colour
     before="$(container_fingerprint)"
     local -a argv=(enable-module "$slug" "$MODULE_ID" --operator "$OPERATOR_ID")

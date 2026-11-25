@@ -11,7 +11,7 @@
 import { error } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { getPublishedProtocolPdfPath } from '$lib/server/protocols/protocol-db'
-import { getProtocolDocumentPort } from '$lib/server/modules/runtime-registry'
+import { getTenantProtocolDocumentPort } from '$lib/server/protocols/document-port'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -23,7 +23,7 @@ export const GET: RequestHandler = async ({ params }) => {
   if (!pdfPath) throw error(404, 'PDF not available')
 
   // A3a-2: the published-PDF download comes from the files module's document port.
-  const docs = getProtocolDocumentPort()
+  const docs = getTenantProtocolDocumentPort()
   // F1: files module off -> no NC document exists to serve: clean 404, no 503.
   if (!docs) throw error(404, 'PDF not available')
 

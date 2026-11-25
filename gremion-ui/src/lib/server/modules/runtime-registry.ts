@@ -221,6 +221,15 @@ export interface DataProviderContract {
    *  committees DELETE route consults it before deprovision/delete; an absent
    *  provider (finance module off) reads as not-referenced. */
   'finance:org-unit-refs': (orgUnitId: string) => Promise<{ referenced: boolean; counts: Record<string, number> }>
+  /** Board: how many boards an org unit has, read where the boards live (the kernel tables or the board
+   *  module's own database). The committees DELETE route asks BEFORE it tears anything down and refuses while
+   *  `counts.boards` is above zero. A rejection (for instance a blocked board database) makes the route refuse
+   *  with 503: an unanswered question is never read as "no boards". Absent provider (board module off) = the
+   *  route counts the kernel `board` table itself. */
+  'board:org-unit-refs': (orgUnitId: string) => Promise<{ referenced: boolean; counts: Record<string, number> }>
+  /** Calendar: how many calendar events are tied to an org unit (`counts.events`), read where the events live
+   *  (kernel tables or the calendar leaf). Same contract as 'board:org-unit-refs'. */
+  'calendar:org-unit-refs': (orgUnitId: string) => Promise<{ referenced: boolean; counts: Record<string, number> }>
   /** Finance: the tenant's Finanzordnung retention for the handover (Art. 17(3)
    *  horizon + live facts). null = no profile to report (the handover kernel
    *  uses its canonical default); a rejection propagates. Absent provider

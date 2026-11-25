@@ -997,6 +997,43 @@ ad_one_failure() {
     ad_one_failure timers
 }
 
+@test "selftest: a backup timer that is installed, disabled and inactive is ok with a note, not a failure" {
+    ad_green
+    ad_timers_json gremion-backup.timer
+    ad_unit_state gremion-backup.timer loaded disabled inactive
+    run ad_selftest
+    [ "$status" -eq 0 ] || { echo "$output" >&2; return 1; }
+    [[ "$output" == *"ok    timers: backup timer is switched off"* ]] || { echo "$output" >&2; return 1; }
+    [[ "$output" != *"purge timer is switched off"* ]]
+    [ "$(printf '%s\n' "$output" | grep -c '^FAIL')" -eq 0 ]
+}
+
+@test "selftest: both guard timers switched off is ok with both notes" {
+    ad_green
+    echo '[]' > "${DK}/timers.json"
+    ad_unit_state gremion-backup.timer loaded disabled inactive
+    ad_unit_state gremion-purge.timer loaded disabled inactive
+    run ad_selftest
+    [ "$status" -eq 0 ] || { echo "$output" >&2; return 1; }
+    [[ "$output" == *"ok    timers: backup timer is switched off; purge timer is switched off"* ]] || { echo "$output" >&2; return 1; }
+}
+
+@test "selftest: a guard timer that is enabled but has no readable next elapse still fails timers" {
+    ad_green
+    ad_timers_json gremion-backup.timer
+    ad_unit_state gremion-backup.timer loaded enabled active
+    run ad_selftest
+    ad_one_failure timers
+}
+
+@test "selftest: a guard timer whose unit file does not exist still fails timers even when the other is switched off" {
+    ad_green
+    echo '[]' > "${DK}/timers.json"
+    ad_unit_state gremion-purge.timer loaded disabled inactive
+    run ad_selftest
+    ad_one_failure timers
+}
+
 @test "selftest: a ping that fails once is a warning, not a failure" {
     ad_green
     cd_write_cfg CD_MIN_FREE_GB=0 CD_PING_URL=https://ping.example.org/secret-token-path

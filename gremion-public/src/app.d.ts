@@ -7,6 +7,9 @@ declare global {
        *  Accept-Language -> 'de' (no person/tenant concept in this app),
        *  limited to the locales the pages are written in (CONTENT_LOCALES). */
       locale?: import('$lib/i18n/server/resolve-locale').Locale
+      /** Set by a route whose portal database is absent: the hook marks the 404 with
+       *  the x-gremion-portal header (lib/server/portal-absent.ts). */
+      portalAbsent?: boolean
     }
   }
 }

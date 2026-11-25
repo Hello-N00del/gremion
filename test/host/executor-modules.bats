@@ -26,6 +26,14 @@ active_colour() { COLOUR=blue; }
 container_fingerprint() { cat "${GREMION_ROOT}/fingerprint"; }
 mail_realm_smtp() { printf 'mail %s\n' "$*" >> "$ORDER"; [ ! -f "${GREMION_ROOT}/mail-fails" ]; }
 mail_sender_args() { MAIL_SENDER_ARGS=(); }
+# the control registry's primary host of the customer (customer_registered_host reads it from postgres):
+# the file registered-host says where the customer lives, the switches say the registry has no row or cannot be read
+customer_registered_host() {
+    printf 'registered-host %s\n' "$1" >> "${GREMION_ROOT}/host-reads.log"
+    [ ! -f "${GREMION_ROOT}/registry-no-row" ] || return 4
+    [ ! -f "${GREMION_ROOT}/registry-fails" ] || { echo "the registered host could not be read" >&2; exit 1; }
+    cat "${GREMION_ROOT}/registered-host" 2>/dev/null || printf 'rat.pilot.example'
+}
 tc() {
     printf 'tc %s\n' "$*" >> "$ORDER"
     # keep what a --dpia-json file said at the moment of the call (the workdir is removed after the run)
@@ -444,4 +452,112 @@ TENANT_SECRETS_DIR=%s/tenant-secrets
     # cmd_reconcile only records the access (TRD-092) and then hands over.
     assert_present '^    customer_reconcile "\$slug" ' "${HOST_SRC}/bin/gremion-tenant" 'gremion-tenant delegates reconcile to customer-ops.sh'
     assert_absent 'repairHost' "${HOST_SRC}/bin/gremion-tenant" 'the reconcile body moved to customer-ops.sh'
+}
+
+# ---------------------------------------------------------------------------
+# a customer on a SECONDARY host (state.env SECONDARY_TENANT_HOSTS) is core-only: the enable of a module that
+# lives on the shared Synapse or Nextcloud is refused BEFORE the container verb runs
+# ---------------------------------------------------------------------------
+
+# secondary_state [list] -- state.env of an install with a customer host and (optionally) secondary hosts
+secondary_state() {
+    printf 'STACK=guardstack\nPILOT_TENANT_HOST=rat.pilot.example\nSECONDARY_TENANT_HOSTS=%s\n' "${1-rat.alpha.example}" > "${GREMION_ROOT}/etc/env/state.env"
+}
+
+# module_args <module> -- verified args of an enable request for the module
+module_args() { jq -nc --arg m "$1" '{slug:"alpha-rat", module:$m, dpia:null}' > "${WORK}/args.json"; }
+
+# registered <host> -- where the registry says the customer lives
+registered() { printf '%s' "$1" > "${GREMION_ROOT}/registered-host"; }
+
+enable_ran() { grep -q '^tc enable-module' "$ORDER"; }
+
+@test "secondary host: enabling votes, files or messaging for a customer on a secondary host is refused before the container verb, naming the module and the reason" {
+    secondary_state
+    registered rat.alpha.example
+    local m
+    for m in votes files messaging publishing newsletter content elections some-new-module; do
+        : > "$ORDER"
+        module_args "$m"
+        drive handle_enable_module
+        [ "$status" -ne 0 ] || { echo "${m} was enabled: ${output}"; return 1; }
+        [[ "$output" == *"${m}"* && "$output" == *"core-only"* && "$output" == *"secondary host"* ]] || { echo "${m}: ${output}"; return 1; }
+        if enable_ran; then echo "the container verb ran for ${m}"; return 1; fi
+    done
+}
+
+@test "secondary host: the core modules (board, calendar) are enabled for a customer on a secondary host, without a registry read" {
+    secondary_state
+    registered rat.alpha.example
+    local m
+    for m in board calendar; do
+        : > "$ORDER"
+        module_args "$m"
+        drive handle_enable_module
+        [ "$status" -eq 0 ] || { echo "${m}: status=${status} ${output}"; return 1; }
+        enable_ran || { echo "the container verb did not run for ${m}"; return 1; }
+    done
+    [ ! -e "${GREMION_ROOT}/host-reads.log" ]
+}
+
+@test "secondary host: a customer registered on PILOT_TENANT_HOST keeps every module, the list set or not" {
+    secondary_state
+    registered rat.pilot.example
+    local m
+    for m in votes files messaging; do
+        : > "$ORDER"
+        module_args "$m"
+        drive handle_enable_module
+        [ "$status" -eq 0 ] || { echo "${m}: status=${status} ${output}"; return 1; }
+        enable_ran || { echo "the container verb did not run for ${m}"; return 1; }
+    done
+}
+
+@test "secondary host: with no SECONDARY_TENANT_HOSTS (or no state.env) the guard is inert: it reads nothing from the registry and the enable is what it always was" {
+    secondary_state ''
+    registered rat.alpha.example
+    module_args votes
+    drive handle_enable_module
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    enable_ran
+    rm -f "${GREMION_ROOT}/etc/env/state.env"
+    : > "$ORDER"
+    drive handle_enable_module
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    enable_ran
+    [ ! -e "${GREMION_ROOT}/host-reads.log" ]
+}
+
+@test "secondary host: fail closed: a customer with no registry row, one with no primary host, and an unreadable registry are each refused for a non-core module" {
+    secondary_state
+    module_args votes
+    touch "${GREMION_ROOT}/registry-no-row"
+    drive handle_enable_module
+    [ "$status" -ne 0 ] || { echo "no row: enabled"; return 1; }
+    [[ "$output" == *"no customer row"* ]] || { echo "$output"; return 1; }
+    rm "${GREMION_ROOT}/registry-no-row"
+    registered ''
+    : > "$ORDER"
+    drive handle_enable_module
+    [ "$status" -ne 0 ] || { echo "no host: enabled"; return 1; }
+    [[ "$output" == *"not registered"* ]] || { echo "$output"; return 1; }
+    touch "${GREMION_ROOT}/registry-fails"
+    : > "$ORDER"
+    drive handle_enable_module
+    [ "$status" -ne 0 ] || { echo "unreadable registry: enabled"; return 1; }
+    if enable_ran; then echo "the container verb ran after a refusal"; return 1; fi
+}
+
+@test "secondary host: the break-glass function customer_enable_module is guarded too (the guard lives in the library, not in one handler)" {
+    secondary_state
+    registered rat.alpha.example
+    run bash -c '
+        set -euo pipefail
+        . "$1/common.sh"; . "$1/customer-ops.sh"
+        . "$2/stubs.sh"
+        customer_enable_module alpha-rat files --operator "$3" 2>&1
+    ' _ "$SRC" "$GREMION_ROOT" "$OPERATOR"
+    [ "$status" -ne 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"files"* && "$output" == *"core-only"* ]] || { echo "$output"; return 1; }
+    if enable_ran; then echo "the container verb ran"; return 1; fi
 }

@@ -1,0 +1,94 @@
+// When does the DB layer say "this instance has no portal"? Only when the portal
+// database was not named explicitly AND it holds none of the portal tables (or does
+// not exist). One missing table while another exists is a broken schema. A named database that fails, and any other failure, stay failures.
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+const envState = vi.hoisted(() => ({
+  GREMION_PUBLIC_DB_URL: 'postgres://mock:mock@localhost/mock',
+} as Record<string, string | undefined>));
+vi.mock('$env/dynamic/private', () => ({ env: envState }));
+
+// failWith: what every portal read rejects with. relations: which portal tables the
+// database holds (the confirming to_regclass query answers from it); confirmFails makes
+// that confirming query itself fail.
+const mockState = vi.hoisted(() => ({
+  failWith: null as unknown,
+  relations: { protocols: false, org_units: false },
+  confirmFails: false,
+}));
+vi.mock('postgres', () => {
+  const sql = Object.assign(
+    (strings: TemplateStringsArray) => {
+      if (strings.join('?').includes('to_regclass')) {
+        if (mockState.confirmFails) return Promise.reject(new Error('confirm failed'));
+        const { protocols, org_units } = mockState.relations;
+        return Promise.resolve([{ absent: !protocols && !org_units }]);
+      }
+      return mockState.failWith ? Promise.reject(mockState.failWith) : Promise.resolve([]);
+    },
+    { unsafe: () => Promise.resolve([]), end: () => Promise.resolve() }
+  );
+  return { default: () => sql };
+});
+
+import { getAllCommittees, getPublishedProtocols, getPublishedProtocolById } from './public-db.js';
+import { PortalAbsentError } from './portal-absent';
+
+const UUID = '00000000-0000-4000-8000-000000000000';
+const pgError = (code: string) => Object.assign(new Error(`pg ${code}`), { code });
+
+describe('portal database absent', () => {
+  beforeEach(() => {
+    mockState.failWith = null;
+    mockState.relations = { protocols: false, org_units: false };
+    mockState.confirmFails = false;
+    delete envState.PORTAL_DB_EXPLICIT;
+  });
+
+  it.each([
+    ['getPublishedProtocols', () => getPublishedProtocols()],
+    ['getPublishedProtocolById', () => getPublishedProtocolById(UUID)],
+    ['getAllCommittees', () => getAllCommittees()],
+  ])('%s: a missing relation without a named portal database is PortalAbsentError', async (_n, call) => {
+    mockState.failWith = pgError('42P01');
+    await expect(call()).rejects.toBeInstanceOf(PortalAbsentError);
+  });
+
+  it('a missing database without a named portal database is PortalAbsentError', async () => {
+    mockState.failWith = pgError('3D000');
+    await expect(getPublishedProtocols()).rejects.toBeInstanceOf(PortalAbsentError);
+  });
+
+  it('a missing relation while another portal table exists is a broken schema, not "no portal"', async () => {
+    mockState.failWith = pgError('42P01');
+    mockState.relations = { protocols: false, org_units: true };
+    const err = await getPublishedProtocols().catch((e: unknown) => e);
+    expect(err).not.toBeInstanceOf(PortalAbsentError);
+    expect(err).toBe(mockState.failWith);
+    mockState.relations = { protocols: true, org_units: false };
+    expect(await getAllCommittees().catch((e: unknown) => e)).toBe(mockState.failWith);
+  });
+
+  it('a confirming query that fails leaves the original failure standing', async () => {
+    mockState.failWith = pgError('42P01');
+    mockState.confirmFails = true;
+    const err = await getPublishedProtocols().catch((e: unknown) => e);
+    expect(err).not.toBeInstanceOf(PortalAbsentError);
+    expect(err).toBe(mockState.failWith);
+  });
+
+  it('a portal database that IS named and fails the same way stays the original failure', async () => {
+    envState.PORTAL_DB_EXPLICIT = '1';
+    mockState.failWith = pgError('42P01');
+    const err = await getPublishedProtocols().catch((e: unknown) => e);
+    expect(err).not.toBeInstanceOf(PortalAbsentError);
+    expect(err).toBe(mockState.failWith);
+  });
+
+  it('any other failure stays the original failure', async () => {
+    mockState.failWith = pgError('28P01');
+    const err = await getPublishedProtocols().catch((e: unknown) => e);
+    expect(err).not.toBeInstanceOf(PortalAbsentError);
+    expect(err).toBe(mockState.failWith);
+  });
+});

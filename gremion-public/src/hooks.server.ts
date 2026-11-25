@@ -1,6 +1,7 @@
 import type { Handle } from '@sveltejs/kit'
 import { sequence } from '@sveltejs/kit/hooks'
 import { createI18nHandle } from '$lib/i18n/server/i18n-handle'
+import { PORTAL_ABSENT_HEADER, PORTAL_ABSENT_VALUE } from '$lib/server/portal-absent'
 
 /**
  * #259-2: app-layer security headers for the PUBLIC portal.
@@ -61,4 +62,12 @@ export const securityHeadersHandle: Handle = async ({ event, resolve }) => {
 // Paraglide's request scope and fills app.html's <html lang> placeholder.
 export const i18nHandle: Handle = createI18nHandle()
 
-export const handle = sequence(i18nHandle, securityHeadersHandle)
+// An instance without a portal answers a clean 404 and says so in a header, so
+// a monitor can tell "no portal" from "a broken portal" (lib/server/portal-absent.ts).
+export const portalAbsentHandle: Handle = async ({ event, resolve }) => {
+  const response = await resolve(event)
+  if (event.locals.portalAbsent) response.headers.set(PORTAL_ABSENT_HEADER, PORTAL_ABSENT_VALUE)
+  return response
+}
+
+export const handle = sequence(i18nHandle, portalAbsentHandle, securityHeadersHandle)

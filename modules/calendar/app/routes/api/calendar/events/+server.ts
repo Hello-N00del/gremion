@@ -20,6 +20,7 @@ import { resolveCalendarBackendOr503 } from '$lib/server/calendar/backend/resolv
 import type { ListEventsFilter, DbRecurrence } from '$lib/server/calendar/backend'
 import { canPublishEvent, forbiddenCommitteeTags, loadEventAuthzContext } from '$lib/server/calendar/event-authz'
 import { expandRecurringEvents } from '$lib/server/calendar/recurrence-expand'
+import { END_BEFORE_START_MESSAGE, endsBeforeStart } from '$lib/server/calendar/event-validation'
 
 const recurrenceSchema = z.object({
   frequency: z.enum(['daily', 'weekly', 'monthly', 'yearly']),
@@ -103,6 +104,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   }
 
   const d = parsed.data
+
+  if (endsBeforeStart(new Date(d.startAt), new Date(d.endAt))) {
+    return json({ success: false, error: END_BEFORE_START_MESSAGE }, { status: 400 })
+  }
 
   // F1-FIX-08 (S3#29): a non-admin may only tag committees they belong to and
   // may only publish (isPublic=true) for one of those committees.

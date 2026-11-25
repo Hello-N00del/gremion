@@ -1,4 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// The protocol routes read the CURRENT tenant's files switch (protocols/document-port.ts): this tenant has it on.
+vi.mock('$lib/server/config', async (orig) => ({
+  ...(await orig<typeof import('$lib/server/config')>()),
+  readConfig: () => ({ modules: { files: true } }),
+}))
 import type { Mock } from 'vitest'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -123,7 +129,7 @@ const submittedProtocol = {
 // A counted resolution as listResolutions returns it: a recorded vote.
 const countedPassed = {
   id: 'r1', result: 'passed', adoption_mode: 'tally', required_majority: 'simple',
-  votes_yes: 2, votes_no: 0, votes_abstain: 1,
+  votes_yes: 2, votes_no: 0, votes_abstain: 0,
 }
 
 const expiredPassingPoll = {
@@ -348,6 +354,41 @@ describe('POST /api/protocols/[id]/publish — body_html sanitization', () => {
     const res = await POST(makeEvent())
     expect(res.status).toBe(200)
     expect(mockSetProtocolStatus).toHaveBeenCalledOnce()
+  })
+
+  // The attendance can be lowered AFTER a decision was stored (attendance route), so the
+  // adoption gate re-checks the stored count against the members present, like the
+  // write routes do.
+  it('blocks publish (422) when a stored count exceeds the members now present, before any file move or DB write', async () => {
+    mockListResolutions.mockResolvedValue([{ ...countedPassed, votes_yes: 3, votes_no: 0, votes_abstain: 0 }])
+    mockGetQuorumContext.mockResolvedValue({ eligibleVotingCount: 3, presentVotingCount: 2, quorate: true })
+
+    const err = await POST(makeEvent()).catch((e) => e)
+    expect(err.status).toBe(422)
+    expect(err.body.message).toMatch(/anwesend/)
+    // The attendance is frozen once submitted: the exit offered is the one that exists.
+    expect(err.body.message).toMatch(/zurückziehen/)
+    expect(err.body.message).not.toMatch(/Anwesenheit.*korrigier/)
+    expect(mockPublishFile).not.toHaveBeenCalled()
+    expect(mockSetProtocolStatus).not.toHaveBeenCalled()
+  })
+
+  it('blocks publish (422) on a stored negative count (acclamation) even when the sum fits', async () => {
+    mockListResolutions.mockResolvedValue([
+      { ...acclamationPassed, votes_yes: 999, votes_no: -999, votes_abstain: 0 },
+    ])
+    mockGetQuorumContext.mockResolvedValue({ eligibleVotingCount: 3, presentVotingCount: 2, quorate: true })
+
+    await expect(POST(makeEvent())).rejects.toMatchObject({ status: 422 })
+    expect(mockSetProtocolStatus).not.toHaveBeenCalled()
+  })
+
+  it('a withdrawn resolution with an implausible stored count does not block publish', async () => {
+    mockListResolutions.mockResolvedValue([{ ...countedPassed, result: 'withdrawn', votes_yes: 999 }])
+    mockGetQuorumContext.mockResolvedValue({ eligibleVotingCount: 3, presentVotingCount: 2, quorate: true })
+
+    const res = await POST(makeEvent())
+    expect(res.status).toBe(200)
   })
 
   // ───────────────────────────────────────────────────────────────────────────

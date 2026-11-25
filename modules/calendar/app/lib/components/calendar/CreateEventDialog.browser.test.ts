@@ -316,3 +316,95 @@ describe('create-event dialog: checkbox names', () => {
     expect(document.getElementById('ce-allday')).not.toBeNull()
   })
 })
+
+describe('create-event dialog: says why a save is refused', () => {
+  const saveButton = () =>
+    Array.from(document.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Speichern')
+  const alerts = () => Array.from(document.querySelectorAll('[role="dialog"] [role="alert"]')).map((el) => el.textContent?.trim())
+
+  test('Speichern with an empty title sends nothing and shows a German field message', async () => {
+    await mountDialog()
+    expect(saveButton()?.disabled).toBe(false)
+    saveButton()?.click()
+    await tick()
+    expect(posted).toBeNull()
+    expect(alerts()).toContain('Bitte einen Titel eingeben.')
+    const title = field('ce-title')
+    expect(title.getAttribute('aria-invalid')).toBe('true')
+    const describedBy = title.getAttribute('aria-describedby')
+    expect(describedBy).toBeTruthy()
+    expect(document.getElementById(describedBy as string)?.textContent).toContain('Bitte einen Titel eingeben.')
+  })
+
+  test('a title made of blanks counts as empty', async () => {
+    await mountDialog()
+    await typeInto(field('ce-title'), '   ')
+    saveButton()?.click()
+    await tick()
+    expect(posted).toBeNull()
+    expect(alerts()).toContain('Bitte einen Titel eingeben.')
+  })
+
+  test('typing a title takes the message away and the save goes through', async () => {
+    await mountDialog()
+    saveButton()?.click()
+    await tick()
+    await typeInto(field('ce-title'), 'Sitzung')
+    expect(alerts()).not.toContain('Bitte einen Titel eingeben.')
+    expect(field('ce-title').getAttribute('aria-invalid')).not.toBe('true')
+    await save('Sitzung')
+    expect(posted?.title).toBe('Sitzung')
+  })
+
+  test('an end before the start is refused in the dialog with the German message, nothing is sent', async () => {
+    await mountDialog()
+    await typeInto(field('ce-title'), 'Sitzung')
+    await typeInto(field('ce-end'), '11.11.2026 08:00')
+    saveButton()?.click()
+    await tick()
+    expect(posted).toBeNull()
+    expect(alerts()).toContain('Das Ende darf nicht vor dem Beginn liegen.')
+    expect(field('ce-end').getAttribute('aria-invalid')).toBe('true')
+  })
+
+  test('fixing the end takes the message away', async () => {
+    await mountDialog()
+    await typeInto(field('ce-title'), 'Sitzung')
+    await typeInto(field('ce-end'), '11.11.2026 08:00')
+    saveButton()?.click()
+    await tick()
+    await typeInto(field('ce-end'), '11.11.2026 12:00')
+    expect(alerts()).not.toContain('Das Ende darf nicht vor dem Beginn liegen.')
+    await vi.waitFor(() => expect(saveButton()?.disabled).toBe(false))
+    saveButton()?.click()
+    await vi.waitFor(() => expect(posted).not.toBeNull())
+  })
+
+  test('an all-day event on one date (end equal to start) is not refused', async () => {
+    await mountDialog()
+    field('ce-allday').click()
+    await tick()
+    await save('Tag der offenen Tür')
+    expect(posted?.allDay).toBe(true)
+  })
+
+  test('the message of a refusal by the server is shown in the dialog, which stays open', async () => {
+    const onClose = vi.fn()
+    ;(fetch as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === '/api/calendar/events' && init?.method === 'POST') {
+        return new Response(JSON.stringify({ success: false, error: 'Das Ende darf nicht vor dem Beginn liegen.' }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+      return jsonResponse([])
+    })
+    render(CreateEventDialog, { props: { open: true, prefillDate: PREFILL, onClose } })
+    await tick()
+    await typeInto(field('ce-title'), 'Sitzung')
+    saveButton()?.click()
+    await vi.waitFor(() => expect(alerts()).toContain('Das Ende darf nicht vor dem Beginn liegen.'))
+    expect(onClose).not.toHaveBeenCalled()
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull()
+  })
+})

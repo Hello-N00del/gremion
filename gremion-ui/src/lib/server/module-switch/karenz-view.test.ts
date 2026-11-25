@@ -187,6 +187,62 @@ describe('problems: failed steps and refused items, by step name and id only', (
     expect((await buildKarenzView(tenant, row(), deps())).problems).toEqual([])
   })
 
+  // The live text was "Schritt publish:files:<uuid> fehlgeschlagen: KcAdminError (HTTP 404)": a ledger key and an
+  // error class on a page for a council. A publication of the sealed copy says what it is, that it is retried, and
+  // names neither the step key, the record id nor the error class.
+  describe('a failed publication of a sealed copy', () => {
+    const RECORD = '9b1f6c1e-3d52-4e0a-8a3c-0c1a7d6a2f11'
+    const failedPublish = step(`publish:files:${RECORD}`, 'failed', 'KcAdminError (HTTP 404)')
+
+    it('is told in plain German, without the step key, the record id or the error class', async () => {
+      const v = await buildKarenzView(tenant, row(), deps({ listSteps: async () => [failedPublish] }))
+      expect(v.problems).toHaveLength(1)
+      const text = v.problems[0]!
+      expect(text).toMatch(/schreibgeschützte Kopie/)
+      expect(text).toMatch(/Dokumentenordner/)
+      expect(text).toMatch(/wiederholt/)
+      expect(text).not.toContain('publish:')
+      expect(text).not.toContain(RECORD)
+      expect(text).not.toContain('KcAdminError')
+      expect(text).not.toContain('404')
+    })
+
+    it('two failed copies are one line, not one per record', async () => {
+      const other = step('publish:files:11111111-2222-4333-8444-555555555555', 'failed', 'KcAdminError (HTTP 404)')
+      const v = await buildKarenzView(tenant, row(), deps({ listSteps: async () => [failedPublish, other] }))
+      expect(v.problems).toHaveLength(1)
+    })
+
+    it('is gone once the step ran again and succeeded (the ledger says done, with no error)', async () => {
+      const v = await buildKarenzView(tenant, row(), deps({ listSteps: async () => [step(`publish:files:${RECORD}`, 'done')] }))
+      expect(v.problems).toEqual([])
+    })
+
+    it('still shows while the pass retries it (an open row and a finalizing one)', async () => {
+      for (const state of ['open', 'finalizing'] as const) {
+        const v = await buildKarenzView(tenant, row({ state }), deps({ listSteps: async () => [failedPublish] }))
+        expect(v.problems, state).toHaveLength(1)
+      }
+    })
+
+    it('is not shown once the module is on again (a restoring row never publishes again), and other failures still are', async () => {
+      const v = await buildKarenzView(
+        tenant,
+        row({ state: 'restoring' }),
+        deps({ listSteps: async () => [failedPublish, step('participant:votes:restore', 'failed', 'KarenzPartialError (1 item(s))')] }),
+      )
+      expect(v.problems).toHaveLength(1)
+      expect(v.problems[0]).toContain('participant:votes:restore')
+    })
+
+    it('the failed list of the publications gets the same plain text', async () => {
+      const v = await buildKarenzView(tenant, row(), deps({ listSteps: async () => [step('publish:list', 'failed', 'Error')] }))
+      expect(v.problems).toHaveLength(1)
+      expect(v.problems[0]).toMatch(/Dokumentenordner/)
+      expect(v.problems[0]).not.toContain('publish:')
+    })
+  })
+
   it('an unreadable ledger is itself a problem, never an empty "all well"', async () => {
     const err = vi.spyOn(console, 'error').mockImplementation(() => {})
     const v = await buildKarenzView(

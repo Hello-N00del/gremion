@@ -32,6 +32,15 @@ const SINK_ID = 'files'
 /** The realm roles that may read retained records (catalogue: council-admin, Vorstand, finance, auditor, it-admin). */
 export const RETAINED_READER_ROLES = ['council-admin', 'vorstand', 'finance', 'auditor', 'it-admin'] as const
 
+/**
+ * The reader roles a realm may not carry. A customer's realm is created with council-admin, vorstand and it-admin
+ * (docker/keycloak/realm-export.base.json); finance and auditor are vocabulary roles that no module mints, so
+ * Keycloak answers 404 "Could not find role" when asked who holds them. Nobody can hold a role that does not
+ * exist, so for these two a missing role means "no readers by this role" and the publish goes on (the absence is
+ * logged). The other three are required: a missing one is a broken realm and fails the step.
+ */
+export const RETAINED_OPTIONAL_ROLES = ['finance', 'auditor'] as const
+
 /** Group folder permissions (Nextcloud bit mask: 1 read, 2 update, 4 create, 8 delete, 16 share). */
 const PERMISSION_READ = 1
 const PERMISSION_WRITE = 1 | 2 | 4 | 8
@@ -155,7 +164,11 @@ async function ensureState(tenant: TenantContext, nc: NextcloudClient): Promise<
  * is read back after the changes and the sync fails if it does not match.
  */
 async function syncReaders(tenant: TenantContext, nc: NextcloudClient, readerGroup: string): Promise<void> {
-  const { holders, skipped } = await listRoleHolders(tenant, RETAINED_READER_ROLES) // a Keycloak failure throws: no partial list
+  // a Keycloak failure throws: no partial list; only a 404 on an OPTIONAL role is read as "no holders"
+  const { holders, skipped, absentRoles } = await listRoleHolders(tenant, RETAINED_READER_ROLES, undefined, { optionalRoles: RETAINED_OPTIONAL_ROLES })
+  if (absentRoles !== undefined && absentRoles.length > 0) {
+    console.warn(`[karenz/files] the realm of tenant ${tenant.id} does not carry the role(s) ${absentRoles.join(', ')}; nobody holds them, so they add no readers to the retained group`)
+  }
   const desired = new Map<string, { displayName?: string; email?: string }>(
     holders.map((hd) => [hd.userId, { displayName: hd.displayName, email: hd.email }]),
   )

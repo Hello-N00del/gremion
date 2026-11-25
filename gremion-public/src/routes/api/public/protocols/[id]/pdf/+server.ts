@@ -15,12 +15,13 @@ import { getPublishedProtocolById } from '$lib/server/public-db';
 // "Main app URL not configured". Same fix as +layout.server.ts.
 import { env } from '$env/dynamic/public';
 import { isUuid } from '$lib/validate';
+import { orNoPortal } from '$lib/server/portal-absent';
 
-export const GET: RequestHandler = async ({ params }) => {
+export const GET: RequestHandler = async ({ params, locals }) => {
   // #262 D5: reject a non-UUID id with a 404 BEFORE it reaches `${id}::uuid`,
   // which would otherwise 500 on this public, scriptable endpoint.
   if (!isUuid(params.id)) throw error(404, 'Not found');
-  const protocol = await getPublishedProtocolById(params.id);
+  const protocol = await orNoPortal(locals, () => getPublishedProtocolById(params.id));
   if (!protocol) throw error(404, 'Not found');
   if (!protocol.pdf_nextcloud_path) throw error(404, 'PDF not available');
 

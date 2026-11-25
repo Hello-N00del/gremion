@@ -278,7 +278,9 @@ setup() {
     shim logger
     # timeout logs its argv, then runs the command: the cap of a call is visible, not enforced
     shim timeout 'if [ "$1" = -k ]; then shift 2; fi; shift; exec "$@"'
-    shim systemctl 'cat "$DK/timers.json" 2>/dev/null || exit 1; [ -f "$DK/timers.json" ] || exit 1'
+    # `systemctl show ... UNIT` answers from $DK/state.UNIT (see unit_state); a unit with no
+    # such file is a unit that does not exist (LoadState=not-found); anything else is the list
+    shim systemctl 'if [ "$1" = show ]; then u="${!#}"; if [ -f "$DK/state.$u" ]; then cat "$DK/state.$u"; else printf "LoadState=not-found\nActiveState=inactive\nUnitFileState=\n"; fi; exit 0; fi; cat "$DK/timers.json" 2>/dev/null || exit 1; [ -f "$DK/timers.json" ] || exit 1'
     shim df 'printf "Filesystem 1024-blocks Used Available Capacity Mounted\nx 1 1 %s 1%% /\n" "$(cat "$DK/df" 2>/dev/null || echo 99999999)"'
     dump_prog_body >"${GREMION_ROOT}/bin/gremion-migration-dump"
     chmod +x "${GREMION_ROOT}/bin/gremion-migration-dump"
@@ -384,6 +386,19 @@ timers_json() { # BACKUP_EPOCH PURGE_EPOCH
         [{unit:"gremion-cd.timer", next:(($b + 5) * 1000000), activates:"gremion-cd.service"},
          {unit:"gremion-backup.timer", next:($b * 1000000), activates:"gremion-backup.service"},
          {unit:"gremion-purge.timer", next:($p * 1000000), activates:"gremion-purge.service"}]' >"$DK/timers.json"
+}
+
+# unit_state UNIT LOAD UNITFILESTATE ACTIVE -- what `systemctl show` says about a unit
+unit_state() {
+    printf 'LoadState=%s\nActiveState=%s\nUnitFileState=%s\n' "$2" "$4" "$3" >"$DK/state.$1"
+}
+
+# timers_json_without UNIT BACKUP_EPOCH PURGE_EPOCH -- the list as systemd gives it once a
+# disabled timer has been stopped: the unit is not in it at all
+timers_json_without() {
+    timers_json "$2" "$3"
+    jq -c --arg m "$1" 'map(select(.unit != $m))' "$DK/timers.json" >"$DK/timers.tmp"
+    mv "$DK/timers.tmp" "$DK/timers.json"
 }
 
 # every stream and file a leak could reach, concatenated: the captured streams, the state
@@ -1200,6 +1215,103 @@ EOF
     [[ "$output" == *"rc=2"* ]]
 }
 
+@test "timer guard: a backup timer that is installed, disabled and inactive cannot elapse, so with the purge timer enabled the span passes and the line says so" {
+    cd_need_flock
+    local now=1700000000
+    timers_json_without gremion-backup.timer $((now + 100000)) $((now + 100000))
+    unit_state gremion-backup.timer loaded disabled inactive
+    run --separate-stderr dat 'cd_data_timer_guard 150; echo rc=$?'
+    [[ "$output" == *"rc=0"* ]]
+    [[ "$output" == *"the backup timer is switched off"* ]]
+    [[ "$output" != *"the purge timer is switched off"* ]]
+    # the purge timer still counts: its next elapse inside the span is an overlap
+    timers_json_without gremion-backup.timer $((now + 100000)) $((now + 600))
+    run --separate-stderr dat 'cd_data_timer_guard 150; echo rc=$?'
+    [[ "$output" == *"rc=3"* ]]
+}
+
+@test "timer guard: a timer that is still in the list with no next elapse but is disabled and inactive is switched off as well" {
+    cd_need_flock
+    local now=1700000000
+    timers_json $((now + 100000)) $((now + 100000))
+    jq -c 'map(if .unit == "gremion-backup.timer" then .next = null else (.) end)' "$DK/timers.json" >"$DK/timers.tmp"
+    mv "$DK/timers.tmp" "$DK/timers.json"
+    unit_state gremion-backup.timer loaded disabled inactive
+    run --separate-stderr dat 'cd_data_timer_guard 150; echo rc=$?'
+    [[ "$output" == *"rc=0"* ]]
+    [[ "$output" == *"the backup timer is switched off"* ]]
+}
+
+@test "timer guard: both timers disabled and inactive pass with both notes" {
+    cd_need_flock
+    echo '[]' >"$DK/timers.json"
+    unit_state gremion-backup.timer loaded disabled inactive
+    unit_state gremion-purge.timer loaded disabled inactive
+    run --separate-stderr dat 'cd_data_timer_guard 150; echo rc=$?'
+    [[ "$output" == *"rc=0"* ]]
+    [[ "$output" == *"the backup timer is switched off"* ]]
+    [[ "$output" == *"the purge timer is switched off"* ]]
+}
+
+@test "timer guard: a timer that is enabled or active but has no readable next elapse is still unknown, code 2" {
+    cd_need_flock
+    local now=1700000000
+    # enabled and waiting, but gone from the list
+    timers_json_without gremion-backup.timer $((now + 100000)) $((now + 100000))
+    unit_state gremion-backup.timer loaded enabled active
+    run --separate-stderr dat 'cd_data_timer_guard 150; echo rc=$?'
+    [[ "$output" == *"rc=2"* ]]
+    [[ "$output" != *"switched off"* ]]
+    # enabled but not started
+    unit_state gremion-backup.timer loaded enabled inactive
+    run --separate-stderr dat 'cd_data_timer_guard 150; echo rc=$?'
+    [[ "$output" == *"rc=2"* ]]
+    # disabled but running (started by hand)
+    unit_state gremion-backup.timer loaded disabled active
+    run --separate-stderr dat 'cd_data_timer_guard 150; echo rc=$?'
+    [[ "$output" == *"rc=2"* ]]
+    # in the list with no next elapse and enabled
+    timers_json $((now + 100000)) $((now + 100000))
+    jq -c 'map(if .unit == "gremion-purge.timer" then .next = null else (.) end)' "$DK/timers.json" >"$DK/timers.tmp"
+    mv "$DK/timers.tmp" "$DK/timers.json"
+    unit_state gremion-backup.timer loaded disabled inactive
+    unit_state gremion-purge.timer loaded enabled active
+    run --separate-stderr dat 'cd_data_timer_guard 150; echo rc=$?'
+    [[ "$output" == *"rc=2"* ]]
+    # a disabled timer does not excuse a purge timer whose elapse lies in the past
+    timers_json $((now + 100000)) $((now - 86400))
+    run --separate-stderr dat 'cd_data_timer_guard 150; echo rc=$?'
+    [[ "$output" == *"rc=2"* ]]
+}
+
+@test "timer guard: a unit file that does not exist, a masked one and a state that cannot be read are unknown, code 2" {
+    cd_need_flock
+    local now=1700000000
+    timers_json_without gremion-backup.timer $((now + 100000)) $((now + 100000))
+    # no state file: systemctl says not-found
+    run --separate-stderr dat 'cd_data_timer_guard 150; echo rc=$?'
+    [[ "$output" == *"rc=2"* ]]
+    unit_state gremion-backup.timer not-found "" inactive
+    run --separate-stderr dat 'cd_data_timer_guard 150; echo rc=$?'
+    [[ "$output" == *"rc=2"* ]]
+    unit_state gremion-backup.timer masked masked inactive
+    run --separate-stderr dat 'cd_data_timer_guard 150; echo rc=$?'
+    [[ "$output" == *"rc=2"* ]]
+    # an answer with a field missing, and garbage
+    printf 'LoadState=loaded\nActiveState=inactive\n' >"$DK/state.gremion-backup.timer"
+    run --separate-stderr dat 'cd_data_timer_guard 150; echo rc=$?'
+    [[ "$output" == *"rc=2"* ]]
+    printf 'no such thing\n' >"$DK/state.gremion-backup.timer"
+    run --separate-stderr dat 'cd_data_timer_guard 150; echo rc=$?'
+    [[ "$output" == *"rc=2"* ]]
+    # the list itself cannot be read: unknown even when both units are switched off
+    unit_state gremion-backup.timer loaded disabled inactive
+    unit_state gremion-purge.timer loaded disabled inactive
+    rm -f "$DK/timers.json"
+    run --separate-stderr dat 'cd_data_timer_guard 150; echo rc=$?'
+    [[ "$output" == *"rc=2"* ]]
+}
+
 @test "timer guard: it reads no state and never exits (the status verb calls it with no state file)" {
     cd_need_flock
     local now=1700000000
@@ -1450,6 +1562,15 @@ cd_data_live_portal_probe; echo rc=$?; cd_state_get ".release.rollback_target"'
     [ "${lines[0]}" = "rc=0" ]
     [ "${lines[1]}" = "null" ]
     [ "$(cat "${GREMION_ROOT}/.probe-n")" -eq 3 ]
+}
+
+@test "live portal probe: a live colour whose customer has no public portal is a pass, said in one plain line, and is never 'looks broken'" {
+    run --separate-stderr dat 'cd_colour_portal_probe() { CD_COLOUR_PORTAL_CASE=none; return 0; }
+cd_data_live_portal_probe; echo rc=$?; cd_state_get ".release.rollback_target"'
+    [ "${lines[0]}" = "rc=0" ]
+    [ "${lines[1]}" = "null" ]
+    [[ "$stderr" == *"the live colour has no public portal"* ]]
+    [[ "$stderr" != *"looks broken"* ]]
 }
 
 @test "live portal probe: a pass on the first try stops there" {
