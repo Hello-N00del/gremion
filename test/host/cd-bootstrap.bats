@@ -102,7 +102,7 @@ scratch_host() {
 # The programs that run from the release tree and are NOT installed (they source the release's own
 # libraries, which the stage does not copy). Written out here on purpose: the list in bootstrap.sh
 # is what the stage uses, this is what the test expects, and a change must touch both.
-TREE_RUN="gremion-isolation gremion-services gremion-tenant"
+TREE_RUN="gremion-isolation gremion-isolation-live gremion-services gremion-tenant"
 is_tree_run() { case " ${TREE_RUN} " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
 # the installed set: every source file the stage must have copied, "<src> <dest>" per line

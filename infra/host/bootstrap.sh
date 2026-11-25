@@ -1152,7 +1152,7 @@ CD_UNITS=(gremion-cd.service gremion-cd.timer gremion-cd-watchdog.service gremio
 # tree; <root>/bin gets a launcher for each (cd_launcher_text). The guard
 # scripts/cd/cd-installed-libs.test.mjs reads this list, requires every other program to be
 # self-contained, and requires every entry here to need the exemption.
-CD_TREE_RUN_PROGRAMS=(gremion-isolation gremion-services gremion-tenant)
+CD_TREE_RUN_PROGRAMS=(gremion-isolation gremion-isolation-live gremion-services gremion-tenant)
 
 # Files an earlier hand install may have left: the libraries someone put beside a copy of a tree-run
 # program so that it would start (the copy itself is replaced by the launcher). Nothing installed
