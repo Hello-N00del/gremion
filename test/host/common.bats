@@ -707,3 +707,135 @@ CASES
         [ "$status" -eq 1 ] || { echo "allowed: '${m}'"; return 1; }
     done
 }
+
+# ---------------------------------------------------------------------------
+# SECONDARY_TENANT_MODULES (state.env, optional): the opt-in for shared-service modules of a secondary-host customer
+# ---------------------------------------------------------------------------
+
+@test "secondary_host_module_allowed with SECONDARY_TENANT_MODULES: only the listed ids of the fixed opt-in set join board and calendar, and the key absent or empty changes nothing" {
+    local m
+    # the key absent and empty: exactly the two core modules (the test above), nothing else
+    for m in files votes messaging publishing content; do
+        run_with 'secondary_host_module_allowed "$1"' "$m"
+        [ "$status" -eq 1 ] || { echo "allowed without the key: ${m}"; return 1; }
+        SECONDARY_TENANT_MODULES='' run_with 'secondary_host_module_allowed "$1"' "$m"
+        [ "$status" -eq 1 ] || { echo "allowed with an empty key: ${m}"; return 1; }
+    done
+    # files and votes opted in: those two join, nothing else does
+    for m in board calendar files votes; do
+        SECONDARY_TENANT_MODULES='files votes' run_with 'secondary_host_module_allowed "$1"' "$m"
+        [ "$status" -eq 0 ] || { echo "refused with the opt-in: ${m}"; return 1; }
+    done
+    for m in messaging messages publishing newsletter content elections finance vault ''; do
+        SECONDARY_TENANT_MODULES='files votes' run_with 'secondary_host_module_allowed "$1"' "$m"
+        [ "$status" -eq 1 ] || { echo "allowed beyond the opt-in: '${m}'"; return 1; }
+    done
+    # a single id opts in that id only
+    SECONDARY_TENANT_MODULES='votes' run_with 'secondary_host_module_allowed "$1"' files
+    [ "$status" -eq 1 ]
+    SECONDARY_TENANT_MODULES='messaging' run_with 'secondary_host_module_allowed "$1"' messaging
+    [ "$status" -eq 0 ]
+}
+
+@test "secondary_host_module_allowed: an id outside the fixed opt-in set is never allowed, whatever the key says (publishing stays out: its mail links name the primary host)" {
+    local m
+    for m in publishing newsletter content elections finance vault handover some-new-module 'files,votes' 'FILES'; do
+        SECONDARY_TENANT_MODULES="${m} files" run_with 'secondary_host_module_allowed "$1"' "$m"
+        [ "$status" -eq 1 ] || { echo "allowed through the key: '${m}'"; return 1; }
+    done
+}
+
+@test "secondary_optin_manifest_id maps catalogue ids to manifest ids as the two secondary lists do: files, votes, messaging->messages, nothing else" {
+    run_with 'secondary_optin_manifest_id files'
+    [ "$status" -eq 0 ]; [ "$output" = files ]
+    run_with 'secondary_optin_manifest_id votes'
+    [ "$status" -eq 0 ]; [ "$output" = votes ]
+    run_with 'secondary_optin_manifest_id messaging'
+    [ "$status" -eq 0 ]; [ "$output" = messages ]
+    local m
+    for m in messages publishing newsletter content board calendar '' unknown; do
+        run_with 'secondary_optin_manifest_id "$1"' "$m"
+        [ "$status" -eq 1 ] || { echo "mapped: '${m}'"; return 1; }
+    done
+}
+
+@test "secondary_tenant_modules_problem: an empty list is fine; a clean files/votes list is fine; unknown, not-yet-allowed, duplicate, comma-separated and upper-case entries are named by position" {
+    run_with 'secondary_tenant_modules_problem "" "" "" "" ""'
+    [ "$status" -eq 0 ]; [ -z "$output" ]
+    run_with 'secondary_tenant_modules_problem "files votes" "canary.example.org" "" "" ""'
+    [ "$status" -eq 0 ]; [ -z "$output" ]
+    run_with 'secondary_tenant_modules_problem "votes" "canary.example.org" "" "" ""'
+    [ "$status" -eq 0 ]
+    local bad
+    for bad in 'some-new-module' 'newsletter' 'content' 'elections' 'messages' 'FILES' 'files,votes' 'files votes files' ; do
+        run_with 'secondary_tenant_modules_problem "$1" "canary.example.org" "off" "namespaced" "namespaced"' "$bad"
+        [ "$status" -eq 1 ] || { echo "accepted '${bad}'"; return 1; }
+        [[ "$output" == *"entry "* ]] || { echo "no position for '${bad}': ${output}"; return 1; }
+    done
+    run_with 'secondary_tenant_modules_problem "files votes files" "canary.example.org" "" "" ""'
+    [[ "$output" == *"entry 3"* && "$output" == *"duplicate of entry 1"* ]] || { echo "$output"; return 1; }
+    run_with 'secondary_tenant_modules_problem "publishing" "canary.example.org" "" "" ""'
+    [[ "$output" == *"entry 1"* && "$output" == *"publishing"* && "$output" == *"mail"* ]] || { echo "$output"; return 1; }
+}
+
+@test "secondary_tenant_modules_problem: the key without SECONDARY_TENANT_HOSTS is refused" {
+    run_with 'secondary_tenant_modules_problem "files" "" "" "" ""'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"SECONDARY_TENANT_HOSTS"* ]] || { echo "$output"; return 1; }
+}
+
+@test "secondary_tenant_modules_problem: messaging needs SYNAPSE_JWT_LOGIN=off and MATRIX_IDENTITY=namespaced on BOTH colours, and names the missing switch" {
+    run_with 'secondary_tenant_modules_problem "messaging" "canary.example.org" "off" "namespaced" "namespaced"'
+    [ "$status" -eq 0 ]; [ -z "$output" ]
+    run_with 'secondary_tenant_modules_problem "files messaging" "canary.example.org" "off" "namespaced" "namespaced"'
+    [ "$status" -eq 0 ]
+    run_with 'secondary_tenant_modules_problem "messaging" "canary.example.org" "" "namespaced" "namespaced"'
+    [ "$status" -eq 1 ]; [[ "$output" == *"SYNAPSE_JWT_LOGIN"* && "$output" != *"MATRIX_IDENTITY"* ]] || { echo "$output"; return 1; }
+    run_with 'secondary_tenant_modules_problem "messaging" "canary.example.org" "on" "namespaced" "namespaced"'
+    [ "$status" -eq 1 ]; [[ "$output" == *"SYNAPSE_JWT_LOGIN"* ]] || { echo "$output"; return 1; }
+    run_with 'secondary_tenant_modules_problem "messaging" "canary.example.org" "off" "" "namespaced"'
+    [ "$status" -eq 1 ]; [[ "$output" == *"MATRIX_IDENTITY"* && "$output" == *"app-blue.env"* && "$output" != *"app-green.env"* ]] || { echo "$output"; return 1; }
+    run_with 'secondary_tenant_modules_problem "messaging" "canary.example.org" "off" "namespaced" "shared"'
+    [ "$status" -eq 1 ]; [[ "$output" == *"MATRIX_IDENTITY"* && "$output" == *"app-green.env"* && "$output" != *"app-blue.env"* ]] || { echo "$output"; return 1; }
+    run_with 'secondary_tenant_modules_problem "messaging" "canary.example.org" "" "" ""'
+    [ "$status" -eq 1 ]; [[ "$output" == *"SYNAPSE_JWT_LOGIN"* && "$output" == *"app-blue.env"* && "$output" == *"app-green.env"* ]] || { echo "$output"; return 1; }
+    # files and votes need neither switch
+    run_with 'secondary_tenant_modules_problem "files votes" "canary.example.org" "" "" ""'
+    [ "$status" -eq 0 ]
+}
+
+# secondary_optin_load <state.env>: the one reader the create and the module guard share. It reads state.env (and
+# the two app files beside it for the messaging switch), refuses a bad opt-in, and sets SECONDARY_TENANT_MODULES
+# to the validated list, whatever the caller's environment held.
+@test "secondary_optin_load: key absent leaves the opt-in empty, even when the caller's environment names one" {
+    local d="${BATS_TEST_TMPDIR}/optin"; mkdir -p "$d"
+    printf 'SECONDARY_TENANT_HOSTS=canary.example.org\n' > "$d/state.env"
+    SECONDARY_TENANT_MODULES='files votes' run_with 'secondary_optin_load "$1"; printf "[%s]" "$SECONDARY_TENANT_MODULES"' "$d/state.env"
+    [ "$status" -eq 0 ]; [ "$output" = '[]' ] || { echo "$output"; return 1; }
+    run_with 'secondary_optin_load "$1"; printf "[%s]" "$SECONDARY_TENANT_MODULES"' "$d/no-such-file.env"
+    [ "$status" -eq 0 ]; [ "$output" = '[]' ] || { echo "$output"; return 1; }
+}
+
+@test "secondary_optin_load: reads the key from the file (quotes stripped) and the allow function then accepts exactly those ids" {
+    local d="${BATS_TEST_TMPDIR}/optin"; mkdir -p "$d"
+    printf 'SECONDARY_TENANT_HOSTS=canary.example.org\nSECONDARY_TENANT_MODULES="files votes"\n' > "$d/state.env"
+    run_with 'secondary_optin_load "$1"; for m in files votes messaging board; do secondary_host_module_allowed "$m" && printf "%s " "$m"; done' "$d/state.env"
+    [ "$status" -eq 0 ]; [ "$output" = 'files votes board ' ] || { echo "[$output]"; return 1; }
+}
+
+@test "secondary_optin_load: a refused opt-in dies naming the key (no host, no value), and messaging reads its switches from state.env and both app files beside it" {
+    local d="${BATS_TEST_TMPDIR}/optin"; mkdir -p "$d"
+    printf 'SECONDARY_TENANT_HOSTS=canary.example.org\nSECONDARY_TENANT_MODULES=bogus\n' > "$d/state.env"
+    run_with 'secondary_optin_load "$1"' "$d/state.env"
+    [ "$status" -ne 0 ]; [[ "$output" == *"SECONDARY_TENANT_MODULES"* && "$output" != *"canary.example.org"* ]] || { echo "$output"; return 1; }
+    printf 'SECONDARY_TENANT_HOSTS=canary.example.org\nSECONDARY_TENANT_MODULES=messaging\n' > "$d/state.env"
+    run_with 'secondary_optin_load "$1"' "$d/state.env"
+    [ "$status" -ne 0 ]; [[ "$output" == *"SYNAPSE_JWT_LOGIN"* && "$output" == *"MATRIX_IDENTITY"* ]] || { echo "$output"; return 1; }
+    printf 'SYNAPSE_JWT_LOGIN=off\n' >> "$d/state.env"
+    printf 'MATRIX_IDENTITY=namespaced\n' > "$d/app-blue.env"
+    run_with 'secondary_optin_load "$1"' "$d/state.env"
+    [ "$status" -ne 0 ]; [[ "$output" == *"app-green.env"* ]] || { echo "$output"; return 1; }
+    printf 'MATRIX_IDENTITY=namespaced\n' > "$d/app-green.env"
+    run_with 'secondary_optin_load "$1"; secondary_host_module_allowed messaging && printf yes' "$d/state.env"
+    [ "$status" -eq 0 ]; [ "$output" = yes ] || { echo "$output"; return 1; }
+}
