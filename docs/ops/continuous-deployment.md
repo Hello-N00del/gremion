@@ -101,7 +101,7 @@ release is in, and whether it started, finished or failed, is in `status`.
 | `snapshot` | checks the lock span against the backup and purge timers, takes the host lock, takes the dump set |
 | `migrate` | runs the two kernel one-shots, then the module step, then the leaf step |
 | `start` | starts the target colour with its worker gate `off` and waits until every container is healthy |
-| `gates` | the readiness gate (public and internal `/readyz`, image identity, the routing test), the isolation evidence and verify |
+| `gates` | the readiness gate (public and internal `/readyz`, image identity, the routing test), the isolation evidence (the `gremion-isolation` of the release tree being judged, not an installed one: it sources the release's own libraries, which the install does not copy) and verify |
 | `switch` | records `switch_started`, switches traffic from the new tree, and confirms the router graph for all services |
 | `watch` | the watch window of `CD_WATCH_MINUTES` of observed time |
 | `commit` | the commit point and the steps around it (see below) |
@@ -775,7 +775,14 @@ Adoption is done once, by hand, on the live host. Nothing is enabled until the l
    `releases/<tag>`, while adopt reads a `pilot-<sha12>` tag and `releases/<sha12>`, so a host upgraded
    that way is refused by step 5.
 3. As root, run `bash /opt/gremion/current/infra/host/bootstrap.sh cd`. It installs, as real files, every
-   host program of `bin/`, `lib/common.sh` and `lib/cd/*.sh` (the apply script is root-owned), renders
+   host program of `bin/` that needs nothing but the installed libraries, `lib/common.sh` and `lib/cd/*.sh`
+   (the apply script is root-owned). `gremion-isolation`, `gremion-services` and `gremion-tenant` are not
+   installed as copies: they source the release's own customer libraries, so `bin/` gets a launcher for each
+   that runs the program of the current release (`/opt/gremion/current/infra/host/bin/<program>`), and a copy
+   an earlier hand install left in `bin/` is replaced by it. The libraries a hand install put beside such a
+   copy (`lib/customer-ops.sh`, `lib/access-log.sh`, `lib/executor/db.sh`) are inert once nothing sources
+   them: the stage names each one it finds and leaves it as it is (a failed apply must put the host back
+   as it was), so remove them by hand when no script of yours still names them. The stage renders
    the six systemd units (`gremion-cd.service` and `.timer`, `gremion-cd-watchdog.service` and
    `.timer`, `gremion-cd-resume.service`, `gremion-cd-apply@.service`), creates `data/cd`, `runtime/cd`
    and `runtime/workers`, and writes `etc/cd.env` from the template when it is absent. It enables and

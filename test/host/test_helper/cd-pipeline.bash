@@ -14,9 +14,9 @@
 #   logger, systemctl, df, ionice, renice
 #   mv               passes every call to the real one; it adds a `workers <colour> <mode>` line to the order
 #                    log per gate file written and fails a write named in $DK/mv.fail (see pl_setup)
-#   gremion-switch, gremion-render, gremion-tenant   committed into the release trees (as the program
+#   gremion-switch, gremion-render, gremion-tenant, gremion-isolation   committed into the release trees (as the program
 #                    finds them: <tree>/infra/host/bin, current/infra/host/bin)
-#   gremion-migration-dump, gremion-isolation, gremion-verify, gremion-mail   in $GREMION_ROOT/bin
+#   gremion-migration-dump, gremion-verify, gremion-mail   in $GREMION_ROOT/bin
 # The clock is the fake clock of the program (cd_sleep moves it), so a window of twenty minutes takes
 # a moment. A kill -9 is done from outside the libraries: a hook file the world shims evaluate
 # (DK/*.hook), or a second process.
@@ -231,6 +231,7 @@ pl_repo_init() {
     mkdir -p "${d}/infra/host/bin" "${d}/infra/host/templates/edge" "${d}/docker/pgbouncer" "${d}/gremion-ui/src"
     pl_script switch "${d}/infra/host/bin/gremion-switch"
     pl_script tenant "${d}/infra/host/bin/gremion-tenant"
+    pl_script isolation "${d}/infra/host/bin/gremion-isolation"
     pl_script render "${d}/infra/host/bin/gremion-render"
     printf '# active.yml.tmpl of the world\n' >"${d}/infra/host/templates/edge/active.yml.tmpl"
     printf -- '-- the auth_query function of the world\nCREATE SCHEMA IF NOT EXISTS pgbouncer;\n' >"${d}/docker/pgbouncer/pgbouncer-auth.sql"
@@ -469,7 +470,6 @@ if [ -s "$DK/tenant.slugs" ] && ! grep -q "\"event\":\"reconciled\"" "$GREMION_R
 fi'
     shim df 'printf "Filesystem 1024-blocks Used Available Capacity Mounted\nx 1 1 99999999 1%% /\n"'
     pl_script dump "${GREMION_ROOT}/bin/gremion-migration-dump"
-    pl_script isolation "${GREMION_ROOT}/bin/gremion-isolation"
     pl_script verify "${GREMION_ROOT}/bin/gremion-verify"
     pl_script mail "${GREMION_ROOT}/bin/gremion-mail"
     pl_world

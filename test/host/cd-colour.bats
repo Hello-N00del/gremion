@@ -1103,10 +1103,17 @@ portal_case() { # COLOUR -- the probe, then the rc and the case it saw
 
 # ================================================================== isolation
 
+# The program of the gates is the RELEASE TREE's own: the cd stage does not install it, because it
+# sources the release's libraries. An INSTALLED one of the same name is a decoy that must never
+# run: a gate that reaches for <root>/bin/gremion-isolation is the defect this pins.
 shim_isolation() {
-    cat > "${GREMION_ROOT}/bin/gremion-isolation" <<'EOF'
+    mkdir -p "${TREE}/infra/host/bin" "${GREMION_ROOT}/bin"
+    printf '#!/usr/bin/env bash\necho decoy >> "$DK/iso-decoy.log"\nexit 0\n' > "${GREMION_ROOT}/bin/gremion-isolation"
+    chmod +x "${GREMION_ROOT}/bin/gremion-isolation"
+    cat > "${TREE}/infra/host/bin/gremion-isolation" <<'EOF'
 #!/usr/bin/env bash
 printf '%s|%s\n' "${GREMION_RELEASE_DIR:-unset}" "$*" >> "$DK/iso.log"
+printf 'root=%s\n' "${GREMION_ROOT:-unset}" >> "$DK/iso-env.log"
 echo "output that names host.example.org and a router table"
 echo "stderr line for host.example.org" >&2
 [ -f "$DK/iso.hang" ] && exec sleep 30
@@ -1117,8 +1124,38 @@ if [ "$1" = run ]; then
 fi
 exit 0
 EOF
-    chmod +x "${GREMION_ROOT}/bin/gremion-isolation"
+    chmod +x "${TREE}/infra/host/bin/gremion-isolation"
     export ISO_TIP="$TIP"
+}
+
+@test "isolation run and record: the program is the release tree's own, never an installed one, and gets the install root" {
+    shim_isolation
+    mkdir -p "${GREMION_ROOT}/data/isolation-evidence"
+    echo '{}' > "${GREMION_ROOT}/data/isolation-evidence/${TIP}.json"
+    call 'cd_colour_isolation_run "$TREE"'
+    [[ "$output" == *"rc=0"* ]]
+    call 'cd_colour_isolation_record "$TREE"'
+    [[ "$output" == *"rc=0"* ]]
+    [ ! -e "$DK/iso-decoy.log" ]
+    [ "$(grep -c . "$DK/iso.log")" -eq 2 ]
+    [ "$(sort -u "$DK/iso-env.log")" = "root=${GREMION_ROOT}" ]
+}
+
+@test "isolation run and record: a program of the tree that is a link or is not there is 2, and nothing runs (the installed decoy neither)" {
+    shim_isolation
+    mkdir -p "${GREMION_ROOT}/data/isolation-evidence"
+    echo '{}' > "${GREMION_ROOT}/data/isolation-evidence/${TIP}.json"
+    mv "${TREE}/infra/host/bin/gremion-isolation" "${GREMION_ROOT}/outside-isolation"
+    ln -s "${GREMION_ROOT}/outside-isolation" "${TREE}/infra/host/bin/gremion-isolation"
+    call 'cd_colour_isolation_run "$TREE"'
+    [[ "$output" == *"rc=2"* ]]
+    call 'cd_colour_isolation_record "$TREE"'
+    [[ "$output" == *"rc=2"* ]]
+    rm -f "${TREE}/infra/host/bin/gremion-isolation"
+    call 'cd_colour_isolation_run "$TREE"'
+    [[ "$output" == *"rc=2"* ]]
+    [ ! -e "$DK/iso.log" ]
+    [ ! -e "$DK/iso-decoy.log" ]
 }
 
 @test "isolation run: it runs with GREMION_RELEASE_DIR set to the new tree and prints the evidence path of the new tip" {
@@ -1159,13 +1196,13 @@ EOF
     [[ "$output" == *"rc=1 reason=isolation_run"* ]]
 }
 
-@test "isolation run: a tree with no tip, or a program that is not installed, is 2" {
+@test "isolation run: a tree with no tip, or a tree without the program, is 2" {
     shim_isolation
     rm -f "${TREE}/.git"
     call 'cd_colour_isolation_run "$TREE"'
     [[ "$output" == *"rc=2"* ]]
     : > "${TREE}/.git"
-    rm -f "${GREMION_ROOT}/bin/gremion-isolation"
+    rm -f "${TREE}/infra/host/bin/gremion-isolation"
     call 'cd_colour_isolation_run "$TREE"'
     [[ "$output" == *"rc=2"* ]]
 }

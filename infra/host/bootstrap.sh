@@ -86,8 +86,10 @@ Stages:
                + gremion-purge.timer (daily, TRD-144/145)
                + gremion-access-purge.timer (daily, TRD-092)
                + gremion-karenz.timer (hourly, module Karenz finalization)
-  cd           the continuous-deployment programs: bin/*, lib/common.sh and lib/cd/*.sh
-               as real files, the six gremion-cd units and etc/cd.env (only if absent);
+  cd           the continuous-deployment programs: bin/* (gremion-isolation,
+               gremion-services and gremion-tenant source the release's own libraries:
+               bin/ gets a launcher for each that runs the current release's program),
+               lib/common.sh and lib/cd/*.sh as real files, the six gremion-cd units and etc/cd.env (only if absent);
                enables nothing, starts nothing   (installs from a release checkout,
                not part of 'all'; also what gremion-cd-apply@.service re-runs)
   harden-ssh   key-only SSH   (RUN LAST, gated, not part of 'all')
@@ -1104,11 +1106,37 @@ stage_timers() {
 # ──────────────────────────────────────────────────────────────────────────
 # cd — the host programs of continuous deployment (gremion-cd)
 #
-# Installs from THIS source tree (a release checkout) as real files: every program of bin/,
-# lib/common.sh and lib/cd/*.sh (lib/cd/apply-root.sh, the one script that runs as root, is
-# root-owned in a root-owned directory; see the note at the directories on what that is worth), renders the six gremion-cd units, makes the data and
+# Installs from THIS source tree (a release checkout) as real files: every program of bin/ that
+# is self-contained (see CD_TREE_RUN_PROGRAMS), lib/common.sh and lib/cd/*.sh (lib/cd/apply-root.sh,
+# the one script that runs as root, is root-owned in a root-owned directory; see the note at the
+# directories on what that is worth), renders the six gremion-cd units, makes the data and
 # runtime directories and writes etc/cd.env from the template when it is absent. It ENABLES and
 # STARTS nothing: that is the operator's step (docs/ops/continuous-deployment.md).
+#
+# WHAT IS NOT INSTALLED AS A COPY, AND WHY. A program of bin/ that sources lib/customer-ops.sh (and
+# through it lib/executor/db.sh, lib/access-log.sh) needs libraries that belong to the RELEASE: the
+# customer lifecycle code and the compose files, images and one-shots it drives are one commit.
+# Those programs run from the release tree (<root>/current/infra/host/bin, or the candidate tree
+# the pipeline is working on), the way gremion-executor sources the same libraries from
+# GREMION_RELEASE_DIR and the timers run <root>/current/infra/host/ops. A copy of the program
+# without the libraries fails on its first line; installing the libraries too would be a second copy
+# of the customer code, outside what apply-root.sh backs up and restores and a version behind the
+# tree it works on. What <root>/bin holds for them is a LAUNCHER that sources nothing and execs the
+# program of <root>/current, so the documented command (gremion-tenant init, gremion-services wire,
+# gremion-isolation run, with <root>/bin on the PATH) still resolves, to the live release's own
+# program. The gates of a release do not use the launcher: they run the candidate tree's program.
+# The rule that keeps this honest is a test: scripts/cd/cd-installed-libs.test.mjs walks every `.`
+# of every installed program and fails, naming the file, when a sourced library is not installed
+# here.
+#
+# TRUST. What is installed is the deploy user's (programs and launchers 0755, libraries 0644; only
+# lib/cd/apply-root.sh is root's) and nothing that runs as root sources it: apply-root.sh sources
+# nothing, and this script, which runs as root, reads only the SOURCE tree. The programs a launcher
+# starts are the live release's own code, which the pipeline already builds images from and the
+# executor already sources; they are run by whoever started the launcher, never by this stage.
+# This stage runs as root and writes only the files it installs, each by a rename inside a directory
+# it has checked is not a link (bin/, lib/, lib/cd/); it deletes nothing it did not install
+# itself (the leftovers of a hand install, CD_LEFTOVER_LIBS, are named and left).
 #
 # It is run twice in a host's life: by hand at the first adoption, and by
 # lib/cd/apply-root.sh (the unit gremion-cd-apply@<sha12>.service) at every later apply of
@@ -1118,6 +1146,60 @@ stage_timers() {
 
 CD_UNITS=(gremion-cd.service gremion-cd.timer gremion-cd-watchdog.service gremion-cd-watchdog.timer
     gremion-cd-resume.service 'gremion-cd-apply@.service')
+
+# The programs of bin/ that are NOT installed as copies: each sources libraries of the release
+# (customer-ops.sh and what it pulls in) that the install does not copy. They run from the release
+# tree; <root>/bin gets a launcher for each (cd_launcher_text). The guard
+# scripts/cd/cd-installed-libs.test.mjs reads this list, requires every other program to be
+# self-contained, and requires every entry here to need the exemption.
+CD_TREE_RUN_PROGRAMS=(gremion-isolation gremion-services gremion-tenant)
+
+# Files an earlier hand install may have left: the libraries someone put beside a copy of a tree-run
+# program so that it would start (the copy itself is replaced by the launcher). Nothing installed
+# sources them any more, so they are inert. They are REPORTED and never touched: they lie outside
+# what apply-root.sh backs up and restores (a failed apply must put the host back as it was, and a
+# deleted file is not in the backup), a removal by path follows a link that stands where a directory
+# was (a lib/executor that points into the live release would take the release's own library with
+# it), and an operator's own script may still name one. Taking them away is the operator's step.
+CD_LEFTOVER_LIBS=(lib/customer-ops.sh lib/access-log.sh lib/executor/db.sh)
+
+# cd_launcher_text <program name> -- the whole text of <root>/bin/<name> for a tree-run program.
+# It sources nothing: it finds the program of the current release and execs it, so that program,
+# its libraries and the release it works on are one commit. The root is GREMION_ROOT when set, else
+# the directory above the launcher's own real path, links followed (a host whose root is not
+# /opt/gremion needs no variable, and a PATH entry that links to <root>/bin works). Either way the
+# root is EXPORTED, so the program it starts works on the root the launcher found and not on the
+# /opt/gremion default (every program of the host reads it through gremion_root).
+cd_launcher_text() {
+    cat <<EOF
+#!/usr/bin/env bash
+# Installed by 'bootstrap.sh cd'; written by the stage, never edited by hand.
+# $1 sources the release's own libraries, which the install does not copy, so the
+# program runs from the current release tree. This launcher only finds it.
+set -euo pipefail
+root="\${GREMION_ROOT:-}"
+if [[ -z "\$root" ]]; then
+    self="\$(readlink -f -- "\${BASH_SOURCE[0]}")" || exit 2
+    root="\$(dirname -- "\$(dirname -- "\$self")")"
+fi
+export GREMION_ROOT="\$root"
+prog="\${root}/current/infra/host/bin/$1"
+if [[ ! -f "\$prog" || ! -x "\$prog" ]]; then
+    printf '%s\\n' "$1: \${prog} is not there (no release is current yet)" >&2
+    exit 2
+fi
+exec "\$prog" "\$@"
+EOF
+}
+
+# cd_is_tree_run <program name> -- 0 when the program is one that runs from the release tree.
+cd_is_tree_run() {
+    local p
+    for p in "${CD_TREE_RUN_PROGRAMS[@]}"; do
+        [[ "$p" == "$1" ]] && return 0
+    done
+    return 1
+}
 
 # install_cd_file <mode> <uid:gid> <src> <dest>
 # A temp file beside <dest>, then rename: the inode a running bash holds is never changed.
@@ -1157,7 +1239,7 @@ stage_cd() {
     local root; root="$(gremion_root)"
     local udir="${GREMION_SYSTEMD_DIR:-/etc/systemd/system}"
     local sbin="$SCRIPT_DIR/bin" slib="$SCRIPT_DIR/lib" tmpl="${TEMPLATE_DIR}/env/cd.env.tmpl"
-    local f u base n
+    local f u base n launcher
 
     # Preconditions come from the SOURCE tree and the host, and are all checked before anything
     # on the host is touched.
@@ -1199,8 +1281,24 @@ stage_cd() {
     n=0
     for f in "$sbin"/*; do
         [[ -f "$f" ]] || continue
+        # a program that runs from the release tree is not installed as a copy (it would source
+        # libraries that are not here): its place in bin/ is a launcher, which replaces whatever a
+        # hand install left there (a copy, a link)
+        if cd_is_tree_run "${f##*/}"; then
+            launcher="$(mktemp)" || die "cannot make a temporary file" 1
+            cd_launcher_text "${f##*/}" >"$launcher" || { rm -f -- "$launcher"; die "cannot write the launcher of ${f##*/}" 1; }
+            install_cd_file 0755 "$dep" "$launcher" "${root}/bin/${f##*/}"
+            rm -f -- "$launcher"
+            n=$((n + 1))
+            continue
+        fi
         install_cd_file 0755 "$dep" "$f" "${root}/bin/${f##*/}"
         n=$((n + 1))
+    done
+    for f in "${CD_LEFTOVER_LIBS[@]}"; do
+        if [[ -e "${root}/${f}" || -L "${root}/${f}" ]]; then
+            info "${root}/${f} is a leftover of a hand install: nothing installed sources it, it is left as it is (remove it by hand when no script of yours names it)"
+        fi
     done
     install_cd_file 0644 "$dep" "$slib/common.sh" "${root}/lib/common.sh"
     for f in "$slib"/cd/*.sh; do
@@ -1239,6 +1337,13 @@ stage_cd() {
     [[ "$n" -ge 2 ]] || die "only ${n} files were installed" 1
     for f in "$sbin"/*; do
         [[ -f "$f" ]] || continue
+        if cd_is_tree_run "${f##*/}"; then
+            # the launcher, not the tree's copy: a real file, the exact text, mode 755
+            [[ -f "${root}/bin/${f##*/}" && ! -L "${root}/bin/${f##*/}" ]] || die "${root}/bin/${f##*/} is not a real file" 1
+            [[ "$(cat -- "${root}/bin/${f##*/}")" == "$(cd_launcher_text "${f##*/}")" ]] || die "${root}/bin/${f##*/} is not the launcher of the release tree's program" 1
+            [[ "$(stat -c '%a' "${root}/bin/${f##*/}")" == 755 ]] || die "${root}/bin/${f##*/} is not mode 755" 1
+            continue
+        fi
         [[ -f "${root}/bin/${f##*/}" && ! -L "${root}/bin/${f##*/}" ]] || die "${root}/bin/${f##*/} is not a real file" 1
         cmp -s "$f" "${root}/bin/${f##*/}" || die "${root}/bin/${f##*/} differs from the tree" 1
     done
