@@ -141,16 +141,34 @@ _cd_drv_end_release() {
     CD_DRV_SWITCH_DONE=0
     _cd_drv_set '.phase = "idle" | .release = null'
     rm -f "${CD_DATA}/release-ref" 2>/dev/null || true
-    _cd_drv_lock_forget
+    _cd_drv_lock_end
 }
 
-# _cd_drv_lock_forget -- the span of the host lock is over: the release ended, or it handed the lock
-# back on purpose (the state apply before the build, a park of the watch), so the next take starts
-# a span of its own. A lock that was lost by a kill is NOT forgotten here: the process that takes
-# the release over goes on counting, and what it reports is an upper bound.
+# _cd_drv_lock_forget -- the host lock was handed back on purpose while the release goes on (the
+# state apply before the build, a park of the watch), so the next take starts a span of its own.
+# Nothing is written down: `status` must not show half a release's span as "the last release". A
+# lock that was lost by a kill is NOT forgotten here: the process that takes the release over goes
+# on counting, and what it reports is an upper bound.
 _cd_drv_lock_forget() {
     rm -f "${CD_DATA}/hostlock-since" 2>/dev/null || true
     CD_HOSTLOCK_SINCE=''
+    CD_HOSTLOCK_SHA12=''
+}
+
+# _cd_drv_lock_end -- the span of the host lock is over because the release is: it committed (commit
+# step 10) or ended any other way. The span is written down as the history line `status` reads ("the
+# last release held it"), so a rolled-back release's span is the last one too, never an older
+# release's. Called wherever the driver lets the lock go at the end of a release, also where a
+# rollback that ran inside a stage has already taken the release record out of the state.
+_cd_drv_lock_end() {
+    local now m
+    if [[ "${CD_HOSTLOCK_SINCE:-}" =~ ^[0-9]{1,12}$ ]] && now="$(cd_now)"; then
+        m=$(((now - CD_HOSTLOCK_SINCE) / 60))
+        ((m < 0)) && m=0
+        # the sha of the release that took the lock: R_SHA12 may be empty by now
+        cd_hist hostlock_released minutes="$m" sha12="${CD_HOSTLOCK_SHA12:-${R_SHA12:-}}" || true
+    fi
+    _cd_drv_lock_forget
 }
 
 # _cd_drv_lock_since -- the host lock was just taken for the release in R_ID: note when this release
@@ -162,6 +180,7 @@ _cd_drv_lock_since() {
     local f="${CD_DATA}/hostlock-since" rid='' at=''
     CD_HOSTLOCK_SINCE=''
     [[ -n "${R_ID:-}" ]] || return 0
+    CD_HOSTLOCK_SHA12="${R_SHA12:-}"
     if [[ -r "$f" ]]; then
         read -r rid at <"$f" || true
         if [[ "$rid" == "$R_ID" && "$at" =~ ^[0-9]{1,12}$ ]]; then
@@ -172,16 +191,6 @@ _cd_drv_lock_since() {
     at="$(cd_now)" || return 0
     printf '%s %s\n' "$R_ID" "$at" | cd_atomic_write "$f" 600 || return 0
     CD_HOSTLOCK_SINCE="$at"
-    return 0
-}
-
-# _cd_drv_lock_record -- the host lock of a committed release is about to go (commit step 10): its
-# span in whole minutes, as the history line `status` reads.
-_cd_drv_lock_record() {
-    local now
-    [[ "${CD_HOSTLOCK_SINCE:-}" =~ ^[0-9]{1,12}$ ]] || return 0
-    now="$(cd_now)" || return 0
-    cd_hist hostlock_released minutes=$(((now - CD_HOSTLOCK_SINCE) / 60)) sha12="${R_SHA12:-}" || true
     return 0
 }
 
@@ -429,10 +438,20 @@ _cd_drv_after_rollback() {
         if [[ -z "$D_HOLD" ]]; then
             cd_hold_set rollback_failed "$(_cd_drv_code "$rule" rollback)" "$R_SHA12" || true
         fi
+        if [[ "$rc" == 2 || "$rc" == 3 ]]; then
+            # a refusal (2) or a busy cd lock (3) touched nothing, and rollback.sh mails only from a
+            # sequence that began (its own failure): without this the hold would be the only news
+            _cd_drv_mail rollback_failed sha12="$R_SHA12" prev_sha12="$D_LSHA12" tag="$R_TAG" colour="$R_COL" \
+                prev_colour="$D_LCOL" stage="${R_STAGE:-none}" rule="$rule" reason=rollback_refused \
+                command="gremion-cd status"
+        fi
     fi
     if [[ "$D_PHASE" != idle || -n "$R_ID" ]]; then
         _cd_drv_end_release
     fi
+    # a rollback that completed has taken the release record out of the state itself: the span of
+    # the lock ends here all the same
+    _cd_drv_lock_end
     cd_hostlock_release
     CD_DRV_ROLLED=1
     return 0
@@ -453,6 +472,10 @@ _cd_drv_policy_committed() {
         cd_hold_set reconcile_failed "$code" "$sha12" || true
         _cd_drv_mail reconcile_failed sha12="$sha12" colour="$colour" reason="$code" \
             command="gremion-cd reconcile" key="reconcile_failed.${sha12}"
+    elif [[ "$D_HOLD" == rollback_failed ]]; then
+        # the operator's rollback, taken while commit steps 6 to 8 retried, did not complete: its
+        # hold and its critical mail are the news, and a `failure` hold would hide them
+        hk=rollback_failed
     elif [[ "$D_HOLD" == failure && "$D_HOLDSHA" == "$sha12" ]]; then
         # the failing unit (commit steps 6 to 8) wrote its own hold, with the step in its
         # reason, and queued its own mail: neither is replaced or doubled
@@ -951,6 +974,7 @@ _cd_drv_st_watch() {
         # is the news): the release is over all the same, as _cd_drv_after_rollback ends it
         CD_DRV_ROLLED=1
         if [[ -n "$R_ID" ]]; then _cd_drv_end_release; fi
+        _cd_drv_lock_end
         cd_hostlock_release
         return 0
     fi
@@ -965,7 +989,11 @@ _cd_drv_st_watch() {
         return 0
     fi
     if ((rc != 0)); then
-        # the loop failed on its own: not proof that the release is bad, so no block
+        # the loop failed on its own: not proof that the release is bad, so no block. Its codes 2 (a
+        # precondition) and 4 (eight samples without a verdict, or a trigger whose rollback was refused
+        # with nothing touched) all land here: commit.sh gives the driver no rule for them, so this is
+        # the driver's own decision (commit_stuck: back to the old colour, no block). A rollback that
+        # is refused again ends as the hold rollback_failed with its mail (_cd_drv_after_rollback)
         cd_stage_fail watch host watch_loop || true
         _cd_drv_rollback_auto commit_stuck watch
         return 0
@@ -1012,9 +1040,13 @@ _cd_drv_st_commit() {
             _cd_drv_commit_closeout "$R_SHA12" "$R_MODE"
             _cd_drv_policy_committed commit host post_commit
         elif [[ -z "$R_ID" || "$D_PHASE" == idle ]]; then
-            # promote ran the rollback itself (commit.sh at CD_COMMIT_MAX_MIN) and ended the
-            # release: a second sequence would meet a release that is over
+            # promote ran the rollback itself (commit.sh at CD_COMMIT_MAX_MIN, or the operator's
+            # request during the retries) and ended the release: a second sequence would meet a
+            # release that is over. One that did not complete leaves its release record behind with
+            # phase idle (the hold rollback_failed is the news): the release is over all the same
             CD_DRV_ROLLED=1
+            if [[ -n "$R_ID" ]]; then _cd_drv_end_release; fi
+            _cd_drv_lock_end
             cd_hostlock_release
         elif [[ "$D_PHASE" == rolling_back ]]; then
             CD_DRV_ROLLED=1
@@ -1044,7 +1076,7 @@ _cd_drv_st_commit() {
         cd_hist prune_failed code="$rc" || true
     fi
     # step 10: the host lock only. The cd lock stays for the reconcile stage.
-    _cd_drv_lock_record
+    _cd_drv_lock_end
     cd_hostlock_release
     cd_heartbeat_stop
     cd_stage_ok commit || true
@@ -1547,11 +1579,20 @@ _cd_drv_candidate() {
 }
 
 # -- the request queue ------------------------------------------------------------------
+# _cd_drv_alive_kept -- the reconcile stage stopped at a verb whose container could not be
+# confirmed gone: the host lock is kept until this process exits, and cd_hostlock_take is
+# re-entrant for the process that holds it, so nothing that takes the lock may run here (a manual
+# rollback would run at once, with that container possibly still alive)
+_cd_drv_alive_kept() {
+    ((${_CD_REC_ALIVE:-0} == 1))
+}
+
 # _cd_drv_drain -- every pending request, oldest first. The arguments are checked again here:
 # the verb that wrote the file checked them once, but the file is data.
 _cd_drv_drain() {
     local req verb args
-    while req="$(cd_request_next)" && [[ -n "$req" ]]; do
+    # the request is looked at only when it may be taken: it stays queued for the next process
+    while ! _cd_drv_alive_kept && req="$(cd_request_next)" && [[ -n "$req" ]]; do
         verb="$(printf '%s' "$req" | jq -r '.verb')"
         args="$(printf '%s' "$req" | jq -c '.args')"
         case "$verb" in
@@ -1573,6 +1614,10 @@ _cd_drv_drain() {
             *) cd_hist request_ignored verb="$verb" || true ;;
         esac
     done
+    if _cd_drv_alive_kept; then
+        cd_hist requests_deferred why=container_alive || true
+        _cd_drv_say "requests wait: a reconcile container is not confirmed gone, the host lock is kept until this process exits"
+    fi
     return 0
 }
 

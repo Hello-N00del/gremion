@@ -5,9 +5,10 @@
 #
 # The program runs from the whole infra/host tree. Nothing of lib/cd is replaced: the helper's stub
 # file only names functions, and it defines a stub where no real function exists, so a library that
-# is missing or renamed shows up as a `stub ...` line in the call log. Every test ends with
-# pl_no_stubs. What is shimmed is outside the family: docker and curl (one world each, files under
-# $DK), git (the real one, recorded), logger, systemctl, and the programs the libraries look up by
+# is missing or renamed shows up as a `stub ...` line in the call log. Every test that runs the
+# program or a library function ends with pl_no_stubs (the kill tests inside pl_kill_case). What is
+# shimmed is outside the family: docker and curl (one world each, files under $DK), git (the real
+# one, recorded), logger, systemctl, mv (see below), and the programs the libraries look up by
 # path (gremion-switch, gremion-render and gremion-tenant inside the release trees, gremion-
 # migration-dump, gremion-isolation, gremion-verify and gremion-mail in the bin directory).
 #
@@ -16,6 +17,10 @@
 # a second process. The history writer is NOT wrapped. Failures are injected by files of the world
 # (a build that fails, a switch that writes and exits 1, a readyz that says no), never by chmod, so
 # a run as root and a run as an unprivileged user do the same.
+#
+# mv is the one other shim of the family's own writes: it records the order of the worker gate files and
+# can make one named write fail (a file of the world, never chmod). The tests that call a library function
+# directly through pl_lib (the span of the host lock, the isolation step) also end with pl_no_stubs.
 #
 # Every address is a reserved example name; no secret-looking value is committed.
 
@@ -292,7 +297,11 @@ pl_kill_case() {
     local -a args
     shift 2
     pl_scn_green
+    # a function named in PL_KILL_PRE changes the world first (a release with the state tier, leaf services)
+    if [ -n "${PL_KILL_PRE:-}" ]; then "$PL_KILL_PRE"; fi
     pl_killed_tick "$pat" "$nth"
+    # PL_KILL_STAGE names the stage the program must have died in (the call may belong to another one)
+    if [ -n "${PL_KILL_STAGE:-}" ]; then [ "$(pl_state .release.stage)" = "$PL_KILL_STAGE" ]; fi
     # the interrupted state is a release in flight, not an idle host
     [ "$(pl_state .phase)" != idle ]
     if [ "${1:-}" = plain ]; then args=(); else args=(--resume-only); fi
@@ -379,6 +388,37 @@ pl_assert_boot_end() {
     pl_assert_boot_end
 }
 
+@test "kill -9 in the retag, then the boot resume: the release commits" {
+    PL_KILL_STAGE=retag pl_kill_case 'docker ps -q --filter label=com.docker.compose.project=teststack-app-green' 1
+    pl_assert_boot_end
+}
+
+pl_leaf_pre() { pl_leaf_world; }
+pl_state_pre() { pl_state_release; }
+
+@test "kill -9 in the leaf step (the second leaf), then the boot resume: the release commits" {
+    PL_KILL_STAGE=migrate PL_KILL_PRE=pl_leaf_pre pl_kill_case '--migrate-only' 2
+    pl_assert_boot_end
+}
+
+@test "kill -9 in the host apply (the root unit's call), then the boot resume: the apply runs again and the release commits" {
+    PL_KILL_STAGE=host_apply PL_KILL_PRE=pl_state_pre pl_kill_case 'sudo -n systemctl start --wait' 1
+    pl_assert_boot_end
+    pl_assert_state_applied
+}
+
+@test "kill -9 in the state apply (the first take of its dump set), then the boot resume: the apply goes on from its restore point and the release commits" {
+    PL_KILL_STAGE=state_apply PL_KILL_PRE=pl_state_pre pl_kill_case '^dump take --release state-pilot-' 1
+    pl_assert_boot_end
+    pl_assert_state_applied
+}
+
+@test "kill -9 in the state apply (the retagged project coming up), then the boot resume: the apply is not taken twice and the release commits" {
+    PL_KILL_STAGE=state_apply PL_KILL_PRE=pl_state_pre pl_kill_case 'state\.env.* up -d' 1
+    pl_assert_boot_end
+    pl_assert_state_applied
+}
+
 @test "a timer tick after a kill -9 takes the release over and ends in the state of the uninterrupted run, the reconcile included" {
     pl_kill_case 'app-green.env --profile . build$' 1 plain
     pl_assert_committed
@@ -454,8 +494,74 @@ pl_assert_boot_end() {
     [ "$(cat "${GREMION_ROOT}/data/isolation-recorded")" = "$C_L0" ]
     [ "$(cat "${GREMION_ROOT}/runtime/active-colour")" = blue ]
     [ "$(pl_state .phase)" = idle ]
+    # the release took the host lock at the snapshot: its span ends with the rollback that ran inside the stage
+    pl_span_ended "${C_B:0:12}"
     pl_hostlock_free
     pl_cdlock_free
+}
+
+@test "an operator rollback in the commit retries that does not complete ends the release record too: the hold rollback_failed stands alone" {
+    pl_scn_green
+    # as above, but the old colour does not prove itself when the rollback asks: the sequence fails at its
+    # second step and leaves the release record behind with phase idle
+    pl_on obstacle '^isolation record' 'rm -f "$GREMION_ROOT/runtime/previous-tag"; mkdir "$GREMION_ROOT/runtime/previous-tag"; printf "notready\n" >"$DK/readyz.blue"; "$HOST_SRC/bin/gremion-cd" rollback </dev/null >"$DK/rollback-verb.out" 2>&1 || true'
+    run pl_tick
+    echo "$output"
+    pl_no_stubs
+    [ "$(pl_hist rollback_requested)" -eq 1 ]
+    [ "$(pl_hist rolled_back)" -eq 0 ]
+    [ "$(pl_state .hold.kind)" = rollback_failed ]
+    [ "$(pl_state .phase)" = idle ]
+    # nothing in the state says a release is in flight: `reconcile` and the next tick must not refuse on it
+    [ "$(pl_state .release)" = null ]
+    [ "$(pl_mails rollback_failed)" -ge 1 ]
+    pl_span_ended "${C_B:0:12}"
+    pl_hostlock_free
+    pl_cdlock_free
+}
+
+@test "an operator rollback taken while commit steps 6 to 8 retry that does not complete leaves the hold rollback_failed, not a failure hold, and ends the record" {
+    pl_scn_green
+    # the old colour project cannot be taken down (commit step 7 retries); at its first try the operator asks for
+    # a rollback, and the old colour does not prove itself when it is asked: the sequence fails at its second step
+    pl_on seven 'app-blue\.env.* down( |$)' ': >"$DK/down.fail"; printf "notready\n" >"$DK/readyz.blue"; "$HOST_SRC/bin/gremion-cd" rollback </dev/null >"$DK/rollback-verb.out" 2>&1 || true'
+    run pl_tick
+    echo "$output"
+    pl_no_stubs
+    [ "$(pl_hist committed)" -eq 1 ]
+    [ "$(pl_hist rollback_requested)" -eq 1 ]
+    [ "$(pl_hist rolled_back)" -eq 0 ]
+    # the release is live and stays so; the hold the failed rollback wrote stands, with its own mail
+    [ "$(pl_state .live.sha)" = "$C_B" ]
+    [ "$(pl_state .hold.kind)" = rollback_failed ]
+    [ "$(pl_mails rollback_failed)" -ge 1 ]
+    [ "$(pl_mails stopped)" -eq 0 ]
+    [ "$(pl_state .phase)" = idle ]
+    [ "$(pl_state .release)" = null ]
+    pl_span_ended "${C_B:0:12}"
+    pl_hostlock_free
+    pl_cdlock_free
+}
+
+@test "rollback: the isolation record of the old tip is put back only where the new tip was recorded: the operator's request in the commit stage, never proof_end or a trigger" {
+    pl_scn_green
+    local row rule stage want l12="${C_L0:0:12}"
+    for row in "manual_rollback commit 1" "commit_stuck commit 1" "proof_end commit 0" "watch_readiness watch 0" "manual_rollback watch 0"; do
+        read -r rule stage want <<<"$row"
+        : >"$DK/order.log"
+        run pl_lib '
+            RB_COMMITTED=0 RB_RULE="$1" RB_STAGE="$2" RB_ID=rel-1 RB_NOTE=""
+            RB_OLD_TREE="${GREMION_ROOT}/releases/$3" RB_OLD_SHA12="$3" RB_NEW_SHA12=bbbbbbbbbbbb RB_NEW_TAG=pilot-bbbbbbbbbbbb RB_NEW_COLOUR=green
+            _cd_rb_s_isolation' "$rule" "$stage" "$l12"
+        echo "$rule/$stage: $output"
+        [ "$status" -eq 0 ]
+        pl_no_stubs
+        if [ "$want" = 1 ]; then
+            [ "$(pl_count '^isolation record')" -ge 1 ]
+        else
+            [ "$(pl_count '^isolation (record|run)')" -eq 0 ]
+        fi
+    done
 }
 
 # ===========================================================================================
@@ -484,6 +590,9 @@ pl_assert_boot_end() {
     pl_cdlock_free
     [ "$(pl_state .release.switch_started)" = true ]
     [ "$(pl_state .release.committed_at)" = null ]
+    # the lock is handed back, the span is over, and half a release's span is no "last release" for status
+    [ ! -e "${GREMION_ROOT}/data/cd/hostlock-since" ]
+    [ "$(pl_hist hostlock_released)" -eq 0 ]
 }
 
 @test "the host lock span of a release resumed from a park starts at the resume, not at the first take" {
@@ -503,6 +612,8 @@ pl_assert_boot_end() {
     pl_assert_committed
     # the park (a quarter of an hour of pause and the half hour after it) is no part of the span
     [ "$(pl_mail_field "$(pl_mail_file released)" hostlock_min)" -lt 10 ]
+    # one span line, the one of the committed release
+    [ "$(pl_hist hostlock_released)" -eq 1 ]
 }
 
 @test "the watch: a rollback of the loop that fails ends the release too, the hold rollback_failed stands alone" {
@@ -518,6 +629,95 @@ pl_assert_boot_end() {
     # no release record is left behind with phase idle
     [ "$(pl_state .release)" = null ]
     [ "$(pl_mails rollback_failed)" -ge 1 ]
+    pl_hostlock_free
+    pl_cdlock_free
+}
+
+@test "the watch: eight samples that gave no verdict (code 4 of the real loop) end as a commit_stuck rollback: the old colour serves, no block, the host lock free" {
+    pl_scn_green
+    cd_write_cfg CD_REPO_URL=https://github.com/org/repo CD_POST_RECONCILE_S=0 CD_WATCH_MINUTES=10 CD_WATCH_INTERVAL_S=30
+    # from the first sample on the evaluation cannot write its sidecar: it answers 2, so no sample gives a verdict
+    pl_on unusable '--max-time 12 http://127.0.0.1:18080/api/version' 'printf "watch-eval.json\n" >"$DK/mv.fail"'
+    pl_on clear '^switch blue' 'rm -f "$DK/mv.fail"'
+    run pl_tick
+    echo "$output"
+    pl_no_stubs
+    [ "$(pl_hist watch_sample_unusable)" -eq 8 ]
+    [ "$(jq -s '[.[] | select(.event == "rollback_started")][0].rule' "${GREMION_ROOT}/data/cd/history.jsonl")" = '"commit_stuck"' ]
+    [ "$(pl_hist rolled_back)" -eq 1 ]
+    [ "$(pl_state .live.sha)" = "$C_L0" ]
+    [ "$(cat "${GREMION_ROOT}/runtime/active-colour")" = blue ]
+    [ "$(readlink "${GREMION_ROOT}/current")" = "${GREMION_ROOT}/releases/${C_L0:0:12}" ]
+    pl_before '^switch green' '^switch blue'
+    pl_after '^switch blue' '^down green'
+    # a window that could not be judged says nothing against the release: no block
+    [ "$(pl_blocks)" -eq 0 ]
+    [ "$(pl_state .phase)" = idle ]
+    [ "$(pl_state .release)" = null ]
+    [ "$(pl_mails rolled_back)" -eq 1 ]
+    pl_span_ended "${C_B:0:12}"
+    pl_hostlock_free
+    pl_cdlock_free
+}
+
+@test "the watch: a trigger whose rollback is refused with nothing touched (code 4 of the real loop) ends the release record, holds rollback_failed and mails" {
+    pl_scn_green
+    # at the first sample the new colour starts to fail and the state comes to name the new colour as the live
+    # one: the rollback of the trigger is refused (the two releases are on the same colour), nothing touched
+    pl_on refused '--max-time 12 http://127.0.0.1:18080/api/version' ': >"$DK/public.fail.green"; jq ".live.colour = \"green\"" "$GREMION_ROOT/data/cd/state.json" >"$DK/state.edit" && mv -f "$DK/state.edit" "$GREMION_ROOT/data/cd/state.json"'
+    run pl_tick
+    echo "$output"
+    pl_no_stubs
+    # no rollback began, whichever door asked for it
+    [ "$(pl_hist rollback_started)" -eq 0 ]
+    [ "$(pl_hist rolled_back)" -eq 0 ]
+    [ "$(pl_hist rollback_returned)" -ge 1 ]
+    [ "$(pl_state .hold.kind)" = rollback_failed ]
+    [ "$(pl_state .phase)" = idle ]
+    [ "$(pl_state .release)" = null ]
+    [ "$(pl_blocks)" -eq 0 ]
+    # nothing was switched or torn down
+    [ "$(pl_count '^switch blue')" -eq 0 ]
+    [ "$(cat "${GREMION_ROOT}/runtime/active-colour")" = green ]
+    # the operator is told: a hold alone is a silent failure on an unattended host
+    [ "$(pl_mails rollback_failed)" -ge 1 ]
+    pl_span_ended "${C_B:0:12}"
+    pl_hostlock_free
+    pl_cdlock_free
+}
+
+@test "the watch: a loop that stops on a precondition (code 2 of the real loop) with the release in flight ends as a commit_stuck rollback: the old colour serves, no block, the host lock free" {
+    pl_scn_green
+    # no tick can reach a precondition of the loop (the tick takes both locks before it runs a stage, and the
+    # configuration is read once), so the stage runs in a process of its own, over the state a killed tick left
+    # at its first sample of the window: the cd lock is held, the host lock is not. The loop answers 2 ("both
+    # locks must be held") before it samples anything; its window is not over and the release is in flight
+    pl_killed_tick '--max-time 12 http://127.0.0.1:18080/api/version' 1
+    [ "$(pl_state .phase)" = watching ]
+    run pl_lib '
+        cd_lock_take
+        _cd_drv_load
+        rc=0
+        _cd_drv_st_watch || rc=$?
+        echo "watch stage: $rc rolled=${CD_DRV_ROLLED}"
+        cd_locks_release'
+    echo "$output"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"watch stage: 0 rolled=1"* ]]
+    [[ "$output" == *"the cd lock and the host lock must both be held"* ]]
+    pl_no_stubs
+    [ "$(jq -s '[.[] | select(.event == "rollback_started")][0].rule' "${GREMION_ROOT}/data/cd/history.jsonl")" = '"commit_stuck"' ]
+    [ "$(pl_hist rolled_back)" -eq 1 ]
+    [ "$(pl_state .live.sha)" = "$C_L0" ]
+    [ "$(cat "${GREMION_ROOT}/runtime/active-colour")" = blue ]
+    [ "$(readlink "${GREMION_ROOT}/current")" = "${GREMION_ROOT}/releases/${C_L0:0:12}" ]
+    pl_before '^switch green' '^switch blue'
+    pl_after '^switch blue' '^down green'
+    # a loop that could not run says nothing against the release: no block
+    [ "$(pl_blocks)" -eq 0 ]
+    [ "$(pl_state .phase)" = idle ]
+    [ "$(pl_state .release)" = null ]
+    [ "$(pl_mails rolled_back)" -eq 1 ]
     pl_hostlock_free
     pl_cdlock_free
 }
@@ -574,6 +774,7 @@ pl_assert_boot_end() {
     run pl_tick
     echo "$output" >"${GREMION_ROOT}/.tick.stdout"
     [ "$status" -eq 0 ]
+    pl_no_stubs
     local f n=0
     for f in "${GREMION_ROOT}/data/cd/state.json" "${GREMION_ROOT}/data/cd/history.jsonl" "${GREMION_ROOT}/.tick.stdout" \
         "${GREMION_ROOT}"/data/cd/outbox/* "$DK"/mail.*.eml; do
@@ -702,6 +903,7 @@ pl_assert_boot_end() {
     pl_scn_green
     run pl_tick
     [ "$status" -eq 0 ]
+    pl_no_stubs
     [ "$(pl_count '^run green (calendar|content|newsletter)-service$')" -eq 0 ]
     [ "$(pl_hist leaves_done)" -ge 1 ]
 }
@@ -726,6 +928,46 @@ pl_assert_boot_end() {
     f="$(pl_mail_file held)"
     [ "$(pl_mail_field "$f" kind)" = held ]
     grep -q "release-now ${C_B:0:12} --with-state" "$f"
+}
+
+# pl_state_release -- a release that changes the state tier, asked for with --with-state (the verb's request
+# waits in the queue for the tick)
+pl_state_release() {
+    pl_apply_world
+    printf '{"services":{"postgres":{"image":"example/db:17"}}}\n' >"$DK/compose.state.${C_B:0:12}.json"
+    "${HOST_SRC}/bin/gremion-cd" release-now "${C_B:0:12}" --with-state >/dev/null
+}
+
+# the end state of a release with the state tier: committed, the state tag applied and the one before it
+# kept, no apply left open, no dump set live (the state set was retired before the app snapshot, the app set
+# at commit step 9)
+pl_assert_state_applied() {
+    local b12="${C_B:0:12}" l12="${C_L0:0:12}"
+    assert_present "^IMAGE_TAG=pilot-${b12}\$" "${GREMION_ROOT}/etc/env/state.env"
+    [ "$(cat "${GREMION_ROOT}/data/cd/previous-state-tag")" = "pilot-${l12}" ]
+    [ ! -e "${GREMION_ROOT}/data/cd/state-apply-pending" ]
+    [ "$(pl_hist state_applied)" -eq 1 ]
+    [ "$(pl_hist dumpset_retired)" -eq 2 ]
+}
+
+@test "a release with the state tier, taken with --with-state: the host apply, the state apply and the retire of its dump set run in order, then the app snapshot, and the release commits" {
+    pl_scn_green
+    pl_state_release
+    run pl_tick
+    echo "$output"
+    [ "$status" -eq 0 ]
+    pl_no_stubs
+    pl_assert_committed
+    pl_assert_state_applied
+    # the real adopt functions ran in the order of the stages, each before the next one's first call
+    pl_before '^sudo -n systemctl start --wait gremion-cd-apply@' '^pull state'
+    pl_before '^up state' '^pull green'
+    # the state set is retired before the app snapshot is taken: the label of the apply, then the label of the release
+    local ev
+    ev="$(jq -rs '[.[] | select(.event == "dumpset_taken" or .event == "dumpset_retired" or .event == "state_applied" or .event == "host_applied") | .event + ":" + (.label // "")] | join(" ")' "${GREMION_ROOT}/data/cd/history.jsonl")"
+    [ "$ev" = "host_applied: dumpset_taken:state-pilot-${C_B:0:12} state_applied: dumpset_retired:state-pilot-${C_B:0:12} dumpset_taken:pilot-${C_B:0:12} dumpset_retired:pilot-${C_B:0:12}" ]
+    [ "$(pl_mails released)" -eq 1 ]
+    [ "$(pl_state .hold)" = null ]
 }
 
 @test "a proof release is rolled back at the end of its window with the rule proof_end and is not blocked" {
@@ -757,6 +999,9 @@ pl_assert_boot_end() {
     [ "$(pl_state .hold.kind)" = proof ]
     pl_before '^switch green' '^switch blue'
     pl_after '^switch blue' '^down green'
+    # the proof release never recorded the new tip (commit step 1 never ran), so the rollback has no old tip
+    # to put back: no isolation record
+    [ "$(pl_count '^isolation record')" -eq 0 ]
 }
 
 # ===========================================================================================
@@ -786,12 +1031,45 @@ pl_assert_boot_end() {
     pl_cdlock_free
 }
 
+@test "a rollback queued while a reconcile container cannot be confirmed gone waits for the next process: no drain with the host lock still held" {
+    pl_scn_green
+    : >"$DK/tenant.leave"
+    : >"$DK/kill.refuse"
+    # the operator asks for a rollback while the first customer is reconciled
+    pl_on rb '^tenant reconcile' '"$HOST_SRC/bin/gremion-cd" rollback </dev/null >"$DK/rollback-verb.out" 2>&1 || true'
+    run pl_tick
+    echo "$output"
+    pl_no_stubs
+    # the contract of the reconcile stage: the host lock is kept until the process exits, and nothing that
+    # needs the lock (a manual rollback is one) runs in this process, which holds it re-entrantly
+    [ "$(pl_hist rollback_started)" -eq 0 ]
+    [ "$(pl_hist requests_deferred)" -eq 1 ]
+    [ "$(pl_state .hold.kind)" = reconcile_failed ]
+    [ "$(pl_state .live.sha)" = "$C_B" ]
+    [ "$(cat "${GREMION_ROOT}/runtime/active-colour")" = green ]
+    [ "$(wc -l <"$DK/tenant.slugs")" -eq 1 ]
+    run pl_count '^switch blue'
+    [ "$output" = 0 ]
+    # the request is not lost: it waits in the queue
+    compgen -G "${GREMION_ROOT}/runtime/cd/requests/*.json" >/dev/null
+    pl_hostlock_free
+    pl_cdlock_free
+    # the next process takes it
+    run pl_tick
+    echo "$output"
+    pl_no_stubs
+    [ "$(pl_hist rollback_started)" -eq 1 ]
+    [ "$(cat "${GREMION_ROOT}/runtime/active-colour")" = blue ]
+}
+
 # ===========================================================================================
 # the host lock span
 # ===========================================================================================
 
 @test "the released mail carries the span of the host lock, and status shows what the last release held it for" {
     pl_scn_green
+    # twenty minutes of the clock go by in the reconcile stage, after the host lock is let go at commit step 10
+    pl_on slowrec '^tenant reconcile' 'echo $(( $(cat "$GREMION_ROOT/.fake-now") + 1200 )) >"$GREMION_ROOT/.fake-now"'
     run pl_tick
     [ "$status" -eq 0 ]
     pl_no_stubs
@@ -805,6 +1083,10 @@ pl_assert_boot_end() {
     [ "$output" = 0 ]
     run "${HOST_SRC}/bin/gremion-cd" status
     [[ "$output" == *"the last release held it "*" minutes"* ]]
+    # the span is written down at commit step 10, where the lock goes, and not at the end of the reconcile stage
+    [ "$(jq -s '[.[] | select(.event == "hostlock_released")] | last | .minutes' "${GREMION_ROOT}/data/cd/history.jsonl")" -ge 2 ]
+    [ "$(jq -s '[.[] | select(.event == "hostlock_released")] | last | .minutes' "${GREMION_ROOT}/data/cd/history.jsonl")" -lt 15 ]
+    [ "$(pl_hist hostlock_released)" -eq 1 ]
 }
 
 @test "a lock span past CD_LOCK_SPAN_MIN is a note of the released mail" {
@@ -812,7 +1094,131 @@ pl_assert_boot_end() {
     cd_write_cfg CD_REPO_URL=https://github.com/org/repo CD_POST_RECONCILE_S=0 CD_WATCH_MINUTES=2 CD_WATCH_INTERVAL_S=30 CD_LOCK_SPAN_MIN=1
     run pl_tick
     [ "$status" -eq 0 ]
+    pl_no_stubs
     grep -qE '^notes: .*lock_span_over' "$(pl_mail_file released)"
+}
+
+@test "status: the span of the last release is the one of a rolled-back release too, not an older committed release's" {
+    pl_scn_green
+    # an earlier release that committed: its span is in the history
+    pl_lib 'cd_hist hostlock_released minutes=7 sha12=cccccccccccc' >/dev/null
+    # this release fails in its window, and half an hour of the clock goes by while it does
+    : >"$DK/public.fail.green"
+    pl_on slow '--max-time 12 http://127.0.0.1:18080/api/version' 'echo $(( $(cat "$GREMION_ROOT/.fake-now") + 1800 )) >"$GREMION_ROOT/.fake-now"'
+    run pl_tick
+    echo "$output"
+    pl_no_stubs
+    [ "$(pl_hist rolled_back)" -eq 1 ]
+    # the history names this release and its span, and the span file of the release is gone
+    pl_span_ended "${C_B:0:12}"
+    [ "$(jq -s '[.[] | select(.event == "hostlock_released")] | last | .minutes' "${GREMION_ROOT}/data/cd/history.jsonl")" -ge 30 ]
+    run "${HOST_SRC}/bin/gremion-cd" status
+    echo "$output"
+    [[ "$output" == *"the last release held it "* ]]
+    [[ "$output" != *"the last release held it 7 minutes"* ]]
+    local m
+    m="$(printf '%s\n' "$output" | sed -n 's/^host lock: the last release held it \([0-9]*\) minutes.*/\1/p')"
+    [ "$m" -ge 30 ]
+    pl_hostlock_free
+    pl_cdlock_free
+}
+
+@test "the host lock span: the state apply stage hands the lock back and the span ends with it" {
+    pl_scn_green
+    run pl_lib '
+        R_ID=rel-1
+        R_SHA12=aaaaaaaaaaaa
+        R_TREE=""
+        cd_lock_take
+        cd_hostlock_take 0
+        _cd_drv_lock_since
+        [[ -s "${CD_DATA}/hostlock-since" && -n "${CD_HOSTLOCK_SINCE}" ]] || { echo "span not started"; exit 1; }
+        rc=0
+        _cd_drv_st_state_apply || rc=$?
+        # the apply itself is refused (no tree), the lock and the span are handed back all the same
+        [[ ! -e "${CD_DATA}/hostlock-since" ]] || { echo "span file kept"; exit 1; }
+        [[ -z "${CD_HOSTLOCK_SINCE}" ]] || { echo "span variable kept"; exit 1; }
+        ( exec 7>>"${GREMION_ROOT}/runtime/hostd.lock"; flock -n 7 ) || { echo "host lock kept"; exit 1; }
+        echo span-handed-back'
+    echo "$output"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *span-handed-back* ]]
+    # a hand-back in the middle of a release is no end of it: nothing is written down for `status`
+    [ "$(pl_hist hostlock_released)" -eq 0 ]
+    pl_no_stubs
+}
+
+@test "the host lock span: the end of a release writes the span down and forgets it" {
+    pl_scn_green
+    run pl_lib '
+        R_ID=rel-1
+        R_SHA12=bbbbbbbbbbbb
+        cd_lock_take
+        cd_hostlock_take 0
+        _cd_drv_lock_since
+        [[ -s "${CD_DATA}/hostlock-since" && -n "${CD_HOSTLOCK_SINCE}" ]] || { echo "span not started"; exit 1; }
+        echo $(( $(cat "$GREMION_CD_NOW_FILE") + 600 )) >"$GREMION_CD_NOW_FILE"
+        _cd_drv_end_release
+        [[ ! -e "${CD_DATA}/hostlock-since" ]] || { echo "span file kept"; exit 1; }
+        [[ -z "${CD_HOSTLOCK_SINCE}" ]] || { echo "span variable kept"; exit 1; }
+        echo span-ended'
+    echo "$output"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *span-ended* ]]
+    [ "$(jq -s '[.[] | select(.event == "hostlock_released")] | last | [.minutes, .sha12] | join(" ")' "${GREMION_ROOT}/data/cd/history.jsonl")" = '"10 bbbbbbbbbbbb"' ]
+    pl_no_stubs
+}
+
+@test "the host lock span: a clock that went back is a span of no minutes, never a negative one" {
+    pl_scn_green
+    run pl_lib '
+        R_ID=rel-2
+        R_SHA12=bbbbbbbbbbbb
+        cd_lock_take
+        cd_hostlock_take 0
+        _cd_drv_lock_since
+        echo $(( $(cat "$GREMION_CD_NOW_FILE") - 1200 )) >"$GREMION_CD_NOW_FILE"
+        _cd_drv_end_release
+        echo span-ended'
+    echo "$output"
+    [ "$status" -eq 0 ]
+    [ "$(jq -s '[.[] | select(.event == "hostlock_released")] | last | [.minutes, .sha12] | join(" ")' "${GREMION_ROOT}/data/cd/history.jsonl")" = '"0 bbbbbbbbbbbb"' ]
+    pl_no_stubs
+}
+
+@test "the released mail: a clock that went back is a span of no minutes there too, never a negative one" {
+    pl_scn_green
+    # the clock goes back half an hour at the switch call, longer than the whole release has taken
+    pl_on back '^switch green' 'echo $(( $(cat "$GREMION_ROOT/.fake-now") - 1800 )) >"$GREMION_ROOT/.fake-now"'
+    run pl_tick
+    echo "$output"
+    [ "$status" -eq 0 ]
+    pl_no_stubs
+    [ "$(pl_hist hostlock_released)" -eq 1 ]
+    local f
+    f="$(pl_mail_file released)"
+    [ "$(pl_mail_field "$f" hostlock_min)" = 0 ]
+    run grep -c 'lock_span_over' "$f"
+    [ "$output" = 0 ]
+}
+
+@test "the driver mails rollback_failed when the rollback was refused (2) or the cd lock was busy (3), and not when the sequence began (1) and mailed itself" {
+    pl_scn_green
+    run pl_lib '
+        cd_lock_take
+        for rc in 1 2 3; do
+            _cd_drv_set ".hold = null | .phase = \"rolling_back\" | .release = {id: (\$s12 + \"-1700000000\"), sha: \$s, sha12: \$s12, tag: \"pilot-bbbbbbbbbbbb\", colour: \"green\", tree: \"/x\", mode: \"auto\", stage: \"watch\", stage_status: \"failed\", switch_started: true, attempt: 1}" --arg s "$1" --arg s12 "${1:0:12}"
+            _cd_drv_after_rollback "$rc" watch_readiness
+        done
+        echo rollbacks-answered' "$C_B"
+    echo "$output"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *rollbacks-answered* ]]
+    # the codes 2 and 3 touched nothing, so rollback.sh queued nothing: one mail each from the driver; the code 1
+    # is a sequence that began, whose own failure mail is rollback.sh's (not run here)
+    [ "$(pl_mails rollback_failed)" -eq 2 ]
+    [ "$(pl_hist rollback_returned)" -eq 3 ]
+    pl_no_stubs
 }
 
 @test "a release that was taken over after a kill -9 reports the span from its first take of the host lock" {
@@ -828,11 +1234,31 @@ pl_assert_boot_end() {
     [ "$(pl_mail_field "$(pl_mail_file released)" hostlock_min)" -ge 30 ]
 }
 
-@test "workers: new off at the start, old off then new on at the switch, new on in the gate file at the commit" {
+@test "workers: across a good release the gate files are written new off, old off, new on, in that order and at the places of the release" {
     pl_scn_green
     run pl_tick
     [ "$status" -eq 0 ]
     pl_no_stubs
+    # the order the world saw: the new colour off before it starts, then at the confirmed switch the old colour
+    # off and only then the new one on; nothing else touched a gate file
+    [ "$(pl_workers)" = "green off,blue off,green on" ]
+    pl_before '^workers green off' '^up green'
+    pl_before '^switch green' '^workers blue off'
+    pl_before '^workers blue off' '^workers green on'
     [ "$(cat "${GREMION_ROOT}/runtime/workers/blue")" = off ]
     [ "$(cat "${GREMION_ROOT}/runtime/workers/green")" = on ]
+}
+
+@test "workers: across a rollback the gate files go new off, then old on, after the switch back" {
+    pl_scn_green
+    : >"$DK/public.fail.green"
+    run pl_tick
+    echo "$output"
+    pl_no_stubs
+    [ "$(pl_hist rolled_back)" -eq 1 ]
+    # the release's own three writes, then the rollback's two
+    [ "$(pl_workers)" = "green off,blue off,green on,green off,blue on" ]
+    pl_after '^switch blue' '^workers blue on'
+    [ "$(cat "${GREMION_ROOT}/runtime/workers/green")" = off ]
+    [ "$(cat "${GREMION_ROOT}/runtime/workers/blue")" = on ]
 }

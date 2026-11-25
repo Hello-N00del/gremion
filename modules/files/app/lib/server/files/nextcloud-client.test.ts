@@ -46,6 +46,21 @@ describe('NextcloudClient groupfolders methods', () => {
     expect(result).toEqual({ id: 42, mountPoint: 'StuRa/Finanzen' })
   })
 
+  it('listGroupFolders returns the group ids of each folder, from the array shape and the id-keyed shape', async () => {
+    const rows = [
+      { id: 1, mount_point: 'Vorstand', groups: { 'ou-a': 31, 'ou-b': 1 } },
+      { id: 2, mount_point: 'Leer', groups: [] }
+    ]
+    const answer = (data: unknown) => (async () => new Response(JSON.stringify({ ocs: { data } }), { status: 200 })) as unknown as typeof fetch
+    const expected = [
+      { id: 1, mountPoint: 'Vorstand', groups: ['ou-a', 'ou-b'] },
+      { id: 2, mountPoint: 'Leer', groups: [] }
+    ]
+    expect(await clientWithFetch(answer(rows)).listGroupFolders()).toEqual(expected)
+    expect(await clientWithFetch(answer({ '1': rows[0], '2': rows[1] })).listGroupFolders()).toEqual(expected)
+    expect(await clientWithFetch(answer(false)).listGroupFolders()).toEqual([])
+  })
+
   it('assignGroupFolderPermissions first addGroup then setPermissions (two POST requests)', async () => {
     const calls: Array<{ url: string; body: string }> = []
     const v21AddGroupResponse = JSON.stringify({ ocs: { meta: { status: 'ok', statuscode: 100, message: 'OK' }, data: { success: true, folder: { id: 42, mount_point: 'StuRa/Finanzen', quota: -3, acl: false, acl_default_no_permission: false, size: 0, groups: { 'ou-finanzen': 31 }, group_details: { 'ou-finanzen': { displayName: 'ou-finanzen', permissions: 31, type: 'group' } }, manage: [] } } } })
