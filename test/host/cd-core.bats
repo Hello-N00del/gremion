@@ -1121,6 +1121,23 @@ cd_block_open_list | cut -d" " -f1' "$C2" "$D1" "$C3"
     [ "$(printf '%s' "$output" | jq -r .serving.sha12)" = "bbbbbbbbbbbb" ]
 }
 
+@test "status: a failed rollback says that the colour of the rolled-back release is not stopped and may still be running" {
+    local rel='{"id":"bbbbbbbbbbbb-1","sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","sha12":"bbbbbbbbbbbb","tag":"pilot-bbbbbbbbbbbb","colour":"green","tree":"/t","mode":"auto","stage":"watch","stage_status":"started","attempt":1,"committed_at":null}'
+    cd_seed_state ".phase = \"idle\" | .live = ${CD_LIVE_JSON} | .hold = {\"kind\":\"rollback_failed\",\"reason\":\"unhealthy_after_rollback\",\"sha12\":\"bbbbbbbbbbbb\",\"since\":\"2026-11-17T02:00:00Z\"} | .release = ${rel}"
+    run cd_prog status
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"rollback_failed (unhealthy_after_rollback)"* ]]
+    [[ "$output" == *"not stopped"*"green"*"may still be running"* ]]
+    run cd_prog status --json
+    [ "$(printf '%s' "$output" | jq -r .new_colour_left_running)" = "green" ]
+    # any other hold says nothing of the kind
+    cd_seed_state ".live = ${CD_LIVE_JSON} | .hold = {\"kind\":\"operator\",\"reason\":\"x\",\"sha12\":\"\",\"since\":\"2026-11-17T02:00:00Z\"}"
+    run cd_prog status
+    [[ "$output" != *"not stopped"* ]]
+    run cd_prog status --json
+    [ "$(printf '%s' "$output" | jq -r .new_colour_left_running)" = "null" ]
+}
+
 @test "status: counts of the last reconcile, module and leaf step are shown, never names" {
     cd_seed_state ".live = (${CD_LIVE_JSON} | .modules = {\"total\":4,\"upgraded\":2,\"unchanged\":2,\"skipped\":0,\"failed\":0,\"files_applied\":5} | .leaves = {\"total\":3,\"migrated\":2,\"skipped\":1,\"failed\":0} | .reconcile = {\"at\":\"2026-11-17T02:00:00Z\",\"total\":3,\"ok\":3,\"failed\":0,\"timeout\":0,\"busy\":0,\"skipped\":0,\"invalid\":0,\"seconds\":41,\"reason\":null})"
     run cd_prog status

@@ -1297,6 +1297,7 @@ fingerprint() {
     [[ "$output" == *"rc=1 "* ]]
     f="$(ls "${GREMION_ROOT}"/data/cd/outbox/*-rollback_failed.eml)"
     assert_present '^reason: switch_failed' "$f"
+    assert_present '^notes: new_colour_still_running' "$f"
     assert_present '^rule: watch_5xx' "$f"
     assert_absent 'redacted' "$f"
 }

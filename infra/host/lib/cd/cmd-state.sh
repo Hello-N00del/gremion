@@ -92,9 +92,11 @@ cd_cmd_status() {
 
     # the facts that come from the state
     local hold_j=null live_j=null prev_j=null rel_j=null poll_j=null serving_j=null watch_left=null
-    local mods_j=null leaves_j=null rec_j=null
+    local mods_j=null leaves_j=null rec_j=null left_j=null
     if [[ "$adopted" == true ]]; then
         hold_j="$(printf '%s' "$doc" | jq -c '.hold')"
+        # a failed rollback stops nothing: the colour of the release it was leaving may still be running
+        left_j="$(printf '%s' "$doc" | jq -c 'if .hold.kind == "rollback_failed" then (.release.colour // .live.colour // null) else null end')"
         live_j="$(printf '%s' "$doc" | jq -c '.live | if . == null then null else {sha12, tag, colour, since, proof: (.proof // false)} end')"
         prev_j="$(printf '%s' "$doc" | jq -c '.previous | if . == null then null else {sha12, tag, colour, startable} end')"
         rel_j="$(printf '%s' "$doc" | jq -c '.release | if . == null then null else {id, sha12, colour, stage, stage_status, attempt: (.attempt // 1), committed: (.committed_at != null)} end')"
@@ -209,7 +211,7 @@ cd_cmd_status() {
         jq -n \
             --argjson proof "$([[ "$proof" == 1 ]] && echo true || echo false)" \
             --arg automation "$auto" --argjson adopted "$adopted" --arg phase "$phase" \
-            --argjson hold "$hold_j" --argjson live "$live_j" --argjson previous "$prev_j" \
+            --argjson hold "$hold_j" --argjson left "$left_j" --argjson live "$live_j" --argjson previous "$prev_j" \
             --argjson release "$rel_j" --argjson serving "$serving_j" --argjson watch_minutes_left "$watch_left" \
             --argjson poll "$poll_j" --argjson blocks_open "$blocks_n" --arg blocks_rules "$blocks_rules" \
             --argjson reconcile "$rec_j" --argjson modules "$mods_j" --argjson leaves "$leaves_j" \
@@ -220,7 +222,7 @@ cd_cmd_status() {
             --argjson differs "$changed_j" --argjson operator "$op_j" '
             {proof_mode: $proof, automation: $automation, adopted: $adopted,
              phase: (if $phase == "" then null else $phase end),
-             hold: $hold, live: $live, previous: $previous, release: $release, serving: $serving,
+             hold: $hold, new_colour_left_running: $left, live: $live, previous: $previous, release: $release, serving: $serving,
              watch_minutes_left: $watch_minutes_left, poll: $poll,
              blocks_open: $blocks_open, blocks_rules: ($blocks_rules | if . == "" then [] else split(",") end),
              reconcile: $reconcile, modules: $modules, leaves: $leaves,
@@ -249,6 +251,9 @@ cd_cmd_status() {
             printf 'serving: %s\n' "$(printf '%s' "$serving_j" | jq -r '"parked: the new release " + .sha12 + " (" + .colour + ") serves; current is still the old tree"')"
         fi
         printf 'hold: %s\n' "$(printf '%s' "$hold_j" | jq -r 'if . == null then "none" else .kind + " (" + .reason + ") since " + .since + (if .sha12 != "" then " sha " + .sha12 else "" end) end')"
+        if [[ "$left_j" != null ]]; then
+            printf 'rollback: did not complete; the colour of the release it was leaving is not stopped (%s may still be running)\n' "$(printf '%s' "$left_j" | jq -r .)"
+        fi
         printf 'live: %s\n' "$(printf '%s' "$live_j" | jq -r 'if . == null then "none" else .sha12 + " " + .tag + " " + .colour + " since " + .since + (if .proof then " (proof)" else "" end) end')"
         printf 'previous: %s\n' "$(printf '%s' "$prev_j" | jq -r 'if . == null then "none" else .sha12 + " " + .tag + " " + .colour + (if .startable then " startable" else " not startable" end) end')"
         printf 'release in flight: %s\n' "$(printf '%s' "$rel_j" | jq -r 'if . == null then "none" else .id + " " + .colour + " stage " + .stage + "/" + .stage_status + " attempt " + (.attempt | tostring) + (if .committed then " (committed)" else "" end) end')"
