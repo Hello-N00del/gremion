@@ -60,7 +60,12 @@ sw_on() { : > "${FAKE_DIR}/sw/$1"; }
 probe() { run bash "$PROBE" "$@"; }
 
 # section_is <name> <verdict> -- the report line of a section, as a positive grep
-section_is() { grep -qE "^$1 +$2( |\$)" <<< "$output"; }
+section_is() {
+    grep -qE "^$1 +$2( |\$)" <<< "$output" && return 0
+    echo "section $1 is not $2; the program said:" >&2
+    echo "$output" >&2
+    return 1
+}
 
 all_sections_pass() {
     local s
@@ -240,7 +245,7 @@ all_sections_pass() {
     probe "$A" "$B"
     [ "$status" -eq 2 ]
     grep -q 'NOT-READY' <<< "$output"
-    refute_recorded docker 'POST'
+    refute_recorded docker '/clients'
 }
 
 @test "a token without the nextcloud audience is NOT-READY before any section runs" {
@@ -440,7 +445,7 @@ all_sections_pass() {
     probe "$A" "$B"
     [ "$status" -eq 0 ]
     section_is chat PASS
-    assert_recorded curl '/_matrix/client/v3/rooms/%21room-beta-fox'
+    assert_recorded curl '/_matrix/client/v3/rooms/!room-beta-fox%3Aplat.example.org/messages'
     assert_recorded curl '/send/'
 }
 
