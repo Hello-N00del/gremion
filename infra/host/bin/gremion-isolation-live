@@ -1,0 +1,953 @@
+#!/usr/bin/env bash
+set -euo pipefail
+#
+# gremion-isolation-live -- the live two-customer isolation probe, run ON THE HOST.
+#
+#   gremion-isolation-live <slugA> <slugB> [--unit NAME] [--user NAME]
+#
+# WHAT IT DOES. On an install with two wired customers it asks, in BOTH directions, whether a
+# user of customer A can read the rooms, files, office documents, calendar, polls or call of
+# customer B on the shared Synapse and Nextcloud, and whether a token of one customer is
+# accepted on the other's host. It acts as one fixture user per customer (the same username in both
+# realms, always starting with `isoprobe`), through the public edge and the in-network services,
+# exactly as a browser or a client would. It reports PASS, FAIL or NOT-ENABLED per section.
+#
+# This is not the isolation evidence of gremion-isolation (that one proves the code against a
+# throwaway database and feeds the module enable gate). This one reads the RUNNING system.
+# Nothing here feeds the enable gate. Keep the output as evidence next to the host run.
+#
+# --- THE FIRST STEP: what was read, and where (code read at the tip this was written on) ---
+#
+# Bearer. gremion-ui/src/hooks.server.ts, authGuard: for a path under /api/ an `Authorization:
+# Bearer` header is verified by verifyBearerJwt (src/lib/server/jwt-verify.ts) against the
+# host-resolved tenant's own issuer and its JWKS, RS256, with the tenant's audiences (default
+# gremion-ui and gremion-mobile). A verified token is then compared with the tenant by
+# bearerTenantMatches (iss must equal the tenant's issuer; a mismatch answers 403
+# TenantMismatch). A token that does not verify falls through to the session check and answers
+# 401. The azp claim is NOT checked (it is only logged when a verified token has no subject), so a
+# temporary client works as long as its tokens carry the gremion-ui audience, the member role and a
+# subject. This program checks all three on the token it gets before any section runs.
+#
+# Routes (all under /api/, so all take a Bearer; none of them is public):
+#   chat      GET /api/auth/matrix-token, GET /api/messages/rooms, then Synapse directly with the
+#             Matrix token the first returns
+#   files     GET /api/files/<unit> and /api/files/<unit>/<file>; Nextcloud WebDAV with the same Bearer
+#             (user_oidc validates it: the token carries the nextcloud audience)
+#   office    GET /api/files/edit-token/<unit>/<file>
+#   calendar  GET /api/calendar/events and /api/calendar/events/<id>
+#   polls     GET /api/polls and /api/polls/<id>
+#   call      POST /livekit/jwt/get_token. This route is a PUBLIC path: no session, no Bearer. It takes
+#             a Matrix OpenID token, which the chat section's Matrix session mints. It is not reached by a
+#             Bearer; the section hangs off the Matrix token of the chat section.
+#   cross-host  any of the routes above, with the token of the other customer
+# A route that stops taking a Bearer on a later release is handled by GREMION_ISOLATION_NO_BEARER
+# (a comma list of section names): those sections print NOT-ENABLED and are not probed. A section
+# is never PASS because a route was out of reach.
+#
+# Realm admin client. The realm template's `gremion-admin` client has a service account with the
+# realm-admin role (gremion-ui/src/lib/server/tenant/provisioner/pipeline.ts,
+# GREMION_ADMIN_SA_REALM_ROLES), so it may reset a user's password and create and delete a client.
+# Its secret is the file tenant_<slug>_client_gremion-admin in TENANT_SECRETS_DIR of the active
+# colour's app env file. The Admin API is not routed on a customer host, so the admin calls run
+# from the Nextcloud container over HTTPS to the Keycloak service (the path the app itself uses;
+# -k there: the leg never leaves the compose network and its identity is the service name).
+#
+# Password grant. The realm template's own gremion-ui client has direct grants off, so the program
+# makes its own temporary client (below). Required actions of the fixture user are read before
+# anything is changed: a user that carries one is NOT-READY and left untouched. Step-up: hooks.server.ts
+# maps acr to a level only; none of the routes probed here asks for a step-up level.
+# The grant itself goes through the public edge on the customer's own host, so the token's iss is
+# the tenant issuer by construction.
+#
+# --- FIXTURE (made by the operator; a missing part is NOT-READY, never PASS) ---
+#   per customer, the SAME in both:
+#     an org unit named NAME (default isoprobe), with its chat room and its files folder,
+#     a member whose username is USER (default isoprobe) -- ONLY a name that starts with
+#       `isoprobe` is accepted: this is never a real person --, a member of that unit,
+#     in the unit folder one file named isoprobe-<slug>.odt,
+#     one poll titled isoprobe-<slug>,
+#     one calendar event titled isoprobe-<slug> within 366 days of today.
+#
+# --- TOKENS ---
+# Per realm: with the realm admin client's secret a random password is set on the fixture user
+# (it is never printed and never on an argv; the user keeps a password nobody knows), a temporary
+# public client isoprobe-<random> is created with direct grant, the gremion-ui and nextcloud
+# audience mappers and the sub, groups, acr and auth_time mappers of the template's gremion-ui
+# client, and a password-grant token is taken. The client is deleted in an EXIT, INT and TERM
+# trap that arms before the first client is created and looks the client up by name, so a
+# half-made client goes too. After a SIGKILL nothing can run: delete any isoprobe-* client by
+# hand then. Every token, secret and password travels on curl's stdin config (`curl -K -`), the
+# way gremion-services hands over a secret: none is on an argv.
+#
+# --- SECTIONS ---
+# Every denial is preceded by a positive control on the OWN resource (200 or 207), else the section
+# is FAIL. A refusal is the exact code named below; an error (5xx), a 401 or a 000 is not a refusal.
+#   chat        the same unit name gives different room ids and different Matrix user ids; A's Matrix
+#               token reads A's room and is refused (403) on B's room messages and on a send into it
+#               (the send is only tried when the read was refused)
+#   files       each customer's folder is identified by its group-folder id, read with occ through the
+#               groups of the fixture user -- never by the mount name, which is the unit name in both
+#               customers. PASS needs two different folder ids, each the ONLY folder of that name in the
+#               groups of its customer's fixture user. Two rules decide it: a probe user whose groups carry
+#               n >= 2 folders of that name FAILS (so a folder shared through a group does not go unseen; none
+#               at all is NOT-READY), and ONE folder id for both customers FAILS. Besides: A's own folder lists
+#               and serves A's file, A's bearer on B's user root at http://nextcloud and the app API for B's file
+#               answer 403 or 404 (any other answer FAILS, see UNCHECKED below).
+#               The rule is the same on every release and reports what the install really holds. A PASS says
+#               nothing about other units or about groups the probe user is not in.
+#               The WebDAV denial alone proves user-root isolation only: Nextcloud refuses a foreign user's root
+#               whether or not a folder is shared. A folder shared between the customers is caught by the folder-id
+#               comparison and the group rule above, and by the other customer's file turning up in the own listing.
+#               Writes are not attempted: a refused write cannot be told from a successful one without
+#               trying it, and a failed denial would write into the other customer.
+#   office      the own editor URL is on A's host (its origin is https://<A's host>); the editor URL for B's
+#               file is refused (403 or 404, no editorUrl). The edit-token route resolves the file in the
+#               CALLER's own Nextcloud root, where B's file name is simply absent: Nextcloud answers 404 and
+#               the route has to pass it on as 404 (a 403 as 403). That error mapping is shipped by another
+#               unit, not by this one: the section PASSes only on a release that ships it. Until then the
+#               route answers 500 or 502 for the absent file, and that reads as FAIL with a message that names
+#               the missing mapping, never as PASS. SAVE AND CLOSE stay unproven until a person
+#               opens a document of each customer by hand on its own host.
+#   calendar    own event 200; B's event id on A's host 404; B's event is not in A's listing
+#   polls       own poll 200; B's poll id on A's host 404; B's poll is not in A's listing
+#   call        a LiveKit JWT for B's room is refused (403); for the own room it is minted and its
+#               room starts t.<A>.
+#   cross-host  A's token on B's host answers 401 (the same route on A's host answers 200)
+#
+# --- UNCHECKED (not established by the one-off read; each is handled so that it can never read as PASS) ---
+#   - Whether the Nextcloud image carries curl. The admin calls and the WebDAV calls run through
+#     `docker exec <nextcloud> curl`. The program asks `curl --version` there before it changes anything:
+#     no answer is NOT-READY and nothing is created.
+#   - The exact WebDAV refusal code for another user's root. Nextcloud with user_oidc may answer 403 or
+#     404 (or something else on another release); the program accepts those two and FAILS on any other
+#     code, so an unexpected code is read by the operator, never counted as a denial.
+#   - Edge routing of /_matrix on PLATFORM_DOMAIN. The Matrix client calls go through the edge on the
+#     platform host. The chat section first asks /_matrix/client/versions there; anything but 200 makes
+#     chat and call NOT-ENABLED (the section's precondition cannot be established), never PASS.
+#   - The Nextcloud group-folder admin output shape (occ groupfolders:list --output=json): an output that is
+#     not a JSON array FAILS the files section. An array whose entries the program cannot read leaves the
+#     probe user in no group that carries a folder named like the unit, and that is NOT-READY (never PASS).
+#   A section whose precondition the program cannot establish is reported NOT-ENABLED (or NOT-READY when
+#   the precondition is a fixture part), never PASS.
+#
+# SECRETS. No password, client secret or token is ever on an argv: not on curl's (they travel on its
+# stdin config, `curl -K -`), not on jq's (a body that holds one is built with `jq -R` reading stdin;
+# only names that are not secret, such as a room id, go through --arg). The bats file records jq's argv
+# and asserts that none of them appears there, on a passing and on a failing run.
+#
+# EXIT CODES. Exactly: 0 every section PASS. 1 any FAIL (a finding; it outranks the rest). 2 usage: the
+# arguments, and nothing after them. 3 any NOT-ENABLED or NOT-READY (a fixture part, a token or host
+# precondition missing: the active colour, an env file, the host lock, a tool) with no FAIL; the run
+# stopped before it had a verdict, whatever the code of the command that failed (RESULT: ABORTED); or every
+# section PASSed but the temporary client could not be confirmed deleted (RESULT: CLEANUP-FAILED, delete
+# it by hand). 130 and 143 only when the run is stopped by INT or TERM (RESULT: INTERRUPTED; the clean-up
+# still runs). An internal abort or a failed clean-up is never 1: 1 only ever means a section found a hole
+# (a FAIL stays 1 when the clean-up fails too; the warning is printed).
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/common.sh
+. "$SCRIPT_DIR/../lib/common.sh"
+# shellcheck source=../lib/customer-ops.sh
+. "$SCRIPT_DIR/../lib/customer-ops.sh"
+
+umask 077
+
+ARGS_DONE=0   # 1 once the arguments are parsed: from then on a usage-coded die is a host precondition (see die)
+
+# Exit code 1 of this program means one thing: a section found a hole. A library function that dies with
+# the assert code (a missing container, a missing colour) is a precondition, not a finding: it exits 3.
+# shellcheck disable=SC2317,SC2329  # called by the sourced library and below
+die() {
+    local c="${2:-$GREMION_EXIT_BLOCKED}"
+    bad "$1"
+    if [[ "$c" == "$GREMION_EXIT_ASSERT" ]]; then c="$GREMION_EXIT_BLOCKED"; fi
+    # exit 2 is for the arguments only: once they are parsed, a library that dies with the usage code
+    # (an absent active colour, a duplicate key in an env file, a lock that cannot be opened) reports a
+    # host precondition, which is exit 3
+    if [[ "$c" == "$GREMION_EXIT_USAGE" && "$ARGS_DONE" == 1 ]]; then c="$GREMION_EXIT_BLOCKED"; fi
+    exit "$c"
+}
+
+HTTP_TIMEOUT="${GREMION_ISOLATION_HTTP_TIMEOUT:-20}"
+KC_URL="${GREMION_ISOLATION_KC_URL:-https://keycloak:8443/auth}"
+NC_URL="${GREMION_ISOLATION_NC_URL:-http://nextcloud}"
+NO_BEARER=",${GREMION_ISOLATION_NO_BEARER:-},"
+ADMIN_CLIENT="gremion-admin"
+UNIT="isoprobe"
+PROBE_USER="isoprobe"
+USER_RE='^isoprobe[a-z0-9._-]{0,30}$'
+UNIT_RE='^[A-Za-z0-9][A-Za-z0-9._-]{0,59}$'
+HOST_RE='^[a-z0-9]([a-z0-9.-]*[a-z0-9])?\.[a-z]{2,}$'
+SECTIONS=(chat files office calendar polls call cross-host)
+
+usage() {
+    cat >&2 <<'EOF'
+usage: gremion-isolation-live <slugA> <slugB> [--unit NAME] [--user NAME]
+
+  Proves, in both directions, that a user of customer A cannot read B's rooms, files, office
+  documents, calendar, polls or call on the shared Synapse and Nextcloud. See the header of this
+  file for the fixture the operator makes first (a user named isoprobe, a unit, a file, a poll and
+  an event in each customer). Exit 0 all PASS, 1 any FAIL, 2 usage (arguments only), 3 any NOT-ENABLED or NOT-READY, a stop
+  before the verdict, or a clean-up that could not be confirmed.
+EOF
+}
+
+# ---------------------------------------------------------------- state
+
+declare -a SLUG=() HOST=() ADM=() CLIENT_ID=() PW=() TOK=() SUB=() SECRET_FILE=()
+declare -a MXT=() MXID=() ROOM=() FILE_FIXTURE=() OID=() OIDSRV=()
+STATE_ENV=""; APP_ENV=""; STACK=""; PLATFORM=""; EDGE_BIND_IP=""; EDGE_HTTPS_PORT=""
+TSD=""; NC=""; FROM=""; TO=""
+NOTREADY=()
+CLEAN_FAILED=0
+DONE=0
+R_CODE=000; R_BODY=""
+CFG=""
+
+# ---------------------------------------------------------------- the clean-up (armed first)
+
+# shellcheck disable=SC2317,SC2329  # reached through cleanup(), which only the EXIT/INT/TERM trap calls
+cleanup_client() {   # <index>: delete the temporary client of realm <index> by name, then read it back
+    local i="$1" slug cid uuid n
+    slug="${SLUG[$i]}"; cid="${CLIENT_ID[$i]}"
+    kc_admin_token "$i" || return 1
+    cfg_reset; cfg_bearer "${ADM[$i]}"
+    http_net GET "${KC_URL}/admin/realms/${slug}/clients?clientId=${cid}"
+    [[ "$R_CODE" == 200 ]] || return 1
+    uuid="$(jq -r '.[0].id // empty' <<< "$R_BODY" 2>/dev/null || true)"
+    if [[ -n "$uuid" ]]; then
+        cfg_reset; cfg_bearer "${ADM[$i]}"
+        http_net DELETE "${KC_URL}/admin/realms/${slug}/clients/${uuid}"
+        [[ "$R_CODE" == 204 ]] || return 1
+    fi
+    cfg_reset; cfg_bearer "${ADM[$i]}"
+    http_net GET "${KC_URL}/admin/realms/${slug}/clients?clientId=${cid}"
+    n="$(jq 'length' <<< "$R_BODY" 2>/dev/null || echo x)"
+    [[ "$R_CODE" == 200 && "$n" == 0 ]] || return 1
+    printf 'cleanup: the temporary client %s is gone from realm %s\n' "$cid" "$slug"
+}
+
+# delete_clients -- the clean-up of both realms, once each. finish() runs it before it prints the verdict (a
+# clean-up that cannot be confirmed is part of the verdict); the trap runs it for every other way out.
+declare -a CLEAN_TRIED=(0 0)
+delete_clients() {
+    local i
+    for i in 0 1; do
+        [[ -n "${CLIENT_ID[$i]:-}" && "${CLEAN_TRIED[$i]}" == 0 ]] || continue
+        if ! cleanup_client "$i"; then
+            CLEAN_FAILED=1
+            printf 'WARNING: could not confirm the deletion of the temporary client %s in realm %s: delete it by hand (Keycloak admin, realm %s, clients)\n' \
+                "${CLIENT_ID[$i]}" "${SLUG[$i]:-?}" "${SLUG[$i]:-?}" >&2
+        fi
+        CLEAN_TRIED[i]=1
+    done
+}
+
+# shellcheck disable=SC2317,SC2329  # only the EXIT/INT/TERM trap calls it
+cleanup() {
+    local rc=$?
+    trap - EXIT INT TERM
+    set +e
+    delete_clients
+    if (( DONE == 0 && rc != 0 )); then
+        case "$rc" in
+            130|143)
+                printf 'RESULT: INTERRUPTED (exit %s): the run was stopped by a signal before it had a verdict\n' "$rc" ;;
+            *)
+                # a stop before the verdict (a command failed under set -e, a precondition died): never a finding,
+                # whatever code the failing command had
+                rc=3
+                printf 'RESULT: ABORTED (exit 3): the run stopped before it had a verdict (no verdict, so no finding either)\n' ;;
+        esac
+    fi
+    exit "$rc"
+}
+
+# ---------------------------------------------------------------- http
+
+# q <text> -- the text as the inside of a curl config string: backslash and quote escaped.
+q() { local s="$1"; s="${s//\\/\\\\}"; s="${s//\"/\\\"}"; printf '%s' "$s"; }
+cfg_reset() { CFG=""; }
+cfg_add() { CFG+="$1 = \"$(q "$2")\""$'\n'; }
+cfg_bearer() { if [[ -n "${1:-}" ]]; then cfg_add header "Authorization: Bearer $1"; fi; }
+cfg_json() { cfg_add header "Content-Type: application/json"; cfg_add data "$1"; }
+
+# split_resp <curl output: body, newline, status code>  ->  R_BODY, R_CODE (000 when there is no code)
+split_resp() {
+    local out="$1" code
+    code="${out##*$'\n'}"
+    code="${code//[!0-9]/}"
+    if (( ${#code} >= 3 )); then R_CODE="${code: -3}"; else R_CODE=000; fi
+    if [[ "$out" == *$'\n'* ]]; then R_BODY="${out%$'\n'*}"; else R_BODY=""; fi
+}
+
+# http_net <method> <url> [curl args...] -- from inside the Nextcloud container (the compose network);
+# the config in CFG goes on stdin.
+http_net() {
+    local out
+    out="$(printf '%s' "$CFG" | docker exec -i "$NC" curl -sSk --max-time "$HTTP_TIMEOUT" -X "$1" -K - -w '\n%{http_code}' "${@:3}" "$2" 2>/dev/null)" || true
+    split_resp "$out"
+}
+
+# http_edge <host> <method> <path> -- through the edge by the public name, pinned to this host's own edge address.
+http_edge() {
+    local h="$1" url out
+    url="https://${h}"
+    [[ "$EDGE_HTTPS_PORT" == 443 ]] || url+=":${EDGE_HTTPS_PORT}"
+    out="$(printf '%s' "$CFG" | curl -sS --max-time "$HTTP_TIMEOUT" --resolve "${h}:${EDGE_HTTPS_PORT}:${EDGE_BIND_IP}" -X "$2" -K - -w '\n%{http_code}' "${url}${3}" 2>/dev/null)" || true
+    split_resp "$out"
+}
+
+nc_occ() { docker exec -u www-data "$NC" php occ "$@"; }
+
+jwt_payload() {   # <token> -> the claims as JSON
+    local p pad
+    p="$(printf '%s' "$1" | cut -d. -f2 | tr '_-' '/+')"
+    pad=$(( (4 - ${#p} % 4) % 4 ))
+    while (( pad > 0 )); do p+="="; pad=$((pad - 1)); done
+    printf '%s' "$p" | base64 -d 2>/dev/null
+}
+
+urlenc() { jq -rn --arg v "$1" '$v|@uri'; }
+
+# openid_body <room> <openid token> <server name> -> the LiveKit token request body. The token is a
+# credential: jq reads it from stdin (-R), never from an argv (room and server name are not secret).
+openid_body() {
+    jq -Rc --arg r "$1" --arg s "$3" '{room: $r, openid_token: {access_token: ., token_type: "Bearer", matrix_server_name: $s}}' <<< "$2"
+}
+
+# ---------------------------------------------------------------- Keycloak (admin)
+
+kc_admin_token() {   # <index> -> ADM[i]
+    local i="$1" secret out
+    secret="$(tr -d '\r\n' < "${SECRET_FILE[$i]}")"
+    cfg_reset
+    cfg_add data-urlencode "grant_type=client_credentials"
+    cfg_add data-urlencode "client_id=${ADMIN_CLIENT}"
+    cfg_add data-urlencode "client_secret=${secret}"
+    secret=""
+    http_net POST "${KC_URL}/realms/${SLUG[$i]}/protocol/openid-connect/token"
+    CFG=""
+    [[ "$R_CODE" == 200 ]] || return 1
+    out="$(jq -r '.access_token // empty' <<< "$R_BODY" 2>/dev/null || true)"
+    R_BODY=""
+    [[ -n "$out" ]] || return 1
+    ADM[i]="$out"
+}
+
+client_json() {   # <clientId>
+    jq -cn --arg id "$1" '
+      def aud($c): {name: ("audience-" + $c), protocol: "openid-connect", protocolMapper: "oidc-audience-mapper",
+                    config: {"included.client.audience": $c, "id.token.claim": "false", "access.token.claim": "true", "introspection.token.claim": "true"}};
+      {clientId: $id, name: "isolation probe (temporary)", enabled: true, publicClient: true,
+       standardFlowEnabled: false, implicitFlowEnabled: false, directAccessGrantsEnabled: true,
+       serviceAccountsEnabled: false, fullScopeAllowed: true,
+       defaultClientScopes: ["profile", "email", "roles"],
+       protocolMappers: [
+         aud("gremion-ui"), aud("nextcloud"),
+         {name: "sub", protocol: "openid-connect", protocolMapper: "oidc-usermodel-property-mapper",
+          config: {"userinfo.token.claim": "false", "user.attribute": "id", "id.token.claim": "false", "access.token.claim": "true", "claim.name": "sub", "jsonType.label": "String"}},
+         {name: "groups", protocol: "openid-connect", protocolMapper: "oidc-group-membership-mapper",
+          config: {"claim.name": "groups", "full.path": "false", "id.token.claim": "true", "access.token.claim": "true", "userinfo.token.claim": "true"}},
+         {name: "auth_time", protocol: "openid-connect", protocolMapper: "oidc-usersessionmodel-note-mapper",
+          config: {"user.session.note": "AUTH_TIME", "claim.name": "auth_time", "jsonType.label": "long", "id.token.claim": "true", "access.token.claim": "true", "introspection.token.claim": "true"}},
+         {name: "acr", protocol: "openid-connect", protocolMapper: "oidc-acr-mapper",
+          config: {"id.token.claim": "true", "access.token.claim": "true", "introspection.token.claim": "true"}}
+       ]}'
+}
+
+not_ready() { NOTREADY+=("$1"); }
+
+# need_tools <cmd...> -- a missing host tool is a missing precondition (exit 3), not usage and not a finding
+need_tools() {
+    local c
+    for c in "$@"; do
+        if ! command -v "$c" >/dev/null 2>&1; then not_ready "the host has no ${c}"; fi
+    done
+    if (( ${#NOTREADY[@]} > 0 )); then finish_not_ready; fi
+}
+
+# realm_tokens <index> -- password, client, grant, the precondition on the token. Failures are NOT-READY.
+realm_tokens() {
+    local i="$1" slug host uid users n name ra enabled ok_user body claims want_iss aud_ok roles_ok sub
+    slug="${SLUG[$i]}"; host="${HOST[$i]}"
+    kc_admin_token "$i" || { not_ready "${slug}: the realm admin client (${ADMIN_CLIENT}) got no token: its secret, the realm or the Keycloak service is not usable"; return 1; }
+    cfg_reset; cfg_bearer "${ADM[$i]}"
+    http_net GET "${KC_URL}/admin/realms/${slug}/users?username=${PROBE_USER}&exact=true"
+    if [[ "$R_CODE" != 200 ]]; then not_ready "${slug}: the user lookup answered ${R_CODE}"; return 1; fi
+    users="$R_BODY"
+    n="$(jq 'length' <<< "$users" 2>/dev/null || echo x)"
+    if [[ "$n" != 1 ]]; then not_ready "${slug}: ${n} users named ${PROBE_USER} (the fixture needs exactly one)"; return 1; fi
+    name="$(jq -r '.[0].username // ""' <<< "$users")"
+    uid="$(jq -r '.[0].id // ""' <<< "$users")"
+    ok_user=no
+    if [[ "$name" == "$PROBE_USER" && "$name" =~ $USER_RE && -n "$uid" ]]; then ok_user=yes; fi
+    if [[ "$ok_user" != yes ]]; then not_ready "${slug}: the lookup answered the user '${name}', which is not ${PROBE_USER}: refused, nothing is changed (this probe never touches a real person)"; return 1; fi
+    enabled="$(jq -r '.[0].enabled // false' <<< "$users")"
+    ra="$(jq -r '(.[0].requiredActions // []) | length' <<< "$users")"
+    if [[ "$enabled" != true ]]; then not_ready "${slug}: the user ${PROBE_USER} is disabled"; return 1; fi
+    if [[ "$ra" != 0 ]]; then not_ready "${slug}: the user ${PROBE_USER} has a required action: a password grant would be refused; it is left untouched (clear it by hand in the realm)"; return 1; fi
+
+    PW[i]="$(openssl rand -hex 24 | tr -d '\r\n')"
+    # the password is read by jq from stdin (-R), never from an argv (a here-string is a pipe or a private file)
+    body="$(jq -Rc '{type: "password", value: ., temporary: false}' <<< "${PW[$i]}")"
+    cfg_reset; cfg_bearer "${ADM[$i]}"; cfg_json "$body"
+    http_net PUT "${KC_URL}/admin/realms/${slug}/users/${uid}/reset-password"
+    body=""; CFG=""
+    case "$R_CODE" in
+        204) ;;
+        400) not_ready "${slug}: setting the fixture user's password answered 400: a password policy of the realm may reject the generated password (48 hex characters); relax it for the probe user or set the policy aside for the run"; return 1 ;;
+        *) not_ready "${slug}: setting the fixture user's password answered ${R_CODE}: the realm admin client may not reset a password"; return 1 ;;
+    esac
+
+    # armed BEFORE the create: the clean-up looks the client up by name
+    CLIENT_ID[i]="isoprobe-$(openssl rand -hex 4 | tr -d '\r\n')"
+    cfg_reset; cfg_bearer "${ADM[$i]}"; cfg_json "$(client_json "${CLIENT_ID[$i]}")"
+    http_net POST "${KC_URL}/admin/realms/${slug}/clients"
+    CFG=""
+    if [[ "$R_CODE" != 201 ]]; then not_ready "${slug}: creating the temporary client answered ${R_CODE}"; return 1; fi
+
+    cfg_reset
+    cfg_add data-urlencode "grant_type=password"
+    cfg_add data-urlencode "client_id=${CLIENT_ID[$i]}"
+    cfg_add data-urlencode "username=${PROBE_USER}"
+    cfg_add data-urlencode "password=${PW[$i]}"
+    cfg_add data-urlencode "scope=openid"
+    http_edge "$host" POST "/auth/realms/${slug}/protocol/openid-connect/token"
+    CFG=""; PW[i]=""
+    if [[ "$R_CODE" != 200 ]]; then
+        not_ready "${slug}: the password grant answered ${R_CODE} ($(jq -r '.error_description // .error // "no reason"' <<< "$R_BODY" 2>/dev/null || echo 'no reason')): a required action or a realm rule blocks it"
+        return 1
+    fi
+    TOK[i]="$(jq -r '.access_token // empty' <<< "$R_BODY" 2>/dev/null || true)"
+    R_BODY=""
+    if [[ -z "${TOK[$i]}" ]]; then not_ready "${slug}: the password grant carried no access token"; return 1; fi
+
+    # the token must be one the app accepts as THIS customer's member, else every section would read as 401
+    claims="$(jwt_payload "${TOK[$i]}")"
+    want_iss="https://${host}/auth/realms/${slug}"
+    sub="$(jq -r '.sub // ""' <<< "$claims" 2>/dev/null || true)"
+    if [[ "$(jq -r '.iss // ""' <<< "$claims" 2>/dev/null || true)" != "$want_iss" ]]; then not_ready "${slug}: the token's issuer is not ${want_iss}"; return 1; fi
+    if [[ -z "$sub" ]]; then not_ready "${slug}: the token has no subject (sub)"; return 1; fi
+    aud_ok="$(jq -r '([(.aud // [])] | flatten) as $a | (($a | index("gremion-ui")) != null) and (($a | index("nextcloud")) != null)' <<< "$claims" 2>/dev/null || echo false)"
+    if [[ "$aud_ok" != true ]]; then not_ready "${slug}: the token's audience lacks gremion-ui or nextcloud"; return 1; fi
+    roles_ok="$(jq -r '((.realm_access.roles // []) | index("member")) != null' <<< "$claims" 2>/dev/null || echo false)"
+    if [[ "$roles_ok" != true ]]; then not_ready "${slug}: the token does not carry the realm role member: the fixture user is not a member"; return 1; fi
+    SUB[i]="$sub"
+    info "${slug}: token ready (temporary client ${CLIENT_ID[$i]}, issuer, subject, audience and member role checked)"
+}
+
+# ---------------------------------------------------------------- the sections' bookkeeping
+
+declare -A VERDICT=()
+SEC=""; SEC_V=PASS; SEC_NOTES=()
+CHAT_NE=0
+
+sec_begin() { SEC="$1"; SEC_V=PASS; SEC_NOTES=(); }
+sec_set() {   # precedence: FAIL > NOT-READY > NOT-ENABLED > PASS
+    case "$1" in
+        FAIL) SEC_V=FAIL ;;
+        NOT-READY) if [[ "$SEC_V" != FAIL ]]; then SEC_V=NOT-READY; fi ;;
+        NOT-ENABLED) if [[ "$SEC_V" != FAIL && "$SEC_V" != NOT-READY ]]; then SEC_V=NOT-ENABLED; fi ;;
+    esac
+}
+s_ok() { SEC_NOTES+=("ok: $*"); }
+s_fail() { sec_set FAIL; SEC_NOTES+=("FAIL: $*"); }
+s_nr() { sec_set NOT-READY; SEC_NOTES+=("NOT-READY: $*"); }
+s_ne() { sec_set NOT-ENABLED; SEC_NOTES+=("NOT-ENABLED: $*"); }
+sec_end() {
+    local n
+    VERDICT["$SEC"]="$SEC_V"
+    printf '%-11s %s\n' "$SEC" "$SEC_V"
+    for n in ${SEC_NOTES[@]+"${SEC_NOTES[@]}"}; do printf '    %s\n' "$n"; done
+}
+no_bearer() { [[ "$NO_BEARER" == *",$1,"* ]]; }
+
+# own_ok <what> -- the positive control on the OWN resource: 2xx. A module that is off is NOT-ENABLED; anything else FAIL.
+own_ok() {
+    case "$R_CODE" in
+        2??) return 0 ;;
+        403)
+            if [[ "$R_BODY" == *"Module disabled"* ]]; then
+                s_ne "$1: the module is off for this customer"
+            else
+                s_fail "$1: the own resource answered 403 (positive control failed)"
+            fi ;;
+        401) s_fail "$1: 401 on the own resource with a verified token (positive control failed)" ;;
+        *) s_fail "$1: the own resource answered ${R_CODE}, not 200 (positive control failed)" ;;
+    esac
+    return 1
+}
+
+# expect_code <what> <allowed codes...> -- a refusal is one of the named codes; nothing else is one.
+expect_code() {
+    local what="$1" a; shift
+    for a in "$@"; do
+        if [[ "$R_CODE" == "$a" ]]; then return 0; fi
+    done
+    s_fail "${what}: answered ${R_CODE}, expected $*"
+    return 1
+}
+
+dir_label() { printf '%s -> %s' "${SLUG[$1]}" "${SLUG[$((1 - $1))]}"; }
+
+api_get() {   # <index> <path> -- as customer <index> on its own host
+    cfg_reset; cfg_bearer "${TOK[$1]}"
+    http_edge "${HOST[$1]}" GET "$2"
+}
+
+# ---------------------------------------------------------------- sections
+
+# an id-keyed section (calendar, polls): list, find the own fixture, own 200, the other customer's id refused.
+sec_by_id() {   # <name> <list path> <item path prefix> <noun>
+    local name="$1" listp="$2" itemp="$3" noun="$4" x y id
+    local -a ids=("" "") rdy=(0 0)
+    sec_begin "$name"
+    if no_bearer "$name"; then s_ne "the ${name} route takes no Bearer on this release"; sec_end; return 0; fi
+    for x in 0 1; do
+        y=$((1 - x))
+        api_get "$x" "$listp"
+        if own_ok "${SLUG[$x]}: own ${noun} listing"; then
+            id="$(jq -r --arg t "isoprobe-${SLUG[$x]}" '[.data[]? | select((.configuration.title // .title // "") | test("(^|[^a-z0-9-])" + $t + "($|[^a-z0-9-])"))][0].id // empty' <<< "$R_BODY" 2>/dev/null || true)"
+            if [[ -z "$id" ]]; then
+                s_nr "no ${noun} titled isoprobe-${SLUG[$x]} on ${SLUG[$x]}: the operator makes it"
+            else
+                ids[x]="$id"; rdy[x]=1
+            fi
+            if jq -e --arg t "isoprobe-${SLUG[$y]}" 'any(.data[]?; (.configuration.title // .title // "") | test("(^|[^a-z0-9-])" + $t + "($|[^a-z0-9-])"))' <<< "$R_BODY" >/dev/null 2>&1; then
+                s_fail "$(dir_label "$x"): the ${noun} of ${SLUG[$y]} is listed on ${SLUG[$x]}'s host"
+            fi
+        fi
+    done
+    if (( rdy[0] == 1 && rdy[1] == 1 )) && [[ "${ids[0]}" == "${ids[1]}" ]]; then
+        s_fail "both customers resolve to one ${noun} id (${ids[0]})"
+    fi
+    for x in 0 1; do
+        y=$((1 - x))
+        (( rdy[x] == 1 && rdy[y] == 1 )) || continue
+        api_get "$x" "${itemp}${ids[$x]}"
+        own_ok "${SLUG[$x]}: own ${noun} ${ids[$x]}" || continue
+        api_get "$x" "${itemp}${ids[$y]}"
+        if expect_code "$(dir_label "$x"): ${noun} ${ids[$y]} of ${SLUG[$y]} on ${SLUG[$x]}'s host" 404; then
+            s_ok "$(dir_label "$x"): own ${noun} 200, the other customer's ${noun} id 404"
+        fi
+    done
+    sec_end
+}
+
+sec_calendar() { sec_by_id calendar "/api/calendar/events?from=${FROM}&to=${TO}" "/api/calendar/events/" "calendar event"; }
+sec_polls() { sec_by_id polls "/api/polls" "/api/polls/" "poll"; }
+
+# files: each folder by its group-folder id, read with occ through the groups of the fixture user
+sec_files() {
+    local x y fid=("" "") ug=("[]" "[]") folders rdy=(0 0) ids n gj
+    sec_begin files
+    FILE_FIXTURE=(3 3)   # 3: not established (the section's own control failed: office probes anyway)
+    if no_bearer files; then s_ne "the files route takes no Bearer on this release"; FILE_FIXTURE=(2 2); sec_end; return 0; fi
+    for x in 0 1; do
+        y=$((1 - x))
+        api_get "$x" "/api/files/${UNIT}"
+        if own_ok "${SLUG[$x]}: own unit folder listing"; then
+            if jq -e --arg n "isoprobe-${SLUG[$x]}.odt" 'any(.files[]?; ((.name // .path // "") | endswith($n)))' <<< "$R_BODY" >/dev/null 2>&1; then
+                FILE_FIXTURE[x]=1; rdy[x]=1
+            else
+                FILE_FIXTURE[x]=0
+                s_nr "no file isoprobe-${SLUG[$x]}.odt in the unit folder ${UNIT} of ${SLUG[$x]}: the operator makes it"
+            fi
+            if jq -e --arg n "isoprobe-${SLUG[$y]}.odt" 'any(.files[]?; ((.name // .path // "") | endswith($n)))' <<< "$R_BODY" >/dev/null 2>&1; then
+                s_fail "$(dir_label "$x"): the file of ${SLUG[$y]} is listed in ${SLUG[$x]}'s unit folder"
+            fi
+        else
+            if [[ "$SEC_V" == NOT-ENABLED ]]; then FILE_FIXTURE[x]=2; fi
+        fi
+    done
+    for x in 0 1; do
+        y=$((1 - x))
+        (( rdy[x] == 1 )) || continue
+        api_get "$x" "/api/files/${UNIT}/isoprobe-${SLUG[$x]}.odt"
+        own_ok "${SLUG[$x]}: own file" || continue
+        # WebDAV with the bearer on the own user root, then on the other customer's
+        cfg_reset; cfg_bearer "${TOK[$x]}"
+        http_net PROPFIND "${NC_URL}/remote.php/dav/files/${SUB[$x]}/${UNIT}/" -H 'Depth: 1'
+        case "$R_CODE" in
+            200|207) ;;
+            *) s_fail "${SLUG[$x]}: own folder over WebDAV answered ${R_CODE}, not 207 (positive control failed)"; continue ;;
+        esac
+        cfg_reset; cfg_bearer "${TOK[$x]}"
+        http_net PROPFIND "${NC_URL}/remote.php/dav/files/${SUB[$y]}/${UNIT}/" -H 'Depth: 1'
+        if expect_code "$(dir_label "$x"): ${SLUG[$y]}'s user root over WebDAV with ${SLUG[$x]}'s bearer" 403 404; then
+            s_ok "$(dir_label "$x"): the other customer's user root over WebDAV ${R_CODE}"
+        fi
+        api_get "$x" "/api/files/${UNIT}/isoprobe-${SLUG[$y]}.odt"
+        if expect_code "$(dir_label "$x"): ${SLUG[$y]}'s file through the app API on ${SLUG[$x]}'s host" 403 404; then
+            s_ok "$(dir_label "$x"): the other customer's file through the app API ${R_CODE}"
+        fi
+    done
+    # the folder identity: by the groups of the fixture user and the folders' own group lists, never by the mount name
+    if ! folders="$(nc_occ groupfolders:list --output=json 2>/dev/null)" || ! jq -e 'type == "array"' <<< "$folders" >/dev/null 2>&1; then
+        s_fail "occ groupfolders:list gave no folder list: the folder identity cannot be read"
+        sec_end; return 0
+    fi
+    for x in 0 1; do
+        if ! gj="$(nc_occ user:info "${SUB[$x]}" --output=json 2>/dev/null)" || ! ug[x]="$(jq -c '.groups // []' <<< "$gj" 2>/dev/null)"; then
+            s_nr "occ user:info ${SUB[$x]} (${SLUG[$x]}) gave nothing: the probe user has no Nextcloud account yet"
+            ug[x]="[]"
+        fi
+        ids="$(jq -c --arg u "$UNIT" --argjson ug "${ug[$x]}" '
+            def gids: (.groups // {}) | if type == "object" then keys elif type == "array" then map(if type == "object" then (.gid // .group_id // .id // empty) else (.) end) else [] end;
+            [.[] | select((.mount_point // "" | ltrimstr("/")) == $u)
+                 | select((gids) as $g | (($g - ($g - $ug)) | length) > 0)
+                 | .id] | unique' <<< "$folders" 2>/dev/null || echo '[]')"
+        n="$(jq 'length' <<< "$ids")"
+        case "$n" in
+            0) s_nr "${SLUG[$x]}: the probe user is in no group that carries a folder named ${UNIT}" ;;
+            1) fid[x]="$(jq -r '.[0]' <<< "$ids")" ;;
+            *) s_fail "${SLUG[$x]}: the probe user's groups carry ${n} folders named ${UNIT} (${ids})" ;;
+        esac
+    done
+    if [[ -n "${fid[0]}" && -n "${fid[1]}" ]]; then
+        if [[ "${fid[0]}" == "${fid[1]}" ]]; then
+            s_fail "both customers resolve to one folder id (${fid[0]}): the unit folder is one folder, not two"
+        else
+            s_ok "${SLUG[0]} resolves folder ${fid[0]}, ${SLUG[1]} resolves folder ${fid[1]} (through the groups of the probe user, not the mount name)"
+        fi
+    fi
+    sec_end
+}
+
+sec_office() {
+    local x y origin want
+    sec_begin office
+    if no_bearer office; then s_ne "the office route takes no Bearer on this release"; sec_end; return 0; fi
+    for x in 0 1; do
+        y=$((1 - x))
+        case "${FILE_FIXTURE[$x]:-3}" in
+            0) s_nr "${SLUG[$x]}: the fixture file isoprobe-${SLUG[$x]}.odt is not readable (see files)"; continue ;;
+            2) s_ne "${SLUG[$x]}: the files route is not usable for this customer (module off, or no Bearer on this release)"; continue ;;
+        esac
+        api_get "$x" "/api/files/edit-token/${UNIT}/isoprobe-${SLUG[$x]}.odt"
+        own_ok "${SLUG[$x]}: own editor URL" || continue
+        # a body that is no JSON (a proxy page) leaves the origin empty, which FAILS below: never a stop
+        origin="$(jq -r '.editorUrl // ""' <<< "$R_BODY" 2>/dev/null | sed -E 's#^(https?://[^/]+).*#\1#' || true)"
+        want="https://${HOST[$x]}"
+        if [[ "$origin" != "$want" && "$origin" != "${want}:${EDGE_HTTPS_PORT}" ]]; then
+            s_fail "${SLUG[$x]}: the own editor URL's origin is '${origin}', not ${want}"
+            continue
+        fi
+        api_get "$x" "/api/files/edit-token/${UNIT}/isoprobe-${SLUG[$y]}.odt"
+        if [[ "$R_CODE" == 5?? ]]; then
+            # a 500 or 502 for a file the own root lacks: the route does not map Nextcloud's 404 and 403 yet
+            s_fail "$(dir_label "$x"): the editor URL for ${SLUG[$y]}'s file answered ${R_CODE}: this release lacks the error mapping of the edit-token route (a missing document must answer 404, a refused one 403), so the denial cannot be shown; the section PASSes only on a release that ships it"
+            continue
+        fi
+        if expect_code "$(dir_label "$x"): the editor URL for ${SLUG[$y]}'s file on ${SLUG[$x]}'s host" 403 404; then
+            if jq -e '(.editorUrl // "") != ""' <<< "$R_BODY" >/dev/null 2>&1; then
+                s_fail "$(dir_label "$x"): a refusal that still carries an editor URL"
+            else
+                s_ok "$(dir_label "$x"): own editor URL on ${want}, the other customer's file refused (${R_CODE})"
+            fi
+        fi
+    done
+    SEC_NOTES+=("save and close stay UNPROVEN: open a document of each customer by hand on its own host and save it")
+    sec_end
+}
+
+sec_chat() {
+    local x y rdy=(0 0) rid read_ok enc txn
+    sec_begin chat
+    CHAT_NE=0
+    if no_bearer chat; then s_ne "the chat routes take no Bearer on this release"; CHAT_NE=1; sec_end; return 0; fi
+    # the Matrix client calls go through the edge on the platform host: if /_matrix is not routed there (UNCHECKED
+    # in the header), a refusal and an unreachable service would look alike, so the section cannot be judged
+    cfg_reset
+    http_edge "$PLATFORM" GET "/_matrix/client/versions"
+    if [[ "$R_CODE" != 200 ]] || ! jq -e 'has("versions")' <<< "$R_BODY" >/dev/null 2>&1; then
+        s_ne "the Matrix client API is not reachable through the edge on ${PLATFORM}: /_matrix/client/versions answered ${R_CODE}; chat and call cannot be judged"
+        CHAT_NE=1
+        sec_end
+        return 0
+    fi
+    for x in 0 1; do
+        MXT[x]=""; MXID[x]=""; ROOM[x]=""
+        # ask the module-gated route first, so a customer without messaging reads NOT-ENABLED and not a
+        # failed Matrix session
+        api_get "$x" "/api/messages/rooms"
+        if ! own_ok "${SLUG[$x]}: own room list"; then
+            if [[ "$SEC_V" == NOT-ENABLED ]]; then CHAT_NE=1; fi
+            continue
+        fi
+        rid="$(jq -r --arg u "$UNIT" '[.data[]? | select((.name // "") == $u)][0].roomId // empty' <<< "$R_BODY" 2>/dev/null || true)"
+        if [[ -z "$rid" ]]; then s_nr "no chat room named ${UNIT} for ${SLUG[$x]}: the operator makes the unit and the user joins it"; continue; fi
+        ROOM[x]="$rid"
+        api_get "$x" "/api/auth/matrix-token"
+        own_ok "${SLUG[$x]}: own Matrix session" || continue
+        MXT[x]="$(jq -r '.data.matrixToken // empty' <<< "$R_BODY" 2>/dev/null || true)"
+        MXID[x]="$(jq -r '.data.matrixUserId // empty' <<< "$R_BODY" 2>/dev/null || true)"
+        R_BODY=""
+        if [[ -z "${MXT[$x]}" || -z "${MXID[$x]}" ]]; then s_fail "${SLUG[$x]}: the Matrix session carries no token or user id"; MXT[x]=""; continue; fi
+        rdy[x]=1
+    done
+    if [[ -n "${MXID[0]}" && "${MXID[0]}" == "${MXID[1]}" ]]; then s_fail "the same Matrix user id (${MXID[0]}) on both customers"; fi
+    if [[ -n "${ROOM[0]}" && "${ROOM[0]}" == "${ROOM[1]}" ]]; then s_fail "the same room id (${ROOM[0]}) for the unit of both customers"; fi
+    if [[ -n "${ROOM[0]}" && -n "${ROOM[1]}" && "${ROOM[0]}" != "${ROOM[1]}" && -n "${MXID[0]}" && "${MXID[0]}" != "${MXID[1]}" ]]; then
+        s_ok "different room ids and different Matrix user ids for the same unit name"
+    fi
+    for x in 0 1; do
+        y=$((1 - x))
+        (( rdy[x] == 1 && rdy[y] == 1 )) || continue
+        enc="$(urlenc "${ROOM[$x]}")"
+        cfg_reset; cfg_bearer "${MXT[$x]}"
+        http_edge "$PLATFORM" GET "/_matrix/client/v3/rooms/${enc}/messages?dir=b&limit=1"
+        if [[ "$R_CODE" != 200 ]]; then s_fail "${SLUG[$x]}: the own room's messages answered ${R_CODE} (positive control failed)"; continue; fi
+        enc="$(urlenc "${ROOM[$y]}")"
+        cfg_reset; cfg_bearer "${MXT[$x]}"
+        http_edge "$PLATFORM" GET "/_matrix/client/v3/rooms/${enc}/messages?dir=b&limit=1"
+        read_ok=no
+        if expect_code "$(dir_label "$x"): ${SLUG[$y]}'s room messages with ${SLUG[$x]}'s Matrix token" 403; then read_ok=yes; fi
+        if [[ "$read_ok" != yes ]]; then
+            SEC_NOTES+=("$(dir_label "$x"): nothing is sent into the other room: the read was not refused")
+            continue
+        fi
+        txn="isoprobe${RANDOM}${RANDOM}"
+        cfg_reset; cfg_bearer "${MXT[$x]}"; cfg_json '{"msgtype":"m.text","body":"isoprobe"}'
+        http_edge "$PLATFORM" PUT "/_matrix/client/v3/rooms/${enc}/send/m.room.message/${txn}"
+        if expect_code "$(dir_label "$x"): a send into ${SLUG[$y]}'s room with ${SLUG[$x]}'s Matrix token" 403; then
+            s_ok "$(dir_label "$x"): own room 200, the other customer's room refused on read and send (403)"
+        fi
+    done
+    sec_end
+}
+
+sec_call() {
+    local x y body jwt room prefix rr
+    sec_begin call
+    if no_bearer call; then s_ne "the call route is not probed on this release"; sec_end; return 0; fi
+    for x in 0 1; do
+        y=$((1 - x))
+        if [[ -z "${MXT[$x]:-}" || -z "${ROOM[$x]:-}" || -z "${ROOM[$y]:-}" ]]; then
+            if (( CHAT_NE == 1 )); then
+                s_ne "${SLUG[$x]}: chat is off, so no Matrix session mints the OpenID token of the call"
+            else
+                s_fail "${SLUG[$x]}: no Matrix session and room to start a call from (see chat)"
+            fi
+            continue
+        fi
+        cfg_reset; cfg_bearer "${MXT[$x]}"; cfg_json '{}'
+        http_edge "$PLATFORM" POST "/_matrix/client/v3/user/$(urlenc "${MXID[$x]}")/openid/request_token"
+        if [[ "$R_CODE" != 200 ]]; then s_fail "${SLUG[$x]}: the Matrix OpenID token answered ${R_CODE}"; continue; fi
+        OID[x]="$(jq -r '.access_token // empty' <<< "$R_BODY" 2>/dev/null || true)"
+        OIDSRV[x]="$(jq -r '.matrix_server_name // empty' <<< "$R_BODY" 2>/dev/null || true)"
+        R_BODY=""
+        if [[ -z "${OID[$x]}" ]]; then s_fail "${SLUG[$x]}: the Matrix OpenID answer carries no token"; continue; fi
+        body="$(openid_body "${ROOM[$x]}" "${OID[$x]}" "${OIDSRV[$x]:-$PLATFORM}")"
+        cfg_reset; cfg_json "$body"
+        http_edge "${HOST[$x]}" POST "/livekit/jwt/get_token"
+        body=""; CFG=""
+        if ! own_ok "${SLUG[$x]}: own call room"; then continue; fi
+        jwt="$(jq -r '.access_token // empty' <<< "$R_BODY" 2>/dev/null || true)"
+        R_BODY=""
+        room="$(jwt_payload "$jwt" | jq -r '.video.room // ""' 2>/dev/null || true)"
+        prefix="t.${SLUG[$x]}."
+        if [[ "$room" != "${prefix}"* ]]; then
+            s_fail "${SLUG[$x]}: the own call room '${room}' does not start with ${prefix}"
+            continue
+        fi
+        body="$(openid_body "${ROOM[$y]}" "${OID[$x]}" "${OIDSRV[$x]:-$PLATFORM}")"
+        cfg_reset; cfg_json "$body"
+        http_edge "${HOST[$x]}" POST "/livekit/jwt/get_token"
+        body=""; CFG=""
+        rr="$R_CODE"
+        if expect_code "$(dir_label "$x"): a LiveKit JWT for ${SLUG[$y]}'s room on ${SLUG[$x]}'s host" 403; then
+            s_ok "$(dir_label "$x"): own room ${room}, the other customer's room refused (${rr})"
+        fi
+    done
+    sec_end
+}
+
+sec_cross_host() {
+    local x y p cand=() own_path off=0
+    sec_begin cross-host
+    if no_bearer cross-host; then s_ne "the cross-host probe takes no Bearer on this release"; sec_end; return 0; fi
+    # the control route is any route of a section whose route takes a Bearer on this release
+    if ! no_bearer calendar; then cand+=("/api/calendar/events?from=${FROM}&to=${TO}"); fi
+    if ! no_bearer polls; then cand+=("/api/polls"); fi
+    if ! no_bearer files; then cand+=("/api/files/${UNIT}"); fi
+    if ! no_bearer chat; then cand+=("/api/auth/matrix-token"); fi
+    if (( ${#cand[@]} == 0 )); then s_ne "no route that takes a Bearer is left to use as the control"; sec_end; return 0; fi
+    for x in 0 1; do
+        y=$((1 - x))
+        own_path=""
+        off=0
+        for p in "${cand[@]}"; do
+            api_get "$x" "$p"
+            if [[ "$R_CODE" == 200 ]]; then own_path="$p"; break; fi
+            if [[ "$R_CODE" == 403 && "$R_BODY" == *"Module disabled"* ]]; then off=$((off + 1)); fi
+        done
+        if [[ -z "$own_path" ]]; then
+            if (( off == ${#cand[@]} )); then
+                s_ne "${SLUG[$x]}: every route that could serve as the control is off"
+            else
+                s_fail "${SLUG[$x]}: no route answers 200 on its own host with its own token (positive control failed)"
+            fi
+            continue
+        fi
+        cfg_reset; cfg_bearer "${TOK[$x]}"
+        http_edge "${HOST[$y]}" GET "$own_path"
+        if expect_code "$(dir_label "$x"): ${SLUG[$x]}'s token on ${SLUG[$y]}'s host" 401; then
+            s_ok "$(dir_label "$x"): the token answers 200 on its own host and 401 on the other"
+        fi
+    done
+    sec_end
+}
+
+# ---------------------------------------------------------------- preconditions
+
+tenant_host() {   # <slug> -> the first plain Host(`h`) router rule of the customer's router file
+    local f="${ROOT}/etc/edge/tenant-${1}.yml"
+    [[ -f "$f" ]] || return 1
+    # shellcheck disable=SC2016  # the backticks are Traefik rule syntax, not a command substitution
+    sed -n 's/^[[:space:]]*rule: "Host(`\([^`]*\)`)"[[:space:]]*$/\1/p' "$f" | head -n 1
+}
+
+container_of() {   # <project> <service> -- the ONE container of a compose service, by its labels
+    local project="$1" service="$2" ids n
+    ids="$(docker ps -q --filter "label=com.docker.compose.project=${project}" \
+                        --filter "label=com.docker.compose.service=${service}")" \
+        || die "docker ps failed while looking for ${service} of ${project}" "$GREMION_EXIT_ASSERT"
+    n="$(grep -c . <<< "$ids" || true)"
+    [[ "$n" == "1" ]] || die "expected exactly one running ${service} in ${project}, found ${n}" "$GREMION_EXIT_ASSERT"
+    printf '%s' "${ids//[[:space:]]/}"
+}
+
+acquire_host_lock() {
+    local lock
+    if [[ "${GREMION_HOST_LOCK_HELD:-}" != 1 ]]; then
+        mkdir -p "${ROOT}/runtime"
+        lock="${ROOT}/runtime/hostd.lock"
+        exec 9>>"$lock" || die "cannot open the host lock: ${lock}" 2
+        flock -n 9 || die "BLOCKED: another host operation is running (lock ${lock}); retry when it has finished" 3
+    fi
+    GREMION_HOST_LOCK_HELD=1
+    export GREMION_HOST_LOCK_HELD
+}
+
+parse_args() {
+    local pos=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --unit) need_value "$@"; UNIT="$2"; shift 2 ;;
+            --user) need_value "$@"; PROBE_USER="$2"; shift 2 ;;
+            -h|--help) usage; exit 0 ;;
+            -*) usage; die "unknown argument: $1" "$GREMION_EXIT_USAGE" ;;
+            *) pos+=("$1"); shift ;;
+        esac
+    done
+    if [[ ${#pos[@]} -ne 2 ]]; then usage; die "needs exactly two customer slugs" "$GREMION_EXIT_USAGE"; fi
+    need_slug "${pos[0]}"; need_slug "${pos[1]}"
+    [[ "${pos[0]}" != "${pos[1]}" ]] || die "needs two different customers, got ${pos[0]} twice" "$GREMION_EXIT_USAGE"
+    SLUG=("${pos[0]}" "${pos[1]}")
+    [[ "$PROBE_USER" =~ $USER_RE ]] || die "the probe user '${PROBE_USER}' is refused: only a username that starts with isoprobe is accepted (this probe never acts as a real person)" "$GREMION_EXIT_USAGE"
+    [[ "$UNIT" =~ $UNIT_RE ]] || die "the unit name '${UNIT}' is not a plain name (letters, digits, dot, dash, underscore)" "$GREMION_EXIT_USAGE"
+}
+
+main() {
+    local i s
+    parse_args "$@"
+    ARGS_DONE=1
+    need_tools docker curl jq openssl base64 sed flock
+    # armed once the arguments are good: it also turns a stop before the verdict into exit 3, and (later)
+    # deletes any temporary client
+    trap cleanup EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    setup_paths
+    acquire_host_lock
+    active_colour
+    STATE_ENV="${ROOT}/etc/env/state.env"
+    APP_ENV="${ROOT}/etc/env/app-${COLOUR}.env"
+    [[ -f "$STATE_ENV" && -f "$APP_ENV" ]] || die "env files absent: ${STATE_ENV} / ${APP_ENV}" "$GREMION_EXIT_BLOCKED"
+    STACK="$(env_key "$STATE_ENV" STACK)"
+    PLATFORM="$(env_key "$STATE_ENV" PLATFORM_DOMAIN)"
+    EDGE_BIND_IP="$(env_key "$STATE_ENV" EDGE_BIND_IP)"
+    EDGE_HTTPS_PORT="$(env_key "$STATE_ENV" EDGE_HTTPS_PORT)"
+    TSD="$(env_key "$APP_ENV" TENANT_SECRETS_DIR)"
+    [[ -n "$STACK" ]] || die "STACK is empty in ${STATE_ENV}" "$GREMION_EXIT_BLOCKED"
+    [[ "$PLATFORM" =~ $HOST_RE ]] || die "PLATFORM_DOMAIN in ${STATE_ENV} is not a host name" "$GREMION_EXIT_BLOCKED"
+    [[ -n "$EDGE_BIND_IP" && "$EDGE_BIND_IP" != CHANGE_ME_* ]] || die "EDGE_BIND_IP in ${STATE_ENV} is not set" "$GREMION_EXIT_BLOCKED"
+    [[ "$EDGE_HTTPS_PORT" =~ ^[0-9]+$ ]] || die "EDGE_HTTPS_PORT in ${STATE_ENV} is not a port" "$GREMION_EXIT_BLOCKED"
+    [[ -n "$TSD" && "$TSD" == /* ]] || die "TENANT_SECRETS_DIR is not set (absolute) in ${APP_ENV}" "$GREMION_EXIT_BLOCKED"
+
+    # the facts of both customers: nothing is changed before every one holds
+    for i in 0 1; do
+        s="${SLUG[$i]}"
+        HOST[i]="$(tenant_host "$s" || true)"
+        if [[ ! "${HOST[$i]}" =~ $HOST_RE ]]; then not_ready "${s}: no host in its router file ${ROOT}/etc/edge/tenant-${s}.yml (is the customer created and routed?)"; fi
+        SECRET_FILE[i]="${TSD}/tenant_${s}_client_${ADMIN_CLIENT}"
+        if [[ ! -s "${SECRET_FILE[$i]}" ]]; then not_ready "${s}: the realm admin client secret is absent: ${SECRET_FILE[$i]}"; fi
+    done
+    if [[ -n "${HOST[0]}" && "${HOST[0]}" == "${HOST[1]}" ]]; then not_ready "${SLUG[0]} and ${SLUG[1]} resolve to one host (${HOST[0]}): the probe needs two hosts"; fi
+    if (( ${#NOTREADY[@]} > 0 )); then finish_not_ready; fi
+    NC="$(container_of "${STACK}-state" nextcloud)"
+    # the admin and WebDAV calls run through the Nextcloud container's own curl: see UNCHECKED in the header
+    if ! docker exec "$NC" curl --version >/dev/null 2>&1; then
+        not_ready "the Nextcloud container (${NC}) has no usable curl: the admin and WebDAV calls run through it; nothing was created"
+        finish_not_ready
+    fi
+
+    FROM="$(date -u -d '366 days ago' +%Y-%m-%dT%H:%M:%SZ)"
+    TO="$(date -u -d '366 days' +%Y-%m-%dT%H:%M:%SZ)"
+
+    # the EXIT/INT/TERM trap is armed (above) before the first client can exist
+
+    info "gremion-isolation-live: ${SLUG[0]} (${HOST[0]}) and ${SLUG[1]} (${HOST[1]}), unit ${UNIT}, user ${PROBE_USER}"
+    for i in 0 1; do
+        realm_tokens "$i" || true
+        if (( ${#NOTREADY[@]} > 0 )); then finish_not_ready; fi
+    done
+
+    sec_chat
+    sec_files
+    sec_office
+    sec_calendar
+    sec_polls
+    sec_call
+    sec_cross_host
+    finish
+}
+
+finish_not_ready() {
+    local n
+    for n in "${NOTREADY[@]}"; do printf 'NOT-READY: %s\n' "$n" >&2; done
+    printf 'RESULT: NOT-READY (exit 3): the fixture or a precondition is missing; nothing was probed\n'
+    DONE=1
+    exit 3
+}
+
+finish() {
+    local s line="" res=PASS rc=0 v
+    for s in "${SECTIONS[@]}"; do
+        v="${VERDICT[$s]:-FAIL}"
+        line+="${s}=${v} "
+        case "$v" in
+            FAIL) res=FAIL ;;
+            NOT-READY) if [[ "$res" != FAIL ]]; then res=NOT-READY; fi ;;
+            NOT-ENABLED) if [[ "$res" == PASS ]]; then res=NOT-ENABLED; fi ;;
+        esac
+    done
+    case "$res" in
+        PASS) rc=0 ;;
+        FAIL) rc=1 ;;
+        NOT-READY) rc=3 ;;
+        NOT-ENABLED) rc=3 ;;
+    esac
+    # the temporary clients go before the verdict is printed: a clean-up that cannot be confirmed is no finding
+    # about isolation, so it never makes exit 1, but an all-PASS run that left a client behind is not a clean PASS
+    delete_clients
+    if (( CLEAN_FAILED == 1 && rc == 0 )); then res=CLEANUP-FAILED; rc=3; fi
+    DONE=1
+    printf 'SUMMARY: %s\n' "$line"
+    printf 'RESULT: %s (exit %s)\n' "$res" "$rc"
+    exit "$rc"
+}
+
+main "$@"
