@@ -9,6 +9,7 @@
   import { isEditableFile, isViewableFile } from '$lib/files/editable-types'
   import { editorTabHref } from '$lib/files/editor-close'
   import { isUploadTooLarge } from '$lib/files/upload-limit'
+  import { folderNameProblem, type FolderNameProblem } from '$lib/files/folder-name'
   import { lang, t } from '$lib/i18n'
 
   interface Props {
@@ -29,6 +30,8 @@
 
   let showNewFolderDialog = $state(false)
   let newFolderName = $state('')
+  // Why the dialog did not create the folder (a refused name, or the server's refusal); shown inside the dialog.
+  let folderError = $state<string | null>(null)
   let showDeleteDialog = $state(false)
   let deleteTarget = $state<DavEntry | null>(null)
   let renamingHref = $state<string | null>(null)
@@ -217,13 +220,48 @@
     renamingHref = null
   }
 
-  async function createFolder() {
-    if (!newFolderName) return
-    const folderPath = (rootPath ? rootPath + '/' : '') + newFolderName
-    const res = await fetch('/api/files/' + folderPath + '?mkdir=true', { method: 'PUT' })
-    if (res.ok) await loadEntries()
-    showNewFolderDialog = false
+  const FOLDER_PROBLEM_KEY: Record<FolderNameProblem, string> = {
+    empty: 'files.folderNameEmpty',
+    separator: 'files.folderNameSeparator',
+    dots: 'files.folderNameDots',
+    characters: 'files.folderNameCharacters'
+  }
+
+  function openNewFolderDialog() {
     newFolderName = ''
+    folderError = null
+    showNewFolderDialog = true
+  }
+
+  function closeNewFolderDialog() {
+    showNewFolderDialog = false
+    folderError = null
+  }
+
+  async function createFolder() {
+    // A refused name stays in the dialog with its reason; the API would refuse it and create nothing too,
+    // but the dialog used to close with no word about why.
+    const problem = folderNameProblem(newFolderName)
+    if (problem) {
+      folderError = $t(FOLDER_PROBLEM_KEY[problem])
+      return
+    }
+    const folderPath = (rootPath ? rootPath + '/' : '') + newFolderName
+    try {
+      const res = await fetch('/api/files/' + folderPath + '?mkdir=true', { method: 'PUT' })
+      if (!res.ok) {
+        folderError = $t('files.folderCreateFailed')
+        return
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('[FileBrowser] createFolder failed', e)
+      folderError = $t('files.folderCreateFailed')
+      return
+    }
+    closeNewFolderDialog()
+    newFolderName = ''
+    await loadEntries()
   }
 </script>
 
@@ -246,7 +284,7 @@
         {$t('files.upload')}
         <input type="file" multiple class="fb-file-input" disabled={uploadingName !== null} onchange={handleFileInput} />
       </label>
-      <button class="btn btn-primary btn-sm" onclick={() => (showNewFolderDialog = true)}>
+      <button class="btn btn-primary btn-sm" onclick={openNewFolderDialog}>
         <Icon name="plus" size={14} />
         {$t('files.newFolder')}
       </button>
@@ -595,7 +633,7 @@
 </style>
 
 <!-- New folder dialog -->
-<Dialog open={showNewFolderDialog} onClose={() => (showNewFolderDialog = false)} lang={$lang}>
+<Dialog open={showNewFolderDialog} onClose={closeNewFolderDialog} lang={$lang}>
   <DialogHeader>
     <DialogTitle>{$t('files.newFolder')}</DialogTitle>
   </DialogHeader>
@@ -603,11 +641,16 @@
     <Input
       bind:value={newFolderName}
       placeholder={$t('files.folderName')}
+      aria-invalid={folderError ? 'true' : undefined}
+      oninput={() => (folderError = null)}
       onkeydown={(e) => { e.stopPropagation(); if (e.key === 'Enter') createFolder() }}
     />
+    {#if folderError}
+      <Alert variant="destructive" class="mt-3 py-2 text-sm">{folderError}</Alert>
+    {/if}
   </div>
   <DialogFooter>
-    <Button variant="outline" onclick={() => (showNewFolderDialog = false)}>{$t('files.cancel')}</Button>
+    <Button variant="outline" onclick={closeNewFolderDialog}>{$t('files.cancel')}</Button>
     <Button onclick={createFolder} disabled={!newFolderName}>{$t('files.create')}</Button>
   </DialogFooter>
 </Dialog>
