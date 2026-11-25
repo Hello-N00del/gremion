@@ -2294,3 +2294,587 @@ EOF
     [ "$status" -eq 0 ]
     [[ "$output" == *"panel service panel@file: not UP yet (try 1 of 3)"* ]]
 }
+
+# ── fx9: a fresh pilot install, judged by what is the kernel's ───────────────
+# Router shapes of the kernel's own state project that no rule was written for, and
+# another compose project's docker-provider objects on the same daemon.
+
+# The router the traefik container itself carries (docker-compose.prod.yml, service
+# traefik): it exists so that traefik.enable=true does not generate a default router. It
+# sits on the unpublished `ping` entrypoint and answers with noop@internal.
+edge_labels_router() {
+    api_edit routers '. + [{"name":"edge-labels@docker","status":"enabled","entryPoints":["ping"],
+        "rule":"Host(`edge-labels.invalid`)","service":"noop@internal"}]'
+    api_edit services '. + [{"name":"noop@internal","loadBalancer":{"servers":[]}}]'
+}
+
+@test "universal: the edge-labels router (ping entrypoint only, noop@internal) is internal-only and exempt" {
+    edge_labels_router
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"all checks passed"* ]]
+    [[ "$output" != *"edge-labels@docker"* ]]
+}
+
+@test "universal: a ping-only router that serves a REAL service is not exempt" {
+    edge_labels_router
+    api_edit routers '(.[] | select(.name=="edge-labels@docker")).service = "keycloak@docker"'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router edge-labels@docker: no certresolver"* ]]
+    [[ "$output" == *"router edge-labels@docker: 0 host pins (expected exactly 1)"* ]]
+}
+
+@test "universal: a noop@internal router that is ALSO on websecure is not exempt" {
+    edge_labels_router
+    api_edit routers '(.[] | select(.name=="edge-labels@docker")).entryPoints = ["ping","websecure"]'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router edge-labels@docker: no certresolver"* ]]
+}
+
+@test "universal: a noop@internal router on the public entrypoint alone is not exempt" {
+    edge_labels_router
+    api_edit routers '(.[] | select(.name=="edge-labels@docker")).entryPoints = ["websecure"]'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router edge-labels@docker: no HSTS middleware"* ]]
+}
+
+# FOREIGN: a static site of ANOTHER compose project that labels its container
+# org.gremion.stack=<this stack> so the stack-scoped edge serves it.
+FOREIGN_LABELS='{"com.docker.compose.project":"gremion-site","com.docker.compose.service":"web",
+  "org.gremion.stack":"staging","traefik.enable":"true",
+  "traefik.http.routers.gremion-site.rule":"Host(`sales.example.net`)",
+  "traefik.http.routers.gremion-site.entrypoints":"websecure",
+  "traefik.http.routers.gremion-site.middlewares":"gremion-site-hsts,gremion-site-ratelimit",
+  "traefik.http.routers.gremion-site-www.rule":"Host(`www.sales.example.net`)",
+  "traefik.http.routers.gremion-site-www.entrypoints":"websecure",
+  "traefik.http.routers.gremion-site-www.middlewares":"gremion-site-www-redirect",
+  "traefik.http.middlewares.gremion-site-hsts.headers.stsseconds":"31536000",
+  "traefik.http.middlewares.gremion-site-ratelimit.ratelimit.average":"50",
+  "traefik.http.middlewares.gremion-site-www-redirect.redirectregex.regex":"^https://www.sales.example.net/(.*)",
+  "traefik.http.services.gremion-site.loadbalancer.server.port":"80"}'
+
+# foreign_labels <jq-filter> [jq args]: FOREIGN_LABELS edited
+foreign_labels() {
+    local f="$1"; shift
+    printf '%s' "$FOREIGN_LABELS" | jq -c "$@" "$f"
+}
+
+# foreign_site [labels-json]: the container plus the router/middleware/service objects Traefik
+# reports for it. Neither router has a certresolver, a host pin or an edge-* middleware: the
+# kernel's universal would fail both, and the three middlewares are not on the traefik container.
+foreign_site() {
+    fake_container c20 gremion-site-web "gremion-site-web" running healthy 0 10.90.250.9 "${1:-$FOREIGN_LABELS}"
+    api_edit routers '. + [
+      {"name":"gremion-site@docker","status":"enabled","entryPoints":["websecure"],"rule":"Host(`sales.example.net`)",
+       "service":"gremion-site","tls":{},"middlewares":["gremion-site-hsts","gremion-site-ratelimit"]},
+      {"name":"gremion-site-www@docker","status":"enabled","entryPoints":["websecure"],"rule":"Host(`www.sales.example.net`)",
+       "service":"gremion-site","tls":{},"middlewares":["gremion-site-www-redirect"]}]'
+    api_edit services '. + [{"name":"gremion-site@docker","loadBalancer":{"servers":[{"url":"http://10.90.250.9:80"}]}}]'
+    api_edit middlewares '. + [
+      {"name":"gremion-site-hsts@docker","provider":"docker","type":"headers","headers":{"stsSeconds":31536000}},
+      {"name":"gremion-site-ratelimit@docker","provider":"docker","type":"ratelimit","rateLimit":{"average":50}},
+      {"name":"gremion-site-www-redirect@docker","provider":"docker","type":"redirectregex","redirectRegex":{"regex":"^https://www.sales.example.net/(.*)"}}]'
+}
+
+# foreign_claims <rule>: the first foreign router now answers <rule> instead
+foreign_claims() {
+    jq --arg r "$1" '(.[] | select(.name=="gremion-site@docker")).rule = $r' "${FAKE_HTTP}/api-http-routers.json" > "${FAKE_HTTP}/r.json"
+    mv "${FAKE_HTTP}/r.json" "${FAKE_HTTP}/api-http-routers.json"
+}
+
+@test "foreign: another compose project's routers and middlewares are not judged, one informational line each" {
+    foreign_site
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"all checks passed"* ]]
+    [ "$(grep -c 'foreign docker' <<<"$output")" -eq 5 ]
+    [ "$(grep -c 'foreign docker router' <<<"$output")" -eq 2 ]
+    [ "$(grep -c 'foreign docker middleware' <<<"$output")" -eq 3 ]
+    [[ "$output" == *"foreign docker router gremion-site@docker"* ]]
+    [[ "$output" == *"foreign docker router gremion-site-www@docker"* ]]
+    [[ "$output" == *"foreign docker middleware gremion-site-www-redirect@docker"* ]]
+    [[ "$output" == *"compose project gremion-site, not a kernel project of stack staging"* ]]
+}
+
+@test "foreign: last-verify.json lists the foreign objects apart from the failures" {
+    foreign_site
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+    run jq -r '.ok' "${GREMION_ROOT}/runtime/last-verify.json"
+    [ "$output" = "true" ]
+    run jq -r '.foreign | map(.kind + ":" + .name) | sort | join(",")' "${GREMION_ROOT}/runtime/last-verify.json"
+    [ "$output" = "middleware:gremion-site-hsts@docker,middleware:gremion-site-ratelimit@docker,middleware:gremion-site-www-redirect@docker,router:gremion-site-www@docker,router:gremion-site@docker" ]
+    run jq -r '.routers | map(select(.name | startswith("gremion-site"))) | length' "${GREMION_ROOT}/runtime/last-verify.json"
+    [ "$output" = "0" ]
+}
+
+@test "foreign: the same labels on a container of the kernel's own state project are judged in full" {
+    foreign_site "$(foreign_labels '."com.docker.compose.project" = "staging-state"')"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router gremion-site@docker: no certresolver"* ]]
+    [[ "$output" == *"router gremion-site@docker: 0 host pins (expected exactly 1)"* ]]
+    [[ "$output" == *"router gremion-site-www@docker: no HSTS middleware"* ]]
+    [[ "$output" == *"middleware gremion-site-hsts@docker is not declared on the traefik container's labels"* ]]
+    [[ "$output" != *"foreign docker"* ]]
+}
+
+@test "foreign: the blue colour project of this stack is a kernel project too" {
+    foreign_site "$(foreign_labels '."com.docker.compose.project" = "staging-app-blue"')"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router gremion-site@docker: no certresolver"* ]]
+    [[ "$output" != *"foreign docker"* ]]
+}
+
+@test "foreign: the green colour project of this stack is a kernel project too" {
+    foreign_site "$(foreign_labels '."com.docker.compose.project" = "staging-app-green"')"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router gremion-site@docker: no certresolver"* ]]
+    [[ "$output" != *"foreign docker"* ]]
+}
+
+@test "foreign: a project whose name merely starts like the kernel's is foreign, the match is exact" {
+    foreign_site "$(foreign_labels '."com.docker.compose.project" = "staging-state-extra"')"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+    [ "$(grep -c 'foreign docker router' <<<"$output")" -eq 2 ]
+}
+
+@test "foreign: a container with no compose project cannot be shown to be foreign and is judged" {
+    foreign_site "$(foreign_labels 'del(."com.docker.compose.project")')"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router gremion-site@docker: no certresolver"* ]]
+    [[ "$output" != *"foreign docker"* ]]
+}
+
+@test "foreign: a container the stack-scoped edge cannot read (other stack label) contributes no foreign objects" {
+    foreign_site "$(foreign_labels '."org.gremion.stack" = "other"')"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router gremion-site@docker: no certresolver"* ]]
+    [[ "$output" != *"foreign docker"* ]]
+}
+
+@test "foreign: without STACK nothing is classified foreign, everything is judged" {
+    sed -i '/^STACK=/d' "${GREMION_ROOT}/etc/env/state.env"
+    # no stack label either: with an empty STACK that is the one container an unguarded comparison would call foreign
+    foreign_site "$(foreign_labels 'del(."org.gremion.stack")')"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router gremion-site@docker: no certresolver"* ]]
+    [[ "$output" != *"foreign docker"* ]]
+}
+
+@test "foreign: a foreign router claiming the platform host is refused" {
+    foreign_site
+    foreign_claims 'Host(`example.org`) && PathPrefix(`/shop`)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"claims example.org"*"the platform"* ]]
+}
+
+@test "foreign: a foreign router claiming the control panel host is refused" {
+    foreign_site
+    foreign_claims 'Host(`control.example.org`)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"claims control.example.org"*"the control panel"* ]]
+}
+
+@test "foreign: a foreign router claiming a customer host is refused, whatever the letter case" {
+    foreign_site
+    foreign_claims 'Host(`Tenant-A.Example.ORG`)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"claims tenant-a.example.org"* ]]
+}
+
+@test "foreign: a customer host in etc/tenant-hosts.txt is protected without any --hosts file naming it" {
+    foreign_site
+    printf 'customer-z.example.org\n' > "${GREMION_ROOT}/etc/tenant-hosts.txt"
+    foreign_claims 'Host(`customer-z.example.org`)'
+    run "$VERIFY"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"claims customer-z.example.org"* ]]
+}
+
+@test "foreign: a HostRegexp that matches a protected host is refused" {
+    foreign_site
+    foreign_claims 'HostRegexp(`^tenant-.\.example\.org$`)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"HostRegexp"*"tenant-a.example.org"* ]]
+}
+
+@test "foreign: a HostRegexp that matches no protected host is fine" {
+    foreign_site
+    foreign_claims 'HostRegexp(`^(www\.)?sales\.example\.net$`)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+}
+
+# Traefik reads a double-quoted string as well as a backtick one: a claim in quotes is still a claim.
+@test "foreign: a protected host written as a double-quoted literal is refused" {
+    foreign_site
+    foreign_claims 'Host("tenant-a.example.org")'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"claims tenant-a.example.org"* ]]
+}
+
+@test "foreign: a HostRegexp in double quotes that matches a protected host is refused" {
+    foreign_site
+    foreign_claims 'HostRegexp("^tenant-.[.]example[.]org$")'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"HostRegexp"*"tenant-a.example.org"* ]]
+}
+
+@test "foreign: a double-quoted host that is not protected is fine" {
+    foreign_site
+    foreign_claims 'Host("sales.example.net")'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+}
+
+@test "foreign: a foreign router that names no host answers every host and is refused" {
+    foreign_site
+    foreign_claims 'PathPrefix(`/shop`)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"not confined to a host"* ]]
+}
+
+# A rule that names a host can still answer every other host: a disjunct that does not need
+# the host, or a negated host matcher.
+@test "foreign: a rule with a disjunct that needs no host answers every host and is refused" {
+    foreign_site
+    foreign_claims 'Host(`sales.example.net`) || PathPrefix(`/`)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"not confined to a host"* ]]
+}
+
+@test "foreign: a negated Host matcher answers every OTHER host and is refused" {
+    foreign_site
+    foreign_claims '!Host(`sales.example.net`)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"not confined to a host"* ]]
+}
+
+@test "foreign: a nested disjunction with a host-free branch is refused" {
+    foreign_site
+    foreign_claims '(Host(`sales.example.net`) || PathPrefix(`/x`)) && PathPrefix(`/y`)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"not confined to a host"* ]]
+}
+
+@test "foreign: a rule the verifier cannot parse is refused, not trusted" {
+    foreign_site
+    foreign_claims 'Host(`sales.example.net`'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"not confined to a host"* ]]
+}
+
+@test "foreign: hosts joined by || and groups around a disjunction are fine when every branch needs a host" {
+    foreign_site
+    foreign_claims 'Host(`sales.example.net`) || Host(`www.sales.example.net`)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+    foreign_claims '(Host(`sales.example.net`) || Host(`www.sales.example.net`)) && PathPrefix(`/x`)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+    foreign_claims 'Host(`sales.example.net`) && (PathPrefix(`/a`) || PathPrefix(`/b`)) && !PathPrefix(`/c`)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+}
+
+# A kernel router is held to the kernel's own middlewares: a name only another project declares
+# cannot satisfy the universal, whatever its name says it is.
+@test "foreign: a kernel router chaining a middleware only a foreign project declares fails, and it does not count as the rate limit" {
+    foreign_site "$(foreign_labels '. + {"traefik.http.middlewares.edge-ratelimit-site.ratelimit.average":"50"}')"
+    api_edit middlewares '. + [{"name":"edge-ratelimit-site@docker","provider":"docker","type":"ratelimit","rateLimit":{"average":50}}]'
+    api_edit routers '(.[] | select(.name=="tenant-a@file")).middlewares |= map(if . == "edge-ratelimit-app@docker" then "edge-ratelimit-site@docker" else . end)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router tenant-a@file: middleware edge-ratelimit-site@docker is declared by another compose project"* ]]
+    [[ "$output" == *"router tenant-a@file: no edge-ratelimit-* middleware"* ]]
+}
+
+@test "foreign: a kernel router chaining a host pin only a foreign project declares fails" {
+    foreign_site "$(foreign_labels '. + {"traefik.http.middlewares.edge-hostpin-sales.headers.customrequestheaders.x-forwarded-host":"tenant-a.example.org"}')"
+    api_edit middlewares '. + [{"name":"edge-hostpin-sales@docker","provider":"docker","type":"headers","headers":{"customRequestHeaders":{"X-Forwarded-Host":"tenant-a.example.org"}}}]'
+    api_edit routers '(.[] | select(.name=="whoami@docker")).middlewares |= map(if . == "edge-hostpin-a@file" then "edge-hostpin-sales@docker" else . end)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router whoami@docker: middleware edge-hostpin-sales@docker is declared by another compose project"* ]]
+    [[ "$output" == *"router whoami@docker: 0 host pins (expected exactly 1)"* ]]
+}
+
+@test "foreign: a host that only a kernel router's rule names is protected too" {
+    foreign_site
+    api_edit routers '. + [{"name":"matrix@docker","status":"enabled","entryPoints":["websecure"],
+        "rule":"Host(`chat.example.org`) && PathPrefix(`/_matrix`)","service":"keycloak@docker","tls":{"certResolver":"le-http"},
+        "middlewares":["edge-hostpin-m@file","edge-hsts-custom@docker","edge-ratelimit-app@docker"]}]'
+    api_edit middlewares '. + [{"name":"edge-hostpin-m@file","provider":"file","type":"headers",
+        "headers":{"customRequestHeaders":{"X-Forwarded-Host":"chat.example.org"}}}]'
+    foreign_claims 'Host(`chat.example.org`)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"claims chat.example.org"* ]]
+}
+
+@test "foreign: the exemption does not weaken a kernel router judged in the same run" {
+    foreign_site
+    api_edit routers '(.[] | select(.name=="tenant-a@file")).middlewares |= map(select(. != "edge-hsts-custom@docker"))'
+    api_edit routers '(.[] | select(.name=="keycloak@docker")).tls = {}'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router tenant-a@file: no HSTS middleware"* ]]
+    [[ "$output" == *"router keycloak@docker: no certresolver"* ]]
+    [[ "$output" != *"router gremion-site@docker:"* ]]
+}
+
+@test "foreign: a foreign container declaring a middleware the kernel also declares does not make the kernel's one foreign" {
+    foreign_site "$(foreign_labels '. + {"traefik.http.middlewares.edge-hsts-custom.headers.stsseconds":"1"}')"
+    api_edit middlewares '(.[] | select(.name=="edge-hsts-custom@docker")).headers.stsSeconds = 0'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router tenant-a@file: no HSTS middleware"* ]]
+    [[ "$output" != *"foreign docker middleware edge-hsts-custom@docker"* ]]
+}
+
+@test "foreign: a foreign container's default router (no router labels) is foreign too" {
+    fake_container c20 gremion-site-web "gremion-site-web" running healthy 0 10.90.250.9 \
+        '{"com.docker.compose.project":"gremion_site","com.docker.compose.service":"web","org.gremion.stack":"staging","traefik.enable":"true"}'
+    api_edit routers '. + [{"name":"web-gremion-site@docker","status":"enabled","rule":"Host(`web-gremion-site`)","service":"web-gremion-site"}]'
+    api_edit services '. + [{"name":"web-gremion-site@docker","loadBalancer":{"servers":[{"url":"http://10.90.250.9:80"}]}}]'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"foreign docker router web-gremion-site@docker"* ]]
+}
+
+@test "foreign: the default router of a KERNEL container (the legal service shape) is judged" {
+    fake_container c21 staging-state-legal-1 "legal" running healthy 0 10.90.250.10 \
+        '{"com.docker.compose.project":"staging-state","com.docker.compose.service":"legal","org.gremion.stack":"staging","traefik.enable":"true"}'
+    api_edit routers '. + [{"name":"legal-staging-state@docker","status":"enabled","rule":"Host(`legal-staging-state`)","service":"legal-staging-state"}]'
+    api_edit services '. + [{"name":"legal-staging-state@docker","loadBalancer":{"servers":[{"url":"http://10.90.250.10:8080"}]}}]'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router legal-staging-state@docker: no certresolver"* ]]
+    [[ "$output" == *"router legal-staging-state@docker: 0 host pins (expected exactly 1)"* ]]
+}
+
+@test "foreign: a TCP router of a foreign project on a public entrypoint is still refused" {
+    foreign_site
+    printf '[{"name":"gremion-site-tcp@docker","entryPoints":["websecure"],"rule":"HostSNI(`sales.example.net`)","tls":{"certResolver":"le-http"}}]\n' \
+        > "${FAKE_HTTP}/api-tcp-routers.json"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"TCP router(s) on a public entrypoint: gremion-site-tcp@docker"* ]]
+}
+
+@test "foreign: an object that traefik does not report is not listed" {
+    foreign_site
+    api_edit routers 'map(select(.name != "gremion-site-www@docker"))'
+    api_edit middlewares 'map(select(.name != "gremion-site-www-redirect@docker"))'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+    [ "$(grep -c 'foreign docker' <<<"$output")" -eq 3 ]
+}
+
+@test "foreign: classification is wired into run_pass before the router checks" {
+    local body
+    body="$(sed -n '/^run_pass() {/,/^}/p' "$VERIFY")"
+    [[ "$body" == *$'fetch_api\n    classify_foreign_docker_objects\n    check_foreign_docker_objects\n    check_routers'* ]]
+}
+
+# A fully-qualified host (trailing dot) is the same host to the edge: the router matches a
+# request for the bare name, so the protected-host scan reads both spellings as one.
+@test "foreign: a trailing dot does not hide the platform host" {
+    foreign_site
+    foreign_claims 'Host(`example.org.`)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"claims example.org (the platform)"* ]]
+}
+
+@test "foreign: a trailing dot and capitals do not hide the control panel host" {
+    foreign_site
+    foreign_claims 'Host(`CONTROL.example.org.`)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"claims control.example.org (the control panel)"* ]]
+}
+
+@test "foreign: a trailing dot does not hide a customer host" {
+    foreign_site
+    foreign_claims 'Host(`tenant-a.example.org.`)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"claims tenant-a.example.org (a customer)"* ]]
+}
+
+@test "foreign: a double-quoted host with a trailing dot does not hide a customer host" {
+    foreign_site
+    foreign_claims 'Host("tenant-a.example.org.")'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"claims tenant-a.example.org (a customer)"* ]]
+}
+
+@test "foreign: a HostRegexp that only matches the fully-qualified spelling of a protected host is refused" {
+    foreign_site
+    foreign_claims 'HostRegexp(`^tenant-a[.]example[.]org[.]$`)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"HostRegexp"*"tenant-a.example.org"* ]]
+}
+
+@test "foreign: a trailing dot on a host nobody protects is fine" {
+    foreign_site
+    foreign_claims 'Host(`sales.example.net.`)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+}
+
+# The name collision: a kernel container that declares router `keycloak` keeps the kernel's
+# router judged even when a foreign container declares the same name.
+@test "foreign: a foreign container declaring a router name a kernel container also declares does not make the kernel's router foreign" {
+    fake_container c2 keycloak "keycloak" running healthy 0 10.90.250.4 \
+        '{"com.docker.compose.project":"staging-state","com.docker.compose.service":"keycloak","org.gremion.stack":"staging","traefik.enable":"true","traefik.http.routers.keycloak.rule":"Host(`tenant-a.example.org`) && PathPrefix(`/auth`)"}'
+    foreign_site "$(foreign_labels '. + {"traefik.http.routers.keycloak.rule":"Host(`sales.example.net`) && PathPrefix(`/kc`)"}')"
+    api_edit routers '(.[] | select(.name=="keycloak@docker")).tls = {}'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router keycloak@docker: no certresolver"* ]]
+    [[ "$output" != *"foreign docker router keycloak@docker"* ]]
+}
+
+# A foreign router is judged by what it answers (host) AND by what it serves. Traefik v3 reads a rule as
+# v3 unless the router asks for ruleSyntax v2, where {name:regex} is the pattern form: the same text reads
+# as a literal in v3, so a v2 router can answer every host while the verifier sees no match.
+@test "foreign: a router with ruleSyntax v2 and a v2 HostRegexp that answers every host is refused" {
+    foreign_site
+    api_edit routers '(.[] | select(.name=="gremion-site@docker")) |= (.rule = "HostRegexp(`{any:.+}`)" | .ruleSyntax = "v2")'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"rule syntax v2"* ]]
+}
+
+@test "foreign: ruleSyntax v2 is refused even when the rule names only its own host" {
+    foreign_site
+    api_edit routers '(.[] | select(.name=="gremion-site@docker")).ruleSyntax = "V2"'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"rule syntax V2"* ]]
+}
+
+@test "foreign: an explicit ruleSyntax v3 is read like the default" {
+    foreign_site
+    api_edit routers '(.[] | select(.name=="gremion-site@docker")).ruleSyntax = "v3"'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+}
+
+@test "foreign: a router on its own host that serves a kernel docker service is refused" {
+    foreign_site
+    api_edit routers '(.[] | select(.name=="gremion-site@docker")).service = "keycloak@docker"'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"serves keycloak@docker"* ]]
+}
+
+@test "foreign: a router that serves a bare service name no foreign container declares is refused" {
+    foreign_site
+    api_edit routers '(.[] | select(.name=="gremion-site@docker")).service = "keycloak"'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"serves keycloak"* ]]
+}
+
+@test "foreign: a router that serves the active colour (a file-provider service) is refused" {
+    foreign_site
+    api_edit routers '(.[] | select(.name=="gremion-site@docker")).service = "app@file"'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"serves app@file"* ]]
+}
+
+@test "foreign: a router that serves an internal service (the API) is refused" {
+    foreign_site
+    api_edit routers '(.[] | select(.name=="gremion-site@docker")).service = "api@internal"'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"serves api@internal"* ]]
+}
+
+@test "foreign: a router with no service at all is refused" {
+    foreign_site
+    api_edit routers '(.[] | select(.name=="gremion-site@docker")) |= del(.service)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"names no service"* ]]
+}
+
+@test "foreign: a router that names its own service with the docker suffix is fine" {
+    foreign_site
+    api_edit routers '(.[] | select(.name=="gremion-site@docker")).service = "gremion-site@docker"'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+}
+
+@test "foreign: a service of another provider is not a foreign service even when a foreign container declares the same bare name" {
+    foreign_site "$(foreign_labels '. + {"traefik.http.services.app.loadbalancer.server.port":"80"}')"
+    api_edit routers '(.[] | select(.name=="gremion-site@docker")).service = "app@file"'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"serves app@file"* ]]
+}
+
+@test "foreign: a service the foreign container declares under a router service label is its own" {
+    foreign_site "$(foreign_labels '. + {"traefik.http.routers.gremion-site.service":"site-backend","traefik.http.services.site-backend.loadbalancer.server.port":"8080"}')"
+    api_edit routers '(.[] | select(.name=="gremion-site@docker")).service = "site-backend"'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+}
+
+@test "foreign: a service name the kernel also declares is not a foreign service" {
+    fake_container c2 keycloak "keycloak" running healthy 0 10.90.250.4 \
+        '{"com.docker.compose.project":"staging-state","com.docker.compose.service":"keycloak","org.gremion.stack":"staging","traefik.enable":"true","traefik.http.services.shared-svc.loadbalancer.server.port":"8080"}'
+    foreign_site "$(foreign_labels '. + {"traefik.http.services.shared-svc.loadbalancer.server.port":"80"}')"
+    api_edit routers '(.[] | select(.name=="gremion-site@docker")).service = "shared-svc"'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"serves shared-svc"* ]]
+}
+
+# Only a container the stack-scoped edge reads can declare an object Traefik lists: a container of
+# another stack, or one with no stack label, must not turn a genuinely foreign object into a kernel one.
+@test "foreign: a router name that a container of ANOTHER stack also declares stays foreign here" {
+    foreign_site
+    fake_container c21 other-web "other-web" running healthy 0 10.90.250.10 \
+        '{"com.docker.compose.project":"other-state","com.docker.compose.service":"web","org.gremion.stack":"otherstack","traefik.http.routers.gremion-site.rule":"Host(`other.example.net`)","traefik.http.middlewares.gremion-site-hsts.headers.stsseconds":"1"}'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"foreign docker router gremion-site@docker"* ]]
+    [[ "$output" == *"foreign docker middleware gremion-site-hsts@docker"* ]]
+}
+
+@test "foreign: a router name that a container with no stack label also declares stays foreign here" {
+    foreign_site
+    fake_container c21 other-web "other-web" running healthy 0 10.90.250.10 \
+        '{"com.docker.compose.project":"unrelated","com.docker.compose.service":"web","traefik.http.routers.gremion-site.rule":"Host(`other.example.net`)"}'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"foreign docker router gremion-site@docker"* ]]
+}

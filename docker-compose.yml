@@ -1043,6 +1043,17 @@ services:
           cpus: "1.0"
     networks:
       - edge
+    # gremion-verify holds every routed container to health=healthy and a container with no
+    # healthcheck reads "none". LiveKit's signalling server answers GET / on its HTTP port
+    # with 200 "OK" once it is serving (the same port the /livekit-sfu router targets); the
+    # pinned image is Alpine, so BusyBox wget and grep are there. The probe asserts the body,
+    # not just a connection, over loopback inside the container.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:7880/ | grep -q OK"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   # The official Element Call web app, unchanged: docker/element-call/Dockerfile
   # builds FROM the upstream image pinned by digest (the image-digest lint accepts no
