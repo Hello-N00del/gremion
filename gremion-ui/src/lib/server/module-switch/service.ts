@@ -328,6 +328,15 @@ export interface OverviewDeps {
   listKarenz?: (customerId: string) => Promise<KarenzRowView[]>
   /** What the Karenz view reads (tests inject doubles). */
   karenz?: Partial<KarenzViewDeps>
+  /**
+   * One reconciler pass for the tenant (reconciler.ts runModuleSwitchPass), run BEFORE anything is read. config.modules,
+   * which the route gate and the navigation read, is written only by that pass, once per MODULE_SWITCH_INTERVAL_MS
+   * (10 s) after the host has finished a request. A page that polls while a request is pending calls it here, so the
+   * gate follows the request within one poll instead of waiting for the next tick; it is the same pass with the same
+   * atomic claims, so racing the timer (or the other app instance) applies a request once. A failing pass is logged,
+   * never an error of the overview.
+   */
+  reconcile?: (tenant: TenantContext) => Promise<unknown>
 }
 
 /** The Karenz views of the tenant's switchable modules, keyed by catalogue id; null when the platform list cannot be read. */
@@ -348,6 +357,13 @@ async function loadKarenzViews(tenant: TenantContext, deps: OverviewDeps): Promi
 
 export async function loadModuleOverview(tenant: TenantContext, deps: OverviewDeps = {}): Promise<ModuleOverview> {
   const platform = getCouncilDb()
+  if (deps.reconcile) {
+    try {
+      await deps.reconcile(tenant)
+    } catch (err) {
+      console.warn(`[module-switch] ${tenant.slug}: the reconciler pass before the overview failed (the timer retries):`, err instanceof Error ? err.message : err)
+    }
+  }
   const state = await readState(platform, tenant)
   const modules = readConfig(tenant).modules
 
@@ -367,14 +383,18 @@ export async function loadModuleOverview(tenant: TenantContext, deps: OverviewDe
     const row = state.get(pair.catalogueId)
     const managed = row?.has_row === true
     const rows = switches.filter((s) => s.moduleId === pair.catalogueId)
+    const pendingRows = rows.filter((s) => PENDING_STATES.has(s.state))
+    // The platform row flips when the host has run the request; config.modules (the gate, the navigation) follows
+    // when the reconciler applies it. While a request is pending, "enabled" says what the gate does.
+    const enabled = managed && pendingRows.length === 0 ? row!.state === 'enabled' : configOn(modules, pair.manifestId)
     return {
       moduleId: pair.catalogueId,
       label: pair.label,
-      enabled: managed ? row!.state === 'enabled' : configOn(modules, pair.manifestId),
+      enabled,
       managed,
       dpiaRecorded: row?.dpia_recorded === true,
       denied: MODULE_DENY[pair.catalogueId] ?? null,
-      pending: rows.filter((s) => PENDING_STATES.has(s.state)).map((s) => ({ requestId: s.requestId, action: s.action, state: s.state })),
+      pending: pendingRows.map((s) => ({ requestId: s.requestId, action: s.action, state: s.state })),
       lastFailure: lastFailureOf(rows),
       karenz: karenzViews?.get(pair.catalogueId) ?? null,
     }

@@ -24,6 +24,7 @@ const h = vi.hoisted(() => {
     loadModuleOverview: vi.fn(),
     previewSwitchOff: vi.fn(),
     loadOperatorModules: vi.fn(),
+    runModuleSwitchPass: vi.fn(async () => ({ applied: 0, failed: 0, adopted: 0 })),
     rows,
     /** An empty table, and the first handle again (handle-1, key-1). */
     reset: () => {
@@ -56,6 +57,7 @@ vi.mock('$lib/server/module-switch/pending', async (orig) => ({
   armPendingSwitch: h.arm,
   claimPendingSwitch: h.claim,
 }))
+vi.mock('$lib/server/module-switch/reconciler', () => ({ runModuleSwitchPass: h.runModuleSwitchPass }))
 vi.mock('$lib/server/module-switch/preview', () => ({ previewSwitchOff: h.previewSwitchOff }))
 vi.mock('$lib/server/module-switch/operator-modules', () => ({ loadOperatorModules: h.loadOperatorModules }))
 vi.mock('$lib/server/module-switch/council-db', async (orig) => ({ ...(await orig<typeof import('$lib/server/module-switch/council-db')>()) }))
@@ -413,7 +415,17 @@ describe('GET /api/settings/modules', () => {
     const res = await get()
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ success: true, data: { modules: [], disableAvailable: false, problem: null, operatorModules: [] } })
-    expect(h.loadModuleOverview).toHaveBeenCalledWith(TENANT)
+    expect(h.loadModuleOverview).toHaveBeenCalledWith(TENANT, { reconcile: expect.any(Function) })
+  })
+
+  // The page polls this while a request is pending. config.modules (the gate, the navigation) is written only by the
+  // reconciler pass, which the timer runs every 10 s: the poll runs the same pass first, so the gate follows a
+  // request that has succeeded within one poll.
+  it('hands the overview the reconciler pass of the request tenant', async () => {
+    await get()
+    const { reconcile } = h.loadModuleOverview.mock.calls[0]![1] as { reconcile: (t: unknown) => Promise<unknown> }
+    await reconcile(TENANT)
+    expect(h.runModuleSwitchPass).toHaveBeenCalledWith(TENANT)
   })
 
   it('carries the modules the council cannot switch but the customer has, next to the switchable ones', async () => {

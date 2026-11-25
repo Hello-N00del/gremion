@@ -695,6 +695,67 @@ describe('loadModuleOverview', () => {
     expect(o.modules.find((m) => m.moduleId === 'calendar')!.lastFailure).toBeNull()
   })
 
+  // The route gate and the navigation read config.modules (a file, read on every request, no cache); the platform
+  // row flips as soon as the executor has run, the reconciler writes config.modules a moment later. While a request
+  // of the module is still pending the overview therefore reports what the gate does, never the platform's state
+  // ahead of it: a page that says "ausgeschaltet" while the routes still answer 200 is the live finding.
+  describe('what "enabled" says while a request is still pending: the gate, never the platform ahead of it', () => {
+    const pendingRow = (action: 'enable' | 'disable', state: string) => ({
+      requestId: 'r9', moduleId: 'votes', action, actorUserId: PERSON, submittedAt: new Date('2026-10-31T09:00:00Z'), state, outcome: null, configError: null,
+    })
+    const votesPlatform = (state: 'enabled' | 'disabled') =>
+      installPlatform(CATALOGUE.map((k) => (k === 'votes' ? row(k, { state, has_row: true, dpia_recorded: true }) : row(k))))
+    const votes = async () => (await loadModuleOverview(tenant)).modules.find((m) => m.moduleId === 'votes')!
+
+    it.each(['queued', 'succeeded', 'applying'])('a switch-off the platform already carried out (request %s) still reads on while config.modules says on', async (state) => {
+      votesPlatform('disabled')
+      config({ calendar: true, votes: true })
+      h.listSwitches.mockResolvedValue([pendingRow('disable', state)])
+      expect(await votes()).toMatchObject({ enabled: true, pending: [{ requestId: 'r9', action: 'disable', state }] })
+    })
+
+    it('a switch-on the platform already carried out still reads off while config.modules says off (the module is not usable yet)', async () => {
+      votesPlatform('enabled')
+      config({ calendar: true, votes: false })
+      h.listSwitches.mockResolvedValue([pendingRow('enable', 'succeeded')])
+      expect(await votes()).toMatchObject({ enabled: false })
+    })
+
+    it('once the request is applied (config.modules agrees) it reads off, and with no request pending the platform answers as before', async () => {
+      votesPlatform('disabled')
+      config({ calendar: true, votes: false })
+      h.listSwitches.mockResolvedValue([{ ...pendingRow('disable', 'applied') }])
+      expect(await votes()).toMatchObject({ enabled: false, pending: [] })
+    })
+
+    it('a request that ended failed or refused leaves the platform state in charge (the gate never moved)', async () => {
+      votesPlatform('enabled')
+      config({ calendar: true, votes: true })
+      h.listSwitches.mockResolvedValue([pendingRow('disable', 'failed')])
+      expect(await votes()).toMatchObject({ enabled: true, pending: [] })
+    })
+
+    it('a pass of the reconciler runs BEFORE the state is read, so a request that has succeeded is applied by the time the answer is built; a failing pass never fails the overview', async () => {
+      votesPlatform('disabled')
+      config({ calendar: true, votes: true })
+      h.listSwitches.mockResolvedValue([pendingRow('disable', 'succeeded')])
+      const reconcile = vi.fn(async () => {
+        config({ calendar: true, votes: false }) // the pass wrote config.modules
+        h.listSwitches.mockResolvedValue([{ ...pendingRow('disable', 'applied') }])
+      })
+      const o = await loadModuleOverview(tenant, { reconcile })
+      expect(reconcile).toHaveBeenCalledTimes(1)
+      expect(reconcile).toHaveBeenCalledWith(tenant)
+      expect(o.modules.find((m) => m.moduleId === 'votes')).toMatchObject({ enabled: false, pending: [] })
+
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const o2 = await loadModuleOverview(tenant, { reconcile: async () => { throw new Error('platform down') } })
+      expect(o2.modules.map((m) => m.moduleId)).toEqual(['calendar', 'votes'])
+      expect(warn).toHaveBeenCalled()
+      warn.mockRestore()
+    })
+  })
+
   it('CouncilNotConfigured throws, never an empty overview', async () => {
     h.getCouncilDb.mockImplementation(() => {
       throw new CouncilNotConfigured()
