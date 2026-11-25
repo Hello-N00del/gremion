@@ -839,3 +839,16 @@ CASES
     run_with 'secondary_optin_load "$1"; secondary_host_module_allowed messaging && printf yes' "$d/state.env"
     [ "$status" -eq 0 ]; [ "$output" = yes ] || { echo "$output"; return 1; }
 }
+
+@test "secondary_host_modules_pinned_off: the key absent gives exactly SECONDARY_HOST_MODULES_OFF in its order; an opt-in removes the mapped manifest ids and nothing else (messaging removes messages)" {
+    run_with 'secondary_host_modules_pinned_off | tr "\n" " "'
+    [ "$status" -eq 0 ]; [ "$output" = 'content elections files messages newsletter vault votes ' ] || { echo "[$output]"; return 1; }
+    SECONDARY_TENANT_MODULES='' run_with 'secondary_host_modules_pinned_off | tr "\n" " "'
+    [ "$output" = 'content elections files messages newsletter vault votes ' ] || { echo "[$output]"; return 1; }
+    SECONDARY_TENANT_MODULES='files' run_with 'secondary_host_modules_pinned_off | tr "\n" " "'
+    [ "$output" = 'content elections messages newsletter vault votes ' ] || { echo "[$output]"; return 1; }
+    SECONDARY_TENANT_MODULES='votes files' run_with 'secondary_host_modules_pinned_off | tr "\n" " "'
+    [ "$output" = 'content elections messages newsletter vault ' ] || { echo "[$output]"; return 1; }
+    SECONDARY_TENANT_MODULES='messaging' run_with 'secondary_host_modules_pinned_off | tr "\n" " "'
+    [ "$output" = 'content elections files newsletter vault votes ' ] || { echo "[$output]"; return 1; }
+}
