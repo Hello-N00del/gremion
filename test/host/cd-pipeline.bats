@@ -731,6 +731,95 @@ pl_state_pre() { pl_state_release; }
     pl_cdlock_free
 }
 
+@test "the watch: eight samples that gave no verdict (code 4 of the real loop) end as a commit_stuck rollback: the old colour serves, no block, the host lock free" {
+    pl_scn_green
+    cd_write_cfg CD_REPO_URL=https://github.com/org/repo CD_POST_RECONCILE_S=0 CD_WATCH_MINUTES=10 CD_WATCH_INTERVAL_S=30
+    # from the first sample on the evaluation cannot write its sidecar: it answers 2, so no sample gives a verdict
+    pl_on unusable '--max-time 12 http://127.0.0.1:18080/api/version' 'printf "watch-eval.json\n" >"$DK/mv.fail"'
+    pl_on clear '^switch blue' 'rm -f "$DK/mv.fail"'
+    run pl_tick
+    echo "$output"
+    pl_no_stubs
+    [ "$(pl_hist watch_sample_unusable)" -eq 8 ]
+    [ "$(jq -s '[.[] | select(.event == "rollback_started")][0].rule' "${GREMION_ROOT}/data/cd/history.jsonl")" = '"commit_stuck"' ]
+    [ "$(pl_hist rolled_back)" -eq 1 ]
+    [ "$(pl_state .live.sha)" = "$C_L0" ]
+    [ "$(cat "${GREMION_ROOT}/runtime/active-colour")" = blue ]
+    [ "$(readlink "${GREMION_ROOT}/current")" = "${GREMION_ROOT}/releases/${C_L0:0:12}" ]
+    pl_before '^switch green' '^switch blue'
+    pl_after '^switch blue' '^down green'
+    # a window that could not be judged says nothing against the release: no block
+    [ "$(pl_blocks)" -eq 0 ]
+    [ "$(pl_state .phase)" = idle ]
+    [ "$(pl_state .release)" = null ]
+    [ "$(pl_mails rolled_back)" -eq 1 ]
+    pl_span_ended "${C_B:0:12}"
+    pl_hostlock_free
+    pl_cdlock_free
+}
+
+@test "the watch: a trigger whose rollback is refused with nothing touched (code 4 of the real loop) ends the release record, holds rollback_failed and mails" {
+    pl_scn_green
+    # at the first sample the new colour starts to fail and the state comes to name the new colour as the live
+    # one: the rollback of the trigger is refused (the two releases are on the same colour), nothing touched
+    pl_on refused '--max-time 12 http://127.0.0.1:18080/api/version' ': >"$DK/public.fail.green"; jq ".live.colour = \"green\"" "$GREMION_ROOT/data/cd/state.json" >"$DK/state.edit" && mv -f "$DK/state.edit" "$GREMION_ROOT/data/cd/state.json"'
+    run pl_tick
+    echo "$output"
+    pl_no_stubs
+    # no rollback began, whichever door asked for it
+    [ "$(pl_hist rollback_started)" -eq 0 ]
+    [ "$(pl_hist rolled_back)" -eq 0 ]
+    [ "$(pl_hist rollback_returned)" -ge 1 ]
+    [ "$(pl_state .hold.kind)" = rollback_failed ]
+    [ "$(pl_state .phase)" = idle ]
+    [ "$(pl_state .release)" = null ]
+    [ "$(pl_blocks)" -eq 0 ]
+    # nothing was switched or torn down
+    [ "$(pl_count '^switch blue')" -eq 0 ]
+    [ "$(cat "${GREMION_ROOT}/runtime/active-colour")" = green ]
+    # the operator is told: a hold alone is a silent failure on an unattended host
+    [ "$(pl_mails rollback_failed)" -ge 1 ]
+    pl_span_ended "${C_B:0:12}"
+    pl_hostlock_free
+    pl_cdlock_free
+}
+
+@test "the watch: a loop that stops on a precondition (code 2 of the real loop) with the release in flight ends as a commit_stuck rollback: the old colour serves, no block, the host lock free" {
+    pl_scn_green
+    # no tick can reach a precondition of the loop (the tick takes both locks before it runs a stage, and the
+    # configuration is read once), so the stage runs in a process of its own, over the state a killed tick left
+    # at its first sample of the window: the cd lock is held, the host lock is not. The loop answers 2 ("both
+    # locks must be held") before it samples anything; its window is not over and the release is in flight
+    pl_killed_tick '--max-time 12 http://127.0.0.1:18080/api/version' 1
+    [ "$(pl_state .phase)" = watching ]
+    run pl_lib '
+        cd_lock_take
+        _cd_drv_load
+        rc=0
+        _cd_drv_st_watch || rc=$?
+        echo "watch stage: $rc rolled=${CD_DRV_ROLLED}"
+        cd_locks_release'
+    echo "$output"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"watch stage: 0 rolled=1"* ]]
+    [[ "$output" == *"the cd lock and the host lock must both be held"* ]]
+    pl_no_stubs
+    [ "$(jq -s '[.[] | select(.event == "rollback_started")][0].rule' "${GREMION_ROOT}/data/cd/history.jsonl")" = '"commit_stuck"' ]
+    [ "$(pl_hist rolled_back)" -eq 1 ]
+    [ "$(pl_state .live.sha)" = "$C_L0" ]
+    [ "$(cat "${GREMION_ROOT}/runtime/active-colour")" = blue ]
+    [ "$(readlink "${GREMION_ROOT}/current")" = "${GREMION_ROOT}/releases/${C_L0:0:12}" ]
+    pl_before '^switch green' '^switch blue'
+    pl_after '^switch blue' '^down green'
+    # a loop that could not run says nothing against the release: no block
+    [ "$(pl_blocks)" -eq 0 ]
+    [ "$(pl_state .phase)" = idle ]
+    [ "$(pl_state .release)" = null ]
+    [ "$(pl_mails rolled_back)" -eq 1 ]
+    pl_hostlock_free
+    pl_cdlock_free
+}
+
 # ===========================================================================================
 # the reconcile stage through the real libraries
 # ===========================================================================================
