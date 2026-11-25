@@ -648,6 +648,82 @@ all_sections_pass() {
     grep -q 'no verdict' <<< "$output"
 }
 
+@test "exit codes: any other stop before the verdict (here exit 4) exits 3 with a RESULT line, never that code" {
+    shim date 'exit 4'
+    probe "$A" "$B"
+    [ "$status" -eq 3 ]
+    grep -q 'RESULT: ABORTED (exit 3)' <<< "$output"
+    grep -q 'no verdict' <<< "$output"
+}
+
+@test "exit codes: an own editor answer that is no JSON FAILS the office section (exit 1) and is cleaned up, never exit 4" {
+    sw_on editor-html
+    probe "$A" "$B"
+    [ "$status" -eq 1 ]
+    section_is office FAIL
+    grep -q 'RESULT: FAIL (exit 1)' <<< "$output"
+    grep -qx "${A} isoprobe-${CLIENT_SUFFIX}" "${FAKE_DIR}/deleted.log"
+    grep -qx "${B} isoprobe-${CLIENT_SUFFIX}" "${FAKE_DIR}/deleted.log"
+}
+
+@test "exit codes: a missing active colour is a host precondition (exit 3), not usage (exit 2)" {
+    rm -f "${GREMION_ROOT}/runtime/active-colour"
+    probe "$A" "$B"
+    [ "$status" -eq 3 ]
+    grep -q 'active-colour' <<< "$output"
+    grep -q 'RESULT: ABORTED (exit 3)' <<< "$output"
+    refute_recorded docker 'exec'
+}
+
+@test "exit codes: a duplicate key in the state file is a host precondition (exit 3), not usage (exit 2)" {
+    printf 'STACK=guardstack
+' >> "${GREMION_ROOT}/etc/env/state.env"
+    probe "$A" "$B"
+    [ "$status" -eq 3 ]
+    grep -q 'duplicate key STACK' <<< "$output"
+    refute_recorded docker 'exec'
+}
+
+@test "exit codes: a host lock that cannot be opened is a host precondition (exit 3), not usage (exit 2)" {
+    rm -f "${GREMION_ROOT}/runtime/hostd.lock"
+    mkdir "${GREMION_ROOT}/runtime/hostd.lock"
+    probe "$A" "$B"
+    [ "$status" -eq 3 ]
+    grep -q 'cannot open the host lock' <<< "$output"
+    refute_recorded docker 'exec'
+}
+
+@test "exit codes: all sections PASS but the temporary client cannot be confirmed deleted exits 3 and says so, never 1" {
+    sw_on client-delete-fail
+    probe "$A" "$B"
+    [ "$status" -eq 3 ]
+    all_sections_pass
+    grep -q 'WARNING: could not confirm the deletion' <<< "$output"
+    grep -q 'RESULT: CLEANUP-FAILED (exit 3)' <<< "$output"
+}
+
+@test "exit codes: a FAIL stays exit 1 when the clean-up fails too" {
+    sw_on all401
+    sw_on client-delete-fail
+    probe "$A" "$B"
+    [ "$status" -eq 1 ]
+    grep -q 'WARNING: could not confirm the deletion' <<< "$output"
+}
+
+@test "files: an occ folder list that is no array FAILS the section" {
+    sw_on groupfolders-notarray
+    probe "$A" "$B"
+    [ "$status" -eq 1 ]
+    section_is files FAIL
+}
+
+@test "files: a folder list whose entries are unreadable is NOT-READY (exit 3), never PASS" {
+    sw_on groupfolders-garbled
+    probe "$A" "$B"
+    [ "$status" -eq 3 ]
+    section_is files NOT-READY
+}
+
 # ---------------------------------------------------------------- preconditions the program cannot assume
 
 @test "a Nextcloud image without curl is NOT-READY (exit 3) before anything is created" {
@@ -719,6 +795,14 @@ all_sections_pass() {
     assert_present '_matrix on PLATFORM_DOMAIN' "$PROBE" "the edge routing of /_matrix is not recorded as unchecked"
     assert_absent 'no shared group' "$PROBE" "the header still promises a separate shared-group check"
     assert_present 'error mapping' "$PROBE" "the office section's need of the route's error mapping is not recorded"
+}
+
+@test "the header states the exit codes, what a garbled folder list does, and what the WebDAV denial proves" {
+    assert_present 'CLEANUP-FAILED' "$PROBE" "the clean-up exit is not in the header"
+    assert_present 'RESULT: ABORTED' "$PROBE" "the abort line is not in the header"
+    assert_present 'is NOT-READY' "$PROBE" "a garbled folder list is not described"
+    assert_present 'user-root isolation' "$PROBE" "what the WebDAV denial proves is not stated"
+    assert_absent 'a shape the' "$PROBE" "the header still overstates what a garbled folder list does"
 }
 
 @test "the header records the first-step reads and what the files section decides" {

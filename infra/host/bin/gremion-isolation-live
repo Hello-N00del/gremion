@@ -95,6 +95,9 @@ set -euo pipefail
 #               answer 403 or 404 (any other answer FAILS, see UNCHECKED below).
 #               The rule is the same on every release and reports what the install really holds. A PASS says
 #               nothing about other units or about groups the probe user is not in.
+#               The WebDAV denial alone proves user-root isolation only: Nextcloud refuses a foreign user's root
+#               whether or not a folder is shared. A folder shared between the customers is caught by the folder-id
+#               comparison and the group rule above, and by the other customer's file turning up in the own listing.
 #               Writes are not attempted: a refused write cannot be told from a successful one without
 #               trying it, and a failed denial would write into the other customer.
 #   office      the own editor URL is on A's host (its origin is https://<A's host>); the editor URL for B's
@@ -121,8 +124,9 @@ set -euo pipefail
 #   - Edge routing of /_matrix on PLATFORM_DOMAIN. The Matrix client calls go through the edge on the
 #     platform host. The chat section first asks /_matrix/client/versions there; anything but 200 makes
 #     chat and call NOT-ENABLED (the section's precondition cannot be established), never PASS.
-#   - The Nextcloud group-folder admin output shape (occ groupfolders:list --output=json): a shape the
-#     program cannot read FAILS the files section.
+#   - The Nextcloud group-folder admin output shape (occ groupfolders:list --output=json): an output that is
+#     not a JSON array FAILS the files section. An array whose entries the program cannot read leaves the
+#     probe user in no group that carries a folder named like the unit, and that is NOT-READY (never PASS).
 #   A section whose precondition the program cannot establish is reported NOT-ENABLED (or NOT-READY when
 #   the precondition is a fixture part), never PASS.
 #
@@ -131,10 +135,14 @@ set -euo pipefail
 # only names that are not secret, such as a room id, go through --arg). The bats file records jq's argv
 # and asserts that none of them appears there, on a passing and on a failing run.
 #
-# EXIT CODES. Exactly: 0 every section PASS. 1 any FAIL (a finding; it outranks the rest). 2 usage
-# (arguments). 3 any NOT-ENABLED or NOT-READY (a fixture part, a token or host precondition missing, or the
-# run stopped before it had a verdict) with no FAIL, or another host operation holds the lock. An
-# internal abort is never 1: 1 only ever means a section found a hole.
+# EXIT CODES. Exactly: 0 every section PASS. 1 any FAIL (a finding; it outranks the rest). 2 usage: the
+# arguments, and nothing after them. 3 any NOT-ENABLED or NOT-READY (a fixture part, a token or host
+# precondition missing: the active colour, an env file, the host lock, a tool) with no FAIL; the run
+# stopped before it had a verdict, whatever the code of the command that failed (RESULT: ABORTED); or every
+# section PASSed but the temporary client could not be confirmed deleted (RESULT: CLEANUP-FAILED, delete
+# it by hand). 130 and 143 only when the run is stopped by INT or TERM (RESULT: INTERRUPTED; the clean-up
+# still runs). An internal abort or a failed clean-up is never 1: 1 only ever means a section found a hole
+# (a FAIL stays 1 when the clean-up fails too; the warning is printed).
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib/common.sh
@@ -144,6 +152,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 umask 077
 
+ARGS_DONE=0   # 1 once the arguments are parsed: from then on a usage-coded die is a host precondition (see die)
+
 # Exit code 1 of this program means one thing: a section found a hole. A library function that dies with
 # the assert code (a missing container, a missing colour) is a precondition, not a finding: it exits 3.
 # shellcheck disable=SC2317,SC2329  # called by the sourced library and below
@@ -151,6 +161,10 @@ die() {
     local c="${2:-$GREMION_EXIT_BLOCKED}"
     bad "$1"
     if [[ "$c" == "$GREMION_EXIT_ASSERT" ]]; then c="$GREMION_EXIT_BLOCKED"; fi
+    # exit 2 is for the arguments only: once they are parsed, a library that dies with the usage code
+    # (an absent active colour, a duplicate key in an env file, a lock that cannot be opened) reports a
+    # host precondition, which is exit 3
+    if [[ "$c" == "$GREMION_EXIT_USAGE" && "$ARGS_DONE" == 1 ]]; then c="$GREMION_EXIT_BLOCKED"; fi
     exit "$c"
 }
 
@@ -173,7 +187,8 @@ usage: gremion-isolation-live <slugA> <slugB> [--unit NAME] [--user NAME]
   Proves, in both directions, that a user of customer A cannot read B's rooms, files, office
   documents, calendar, polls or call on the shared Synapse and Nextcloud. See the header of this
   file for the fixture the operator makes first (a user named isoprobe, a unit, a file, a poll and
-  an event in each customer). Exit 0 all PASS, 1 any FAIL, 2 usage, 3 any NOT-ENABLED or NOT-READY.
+  an event in each customer). Exit 0 all PASS, 1 any FAIL, 2 usage (arguments only), 3 any NOT-ENABLED or NOT-READY, a stop
+  before the verdict, or a clean-up that could not be confirmed.
 EOF
 }
 
@@ -212,26 +227,39 @@ cleanup_client() {   # <index>: delete the temporary client of realm <index> by 
     printf 'cleanup: the temporary client %s is gone from realm %s\n' "$cid" "$slug"
 }
 
-# shellcheck disable=SC2317,SC2329  # only the EXIT/INT/TERM trap calls it
-cleanup() {
-    local rc=$? i
-    trap - EXIT INT TERM
-    set +e
+# delete_clients -- the clean-up of both realms, once each. finish() runs it before it prints the verdict (a
+# clean-up that cannot be confirmed is part of the verdict); the trap runs it for every other way out.
+declare -a CLEAN_TRIED=(0 0)
+delete_clients() {
+    local i
     for i in 0 1; do
-        [[ -n "${CLIENT_ID[$i]:-}" ]] || continue
+        [[ -n "${CLIENT_ID[$i]:-}" && "${CLEAN_TRIED[$i]}" == 0 ]] || continue
         if ! cleanup_client "$i"; then
             CLEAN_FAILED=1
             printf 'WARNING: could not confirm the deletion of the temporary client %s in realm %s: delete it by hand (Keycloak admin, realm %s, clients)\n' \
                 "${CLIENT_ID[$i]}" "${SLUG[$i]:-?}" "${SLUG[$i]:-?}" >&2
         fi
+        CLEAN_TRIED[i]=1
     done
-    # a stop before the verdict (a command failed under set -e) is no finding: never exit 1 for it
-    if (( DONE == 0 && rc == 1 )); then
-        rc=3
-        printf 'RESULT: ABORTED (exit 3): the run stopped before it had a verdict (no verdict, so no finding either)
-'
+}
+
+# shellcheck disable=SC2317,SC2329  # only the EXIT/INT/TERM trap calls it
+cleanup() {
+    local rc=$?
+    trap - EXIT INT TERM
+    set +e
+    delete_clients
+    if (( DONE == 0 && rc != 0 )); then
+        case "$rc" in
+            130|143)
+                printf 'RESULT: INTERRUPTED (exit %s): the run was stopped by a signal before it had a verdict\n' "$rc" ;;
+            *)
+                # a stop before the verdict (a command failed under set -e, a precondition died): never a finding,
+                # whatever code the failing command had
+                rc=3
+                printf 'RESULT: ABORTED (exit 3): the run stopped before it had a verdict (no verdict, so no finding either)\n' ;;
+        esac
     fi
-    if (( CLEAN_FAILED == 1 && rc == 0 )); then rc=1; fi
     exit "$rc"
 }
 
@@ -599,7 +627,8 @@ sec_office() {
         esac
         api_get "$x" "/api/files/edit-token/${UNIT}/isoprobe-${SLUG[$x]}.odt"
         own_ok "${SLUG[$x]}: own editor URL" || continue
-        origin="$(jq -r '.editorUrl // ""' <<< "$R_BODY" 2>/dev/null | sed -E 's#^(https?://[^/]+).*#\1#')"
+        # a body that is no JSON (a proxy page) leaves the origin empty, which FAILS below: never a stop
+        origin="$(jq -r '.editorUrl // ""' <<< "$R_BODY" 2>/dev/null | sed -E 's#^(https?://[^/]+).*#\1#' || true)"
         want="https://${HOST[$x]}"
         if [[ "$origin" != "$want" && "$origin" != "${want}:${EDGE_HTTPS_PORT}" ]]; then
             s_fail "${SLUG[$x]}: the own editor URL's origin is '${origin}', not ${want}"
@@ -824,6 +853,7 @@ parse_args() {
 main() {
     local i s
     parse_args "$@"
+    ARGS_DONE=1
     need_tools docker curl jq openssl base64 sed flock
     # armed once the arguments are good: it also turns a stop before the verdict into exit 3, and (later)
     # deletes any temporary client
@@ -910,6 +940,10 @@ finish() {
         NOT-READY) rc=3 ;;
         NOT-ENABLED) rc=3 ;;
     esac
+    # the temporary clients go before the verdict is printed: a clean-up that cannot be confirmed is no finding
+    # about isolation, so it never makes exit 1, but an all-PASS run that left a client behind is not a clean PASS
+    delete_clients
+    if (( CLEAN_FAILED == 1 && rc == 0 )); then res=CLEANUP-FAILED; rc=3; fi
     DONE=1
     printf 'SUMMARY: %s\n' "$line"
     printf 'RESULT: %s (exit %s)\n' "$res" "$rc"

@@ -94,6 +94,8 @@ route_keycloak() { # method path bearer data
             if [[ -f "$D/clients/${s}/${id}" ]]; then reply 200 "[{\"id\":\"cid-${id}\",\"clientId\":\"${id}\"}]"; else reply 200 '[]'; fi ;;
         "DELETE clients/cid-"*)
             id="${sub#clients/cid-}"
+            # client-delete-fail: Keycloak refuses to delete the temporary client (it stays, nothing is logged)
+            if sw client-delete-fail; then reply 500 '{}'; return 0; fi
             rm -f "$D/clients/${s}/${id}"
             printf '%s %s\n' "$s" "$id" >> "$D/deleted.log"
             reply 204 '' ;;
@@ -233,7 +235,10 @@ route_customer() { # host method path bearer data
         "GET /api/files/edit-token/${UNIT}/"*)
             ef="${path#"/api/files/edit-token/${UNIT}/"}"; eh="$host"
             if sw editor-origin-wrong; then eh="$(host_of_realm "$o")"; fi
-            if [[ "$ef" == "isoprobe-${s}.odt" ]] || sw editor-open; then
+            if [[ "$ef" == "isoprobe-${s}.odt" ]] && sw editor-html; then
+                # editor-html: a proxy page answers the own file with 200 and a body that is not JSON
+                reply 200 '<html>proxy</html>'
+            elif [[ "$ef" == "isoprobe-${s}.odt" ]] || sw editor-open; then
                 reply 200 "{\"token\":\"t\",\"tokenTtl\":1,\"editorUrl\":\"https://${eh}/office/browser/x/cool.html?WOPISrc=x\"}"
             elif sw editor-502; then reply 502 '{}'
             elif sw editor-500; then reply 500 '{}'
@@ -296,6 +301,9 @@ fake_occ() { # args after `php occ`
     local sub realm
     case "$1" in
         groupfolders:list)
+            # groupfolders-notarray: an output that is no folder list; groupfolders-garbled: a list whose entries are no folders
+            if sw groupfolders-notarray; then printf '{"error":"x"}'; return 0; fi
+            if sw groupfolders-garbled; then printf '[1,"x",null]'; return 0; fi
             # shared-folder: the app leaks too; shared-folder-id: ONLY the folder list holds one folder for both
             if sw shared-folder || sw shared-folder-id; then
                 printf '[{"id":11,"mount_point":"%s","groups":{"ou-%s":{"permissions":31},"ou-%s":{"permissions":31}},"quota":-3,"size":0,"acl":false}]' "$UNIT" "$A" "$B"
