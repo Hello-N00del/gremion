@@ -35,7 +35,12 @@
 #       confirm  cd_traffic_confirm for the old colour (three services, the router graph) and the
 #                public ready-only probe through the real edge. Then the post-rollback window
 #                (CD_POST_ROLLBACK_S): the samples of the watch on the old colour; a bad streak is
-#                a critical mail (rollback_failed, note unhealthy_after_rollback) and nothing else.
+#                a critical mail (rollback_failed, note unhealthy_after_rollback) and nothing is
+#                stopped. The failure path of the watch (and of the window with no good sample)
+#                settles what already follows the traffic, see _cd_rb_settle: the worker gate (new
+#                colour off, then old colour on) and the block of the new commit. The hold stays
+#                rollback_failed, the new colour stays RUNNING (the mail says so with the note
+#                new_colour_still_running) and `gremion-cd status` names it.
 #       workers  the new colour's gate file off, THEN the old colour's on.
 #       stop     the new colour project is stopped (cd_colour_down, which refuses a colour that
 #                the file or Traefik names), only after the confirm. Its log tail is kept under
@@ -507,6 +512,28 @@ _cd_rb_s_workers() {
     return 0
 }
 
+# _cd_rb_settle - the end state of a rollback whose watch on the old colour failed. The switch back
+# is confirmed, so the old colour serves whatever the watch says; the host must not be left half
+# rolled back (the gate of the new colour on and the old one off while the old one serves, and no
+# block for the commit that was condemned). The documented order stays (the watch comes first, so
+# a rollback that ends well is unchanged); the failure path does the two steps that follow the
+# traffic: the worker gate (new off, THEN old on, as the workers step) and the block (as the
+# blockhold step). It does NOT stop the new colour, restore the env tag, move `current` or
+# change the hold: with the old colour unproven or unhealthy that stays the operator's call.
+# A step that fails here is a history line and a message, never a change of the reason the
+# caller reports.
+_cd_rb_settle() {
+    if ! cd_colour_workers "$RB_NEW_COLOUR" off || ! cd_colour_workers "$RB_OLD_COLOUR" on; then
+        cd_hist rollback_settle_failed what=workers || true
+        _cd_rb_err "the worker gate could not be set to follow the ${RB_OLD_COLOUR} colour after the failed watch; set it by hand"
+    fi
+    if _cd_rb_writes_block "$RB_RULE" && ! cd_block_add "$RB_NEW_SHA" "$RB_RULE" "rolled back to ${RB_OLD_TAG}"; then
+        cd_hist rollback_settle_failed what=block || true
+        _cd_rb_err "the block for the ${RB_NEW_SHA12} commit could not be written after the failed watch"
+    fi
+    return 0
+}
+
 # _cd_rb_keep_logs - the last 500 lines of the new colour's gremion-ui, mode 0600, under logs/.
 # Best effort: the new colour may not answer at all. The path is never printed.
 _cd_rb_keep_logs() {
@@ -532,6 +559,7 @@ _cd_rb_s_stop() {
     _cd_rb_keep_logs
     if ! cd_colour_down "$RB_NEW_TREE" "$RB_NEW_COLOUR"; then
         cd_hist rollback_stop_failed colour="$RB_NEW_COLOUR" || true
+        RB_STOP_FAILED=1
         _cd_rb_err "the ${RB_NEW_COLOUR} colour could not be stopped; the switch back is done, stop it by hand"
     fi
     return 0
@@ -669,11 +697,17 @@ _cd_rb_s_mail() {
 # The release record is left in the state with phase idle (the hold is the news): the driver ends it
 # (_cd_drv_after_rollback, and the watch and commit stages when the rollback ran inside them). Returns 1.
 _cd_rb_fail() {
-    local reason="${CD_ROLLBACK_REASON:-failed}" notes="${RB_NOTE:-}"
+    local reason="${CD_ROLLBACK_REASON:-failed}" notes="${RB_NOTE:-}" running=1 left=""
     local -a f=()
     reason="${reason//[^a-z0-9_]/_}"
+    # the new colour is stopped only by the stop step: a rollback that failed before it, or whose stop
+    # did not take, leaves the new colour running (stopping it is the operator's call). The hold keeps
+    # the colour, because the release record is gone when `gremion-cd status` is asked and the
+    # state's live colour is the OLD one, the colour that serves. Read before the sidecar goes.
+    if _cd_rb_done stop && [[ "${RB_STOP_FAILED:-0}" -eq 0 ]]; then running=0; fi
     cd_hist rollback_failed reason="$reason" rule="$RB_RULE" || true
-    cd_hold_set rollback_failed "$reason" "$RB_NEW_SHA12" || true
+    if [[ "$running" -eq 1 ]]; then left="$RB_NEW_COLOUR"; fi
+    cd_hold_set rollback_failed "$reason" "$RB_NEW_SHA12" "$left" || true
     if [[ "$RB_SYNTH" == 1 ]]; then
         # the record was made for this rollback (nothing was in flight): a failed rollback must not
         # leave it behind, a reader could take it for a commit with steps pending
@@ -684,6 +718,7 @@ _cd_rb_fail() {
     rm -f -- "$(_cd_rb_sidecar)" 2>/dev/null || true
     mapfile -t f < <(_cd_rb_mail_fields)
     f+=("stage=${RB_STAGE:-none}" "reason=${reason}" "command=gremion-cd status")
+    if [[ "$running" == 1 ]]; then notes="${notes:+${notes},}new_colour_still_running"; fi
     if [[ -n "$notes" ]]; then f+=("notes=${notes}"); fi
     # no dedupe key: every failed attempt is a critical mail of its own (a retry on the same release
     # record must not be silenced)
@@ -712,6 +747,7 @@ cd_rollback_run() {
     local rule="${1:-}" rc=0 s
     CD_ROLLBACK_REASON=''
     RB_NOTE=''
+    RB_STOP_FAILED=0
     RB_CONFIRMED_AT=0
     [[ "$#" -eq 1 ]] || { _cd_rb_err "cd_rollback_run: usage: RULE"; return 2; }
     [[ "$rule" =~ ^[a-z0-9_]{1,40}$ && "$_CD_RB_RULES" == *" ${rule} "* ]] || { _cd_rb_err "cd_rollback_run: not a rollback rule"; return 2; }
@@ -722,7 +758,8 @@ cd_rollback_run() {
     _cd_rb_plan "$rule" || return $?
     _cd_rb_begin || return $?
     for s in $_CD_RB_STEPS; do
-        _cd_rb_step "$s" || { _cd_rb_fail; return $?; }
+        # a failed watch on the old colour comes after the confirm: settle the gate and the block
+        _cd_rb_step "$s" || { if [[ "$s" == watch ]]; then _cd_rb_settle; fi; _cd_rb_fail; return $?; }
     done
     _cd_rb_finish || { _cd_rb_why state_failed "the state could not be written"; _cd_rb_fail; return $?; }
     return 0

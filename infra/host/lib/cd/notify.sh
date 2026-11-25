@@ -75,7 +75,8 @@ CD_NOTIFY_DETAILS="no_heartbeat heartbeat_unreadable no_tick release_stuck relea
 #   reconcile_not_run        the reconcile stage was skipped (CD_RECONCILE=0)
 #   rollback_off_lock_held   the kill switch is on: automatic rollback is OFF and the host lock is held
 #   unhealthy_after_rollback the old colour is unhealthy after a rollback; nothing is left to try
-CD_NOTIFY_NOTES="lock_span_over reconcile_not_run rollback_off_lock_held unhealthy_after_rollback"
+#   new_colour_still_running a rollback that failed did not stop the new colour: it is still up
+CD_NOTIFY_NOTES="lock_span_over reconcile_not_run rollback_off_lock_held unhealthy_after_rollback new_colour_still_running"
 
 declare -gA CD_NOTIFY_KIND_FIELDS=(
     [released]="sha12 prev_sha12 tag colour prev_colour commits requests fivexx tenants_not_ready modules_total modules_upgraded modules_failed leaves_total leaves_migrated leaves_skipped leaves_failed observed_min snapshot_s module_s reconcile_s hostlock_min dump_label dump_mb notes"
