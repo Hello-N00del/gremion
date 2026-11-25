@@ -5,6 +5,7 @@ import {
   getPublishedProtocols,
   getAllCommittees,
 } from '$lib/server/public-db';
+import { orNoPortal } from '$lib/server/portal-absent';
 
 // v5 Task 4.8 — the #antrag portal section is optional. The portal-admin
 // (gremion-ui) decides its visibility; gremion-public has no shared config
@@ -24,13 +25,13 @@ function flag(value: string | undefined, fallback = true): boolean {
   return value !== 'false' && value !== '0';
 }
 
-export const load: PageServerLoad = async () => {
-  const [latestProtocols, committees] = await Promise.all([
+export const load: PageServerLoad = async ({ locals }) => {
+  const [latestProtocols, committees] = await orNoPortal(locals, () => Promise.all([
     getPublishedProtocols(undefined, 6),
     // Org structure for the OrganisationTree section. getAllCommittees()
     // already returns the GDPR-safe public projection (no Keycloak IDs).
     getAllCommittees().catch(() => []),
-  ]);
+  ]));
 
   return {
     latestProtocols,

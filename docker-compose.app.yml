@@ -322,6 +322,10 @@ services:
       #                          above); else the platform domain.
       ORIGIN:                      https://${PUBLIC_PORTAL_HOST:-public.${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}}
       GREMION_PUBLIC_DB_URL:       postgresql://gremion_public_reader:${PUBLIC_DB_PASSWORD}@postgres-${STACK:?STACK required}:5432/${PUBLIC_PORTAL_DB_NAME:-${GREMION_DB_NAME:-gremion}}
+      # 1 when the host named the portal database (PUBLIC_PORTAL_DB_NAME), empty when it
+      # did not. Unnamed, a database without portal tables means "no portal for this
+      # instance" (a clean 404); named, the same failure is a real failure (a 500).
+      PORTAL_DB_EXPLICIT:          ${PUBLIC_PORTAL_DB_NAME:+1}
       PUBLIC_CONTACT_NAME:         ${PUBLIC_CONTACT_NAME:-}
       PUBLIC_CONTACT_ADDRESS:      ${PUBLIC_CONTACT_ADDRESS:-}
       PUBLIC_CONTACT_EMAIL:        ${PUBLIC_CONTACT_EMAIL:-}

@@ -16,7 +16,7 @@ import { describe, it, expect } from 'vitest';
 // pinned by lib/test/csp-no-third-party-fonts.test.ts), and the header hook is
 // the kernel's `securityHeadersHandle` (its `handle` is the TASK-062 i18n
 // sequence around it).
-import { CSP_HEADER_VALUE, securityHeadersHandle as handle } from './hooks.server';
+import { CSP_HEADER_VALUE, securityHeadersHandle as handle, portalAbsentHandle } from './hooks.server';
 
 function directive(name: string): string {
   const found = CSP_HEADER_VALUE.split('; ').find((d) => d.startsWith(`${name} `));
@@ -72,5 +72,27 @@ describe('handle — headers are attached to HTML responses only', () => {
   it('leaves a binary attachment (the protocol PDF route) untouched', async () => {
     const res = await call('application/pdf');
     expect(res.headers.get('Content-Security-Policy')).toBeNull();
+  });
+});
+
+// A portal that is not set up answers its clean 404 with a marker header, so the
+// CD probe can tell "no portal" from "a broken portal". Only when a route marked
+// the request; an ordinary 404 carries nothing.
+describe('portal-absent marker', () => {
+  const run = async (locals: App.Locals, status: number) =>
+    (await portalAbsentHandle({
+      event: { locals } as never,
+      resolve: async () => new Response('x', { status, headers: { 'content-type': 'text/html' } }),
+    })) as Response;
+
+  it('adds the marker to a marked request', async () => {
+    const res = await run({ portalAbsent: true }, 404);
+    expect(res.headers.get('x-gremion-portal')).toBe('none');
+    expect(res.status).toBe(404);
+  });
+
+  it('adds nothing to an ordinary response', async () => {
+    expect((await run({}, 404)).headers.get('x-gremion-portal')).toBeNull();
+    expect((await run({}, 200)).headers.get('x-gremion-portal')).toBeNull();
   });
 });
