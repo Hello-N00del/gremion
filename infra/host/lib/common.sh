@@ -691,6 +691,7 @@ secondary_tenant_modules_problem() {
 # opt-in leaves it empty, sets SECONDARY_OPTIN_WHY to the reason (no value in it) and returns 1; the caller says
 # so in its own words. The one reader of the key for the create and the module guard: it reads state.env, and the
 # app-blue.env / app-green.env beside it for the messaging switch, never a request.
+# shellcheck disable=SC2034  # SECONDARY_OPTIN_WHY is read by create.sh and customer-ops.sh, which source this file
 secondary_optin_load() {
     local state="${1:-}" dir list hosts jwt blue green why
     SECONDARY_TENANT_MODULES=""
