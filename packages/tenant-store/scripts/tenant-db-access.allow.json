@@ -249,6 +249,14 @@
       "reason": "test of the calendar leaf's migrate-only entry against a scratch Postgres (direct admin/test connections, fixture databases created and dropped); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner"
     },
     {
+      "path": "modules/calendar/test/tenant-store.first-contact.integration.test.ts",
+      "calls": 2,
+      "imports": 1,
+      "adoptedBy": "TASK-021",
+      "since": "2026-11-25",
+      "reason": "test of the calendar leaf's first contact under concurrency against a scratch Postgres (direct admin/test connections, fixture databases with a test-only prefix created and dropped); retires with the code it tests when TASK-021 moves the module onto openTenantDb"
+    },
+    {
       "path": "modules/content/scripts/backfill.ts",
       "calls": 1,
       "imports": 1,
@@ -367,6 +375,14 @@
       "adoptedBy": "TASK-021",
       "since": "2026-11-20",
       "reason": "test of the content leaf's migrate-only entry against a scratch Postgres (direct admin/test connections, fixture databases created and dropped); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner"
+    },
+    {
+      "path": "modules/content/test/tenant-store.first-contact.integration.test.ts",
+      "calls": 2,
+      "imports": 1,
+      "adoptedBy": "TASK-021",
+      "since": "2026-11-25",
+      "reason": "test of the content leaf's first contact under concurrency against a scratch Postgres (direct admin/test connections, fixture databases with a test-only prefix created and dropped); retires with the code it tests when TASK-021 moves the module onto openTenantDb"
     },
     {
       "path": "modules/finance/scripts/backfill.ts",
@@ -503,6 +519,14 @@
       "adoptedBy": "TASK-021",
       "since": "2026-11-20",
       "reason": "test of the publishing leaf's migrate-only entry against a scratch Postgres (direct admin/test connections, fixture databases created and dropped); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner"
+    },
+    {
+      "path": "modules/publishing/test/tenant-store.first-contact.integration.test.ts",
+      "calls": 2,
+      "imports": 1,
+      "adoptedBy": "TASK-021",
+      "since": "2026-11-25",
+      "reason": "test of the publishing leaf's first contact under concurrency against a scratch Postgres (direct admin/test connections, fixture databases with a test-only prefix created and dropped); retires with the code it tests when TASK-021 moves the module onto openTenantDb"
     },
     {
       "path": "modules/vault/src/migrations.ts",
