@@ -2523,7 +2523,76 @@ foreign_claims() {
     foreign_claims 'PathPrefix(`/shop`)'
     run "$VERIFY" --hosts "$HOSTS"
     [ "$status" -eq 1 ]
-    [[ "$output" == *"foreign router gremion-site@docker"*"names no host"* ]]
+    [[ "$output" == *"foreign router gremion-site@docker"*"not confined to a host"* ]]
+}
+
+# A rule that names a host can still answer every other host: a disjunct that does not need
+# the host, or a negated host matcher.
+@test "foreign: a rule with a disjunct that needs no host answers every host and is refused" {
+    foreign_site
+    foreign_claims 'Host(`sales.example.net`) || PathPrefix(`/`)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"not confined to a host"* ]]
+}
+
+@test "foreign: a negated Host matcher answers every OTHER host and is refused" {
+    foreign_site
+    foreign_claims '!Host(`sales.example.net`)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"not confined to a host"* ]]
+}
+
+@test "foreign: a nested disjunction with a host-free branch is refused" {
+    foreign_site
+    foreign_claims '(Host(`sales.example.net`) || PathPrefix(`/x`)) && PathPrefix(`/y`)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"not confined to a host"* ]]
+}
+
+@test "foreign: a rule the verifier cannot parse is refused, not trusted" {
+    foreign_site
+    foreign_claims 'Host(`sales.example.net`'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"not confined to a host"* ]]
+}
+
+@test "foreign: hosts joined by || and groups around a disjunction are fine when every branch needs a host" {
+    foreign_site
+    foreign_claims 'Host(`sales.example.net`) || Host(`www.sales.example.net`)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+    foreign_claims '(Host(`sales.example.net`) || Host(`www.sales.example.net`)) && PathPrefix(`/x`)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+    foreign_claims 'Host(`sales.example.net`) && (PathPrefix(`/a`) || PathPrefix(`/b`)) && !PathPrefix(`/c`)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+}
+
+# A kernel router is held to the kernel's own middlewares: a name only another project declares
+# cannot satisfy the universal, whatever its name says it is.
+@test "foreign: a kernel router chaining a middleware only a foreign project declares fails, and it does not count as the rate limit" {
+    foreign_site "$(foreign_labels '. + {"traefik.http.middlewares.edge-ratelimit-site.ratelimit.average":"50"}')"
+    api_edit middlewares '. + [{"name":"edge-ratelimit-site@docker","provider":"docker","type":"ratelimit","rateLimit":{"average":50}}]'
+    api_edit routers '(.[] | select(.name=="tenant-a@file")).middlewares |= map(if . == "edge-ratelimit-app@docker" then "edge-ratelimit-site@docker" else . end)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router tenant-a@file: middleware edge-ratelimit-site@docker is declared by another compose project"* ]]
+    [[ "$output" == *"router tenant-a@file: no edge-ratelimit-* middleware"* ]]
+}
+
+@test "foreign: a kernel router chaining a host pin only a foreign project declares fails" {
+    foreign_site "$(foreign_labels '. + {"traefik.http.middlewares.edge-hostpin-sales.headers.customrequestheaders.x-forwarded-host":"tenant-a.example.org"}')"
+    api_edit middlewares '. + [{"name":"edge-hostpin-sales@docker","provider":"docker","type":"headers","headers":{"customRequestHeaders":{"X-Forwarded-Host":"tenant-a.example.org"}}}]'
+    api_edit routers '(.[] | select(.name=="whoami@docker")).middlewares |= map(if . == "edge-hostpin-a@file" then "edge-hostpin-sales@docker" else . end)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router whoami@docker: middleware edge-hostpin-sales@docker is declared by another compose project"* ]]
+    [[ "$output" == *"router whoami@docker: 0 host pins (expected exactly 1)"* ]]
 }
 
 @test "foreign: a host that only a kernel router's rule names is protected too" {
