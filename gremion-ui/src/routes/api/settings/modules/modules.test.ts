@@ -24,7 +24,7 @@ const h = vi.hoisted(() => {
     loadModuleOverview: vi.fn(),
     previewSwitchOff: vi.fn(),
     loadOperatorModules: vi.fn(),
-    runModuleSwitchPass: vi.fn(async () => ({ applied: 0, failed: 0, adopted: 0 })),
+    runModuleSwitchPassNow: vi.fn(async () => ({ ran: true, value: { applied: 0, failed: 0, adopted: 0 } })),
     rows,
     /** An empty table, and the first handle again (handle-1, key-1). */
     reset: () => {
@@ -57,7 +57,7 @@ vi.mock('$lib/server/module-switch/pending', async (orig) => ({
   armPendingSwitch: h.arm,
   claimPendingSwitch: h.claim,
 }))
-vi.mock('$lib/server/module-switch/reconciler', () => ({ runModuleSwitchPass: h.runModuleSwitchPass }))
+vi.mock('$lib/server/module-switch/on-demand', () => ({ runModuleSwitchPassNow: h.runModuleSwitchPassNow }))
 vi.mock('$lib/server/module-switch/preview', () => ({ previewSwitchOff: h.previewSwitchOff }))
 vi.mock('$lib/server/module-switch/operator-modules', () => ({ loadOperatorModules: h.loadOperatorModules }))
 vi.mock('$lib/server/module-switch/council-db', async (orig) => ({ ...(await orig<typeof import('$lib/server/module-switch/council-db')>()) }))
@@ -474,7 +474,7 @@ describe('GET /api/settings/modules', () => {
     await get()
     const { reconcile } = h.loadModuleOverview.mock.calls[0]![1] as { reconcile: (t: unknown) => Promise<unknown> }
     await reconcile(TENANT)
-    expect(h.runModuleSwitchPass).toHaveBeenCalledWith(TENANT)
+    expect(h.runModuleSwitchPassNow).toHaveBeenCalledWith(TENANT)
   })
 
   it('carries the modules the council cannot switch but the customer has, next to the switchable ones', async () => {

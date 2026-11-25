@@ -17,7 +17,7 @@ import {
 } from '$lib/server/module-switch/pending'
 import { loadOperatorModules } from '$lib/server/module-switch/operator-modules'
 import { previewSwitchOff } from '$lib/server/module-switch/preview'
-import { runModuleSwitchPass } from '$lib/server/module-switch/reconciler'
+import { runModuleSwitchPassNow } from '$lib/server/module-switch/on-demand'
 import { loadModuleOverview, mayManageModules, submitModuleSwitch, type SwitchContext, type SwitchInput } from '$lib/server/module-switch/service'
 import { MODULE_SWITCH_REQUIRED_LOA, moduleSwitchStepUpFreshnessSeconds } from '$lib/server/module-switch/step-up'
 
@@ -191,9 +191,10 @@ export const GET: RequestHandler = async ({ url, locals }) => {
     }
     // The switchable modules (with their switches) and, next to them, the ones the customer has that the council cannot switch.
     // The page polls this while a request is pending. config.modules, which the route gate and the navigation read,
-    // is written only by the reconciler pass (timer: every 10 s); running that same pass first, with the same atomic
-    // claims, makes the gate follow a request that has succeeded within one poll.
-    const overview = await loadModuleOverview(locals.tenant, { reconcile: (t) => runModuleSwitchPass(t) })
+    // is written only by the reconciler pass (timer: every 10 s); running that same pass first makes the gate follow a
+    // request that has succeeded within one poll. Through the worker seam (on-demand.ts): a colour whose worker gate
+    // is off, or a pass already running for this tenant, runs nothing here and the overview shows what is stored.
+    const overview = await loadModuleOverview(locals.tenant, { reconcile: (t) => runModuleSwitchPassNow(t) })
     return json({ success: true, data: { ...overview, operatorModules: await loadOperatorModules(locals.tenant) } })
   } catch (err) {
     if (err instanceof CouncilNotConfigured) return json(NOT_CONFIGURED, { status: 503 })

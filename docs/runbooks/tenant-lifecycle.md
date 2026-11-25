@@ -529,6 +529,21 @@ enablement row exists, it is the source of truth for "is a module on". A module 
 row (every module of a customer that predates the switch) is *unmanaged* and keeps following
 `config.modules`, which defaults every toggleable module to on.
 
+**When the module's routes turn off.** The route gate and the navigation read `config.modules`
+from the customer's `config.json` on every request: there is no cache of module state in the
+app, so no TTL to wait out. The file changes when the reconciler applies the request, and
+that follows the host: not when the switch-off is accepted (the request is `queued`, then
+`running` while the host executor changes the platform enablement), but when the request has
+`succeeded`. The Karenz steps (archive, publish the read-only copies) start after that, from
+the applied switch. From then on the lag is the reconciler's own: at most one 10 s timer tick
+(`MODULE_SWITCH_INTERVAL_MS`), or, while the settings page is open, at most one poll (5 s),
+because `GET /api/settings/modules` runs the same pass first. That on-demand pass goes through
+the worker seam: a colour whose worker gate is `off`, or a pass already running for the
+customer in that process, runs nothing from the request and the page shows what is stored. The
+gate is deliberately not switched at acceptance: the platform enablement, which the host
+changes, is the source of truth, and a request that fails, is refused or expires must leave the
+module exactly as it was; a gate that went off ahead of the host would have to be taken back.
+
 **Reading a failed switch.** The settings section shows the failure text of the newest
 switch of each module. The states of the tenant-side record are `queued`, `succeeded`,
 `applying`, `applied` and the failures `failed`, `refused`, `expired` and `dead`. The

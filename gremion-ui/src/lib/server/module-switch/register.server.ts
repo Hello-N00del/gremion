@@ -19,9 +19,9 @@ import { CouncilNotConfigured, getCouncilDb } from './council-db'
 import { registerSwitchOffGuard } from './guards'
 import { calendarLeafSwitchOffGuard } from './leaf-guards'
 import { MODULE_SWITCH_INTERVAL_MS, runModuleSwitchPass } from './reconciler'
+import { MODULE_SWITCH_WORKER } from './worker-id'
 
-/** The id the reconciler reports under in logs and single-flight. */
-export const MODULE_SWITCH_WORKER = 'module-switch'
+export { MODULE_SWITCH_WORKER }
 
 // Unconditional (not inside the hook below): the guard answers the switch service, which runs whether or
 // not the reconciler does. See leaf-guards.ts for why a leaf-backed calendar may not be switched off yet.
