@@ -6,7 +6,9 @@ import { getProtocol, addResolution, ProtocolNotEditableError } from '$lib/serve
 import type { AdoptionMode, ProtocolResolution, RequiredMajority } from '$lib/server/protocols/protocol-db'
 import { requireUuidParams } from '$lib/server/protocols/route-ids'
 import { requireResolutionText } from '$lib/server/protocols/resolution-text'
+import { assertResolutionFitsMeeting, requireWholeNumberCounts } from '$lib/server/protocols/resolution-plausibility'
 import { decideResolution } from '$lib/server/governance/resolution-decision'
+import { getQuorumContext } from '$lib/server/governance/quorum'
 import {
   CORE_DECISION_RULE_IDS,
   DEFAULT_MAJORITY,
@@ -102,6 +104,22 @@ export async function POST(event: RequestEvent) {
     if (providedVotes !== 0 && providedVotes !== 3) {
       throw error(400, 'Informative Stimmzahlen entweder vollständig (Ja/Nein/Enthaltung) oder gar nicht angeben')
     }
+    // An informational count is a JSON number, like a tally: the integer column never
+    // sees a client string.
+    requireWholeNumberCounts(body.votesYes, body.votesNo, body.votesAbstain)
+    // The declared outcome is a decision of the meeting like a counted one: a
+    // meeting that is not quorate records none, and an informational count still
+    // has to fit the members present.
+    assertResolutionFitsMeeting(
+      {
+        required_majority: requiredMajority,
+        adoption_mode: 'acclamation',
+        votes_yes: providedVotes === 3 ? body.votesYes : null,
+        votes_no: providedVotes === 3 ? body.votesNo : null,
+        votes_abstain: providedVotes === 3 ? body.votesAbstain : null,
+      },
+      await getQuorumContext(protocol.id),
+    )
     const resolution = await addToEditableProtocol(protocol.id, {
       text,
       votesYes: providedVotes === 3 ? body.votesYes : null,
@@ -120,9 +138,12 @@ export async function POST(event: RequestEvent) {
   const votesAbstain = body.votesAbstain ?? 0
 
   // INV-5: the binding result is computed server-side from the pre-declared rule
-  // + tallies — never accepted free-hand from the client. Quorum is enforced AT
-  // ADOPTION (protocol publish), not during draft data-entry, so this write path
-  // does not block a not-yet-quorate meeting (enforceQuorum: false).
+  // + tallies — never accepted free-hand from the client. The engine is asked for
+  // the result without its own quorum throw (enforceQuorum: false) because a row
+  // nobody has voted on yet is a placeholder that a not-yet-quorate meeting may
+  // hold; every other decision is checked below against the same quorum context
+  // the engine read (assertResolutionFitsMeeting), and publish enforces quorum
+  // again at adoption.
   // A malformed tally (negative, fractional, non-numeric) is client input: the
   // engine's typed errors become a 400 instead of escaping as a 500.
   const decision = await decideResolution({
@@ -142,6 +163,20 @@ export async function POST(event: RequestEvent) {
     if (isDecisionRuleInputError(err)) throw error(400, `Ungültige Abstimmungsdaten: ${err.message}`)
     throw err
   })
+
+  // quorum is null only for a withdrawn resolution, which is no vote.
+  if (decision.quorum) {
+    assertResolutionFitsMeeting(
+      {
+        required_majority: requiredMajority,
+        adoption_mode: 'tally',
+        votes_yes: votesYes,
+        votes_no: votesNo,
+        votes_abstain: votesAbstain,
+      },
+      decision.quorum,
+    )
+  }
 
   const resolution = await addToEditableProtocol(protocol.id, {
     text,

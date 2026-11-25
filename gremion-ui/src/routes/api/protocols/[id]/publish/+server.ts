@@ -12,6 +12,7 @@ import { convertOdtToHtml, convertOdtToPdf } from '$lib/server/documents/collabo
 import { getProtocolDocumentPort } from '$lib/server/modules/runtime-registry'
 import { getDb } from '$lib/server/db'
 import { getQuorumContext } from '$lib/server/governance/quorum'
+import { firstMisfittingResolution } from '$lib/governance/resolution-plausibility'
 import type { PgTransaction } from '$lib/server/db/tx'
 import { sanitizeRichHtml } from '$lib/server/security/html-sanitize'
 import { untalliedResolutionsMessage, UNTALLIED_RESOLUTION_CODE } from '$lib/governance/resolution-vote-state'
@@ -38,7 +39,9 @@ function requireAuth(event: RequestEvent): SessionUser {
  * stamped and written to the audit chain as one. Refused first, since the way out
  * (enter the count, withdraw or delete) also decides whether a quorum is needed at
  * all. A consent resolution with an empty tally is adopted (silence adopts) and
- * passes. A withdrawn resolution is not a vote and needs no quorum. Throws 422.
+ * passes. A withdrawn resolution is not a vote and needs no quorum. A stored count
+ * that no longer fits the members present (attendance lowered after the decision was
+ * saved) is refused too. Throws 422.
  */
 async function assertAdoptable(
   protocolId: string,
@@ -53,8 +56,16 @@ async function assertAdoptable(
     if (!quorum.quorate) {
       throw error(
         422,
-        `Nicht beschlussfähig: ${quorum.presentVotingCount}/${quorum.eligibleVotingCount} stimmberechtigte Mitglieder anwesend — ein Protokoll mit bindenden Beschlüssen kann nicht veröffentlicht werden.`,
+        `Nicht beschlussfähig: ${quorum.presentVotingCount}/${quorum.eligibleVotingCount} stimmberechtigte Mitglieder anwesend — ein Protokoll mit bindenden Beschlüssen kann nicht veröffentlicht werden. Die Beschlüsse lassen sich zurückziehen.`,
       )
+    }
+    // The attendance can be lowered after a decision was stored, so the stored counts
+    // are held against the members present again, with the rule the write routes use.
+    // Once the protocol is submitted the attendance is frozen, so the way out is to
+    // withdraw (or delete) the decision; the submit gate keeps new cases from getting here.
+    const misfit = firstMisfittingResolution(resolutions, quorum)
+    if (misfit) {
+      throw error(422, `${misfit.refusal.message} Der Beschluss lässt sich zurückziehen oder löschen.`)
     }
   }
 }

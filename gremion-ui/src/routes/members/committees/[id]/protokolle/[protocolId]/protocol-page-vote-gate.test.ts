@@ -124,7 +124,8 @@ describe('protocol page: a submitted protocol with a resolution nobody voted on'
   })
 
   it('locks the row again once the count is saved', async () => {
-    answer = { status: 200, body: { resolution: { ...untallied, votes_yes: 2, votes_no: 1, result: 'passed' } } }
+    // two members present (fixture quorum 3/2): the saved count has to fit them, else the row stays open
+    answer = { status: 200, body: { resolution: { ...untallied, votes_yes: 2, votes_no: 0, result: 'passed' } } }
     render(Page, { props: { data: pageData('submitted') as never } })
     await fireEvent.click(editButton('Antrag ohne Stimmen')!)
     await fireEvent.click(screen.getByRole('button', { name: 'Speichern' }))

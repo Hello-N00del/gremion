@@ -9,7 +9,9 @@ import type { AdoptionMode, RequiredMajority } from '$lib/server/protocols/proto
 import { requireUuidParams } from '$lib/server/protocols/route-ids'
 import { requireResolutionText } from '$lib/server/protocols/resolution-text'
 import { getDb } from '$lib/server/db'
+import { assertResolutionFitsMeeting, requireWholeNumberCounts } from '$lib/server/protocols/resolution-plausibility'
 import { decideResolution } from '$lib/server/governance/resolution-decision'
+import { getQuorumContext } from '$lib/server/governance/quorum'
 import { isDecisionRuleInputError } from '$lib/server/governance/decision-rule'
 
 function requireAdmin(event: RequestEvent): SessionUser {
@@ -128,6 +130,21 @@ export async function PATCH(event: RequestEvent) {
     if (providedVotes !== 0 && providedVotes !== 3) {
       throw error(400, 'Informative Stimmzahlen entweder vollständig (Ja/Nein/Enthaltung) oder gar nicht angeben')
     }
+    // An informational count is a JSON number, like a tally: the integer column never
+    // sees a client string.
+    requireWholeNumberCounts(votesYes, votesNo, votesAbstain)
+    // Any edit of a declared (not withdrawn) decision needs a quorate meeting, and an
+    // informational count has to fit the members present (mirror of the POST gate).
+    assertResolutionFitsMeeting(
+      {
+        required_majority: requiredMajority,
+        adoption_mode: 'acclamation',
+        votes_yes: providedVotes === 3 ? votesYes : null,
+        votes_no: providedVotes === 3 ? votesNo : null,
+        votes_abstain: providedVotes === 3 ? votesAbstain : null,
+      },
+      await getQuorumContext(current.protocol_id),
+    )
     const resolution = await refusePublished(() => updateResolution(event.params.resId!, {
       text,
       ...(providedVotes === 3 ? { votesYes, votesNo, votesAbstain } : {}),
@@ -153,8 +170,11 @@ export async function PATCH(event: RequestEvent) {
   }
 
   // INV-5: recompute the binding result server-side from the (possibly patched)
-  // tallies + the fixed rule. Quorum is enforced AT ADOPTION (publish), not on a
-  // draft edit, so this path does not block a not-yet-quorate meeting.
+  // tallies + the fixed rule. The engine is asked without its own quorum throw
+  // (enforceQuorum: false): a row nobody has voted on yet is a placeholder a
+  // not-yet-quorate meeting may hold. Every other decision is checked below
+  // against the quorum context the engine read, as on POST; publish enforces
+  // quorum again at adoption.
   const decision = await decideResolution({
     protocolId: current.protocol_id,
     votesYes,
@@ -173,6 +193,20 @@ export async function PATCH(event: RequestEvent) {
     if (isDecisionRuleInputError(err)) throw error(400, `Ungültige Abstimmungsdaten: ${err.message}`)
     throw err
   })
+
+  // quorum is null only for a withdrawn resolution, which is no vote.
+  if (decision.quorum) {
+    assertResolutionFitsMeeting(
+      {
+        required_majority: requiredMajority,
+        adoption_mode: 'tally',
+        votes_yes: votesYes,
+        votes_no: votesNo,
+        votes_abstain: votesAbstain,
+      },
+      decision.quorum,
+    )
+  }
 
   const resolution = await refusePublished(() => updateResolution(event.params.resId!, {
     text,

@@ -35,7 +35,7 @@ const base = {
 // A counted resolution with a recorded vote, as listResolutions returns it.
 const counted = {
   id: 'r1', result: 'passed', adoption_mode: 'tally', required_majority: 'simple',
-  votes_yes: 2, votes_no: 0, votes_abstain: 1,
+  votes_yes: 2, votes_no: 0, votes_abstain: 0,
 }
 const ev = () => ({
   locals: { user: { id: 'u1', roles: ['council-admin'] } },
