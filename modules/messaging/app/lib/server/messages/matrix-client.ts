@@ -1,7 +1,13 @@
 import { env } from '$env/dynamic/private'
+import { error } from '@sveltejs/kit'
 import { currentTenantId, getTenant } from '$lib/server/tenant/context'
+import { assertIssMatch } from '$lib/server/tenant/iss-match'
 import { serviceEnv } from '$lib/server/env/service-env'
 import { resolveSecret } from '$lib/server/tenant/secrets'
+import { isShowableName } from '$lib/components/messaging/sender-label'
+import { TENANT_MARKER_TYPE, matrixIdentityMode, matrixLocalpart } from './matrix-namespace'
+import { __resetChatIdentityGuardForTests, assertNamespacedChatReady } from './chat-identity-guard'
+import { getSynapseAdmin } from './synapse-admin'
 
 // Cache Matrix access tokens per Keycloak user sub.
 // Avoids a /login round-trip on every API request and prevents 429s.
@@ -16,6 +22,9 @@ interface CachedMatrixToken {
 // app-server address, so Synapse's per-address login rate limit answers 429 and
 // each login creates a new device.
 const MATRIX_TOKEN_TTL_MS = 3_600_000
+// An app-minted token (namespaced identity) is ended by the homeserver at mint time + the TTL; the
+// cache hands it out until this long before that, so a request never starts on a token about to die.
+const MATRIX_TOKEN_EXPIRY_MARGIN_MS = 60_000
 const matrixTokenCache = new Map<string, CachedMatrixToken>()
 // In-flight login promises per cache key — prevents concurrent cache misses from
 // all firing a /login request simultaneously (thundering herd on server restart).
@@ -118,6 +127,8 @@ class MatrixClient {
   // Caches the result per user+device; deduplicates concurrent inflight requests
   // for the same user (prevents thundering herd on server restart).
   async getMatrixToken(keycloakJwt: string, deviceId?: string): Promise<string> {
+    // MATRIX_IDENTITY=namespaced: the app mints the token itself and ignores deviceId (see mintNamespacedToken).
+    if (matrixIdentityMode() === 'namespaced') return this.mintNamespacedToken(keycloakJwt)
     const payload = decodeJwtPayload(keycloakJwt)
     const sub = (payload.sub as string | undefined) ?? keycloakJwt.slice(-20)
     const keycloakExp = typeof payload.exp === 'number' ? payload.exp * 1000 : 0
@@ -161,6 +172,59 @@ class MatrixClient {
 
     matrixTokenInflight.set(cacheKey, loginPromise)
     return loginPromise
+  }
+
+  // MATRIX_IDENTITY=namespaced: Matrix token of a customer's member, minted by the app.
+  //
+  //   1. whose token is it: the JWT's issuer must be THIS request's customer (the signature was
+  //      verified by the hooks or by Auth.js; this is the check that it was verified for this customer),
+  //      and it must carry the username the account is named after;
+  //   2. may chat run at all (chat-identity-guard.ts);
+  //   3. the account `<slug>.<escaped username>` is created if missing (never reactivated, never
+  //      renamed), then the Synapse admin API issues a login for it that the homeserver itself ends at
+  //      now + MATRIX_TOKEN_TTL_MS (valid_until_ms).
+  //
+  // That endpoint takes no device_id, so there is NO device continuity: every mint is a new device
+  // and `deviceId` is ignored. The check of step 1 runs before the cache is read, so a cached token
+  // is never handed to a token of another customer.
+  private async mintNamespacedToken(keycloakJwt: string): Promise<string> {
+    const tenant = getTenant()
+    const payload = decodeJwtPayload(keycloakJwt)
+    if (!assertIssMatch({ tokenIss: typeof payload.iss === 'string' ? payload.iss : undefined, tenantIssuer: tenant.issuer })) {
+      throw error(403, 'Die Anmeldung gehört nicht zu diesem Mandanten.')
+    }
+    const username = typeof payload.preferred_username === 'string' ? payload.preferred_username : ''
+    if (username === '') throw error(403, 'Der Anmeldung fehlt der Benutzername für den Chat.')
+    const localpart = matrixLocalpart(tenant.slug, username)
+
+    await assertNamespacedChatReady(this.baseUrl)
+
+    const cacheKey = `${tenant.id}|${localpart}`
+    const cached = matrixTokenCache.get(cacheKey)
+    if (cached && Date.now() < cached.expiresAt) return cached.matrixToken
+    const inflight = matrixTokenInflight.get(cacheKey)
+    if (inflight) return inflight
+
+    const keycloakExp = typeof payload.exp === 'number' ? payload.exp * 1000 : 0
+    if (keycloakExp > 0 && Date.now() >= keycloakExp) {
+      throw new Error('Keycloak JWT is expired — session refresh required')
+    }
+
+    const displayName = typeof payload.name === 'string' && isShowableName(payload.name) ? payload.name.trim() : undefined
+    const admin = getSynapseAdmin()
+    const mint = (async () => {
+      if ((await admin.ensureUser(localpart, displayName)) === 'deactivated') {
+        throw error(403, 'Dieses Chat-Konto ist deaktiviert.')
+      }
+      const validUntilMs = Date.now() + MATRIX_TOKEN_TTL_MS
+      const matrixToken = await admin.getUserLoginToken(localpart, { validUntilMs })
+      matrixTokenCache.set(cacheKey, { matrixToken, expiresAt: validUntilMs - MATRIX_TOKEN_EXPIRY_MARGIN_MS })
+      return matrixToken
+    })().finally(() => {
+      matrixTokenInflight.delete(cacheKey)
+    })
+    matrixTokenInflight.set(cacheKey, mint)
+    return mint
   }
 
   // Resolve a room alias (e.g. "#stura-vorstand:srv") to its room id.
@@ -652,6 +716,7 @@ export const matrixClient = new Proxy({} as MatrixClient, {
 
 /** Test-only: clear the per-tenant client registry + token/inflight caches. */
 export function __resetMatrixCachesForTests(): void {
+  __resetChatIdentityGuardForTests()
   _clientByTenant.clear()
   matrixTokenCache.clear()
   matrixTokenInflight.clear()

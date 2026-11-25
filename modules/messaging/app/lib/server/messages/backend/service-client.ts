@@ -21,6 +21,7 @@
 import type { RequestEvent } from '@sveltejs/kit'
 import { getTenant } from '$lib/server/tenant/context'
 import { getKeycloakJwt } from '../matrix-creds'
+import { refuseNamespacedServiceBackend } from '../chat-identity-guard'
 import { roomNameFromMatrixId, dmRoomName } from '../livekit-client'
 import type {
   LivekitPort,
@@ -152,6 +153,8 @@ class ServiceMatrixClient implements MatrixClientPort {
   constructor(private readonly leaf: ServiceMessagesClient) {}
 
   async getMatrixToken(keycloakJwt: string, deviceId?: string): Promise<string> {
+    // MATRIX_IDENTITY=namespaced is not supported through the leaf, which still logs in by JWT.
+    refuseNamespacedServiceBackend()
     const payload = decodeJwtPayload(keycloakJwt)
     const sub = (payload.sub as string | undefined) ?? keycloakJwt.slice(-20)
     const keycloakExp = typeof payload.exp === 'number' ? payload.exp * 1000 : 0
