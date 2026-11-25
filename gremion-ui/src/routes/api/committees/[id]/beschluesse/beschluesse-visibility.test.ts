@@ -9,10 +9,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { Role } from '$lib/auth/types'
 
 const UNITS: Record<string, { id: string; visibility: 'all_members' | 'committee_only' }> = {
-  'u-closed': { id: 'u-closed', visibility: 'committee_only' },
-  'u-open': { id: 'u-open', visibility: 'all_members' },
+  '00000000-0000-4000-8000-0000000000c1': { id: '00000000-0000-4000-8000-0000000000c1', visibility: 'committee_only' },
+  '00000000-0000-4000-8000-0000000000c2': { id: '00000000-0000-4000-8000-0000000000c2', visibility: 'all_members' },
 }
-const MEMBERSHIPS: Record<string, string[]> = { 'unit-member': ['u-closed'] }
+const MEMBERSHIPS: Record<string, string[]> = { 'unit-member': ['00000000-0000-4000-8000-0000000000c1'] }
 
 const h = vi.hoisted(() => ({
   sqlCalls: 0,
@@ -78,14 +78,14 @@ beforeEach(() => {
 describe('GET /api/committees/[id]/beschluesse -- visibility (D-3)', () => {
   it('a Guest and a non-member Member get a 404 for a committee_only unit, and nothing is read', async () => {
     for (const user of [GUEST, STRANGER]) {
-      expect(await statusOf(() => GET(ev(user, 'u-closed')))).toBe(404)
+      expect(await statusOf(() => GET(ev(user, '00000000-0000-4000-8000-0000000000c1')))).toBe(404)
     }
     expect(h.sqlCalls).toBe(0)
     expect(h.settingsCalls).toBe(0)
   })
 
   it('a Guest sees the published resolutions of an all_members unit', async () => {
-    const res = await GET(ev(GUEST, 'u-open'))
+    const res = await GET(ev(GUEST, '00000000-0000-4000-8000-0000000000c2'))
     expect(res.status).toBe(200)
     const body = (await res.json()) as { entries: Array<{ type: string }> }
     expect(body.entries.map((e) => e.type)).toEqual(['beschluss'])
@@ -93,12 +93,12 @@ describe('GET /api/committees/[id]/beschluesse -- visibility (D-3)', () => {
 
   it('a member of the committee_only unit and a CouncilAdmin read its register', async () => {
     for (const user of [UNIT_MEMBER, ADMIN]) {
-      expect(await statusOf(() => GET(ev(user, 'u-closed')))).toBe(200)
+      expect(await statusOf(() => GET(ev(user, '00000000-0000-4000-8000-0000000000c1')))).toBe(200)
     }
   })
 
   it('an unknown unit is a 404, the same answer as a hidden one', async () => {
-    expect(await statusOf(() => GET(ev(ADMIN, 'u-missing')))).toBe(404)
+    expect(await statusOf(() => GET(ev(ADMIN, '00000000-0000-4000-8000-0000000000c3')))).toBe(404)
   })
 })
 
@@ -108,7 +108,7 @@ describe('GET /api/committees/[id]/beschluesse -- visibility (D-3)', () => {
 // the row, with the same predicate the protocol page and the gates use.
 describe('GET /api/committees/[id]/beschluesse -- a resolution nobody voted on', () => {
   type Entry = { id: string; result: string; untallied: boolean }
-  const entriesFor = async () => ((await (await GET(ev(ADMIN, 'u-open'))).json()) as { entries: Entry[] }).entries
+  const entriesFor = async () => ((await (await GET(ev(ADMIN, '00000000-0000-4000-8000-0000000000c2'))).json()) as { entries: Entry[] }).entries
 
   it('reads the rule and the adoption mode the verdict depends on', async () => {
     await entriesFor()

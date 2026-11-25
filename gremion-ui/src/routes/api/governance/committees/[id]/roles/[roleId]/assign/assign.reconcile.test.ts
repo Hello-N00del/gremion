@@ -79,7 +79,7 @@ function kcGroups(names: readonly string[]) {
 
 function event(body: unknown) {
   return {
-    params: { id: 'ou-1', roleId: 'role-1' },
+    params: { id: '00000000-0000-4000-8000-0000000000a1', roleId: '00000000-0000-4000-8000-0000000000b1' },
     request: new Request('http://stura.test/api/governance/committees/ou-1/roles/role-1/assign', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -102,7 +102,7 @@ describe('POST /api/governance/committees/[id]/roles/[roleId]/assign — flat-gr
     _resetRuntimeRegistryForTests()
     registerRoleGroupGrantResolver(financeFlatGroupsForRole)
 
-    h.createAssignment.mockResolvedValue({ id: 'assign-1', role_id: 'role-1', user_keycloak_id: 'incoming' })
+    h.createAssignment.mockResolvedValue({ id: 'assign-1', role_id: '00000000-0000-4000-8000-0000000000b1', user_keycloak_id: 'incoming' })
     h.scheduleNotifications.mockResolvedValue(undefined)
     h.listOrgUnitMembers.mockResolvedValue([])
     h.listAllRoleNames.mockResolvedValue(ALL_ROLE_NAMES)
@@ -148,7 +148,7 @@ describe('POST /api/governance/committees/[id]/roles/[roleId]/assign — flat-gr
 
   it('(b) unassign: reassigning to a new holder removes groups the outgoing holder can no longer derive', async () => {
     h.getActiveAssignment.mockResolvedValue({
-      id: 'assign-0', role_id: 'role-1', user_keycloak_id: 'outgoing',
+      id: 'assign-0', role_id: '00000000-0000-4000-8000-0000000000b1', user_keycloak_id: 'outgoing',
       start_date: new Date('2025-01-01'), end_date: new Date('2026-01-01'),
     })
     // Outgoing holder loses their only role; incoming gains it.
@@ -172,7 +172,7 @@ describe('POST /api/governance/committees/[id]/roles/[roleId]/assign — flat-gr
 
   it('(c) a group held via a SECOND active assignment survives losing the first', async () => {
     h.getActiveAssignment.mockResolvedValue({
-      id: 'assign-0', role_id: 'role-1', user_keycloak_id: 'outgoing',
+      id: 'assign-0', role_id: '00000000-0000-4000-8000-0000000000b1', user_keycloak_id: 'outgoing',
       start_date: new Date('2025-01-01'), end_date: new Date('2026-01-01'),
     })
     // Outgoing holder is losing Finanzvorstand but is STILL an active
@@ -201,7 +201,7 @@ describe('POST /api/governance/committees/[id]/roles/[roleId]/assign — flat-gr
 
   it('(d) a group outside the auto-managed universe (manual -belege) is never removed', async () => {
     h.getActiveAssignment.mockResolvedValue({
-      id: 'assign-0', role_id: 'role-1', user_keycloak_id: 'outgoing',
+      id: 'assign-0', role_id: '00000000-0000-4000-8000-0000000000b1', user_keycloak_id: 'outgoing',
       start_date: new Date('2025-01-01'), end_date: new Date('2026-01-01'),
     })
     // Outgoing holder loses their only role AND separately holds the manually

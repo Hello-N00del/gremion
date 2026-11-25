@@ -3,6 +3,7 @@ import type { RequestEvent } from '@sveltejs/kit'
 import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth'
 import { upsertBeschlussregisterSettings } from '$lib/server/protocols/protocol-db'
+import { requireCommitteeId } from '$lib/server/governance/route-ids'
 
 function requireAuth(event: RequestEvent): SessionUser {
   const user = event.locals.user as SessionUser | undefined
@@ -13,6 +14,7 @@ function requireAuth(event: RequestEvent): SessionUser {
 export async function PATCH(event: RequestEvent) {
   const user = requireAuth(event)
   if (!hasRole(user.roles, Role.CouncilAdmin)) throw error(403, 'Nur Admins können Einstellungen ändern')
+  requireCommitteeId(event.params.id)
   const body = await event.request.json()
   const settings = await upsertBeschlussregisterSettings(event.params.id!, {
     include_protocols: body.include_protocols,

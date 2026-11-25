@@ -156,8 +156,14 @@ export function createPollsClient(opts: { oidcBearer?: string; tenantId?: string
       try {
         raw = (await ncFetch<{ poll: NcPoll }>(`/poll/${id}`)).poll
       } catch (e) {
-        // NC answers 403/404 for polls this user cannot see: same answer as foreign.
-        if (e instanceof Error && /→\s*(403|404)\b/.test(e.message)) throw notFound()
+        // NC answers 403/404 for polls this user cannot see, and 400 for an id it does not know at all: same answer as foreign.
+        const upstream = e instanceof Error ? /→\s*(400|403|404)\b/.exec(e.message)?.[1] : undefined
+        if (upstream) {
+          // A 400 also covers a poll the per-user bearer cannot read (a misconfiguration): the caller
+          // sees 404, the upstream status stays in the server log.
+          console.warn('[polls:upstream]', { op: 'getPoll', pollId: id, upstreamStatus: Number(upstream) })
+          throw notFound()
+        }
         throw e
       }
       const scoped = scopePoll(raw, t, legacy(), adminUser())

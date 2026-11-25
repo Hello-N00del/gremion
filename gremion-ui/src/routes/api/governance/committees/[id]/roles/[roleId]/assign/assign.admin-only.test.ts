@@ -30,7 +30,7 @@ const body = { userKeycloakId: 'u-ben', startDate: '2026-11-11', endDate: '2027-
 
 function event(roles: string[] | null) {
   return {
-    params: { id: 'ou-1', roleId: 'role-1' },
+    params: { id: '00000000-0000-4000-8000-0000000000a1', roleId: '00000000-0000-4000-8000-0000000000b1' },
     request: new Request('http://stura.test/api/governance/committees/ou-1/roles/role-1/assign', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -57,7 +57,7 @@ describe('POST /api/governance/committees/[id]/roles/[roleId]/assign', () => {
     expect(res.status).toBe(201)
     const json = await res.json()
     expect(json.success).toBe(true)
-    expect(json.data).toMatchObject({ role_id: 'role-1', user_keycloak_id: 'u-ben', status: 'active' })
+    expect(json.data).toMatchObject({ role_id: '00000000-0000-4000-8000-0000000000b1', user_keycloak_id: 'u-ben', status: 'active' })
     expect(h.createAssignment).toHaveBeenCalledTimes(1)
   })
 

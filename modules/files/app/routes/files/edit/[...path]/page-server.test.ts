@@ -9,7 +9,8 @@ const { mockGetFileId, mockGetCollaboraEditorUrl } = vi.hoisted(() => ({
   mockGetCollaboraEditorUrl: vi.fn()
 }))
 
-vi.mock('$lib/server/files/nextcloud-client', () => ({
+vi.mock('$lib/server/files/nextcloud-client', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('$lib/server/files/nextcloud-client')>()),
   createNextcloudClient: () => ({
     getFileId: mockGetFileId,
     getCollaboraEditorUrl: mockGetCollaboraEditorUrl
@@ -18,6 +19,7 @@ vi.mock('$lib/server/files/nextcloud-client', () => ({
 vi.mock('$env/dynamic/private', () => ({ env: {} }))
 
 import { load } from './+page.server'
+import { NextcloudResponseError } from '$lib/server/files/nextcloud-client'
 
 function makeEvent(path: string, origin: string) {
   const user = { id: 'u1', roles: [], groups: [] } as unknown as SessionUser
@@ -43,5 +45,52 @@ describe('files edit page load', () => {
     }
     expect(data.editorUrl).toBe('http://collabora/edit?x=1')
     expect(mockGetCollaboraEditorUrl).toHaveBeenCalledWith(42, 'u1', { publicOrigin: 'https://kunde.example' })
+  })
+  // A failed Nextcloud call used to be shown with the upstream text, which carries the
+  // internal DAV path and the user's Nextcloud id. The page shows a plain German sentence.
+  const UID = '3f0c9c1e-6a53-4f6e-9a3b-2f4a1c7d8e90'
+  // The shape the real client throws for a failed request: it carries a numeric `status`.
+  const upstream = (status: number) =>
+    new NextcloudResponseError({
+      method: 'PROPFIND',
+      path: `/remote.php/dav/files/${UID}/Docs/Missing.odt`,
+      status,
+      contentType: 'application/xml',
+      bodySnippet: '<d:error>sabre</d:error>'
+    })
+
+  async function failure(): Promise<{ status: number; text: string }> {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (load as any)(makeEvent('Docs/Missing.odt', 'https://kunde.example'))
+    } catch (e) {
+      const err = e as { status?: number; body?: unknown }
+      return { status: err.status ?? 0, text: JSON.stringify(err.body ?? {}) }
+    }
+    throw new Error('load did not fail')
+  }
+
+  function expectClean(text: string) {
+    expect(text).not.toContain('remote.php')
+    expect(text).not.toContain(UID)
+    expect(text).not.toContain('Nextcloud PROPFIND')
+    expect(text).not.toContain('sabre')
+  }
+
+  it('a missing file answers 404 without the DAV path or the user id', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    mockGetFileId.mockRejectedValue(upstream(404))
+    const out = await failure()
+    expect(out.status).toBe(404)
+    expectClean(out.text)
+  })
+
+  it('a failed PROPFIND answers 502 without the DAV path or the user id and logs the detail', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    mockGetFileId.mockRejectedValue(upstream(500))
+    const out = await failure()
+    expect(out.status).toBe(502)
+    expectClean(out.text)
+    expect(JSON.stringify(log.mock.calls)).toContain('remote.php')
   })
 })

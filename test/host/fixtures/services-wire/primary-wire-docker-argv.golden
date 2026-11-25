@@ -1,0 +1,41 @@
+docker ps -q --filter label=com.docker.compose.project=guardstack-state --filter label=com.docker.compose.service=postgres
+docker exec -i c-pg psql -X -U gremion_pg -d control -tAq -v ON_ERROR_STOP=1 -v slug=alpha-rat -f -
+docker ps -q --filter label=com.docker.compose.project=guardstack-state --filter label=com.docker.compose.service=nextcloud
+docker compose --env-file <ROOT>/etc/env/state.env up -d matrix
+docker ps -q --filter label=com.docker.compose.project=guardstack-state --filter label=com.docker.compose.service=matrix
+docker inspect --format {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} c-matrix
+docker exec -e SYNAPSE_ADMIN_TOKEN c-matrix bash -c printf "header = \"Authorization: Bearer %s\"\n" "$SYNAPSE_ADMIN_TOKEN" | curl -sf --max-time 10 -K - http://127.0.0.1:8008/_matrix/client/v3/account/whoami
+docker exec c-matrix bash /bootstrap.sh
+docker compose --env-file <ROOT>/etc/env/state.env up -d --force-recreate matrix
+docker ps -q --filter label=com.docker.compose.project=guardstack-state --filter label=com.docker.compose.service=matrix
+docker inspect --format {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} c-matrix
+docker exec c-matrix printenv BOOTSTRAP_MODE
+docker exec c-matrix printenv SYNAPSE_KEYCLOAK_ISSUER_URL
+docker exec c-matrix printenv SYNAPSE_OIDC_CLIENT_SECRET_FILE
+docker inspect --format {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} c-nextcloud
+docker exec -u www-data -e NEXTCLOUD_OIDC_CLIENT_SECRET c-nextcloud sh -c php occ user_oidc:provider Keycloak --clientid=nextcloud --clientsecret="$NEXTCLOUD_OIDC_CLIENT_SECRET" --discoveryuri=https://pilot.guard.example.org/auth/realms/alpha-rat/.well-known/openid-configuration --unique-uid=0 --check-bearer=1 --bearer-provisioning=1
+docker exec -u www-data c-nextcloud php occ richdocuments:activate-config
+docker exec -u www-data c-nextcloud php occ config:app:set richdocuments wopi_callback_url --value=http://nextcloud
+docker exec -u www-data c-nextcloud php occ app:list --output=json
+docker exec -u www-data c-nextcloud php occ config:app:get richdocuments wopi_url
+docker exec -u www-data c-nextcloud php occ config:app:get richdocuments public_wopi_url
+docker exec -u www-data c-nextcloud php occ user_oidc:provider Keycloak --output=json
+docker exec c-nextcloud curl -fsS --max-time 15 -o /dev/null https://pilot.guard.example.org/auth/realms/alpha-rat/.well-known/openid-configuration
+docker ps -q --filter label=com.docker.compose.project=guardstack-app-blue --filter label=com.docker.compose.service=calendar-service
+docker ps -q --filter label=com.docker.compose.project=guardstack-app-blue --filter label=com.docker.compose.service=calendar-service
+docker exec c-calendar printenv CALDAV_CALENDAR_TEMPLATE
+docker exec c-calendar printenv CALDAV_SHARED_USER
+docker exec c-calendar printenv NEXTCLOUD_ADMIN_USER
+docker exec -u www-data c-nextcloud php occ dav:list-calendars admin
+docker exec -u www-data c-nextcloud php occ dav:create-calendar admin gremion-alpha-rat
+docker exec -u www-data c-nextcloud php occ dav:list-calendars admin
+docker compose --env-file <ROOT>/etc/env/app-blue.env up -d --force-recreate gremion-ui
+docker ps -q --filter label=com.docker.compose.project=guardstack-app-blue --filter label=com.docker.compose.service=gremion-ui
+docker inspect --format {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} c-ui
+docker exec c-ui printenv SYNAPSE_ADMIN_TOKEN
+docker ps -q --filter label=com.docker.compose.project=guardstack-state --filter label=com.docker.compose.service=postgres
+docker exec -i c-pg psql -X -U gremion_pg -d control -tAq -v ON_ERROR_STOP=1 -v slug=alpha-rat -f -
+docker ps -q --filter label=com.docker.compose.project=guardstack-state --filter label=com.docker.compose.service=postgres
+docker exec -i c-pg psql -X -U gremion_pg -d control -tAq -v ON_ERROR_STOP=1 -v slug=alpha-rat -f -
+docker ps -q --filter label=com.docker.compose.project=guardstack-state --filter label=com.docker.compose.service=postgres
+docker exec -i c-pg psql -X -U gremion_pg -d t_0123456789abcdef0123456789abcdef__kernel -tAq -v ON_ERROR_STOP=1 -f -

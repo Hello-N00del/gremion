@@ -559,3 +559,93 @@ test('guard 8: livekit has one CPU core and the memory limit it had, and its ren
   assert.ok(String(cfg[0].source).replaceAll('\\', '/').endsWith('/docker/livekit/livekit.yaml'), `source ${cfg[0].source}`)
   assert.ok(bindRefusesMissingHostDir(cfg[0]), `a config that was not rendered would be created empty (rendered bind: ${JSON.stringify(cfg[0].bind)})`)
 })
+
+// ── 9. the kernel's own routers pass gremion-verify's universal, read off the render ──
+//
+// gremion-verify holds every public docker-provider router of the kernel's projects to one
+// universal (a certificate resolver, exactly one host pin chained first, HSTS, a rate limit) and
+// every @docker middleware to the traefik container's labels. A fresh pilot install reported 31
+// failures because five routers and one middleware were written before the universal was and
+// nothing here read them against it. Read from the same render the edge is deployed from:
+//   - a router is internal-only, and so exempt, exactly as the verifier exempts it: on
+//     internaltest alone, or on the unpublished ping entrypoint alone serving noop@internal;
+//   - every other router names its resolver, chains edge-hostpin-* first, an edge-hsts-* and an
+//     edge-ratelimit-*, and every middleware it chains is declared on the traefik container;
+//   - no service asks Traefik for a DEFAULT router (traefik.enable=true with no router label
+//     generates Host(`<service>-<project>`) on every entrypoint, outside all of the above);
+//   - every container behind a public router has a healthcheck, because the census reads
+//     health=none as a failure.
+
+// a compose label value as text: the render writes strings, a hand-written file may carry a YAML boolean
+const labelText = (v) => (typeof v === 'string' ? v : v === true ? 'true' : v === false ? 'false' : '')
+
+const verifyExempt = (rt) => {
+  const eps = (rt.entrypoints ?? '').split(',').filter(Boolean)
+  return (eps.length === 1 && eps[0] === 'internaltest') || (eps.length === 1 && eps[0] === 'ping' && rt.service === 'noop@internal')
+}
+const publicRouters = (r) =>
+  Object.entries(r.services).flatMap(([svc, s]) =>
+    routerNames(s.labels ?? {})
+      .map((name) => ({ svc, name, rt: routerKeys(s.labels, name) }))
+      .filter((x) => !verifyExempt(x.rt)),
+  )
+
+test('guard 9: every public docker router carries the verify universal, and every middleware it chains is declared on the traefik container', () => {
+  const r = pilotState()
+  const env = fixtureEnv()
+  const declared = new Set(
+    Object.keys(r.services.traefik.labels ?? {})
+      .map((k) => /^traefik\.http\.middlewares\.([^.]+)\./.exec(k)?.[1])
+      .filter(Boolean),
+  )
+  const routers = publicRouters(r)
+  // declared vs collected: the routers the pilot ships, so a parser that lost a service cannot pass vacuously
+  const names = routers.map((x) => `${x.svc}/${x.name}`).sort((a, b) => a.localeCompare(b))
+  for (const must of ['fallback/fallback', 'keycloak/keycloak', 'keycloak/keycloak-admin', 'keycloak/keycloak-ops', 'livekit/livekit', 'matrix/matrix']) {
+    assert.ok(names.includes(must), `${must} is not among the public routers read (${names.join(', ')})`)
+  }
+  for (const { svc, name, rt } of routers) {
+    const who = `${svc}/${name}`
+    assert.equal(rt.tls, 'true', `${who}: tls`)
+    assert.ok(rt['tls.certresolver'], `${who}: a router that names no resolver serves the default certificate, silently`)
+    assert.equal(rt['tls.certresolver'], env.TRAEFIK_CERT_RESOLVER, `${who}: the resolver is the install's TRAEFIK_CERT_RESOLVER`)
+    const chain = (rt.middlewares ?? '').split(',').filter(Boolean)
+    assert.ok((chain[0] ?? '').startsWith('edge-hostpin-'), `${who}: the host pin is not first in the chain (${chain.join(',')})`)
+    assert.equal(chain.filter((m) => m.startsWith('edge-hostpin-')).length, 1, `${who}: exactly one host pin`)
+    assert.ok(chain.some((m) => /^edge-hsts-(platform|custom)@docker$/.test(m)), `${who}: no HSTS middleware`)
+    assert.ok(chain.some((m) => /^edge-ratelimit-.+@docker$/.test(m)), `${who}: no edge-ratelimit-* middleware`)
+    for (const m of chain) {
+      const [base, provider] = m.split('@')
+      assert.equal(provider, 'docker', `${who}: ${m} must be qualified @docker`)
+      assert.ok(declared.has(base), `${who}: chains ${m}, which the traefik container does not declare (B-09)`)
+    }
+  }
+})
+
+test('guard 9: the Keycloak admin allowlist is declared on the traefik container, not on keycloak, and gates the admin router', () => {
+  const r = pilotState()
+  const key = 'traefik.http.middlewares.kc-admin-allowlist.ipallowlist.sourcerange'
+  assert.ok(r.services.traefik.labels[key], 'the traefik container does not declare kc-admin-allowlist')
+  assert.equal(r.services.keycloak.labels[key], undefined, 'keycloak declares kc-admin-allowlist: gremion-verify refuses an @docker middleware off the traefik container')
+  const chain = routerKeys(r.services.keycloak.labels, 'keycloak-admin').middlewares.split(',')
+  assert.ok(chain.includes('kc-admin-allowlist@docker'), 'the admin router does not chain the allowlist')
+})
+
+test('guard 9: no service asks Traefik for a default router (traefik.enable=true needs a router label)', () => {
+  const r = pilotState()
+  const enabled = Object.entries(r.services).filter(([, s]) => labelText(s.labels?.['traefik.enable']) === 'true')
+  assert.ok(enabled.length >= 5, `only ${enabled.length} traefik-enabled services were read`)
+  const bare = enabled.filter(([, s]) => routerNames(s.labels).length === 0).map(([n]) => n)
+  assert.deepEqual(bare, [], `${bare.join(', ')} carry traefik.enable=true and no router: Traefik generates Host(<service>-<project>) on every entrypoint, with no resolver, pin, HSTS or rate limit`)
+  assert.equal(labelText(r.services.legal.labels['traefik.enable']), 'false', 'legal is reached over the edge network by gremion-ui, never through Traefik')
+})
+
+test('guard 9: every container behind a public router has a healthcheck (health=none fails the census)', () => {
+  const r = pilotState()
+  const routed = [...new Set(publicRouters(r).map((x) => x.svc))]
+  assert.ok(routed.includes('livekit') && routed.includes('keycloak'), `routed services read: ${routed.join(', ')}`)
+  for (const name of routed) {
+    const hc = r.services[name].healthcheck
+    assert.ok(hc && Array.isArray(hc.test) && hc.test.length > 0 && hc.test[0] !== 'NONE' && hc.disable !== true, `${name} is routed publicly and has no healthcheck`)
+  }
+})

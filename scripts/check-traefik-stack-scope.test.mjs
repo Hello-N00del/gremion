@@ -224,7 +224,8 @@ test('the repository: the guard SEES the services that matter (a parser that dro
   const seen = new Set(r.routed.map((x) => `${x.file}#${x.service}`))
   for (const want of [
     'docker-compose.prod.yml#keycloak',
-    'docker-compose.prod.yml#legal',
+    'docker-compose.prod.yml#matrix',
+    'docker-compose.prod.yml#livekit',
     'docker-compose.prod.yml#traefik',
     'docker-compose.prod.yml#fallback',
     'compose/control-panel/standalone.yml#control-panel',
@@ -237,9 +238,11 @@ test('the repository: the guard SEES the services that matter (a parser that dro
 
 test('the render (docker compose config): for two different STACK values every routed service carries exactly that STACK', () => {
   for (const stack of ['guardstack', 'otherstack']) {
-    const render = renderState({ env: { STACK: stack } })
+    // the pilot profiles on: the default render routes only traefik, keycloak and fallback (legal is reached over
+    // the edge network, never through Traefik, and carries traefik.enable=false)
+    const render = renderState({ env: { STACK: stack, COMPOSE_PROFILES: 'production,messaging,nextcloud,collabora,video' } })
     const routed = Object.entries(render.services ?? {}).filter(([, s]) => isRouted(labelMap(s.labels)))
-    assert.ok(routed.length >= 4, `only ${routed.length} routed services in the ${stack} render`)
+    assert.ok(routed.length >= 6, `only ${routed.length} routed services in the ${stack} render`)
     for (const [name, s] of routed) assert.equal(labelMap(s.labels)['org.gremion.stack'], stack, `${stack}: ${name}`)
     const tr = render.services.traefik
     assert.equal(tr.environment?.STACK, stack, `${stack}: the traefik container is not told its stack`)

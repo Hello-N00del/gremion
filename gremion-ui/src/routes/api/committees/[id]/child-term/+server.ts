@@ -1,6 +1,7 @@
 import { error, json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { updateOrgUnit } from '$lib/server/governance/org-units-db'
+import { requireCommitteeId } from '$lib/server/governance/route-ids'
 import { Role } from '$lib/auth/types'
 import { parseJsonBody } from '$lib/server/parse-json-body'
 
@@ -14,6 +15,7 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
   if (!roles.includes(Role.CouncilAdmin) && !roles.includes(Role.ITAdmin)) {
     throw error(403, 'Nur Vorstand/IT')
   }
+  requireCommitteeId(params.id)
   const body = await parseJsonBody(request)
   const childTerm = (body as { childTerm?: unknown } | null)?.childTerm
   if (typeof childTerm !== 'string' || childTerm.length > 80) throw error(400, 'Ungültiger Wert')

@@ -452,7 +452,12 @@ samples after a resume are never a trigger.
    is **left running**;
 5. confirm all services and the public ready probe, then watch the old colour for
    `CD_POST_ROLLBACK_S`; a bad streak there is a critical mail (`rollback_failed`, note
-   `unhealthy_after_rollback`) and nothing else;
+   `unhealthy_after_rollback`). The new colour is not stopped then, but the host is not left half
+   rolled back: the new colour's worker gate goes off and the old colour's on, the new commit is
+   blocked, the hold stays `rollback_failed`, and the mail carries the note
+   `new_colour_still_running`. The hold records that colour (`left_running`, kept until the hold
+   clears), and `gremion-cd status` names it from there, not from the live colour, which is the one
+   that serves. A rollback that failed after the stop step records none;
 6. switch the new colour's worker gate off, then the old colour's on;
 7. stop the new colour (keeping a 0600 tail of its log), put the env tag back, write the block and
    the hold, move `current` and the tag files back when they had moved, record the isolation
@@ -475,7 +480,10 @@ release and only when `previous` is startable; otherwise use `gremion-rollback` 
 **The watch rules.** Each sample checks the public `/readyz` through the real edge, the internal
 `/readyz` of the new colour (ready, the right colour and release, and not more customers not ready
 than the live colour had), the routing test, image identity, the portal list page and the
-containers. Before any rule fires, a sample asks whether a shared service (the state project, the
+containers. The routing test reads the edge's services: `app@file` and `public@file` must name the
+colour and be up. A service that no router uses has no health state; `public@file` is that on an
+install that places no portal router (`etc/edge/public-host.yml`), and then it must still list
+only the colour's servers. With the portal router file placed it must be used and up. Before any rule fires, a sample asks whether a shared service (the state project, the
 edge, docker) is down: if so the observed clock stops, the paused clock runs, and one mail says
 `paused`. At the pause cap the release is rolled back when the old colour is ready and the new
 one is not, and parked otherwise. A reboot, a slow sample and a 5xx window that overlaps an

@@ -46,27 +46,32 @@ vi.mock('$lib/server/keycloak-admin', () => ({
 
 import { GET, PUT } from './+server'
 
+// Content ids are UUIDs; the route answers 404 for anything else before a backend call.
+const PID = '0b7c6f1e-4a8e-4c51-9f3a-2d1e8c7b6a50'
+const BAD_ID = 'not-a-uuid'
+
 type Ev = Parameters<typeof PUT>[0]
 
 function makeEvent(opts: {
   user?: { roles: string[]; groups: string[]; id: string } | null
   body?: unknown
+  id?: string
 }): Ev {
   return {
-    request: new Request('http://stura.test/api/content/posts/p1/recipients', {
+    request: new Request(`http://stura.test/api/content/posts/${opts.id ?? PID}/recipients`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(opts.body ?? {}),
     }),
     locals: { user: opts.user ?? null },
-    params: { id: 'p1' },
+    params: { id: opts.id ?? PID },
   } as unknown as Ev
 }
 
 describe('/api/content/posts/[id]/recipients', () => {
   beforeEach(() => {
     mockComposeCapabilities.mockReset().mockReturnValue({ 'content.author': ['authors'] })
-    mockGetPost.mockReset().mockResolvedValue({ id: 'p1', title: 'T' })
+    mockGetPost.mockReset().mockResolvedValue({ id: PID, title: 'T' })
     mockGetRecipients.mockReset().mockResolvedValue([])
     mockSetRecipients.mockReset().mockResolvedValue(undefined)
     mockListLists.mockReset().mockResolvedValue([{ id: 'l1', name: 'A', created_at: 'x' }])
@@ -115,7 +120,7 @@ describe('/api/content/posts/[id]/recipients', () => {
       }),
     )
     expect(res.status).toBe(200)
-    expect(mockSetRecipients).toHaveBeenCalledWith('p1', [
+    expect(mockSetRecipients).toHaveBeenCalledWith(PID, [
       { mailing_list_id: 'l1' },
       { keycloak_group_id: 'g1' },
     ])
@@ -256,13 +261,13 @@ describe('/api/content/posts/[id]/recipients', () => {
     const res = await PUT(makeEvent({ user: author, body: { recipients: [{ mailing_list_id: 'l1' }] } }))
     expect(res.status).toBe(200)
     expect(mockListOrgUnits).not.toHaveBeenCalled()
-    expect(mockSetRecipients).toHaveBeenCalledWith('p1', [{ mailing_list_id: 'l1' }])
+    expect(mockSetRecipients).toHaveBeenCalledWith(PID, [{ mailing_list_id: 'l1' }])
   })
 
   it('PUT saves the other changes and leaves out a stored group that no longer belongs to an org unit', async () => {
     // "old" was saved for this post earlier; its org unit is gone since.
     mockGetRecipients.mockResolvedValue([
-      { id: 'r1', post_id: 'p1', mailing_list_id: null, keycloak_group_id: 'old' },
+      { id: 'r1', post_id: PID, mailing_list_id: null, keycloak_group_id: 'old' },
     ])
     const res = await PUT(
       makeEvent({
@@ -274,7 +279,7 @@ describe('/api/content/posts/[id]/recipients', () => {
     )
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ ok: true, removed: ['old'] })
-    expect(mockSetRecipients).toHaveBeenCalledWith('p1', [{ mailing_list_id: 'l1' }, { keycloak_group_id: 'g2' }])
+    expect(mockSetRecipients).toHaveBeenCalledWith(PID, [{ mailing_list_id: 'l1' }, { keycloak_group_id: 'g2' }])
     // Keycloak is asked about the kept group only.
     expect(mockGetGroup).toHaveBeenCalledTimes(1)
     expect(mockGetGroup).toHaveBeenCalledWith('g2')
@@ -282,7 +287,7 @@ describe('/api/content/posts/[id]/recipients', () => {
 
   it('PUT 400s a new foreign group even when a stored one is sent along', async () => {
     mockGetRecipients.mockResolvedValue([
-      { id: 'r1', post_id: 'p1', mailing_list_id: null, keycloak_group_id: 'old' },
+      { id: 'r1', post_id: PID, mailing_list_id: null, keycloak_group_id: 'old' },
     ])
     await expect(
       PUT(
@@ -305,7 +310,7 @@ describe('/api/content/posts/[id]/recipients', () => {
     mockGetGroup.mockRejectedValue(new Error('kc down'))
     const res = await PUT(makeEvent({ user: author, body: { recipients: [{ keycloak_group_id: 'g1' }] } }))
     expect(res.status).toBe(200)
-    expect(mockSetRecipients).toHaveBeenCalledWith('p1', [{ keycloak_group_id: 'g1' }])
+    expect(mockSetRecipients).toHaveBeenCalledWith(PID, [{ keycloak_group_id: 'g1' }])
   })
 
   it('PUT checks each distinct group id once, however often it is listed', async () => {
@@ -380,5 +385,19 @@ describe('/api/content/posts/[id]/recipients', () => {
         }),
       ),
     ).rejects.toMatchObject({ status: 400 })
+  })
+
+  it('GET 404s a malformed post id before any backend call', async () => {
+    await expect(
+      GET(makeEvent({ user: { roles: ['member'], groups: ['authors'], id: 'u1' }, id: BAD_ID })),
+    ).rejects.toMatchObject({ status: 404 })
+    expect(mockGetPost).not.toHaveBeenCalled()
+  })
+
+  it('PUT 404s a malformed post id before any backend call', async () => {
+    await expect(
+      PUT(makeEvent({ user: { roles: ['member'], groups: ['authors'], id: 'u1' }, id: BAD_ID, body: { recipients: [] } })),
+    ).rejects.toMatchObject({ status: 404 })
+    expect(mockGetPost).not.toHaveBeenCalled()
   })
 })

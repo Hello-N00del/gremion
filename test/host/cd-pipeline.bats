@@ -629,6 +629,15 @@ pl_state_pre() { pl_state_release; }
     # no release record is left behind with phase idle
     [ "$(pl_state .release)" = null ]
     [ "$(pl_mails rollback_failed)" -ge 1 ]
+    # the old colour (blue) serves and is live; the colour left running is the new one (green), and
+    # `gremion-cd status` says so from the hold, after the release record has ended
+    [ "$(pl_state .live.colour)" = blue ]
+    [ "$(pl_state .hold.left_running)" = green ]
+    run "${HOST_SRC}/bin/gremion-cd" status --json
+    [ "$(printf '%s' "$output" | jq -r .new_colour_left_running)" = green ]
+    run "${HOST_SRC}/bin/gremion-cd" status
+    [[ "$output" == *"green may still be running"* ]]
+    [[ "$output" != *"blue may still be running"* ]]
     pl_hostlock_free
     pl_cdlock_free
 }

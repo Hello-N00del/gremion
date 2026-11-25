@@ -412,12 +412,13 @@ def tagok: isstr and test("^pilot-[0-9a-f]{12}$");
 def colour: IN("blue", "green");
 
 def hold_v: if . == null then []
-  else shape("hold"; ["kind","reason","sha12","since"]; ["kind","reason","sha12","since"])
+  else shape("hold"; ["kind","reason","sha12","since","left_running"]; ["kind","reason","sha12","since"])
     + (if type == "object" then
         check("hold.kind"; (.kind | IN("operator","blocked","state_tier","unsupported_chain","contract_migration","waived_migration","ci_changed","chain_class_changed","batch_too_large","not_ancestor","ruleset_missing","range_unverified","classify_failed","failure","proof","rollback_failed","killswitch","stuck_stage","reconcile_failed")); "not an allowed kind")
         + check("hold.reason"; ((.reason | isstr) and (.reason | test("^[A-Za-z0-9_:./+-]{0,120}$"))); "not a code")
         + check("hold.sha12"; ((.sha12 | isstr) and (.sha12 | test("^([0-9a-f]{12})?$"))); "not a short sha")
         + check("hold.since"; (.since | isstr); "not a string")
+        + (if has("left_running") then check("hold.left_running"; (.left_running | colour); "not a colour") else [] end)
        else [] end)
   end;
 
@@ -642,12 +643,14 @@ cd_release_committed() {
     [[ -n "$v" ]]
 }
 
-# cd_hold_set KIND REASON [SHA12] / cd_hold_clear
+# cd_hold_set KIND REASON [SHA12 [LEFT_RUNNING]] / cd_hold_clear
+# LEFT_RUNNING (blue or green) is the colour that a failed rollback left running. It lives and goes
+# with the hold, so `gremion-cd status` reads it from there after the release record has ended.
 cd_hold_set() {
-    local kind="${1:-}" reason="${2:-}" sha12="${3:-}" since
+    local kind="${1:-}" reason="${2:-}" sha12="${3:-}" left="${4:-}" since
     since="$(cd_iso)" || return 2
-    cd_state_set '.hold = {kind: $k, reason: $r, sha12: $s, since: $t}' \
-        --arg k "$kind" --arg r "$reason" --arg s "$sha12" --arg t "$since" || return $?
+    cd_state_set '.hold = ({kind: $k, reason: $r, sha12: $s, since: $t} + (if $l == "" then {} else {left_running: $l} end))' \
+        --arg k "$kind" --arg r "$reason" --arg s "$sha12" --arg t "$since" --arg l "$left" || return $?
     cd_hist hold_set kind="$kind" reason="$reason" sha12="$sha12" || true
 }
 cd_hold_clear() {

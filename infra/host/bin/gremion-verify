@@ -172,6 +172,12 @@ declare -A SERVICES_TO_CHECK=()
 declare -A SERVICE_HEALTHY=()
 declare -A SAN_OK=()
 declare -A MARKER_SHA=()
+# Docker-provider objects another compose project declares on the same daemon
+# (see classify_foreign_docker_objects): the lower-cased name -> its project.
+declare -A FOREIGN_ROUTER=()
+declare -A FOREIGN_MW=()
+declare -A FOREIGN_SVC=()
+declare -a FOREIGN_LISTED=()   # "kind|name@docker|project", only what Traefik reports
 
 usage() {
     cat >&2 <<'EOF'
@@ -261,6 +267,289 @@ rule_host() {
     printf ''
 }
 
+# ── Foreign docker-provider objects ──────────────────────────────────────────
+# The edge's docker provider is scoped to the stack by a label (org.gremion.stack),
+# not to the compose projects the kernel ships. A static site of ANOTHER compose
+# project that labels its container with this stack's value is therefore served by
+# this edge on purpose, and its routers and middlewares appear in the same API
+# lists as the kernel's own. They are not the kernel's to judge: the router
+# universal, the placement rule and the census speak for the kernel's own projects
+# (<stack>-state, <stack>-app-blue, <stack>-app-green) and nothing else.
+#
+# WHO OWNS AN OBJECT is read from the containers, never from its name: Traefik's
+# API does not say which container declared a docker-provider router, so the label
+# sets are read (the router/middleware names under traefik.http.routers.* and
+# traefik.http.middlewares.*, plus the implicit router a labelled container with no
+# router label gets, named <service>-<project>). An object is FOREIGN only when
+#   - a container whose compose project is not one of the three above declares it,
+#   - that container carries org.gremion.stack=<this stack> (a container the
+#     stack-scoped edge cannot read contributes no object to Traefik's lists), and
+#   - NO kernel container declares the same name (a collision is judged, not excused).
+# Everything this cannot attribute stays judged: no STACK, docker unreachable, a
+# container with no compose project at all, an object no label explains.
+#
+# A container of another stack, or one that carries no stack label, is not read by
+# this edge and is attributed to neither side: it can neither make an object foreign
+# nor excuse one.
+#
+# Foreign objects cost the kernel nothing and are never silent: one informational
+# line each, and a foreign ROUTER is refused when it
+#   - claims a host of the platform, the control panel or a customer, or names no
+#     host in some branch of its rule (which is every host),
+#   - asks for a rule syntax other than v3 (a v2 {name:regex} pattern reads as a
+#     literal here and as a wildcard at the edge), or
+#   - serves anything but a service a foreign container declares (a kernel
+#     backend, the active colour, an internal service): the kernel's pin, HSTS,
+#     rate limit and allowlist protect those only on the kernel's own routers.
+# L4 routers are not exempted: check_l4_routers reads every TCP/UDP router.
+
+kernel_project_p() {   # <compose project>
+    case "$1" in
+        "${STACK}-state"|"${STACK}-app-blue"|"${STACK}-app-green") return 0 ;;
+    esac
+    return 1
+}
+
+# <name@provider> as Traefik reports it -> success when it is a docker router/middleware
+# of a foreign project. The two lists are separate: a router and a middleware may share a name.
+foreign_router_p() {
+    local n="$1"
+    [[ "$n" == *@docker ]] || return 1
+    n="${n%@docker}"; n="${n,,}"
+    [[ -n "$n" && -n "${FOREIGN_ROUTER[$n]+x}" ]]
+}
+
+foreign_mw_p() {
+    local n="$1"
+    [[ "$n" == *@docker ]] || return 1
+    n="${n%@docker}"; n="${n,,}"
+    [[ -n "$n" && -n "${FOREIGN_MW[$n]+x}" ]]
+}
+
+# Traefik's own Normalize: every run of characters that are not letters or digits becomes one "-".
+traefik_normalize() {
+    local s
+    s="$(printf '%s' "$1" | tr -cs 'A-Za-z0-9' '-')"
+    s="${s#-}"; s="${s%-}"
+    printf '%s' "${s,,}"
+}
+
+classify_foreign_docker_objects() {
+    FOREIGN_ROUTER=(); FOREIGN_MW=(); FOREIGN_SVC=(); FOREIGN_LISTED=()
+    [[ -n "${STACK:-}" ]] || return 0
+    local ids id labels project service stack enable name n
+    local -a routers mws svcs
+    local -A kernel_router=() kernel_mw=() kernel_svc=() foreign_router_proj=() foreign_mw_proj=() foreign_svc_proj=()
+    ids="$(docker ps -a -q 2>/dev/null)" || return 0
+    for id in $ids; do
+        labels="$(docker inspect --format '{{json .Config.Labels}}' "$id" 2>/dev/null)" || continue
+        [[ -n "$labels" && "$labels" != "null" ]] || continue
+        labels="$(jq -c 'with_entries(.key |= ascii_downcase)' <<<"$labels" 2>/dev/null)" || continue
+        project="$(jq -r '."com.docker.compose.project" // ""' <<<"$labels")"
+        service="$(jq -r '."com.docker.compose.service" // ""' <<<"$labels")"
+        stack="$(jq -r '."org.gremion.stack" // ""' <<<"$labels")"
+        enable="$(jq -r '."traefik.enable" // ""' <<<"$labels")"
+        mapfile -t routers < <(jq -r 'keys[] | select(startswith("traefik.http.routers.")) | split(".")[3] // empty' <<<"$labels" | sort -u)
+        mapfile -t mws < <(jq -r 'keys[] | select(startswith("traefik.http.middlewares.")) | split(".")[3] // empty' <<<"$labels" | sort -u)
+        mapfile -t svcs < <(jq -r 'keys[] | select(startswith("traefik.http.services.")) | split(".")[3] // empty' <<<"$labels" | sort -u)
+        # a labelled container with no router label gets the implicit router <service>-<project>
+        if (( ${#routers[@]} == 0 )) && [[ "${enable,,}" == "true" && -n "$project" && -n "$service" ]]; then
+            routers=("$(traefik_normalize "${service}-${project}")")
+        fi
+        # the service a labelled container gets when it declares none is named like its implicit router
+        if [[ "${enable,,}" == "true" && -n "$project" && -n "$service" ]]; then
+            svcs+=("$(traefik_normalize "${service}-${project}")")
+        fi
+        if [[ -n "$project" ]] && ! kernel_project_p "$project"; then
+            # another stack's container, or one with no stack label, is not read by this edge: it
+            # contributes no object to Traefik's lists and so neither makes one foreign nor excuses one
+            [[ "$stack" == "$STACK" ]] || continue
+            for n in "${routers[@]}"; do [[ -z "$n" ]] || foreign_router_proj["${n,,}"]="$project"; done
+            for n in "${mws[@]}";     do [[ -z "$n" ]] || foreign_mw_proj["${n,,}"]="$project"; done
+            for n in "${svcs[@]}";    do [[ -z "$n" ]] || foreign_svc_proj["${n,,}"]="$project"; done
+        else
+            for n in "${routers[@]}"; do [[ -z "$n" ]] || kernel_router["${n,,}"]=1; done
+            for n in "${mws[@]}";     do [[ -z "$n" ]] || kernel_mw["${n,,}"]=1; done
+            for n in "${svcs[@]}";    do [[ -z "$n" ]] || kernel_svc["${n,,}"]=1; done
+        fi
+    done
+    for n in "${!foreign_router_proj[@]}"; do
+        [[ -n "${kernel_router[$n]+x}" ]] || FOREIGN_ROUTER["$n"]="${foreign_router_proj[$n]}"
+    done
+    for n in "${!foreign_mw_proj[@]}"; do
+        [[ -n "${kernel_mw[$n]+x}" ]] || FOREIGN_MW["$n"]="${foreign_mw_proj[$n]}"
+    done
+    for n in "${!foreign_svc_proj[@]}"; do
+        [[ -n "${kernel_svc[$n]+x}" ]] || FOREIGN_SVC["$n"]="${foreign_svc_proj[$n]}"
+    done
+    # only what Traefik actually reports: a label of a container whose objects it did not load lists nothing
+    while IFS= read -r name; do
+        [[ -n "$name" ]] || continue
+        foreign_router_p "$name" || continue
+        n="${name%@docker}"; FOREIGN_LISTED+=("router|${name}|${FOREIGN_ROUTER[${n,,}]}")
+    done < <(printf '%s' "$ROUTERS_JSON" | jq -r '.[].name')
+    while IFS= read -r name; do
+        [[ -n "$name" ]] || continue
+        foreign_mw_p "$name" || continue
+        n="${name%@docker}"; FOREIGN_LISTED+=("middleware|${name}|${FOREIGN_MW[${n,,}]}")
+    done < <(printf '%s' "$MIDDLEWARES_JSON" | jq -r '.[] | select((.provider // (.name | split("@")[1])) == "docker") | .name')
+    return 0
+}
+
+# The hosts only the kernel's own routers may answer, one "<lower-cased host><TAB><whose>" per line.
+foreign_protected_hosts() {
+    local h tf excluded
+    printf '%s\t%s\n' "${PLATFORM_DOMAIN,,}" "the platform"
+    h="$(control_host)"; printf '%s\t%s\n' "${h,,}" "the control panel"
+    if [[ -n "${PILOT_TENANT_HOST:-}" ]]; then
+        printf '%s\t%s\n' "${PILOT_TENANT_HOST,,}" "a customer"
+        printf '%s\t%s\n' "turn.${PILOT_TENANT_HOST,,}" "a customer"
+    fi
+    tf="$(gremion_root)/etc/tenant-hosts.txt"
+    if [[ -f "$tf" ]]; then
+        while IFS= read -r h; do printf '%s\t%s\n' "${h,,}" "a customer"; done < <(grep -Ev '^[[:space:]]*(#|$)' "$tf" || true)
+    fi
+    if [[ -n "$HOSTS_FILE" && -f "$HOSTS_FILE" ]]; then
+        while IFS= read -r h; do printf '%s\t%s\n' "${h,,}" "a customer"; done < <(grep -Ev '^[[:space:]]*(#|$)' "$HOSTS_FILE" || true)
+    fi
+    # every host a router that is not foreign (and not internal-only) pins in its rule
+    excluded="$(printf '%s\n' "${!FOREIGN_ROUTER[@]}" | jq -Rsc 'split("\n") | map(select(length > 0) | (.) + "@docker")')"
+    printf '%s' "$ROUTERS_JSON" | jq -r --argjson ex "$excluded" '
+        .[]
+        | select((.name | endswith("@internal")) | not)
+        | select((.name | ascii_downcase) as $n | ($ex | index($n)) == null)
+        | select((.entryPoints // []) as $e | $e != ["internaltest"] and $e != ["ping"])
+        | (.rule // "") | match("host(?:header)?\\(`([^`]+)`\\)"; "gi") | .captures[0].string
+        | ascii_downcase | select(endswith(".invalid") | not) | (.) + "\ta host of the kernel'"'"'s own routers"' 2>/dev/null || true
+}
+
+# rule_pins_host <rule> -> "pinned" when EVERY request the rule matches names a host (a positive
+# Host/HostRegexp/HostHeader matcher the request must satisfy), else "open". A recursive-descent
+# reading of Traefik's rule syntax: a disjunction is pinned only when every branch is, a conjunction
+# when any factor is, a negation never is, and anything it cannot parse is open (fail closed).
+# Strings are backtick (no escapes) or double-quoted (backslash escapes).
+rule_pins_host() {
+    RULE="$1" awk '
+    function skipws() { while (substr(s, pos, 1) ~ /[ \t]/) pos++ }
+    function parse_or(   v, t) {
+        v = parse_and(); skipws()
+        while (substr(s, pos, 2) == "||") { pos += 2; t = parse_and(); v = (v && t) ? 1 : 0; skipws() }
+        return v
+    }
+    function parse_and(   v, t) {
+        v = parse_factor(); skipws()
+        while (substr(s, pos, 2) == "&&") { pos += 2; t = parse_factor(); v = (v || t) ? 1 : 0; skipws() }
+        return v
+    }
+    function parse_factor(   name, v, c, q, depth, lname) {
+        skipws()
+        if (substr(s, pos, 1) == "!") { pos++; v = parse_factor(); return 0 }
+        if (substr(s, pos, 1) == "(") {
+            pos++; v = parse_or(); skipws()
+            if (substr(s, pos, 1) == ")") pos++; else bad = 1
+            return v
+        }
+        name = ""
+        while (substr(s, pos, 1) ~ /[A-Za-z]/) { name = name substr(s, pos, 1); pos++ }
+        if (name == "" || substr(s, pos, 1) != "(") { bad = 1; return 0 }
+        pos++; depth = 1; q = ""
+        while (pos <= length(s) && depth > 0) {
+            c = substr(s, pos, 1); pos++
+            if (q != "") {
+                if (q == "\"" && c == "\\") pos++
+                else if (c == q) q = ""
+                continue
+            }
+            if (c == "`" || c == "\"") { q = c; continue }
+            if (c == "(") depth++
+            else if (c == ")") depth--
+        }
+        if (depth != 0) bad = 1
+        lname = tolower(name)
+        return (lname == "host" || lname == "hostregexp" || lname == "hostheader") ? 1 : 0
+    }
+    BEGIN {
+        s = ENVIRON["RULE"]; pos = 1; bad = 0
+        v = parse_or(); skipws()
+        if (pos <= length(s)) bad = 1
+        r = (bad == 0 && v == 1) ? "pinned" : "open"
+        print r
+    }'
+}
+
+check_foreign_docker_objects() {
+    (( ${#FOREIGN_LISTED[@]} > 0 )) || return 0
+    local kind name project rule token re h why n claimed syntax svc
+    local -A protected=()
+    local -a tokens
+    while IFS='|' read -r kind name project; do
+        info "foreign docker ${kind} ${name} (compose project ${project}, not a kernel project of stack ${STACK}): informational, not judged"
+    done < <(printf '%s\n' "${FOREIGN_LISTED[@]}" | sort)
+    while IFS=$'\t' read -r h why; do
+        # a fully-qualified spelling (trailing dot) is the same host: tokens of a rule are read the same way
+        while [[ "$h" == *. ]]; do h="${h%.}"; done
+        [[ -n "$h" ]] || continue
+        # the first reason wins: platform and control panel are listed before a customer
+        [[ -n "${protected[$h]+x}" ]] || protected["$h"]="$why"
+    done < <(foreign_protected_hosts)
+
+    while IFS='|' read -r kind name project; do
+        [[ "$kind" == router ]] || continue
+        rule="$(printf '%s' "$ROUTERS_JSON" | jq -r --arg n "$name" '[.[] | select(.name == $n)][0].rule // ""')"
+        # Traefik reads a rule as v3 unless the router asks otherwise; a v2 pattern ({name:regex}) is
+        # a literal to every reader below, so a router that asks for v2 cannot be shown to miss a host
+        syntax="$(printf '%s' "$ROUTERS_JSON" | jq -r --arg n "$name" '[.[] | select(.name == $n)][0].ruleSyntax // "" | if type == "string" then (.) else "unreadable" end')"
+        if [[ -n "$syntax" && "${syntax,,}" != v3 ]]; then
+            fail "foreign router ${name} (compose project ${project}) asks for rule syntax ${syntax}, which this verifier does not read: a pattern it takes for a literal can answer every host of the platform, the control panel and every customer: ${rule}"
+            continue
+        fi
+        # what the router serves: only a service a foreign container declares. A kernel backend or the
+        # active colour reached through a foreign host skips the kernel's pin, HSTS, rate limit and allowlist.
+        svc="$(printf '%s' "$ROUTERS_JSON" | jq -r --arg n "$name" '[.[] | select(.name == $n)][0].service // "" | if type == "string" then (.) else "" end')"
+        if [[ -z "$svc" ]]; then
+            fail "foreign router ${name} (compose project ${project}) names no service, so it cannot be shown to serve only the foreign project's own"
+        else
+            n="${svc,,}"
+            if [[ "$n" == *@* ]]; then
+                if [[ "${n##*@}" == docker ]]; then n="${n%@*}"; else n=""; fi
+            fi
+            if [[ -z "$n" || -z "${FOREIGN_SVC[$n]+x}" ]]; then
+                fail "foreign router ${name} (compose project ${project}) serves ${svc}, which no foreign container of the stack declares: a kernel backend, the active colour or an internal service is reached only through the kernel's own routers"
+            fi
+        fi
+        if [[ "$(rule_pins_host "$rule")" != pinned ]]; then
+            fail "foreign router ${name} (compose project ${project}) is not confined to a host (a branch of its rule, or the whole of it, needs none, or the rule cannot be read), so it can answer every host of the platform, the control panel and every customer: ${rule}"
+        fi
+        # a quoted token (backtick, or double quote as Traefik also reads it) equal to a protected host
+        # (any letter case, any matcher)
+        claimed=""
+        mapfile -t tokens < <(printf '%s' "$rule" | jq -Rr 'scan("`([^`]*)`|\"((?:[^\"\\\\]|\\\\.)*)\"") | if .[0] != null then .[0] else (.[1] | gsub("\\\\(?<c>.)"; .c)) end | ascii_downcase | sub("\\.+$"; "")')
+        for token in "${tokens[@]}"; do
+            [[ -n "$token" && -n "${protected[$token]+x}" ]] || continue
+            case " $claimed " in *" $token "*) continue ;; esac
+            claimed+=" $token"
+            fail "foreign router ${name} (compose project ${project}) claims ${token} (${protected[$token]}): only the kernel's own routers may answer it: ${rule}"
+        done
+        # a HostRegexp that matches one (Oniguruma, the nearest the shell has to Traefik's RE2)
+        mapfile -t tokens < <(printf '%s' "$rule" | jq -Rr 'match("hostregexp\\((?:`([^`]*)`|\"((?:[^\"\\\\]|\\\\.)*)\")"; "gi") | .captures | if .[0].string != null then .[0].string else (.[1].string | gsub("\\\\(?<c>.)"; .c)) end')
+        for re in "${tokens[@]}"; do
+            [[ -n "$re" ]] || continue
+            for h in "${!protected[@]}"; do
+                # the bare name AND its fully-qualified spelling (trailing dot): the edge matches a request for
+                # the bare name against a rule written either way, so a pattern that fits only one still claims it
+                if n="$(jq -n --arg re "$re" --arg h "$h" '(($h | test($re; "i")) or (($h + ".") | test($re; "i")))' 2>/dev/null)"; then
+                    [[ "$n" != "true" ]] \
+                        || fail "foreign router ${name} (compose project ${project}) has a HostRegexp(\`${re}\`) that matches ${h} (${protected[$h]}): only the kernel's own routers may answer it"
+                else
+                    fail "foreign router ${name} (compose project ${project}) has a HostRegexp(\`${re}\`) this verifier cannot read, so it cannot show it misses the platform, the control panel and every customer"
+                    break
+                fi
+            done
+        done
+    done < <(printf '%s\n' "${FOREIGN_LISTED[@]}" | sort)
+    return 0
+}
+
 check_routers() {
     local svc_names mw_names n i name status service rule qualified host mws m base eps
     svc_names="$(printf '%s' "$SERVICES_JSON" | jq -r '.[].name')"
@@ -270,6 +559,8 @@ check_routers() {
     for (( i = 0; i < n; i++ )); do
         name="$(printf '%s' "$ROUTERS_JSON" | jq -r ".[$i].name")"
         case "$name" in *@internal) continue ;; esac
+        # another compose project's router: reported by check_foreign_docker_objects, not judged here
+        ! foreign_router_p "$name" || continue
 
         status="$(printf  '%s' "$ROUTERS_JSON" | jq -r ".[$i].status // \"missing\"")"
         service="$(printf '%s' "$ROUTERS_JSON" | jq -r ".[$i].service // \"\"")"
@@ -326,40 +617,15 @@ check_routers() {
 # a router added tomorrow is held to it the moment Traefik loads it. Later
 # /api/v1 routers (TRD-409) are no exception — they must pass this too.
 #
-# SUBJECT: every router except `*@internal` (Traefik's own: acme-http, api,
-# ping) and a router whose entryPoints are EXACTLY ["internaltest"] (the
-# loopback-only inactive-colour routers). A router with NO entryPoints listens
-# on every default entrypoint, so it is a subject too — exemption is by
-# evidence, never by absence.
-#
-# Each subject must carry:
-#   - a non-empty tls.certResolver. A bare `tls: {}` does not inherit the
-#     entrypoint's resolver and silently serves the default certificate;
-#   - a rule naming exactly ONE literal Host() and no HostRegexp — a pattern
-#     or a second host cannot be pinned to one value;
-#   - exactly ONE edge-hostpin-* middleware, FIRST in its chain, whose
-#     X-Forwarded-Host (read from the middleware Traefik actually loaded) is
-#     that literal host. Traefik only sets X-Forwarded-Host when it is absent
-#     and only strips it from untrusted peers; the pin is what makes the header
-#     edge-authoritative, and first is what keeps every later middleware from
-#     seeing a client-supplied value;
-#   - an HSTS middleware (edge-hsts-platform|edge-hsts-custom with stsSeconds
-#     > 0) and a tiered edge-ratelimit-* middleware that IS a rate limiter.
-#     Names alone are not trusted: an HSTS-named middleware with no max-age is
-#     not HSTS.
-# Zero subjects is itself a failure: a universal over nothing proves nothing.
-
-# ── The router universal (TASK-034a; spec B §3 post-condition) ───────────────
-#
-# Asserted over EVERY router Traefik's API reports, never over a list of names:
-# a router added tomorrow is held to it the moment Traefik loads it. Later
-# /api/v1 routers (TRD-409) are no exception — they must pass this too.
-#
-# SUBJECT: every HTTP router except `*@internal` (Traefik's own: acme-http, api,
-# ping) and a router whose entryPoints are EXACTLY ["internaltest"] (the
-# loopback-only inactive-colour routers). A router with NO entryPoints listens
-# on every default entrypoint, so it is a subject too — exemption is by
-# evidence, never by absence. TCP/UDP routers on the public entrypoints are
+# SUBJECT: every HTTP router of the kernel's own compose projects except
+# `*@internal` (Traefik's own: acme-http, api, ping), a router whose entryPoints
+# are EXACTLY ["internaltest"] (the loopback-only inactive-colour routers) and
+# the router on EXACTLY ["ping"] that serves noop@internal (the traefik
+# container's own edge-labels router, on an entrypoint nothing publishes). A
+# router with NO entryPoints listens on every default entrypoint, so it is a
+# subject too — exemption is by evidence, never by absence. Routers another
+# compose project declares are not the kernel's to judge (see
+# classify_foreign_docker_objects). TCP/UDP routers on the public entrypoints are
 # refused outright (check_l4_routers, one exact exception: the video relay's
 # livekit-turn router): a TCP passthrough on websecure takes the connection
 # before any HTTP router, pin included, ever sees it.
@@ -442,8 +708,18 @@ check_router_universal() {
         r="$(printf '%s' "$ROUTERS_JSON" | jq -c ".[$i]")"
         name="$(jq -r '.name' <<<"$r")"
         case "$name" in *@internal) continue ;; esac
+        ! foreign_router_p "$name" || continue
         eps="$(jq -r '.entryPoints // [] | join(",")' <<<"$r")"
         [[ "$eps" == "internaltest" ]] && continue
+        # The one router the traefik container itself carries (edge-labels): on the
+        # unpublished `ping` entrypoint, answering with noop@internal, so that
+        # traefik.enable=true does not generate a default router. A router that listens
+        # ONLY where nothing is published and serves nothing cannot be pinned, throttled
+        # or given HSTS for any client. Exempt by evidence: exactly ["ping"] AND exactly
+        # noop@internal; on a second entrypoint or with a real service it is a subject.
+        if [[ "$eps" == "ping" && "$(jq -r '.service // ""' <<<"$r")" == "noop@internal" ]]; then
+            continue
+        fi
         subjects=$(( subjects + 1 ))
 
         resolver="$(jq -r '.tls.certResolver // ""' <<<"$r")"
@@ -462,6 +738,12 @@ check_router_universal() {
         mapfile -t mws < <(jq -r '.middlewares // [] | .[]' <<<"$r")
         for m in "${mws[@]}"; do
             q="$(qualify_ref "$m" "$name")"
+            # A middleware only another compose project declares is not the kernel's: whatever its
+            # name says it is, it cannot be the pin, the HSTS or the rate limit the kernel owes.
+            if foreign_mw_p "$q"; then
+                fail "router $name: middleware $q is declared by another compose project (not a kernel project of stack ${STACK}), so it cannot stand for a kernel middleware"
+                continue
+            fi
             chain+=("$q")
             base="${q%%@*}"
             [[ "$base" == edge-hostpin-* ]] && pins+=("$q")
@@ -602,6 +884,7 @@ check_middleware_placement() {
     done
 
     for m in $(printf '%s' "$MIDDLEWARES_JSON" | jq -r '.[] | select((.provider // (.name | split("@")[1])) == "docker") | .name'); do
+        ! foreign_mw_p "$m" || continue
         base="$(tr '[:upper:]' '[:lower:]' <<<"${m%%@*}")"
         (( traefik_ids == 1 )) \
             || { fail "middleware ${m}: ${traefik_ids} containers carry com.docker.compose.service=traefik (expected exactly 1), so its placement cannot be established"; continue; }
@@ -1422,7 +1705,7 @@ build_rows() {
 }
 
 write_report() {
-    local ts okflag rows fjson
+    local ts okflag rows fjson foreign
     ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     if (( ${#FAILURES[@]} == 0 )); then
         okflag=true
@@ -1436,10 +1719,16 @@ write_report() {
     else
         rows="$(printf '%s\n' "${ROUTER_ROWS[@]}" | jq -sc '.')"
     fi
+    if (( ${#FOREIGN_LISTED[@]} == 0 )); then
+        foreign='[]'
+    else
+        foreign="$(printf '%s\n' "${FOREIGN_LISTED[@]}" \
+            | jq -Rsc 'split("\n") | map(select(length > 0) | split("|") | {kind: .[0], name: .[1], project: .[2]})')"
+    fi
     jq -nc --arg ts "$ts" --argjson ok "$okflag" \
            --argjson routers "$rows" --argjson failures "$fjson" \
-           --argjson waivers "$(waivers_json)" \
-        '{ts: $ts, ok: $ok, routers: $routers, failures: $failures, waivers: $waivers}' \
+           --argjson waivers "$(waivers_json)" --argjson foreign "$foreign" \
+        '{ts: $ts, ok: $ok, routers: $routers, failures: $failures, waivers: $waivers, foreign: $foreign}' \
         | atomic_write "$(gremion_root)/runtime/last-verify.json" 0644
 }
 
@@ -1632,6 +1921,8 @@ run_pass() {
     SERVICES_TO_CHECK=(); SERVICE_HEALTHY=(); SAN_OK=(); MARKER_SHA=()
     load_waivers
     fetch_api
+    classify_foreign_docker_objects
+    check_foreign_docker_objects
     check_routers
     check_router_universal
     check_l4_routers

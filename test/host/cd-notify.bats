@@ -605,6 +605,12 @@ digest_day() { date -u -d "2026-11-18 $1" +%s; }
     grep -qx 'notes: unhealthy_after_rollback' "$(grep -l '^kind: rollback_failed$' "${GREMION_ROOT}"/data/cd/outbox/*.eml)"
 }
 
+@test "notes: a rollback_failed mail can say that the new colour is still running" {
+    run nlib 'cd_notify rollback_failed sha12='"$SHA_A"' colour=green notes=unhealthy_after_rollback,new_colour_still_running'
+    [ "$status" -eq 0 ]
+    grep -qx 'notes: unhealthy_after_rollback,new_colour_still_running' "$(grep -l '^kind: rollback_failed$' "${GREMION_ROOT}"/data/cd/outbox/*.eml)"
+}
+
 @test "notes: a word outside the list, a slug-shaped word, a list that is too long and a note on a kind that has none are never written as text" {
     run nlib '
         cd_notify released sha12='"$SHA_A"' notes=customer_acme

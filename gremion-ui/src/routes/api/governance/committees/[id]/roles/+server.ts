@@ -6,6 +6,7 @@ import type { SessionUser } from '$lib/auth/types'
 import { listRoles, createRole, getActiveAssignment } from '$lib/server/governance/governance-db'
 import { getOrgUnit, isMemberOf } from '$lib/server/governance/org-units-db'
 import { canSeeOrgUnit, seesAllGovernance } from '$lib/server/governance/visibility'
+import { malformedIdResponse } from '$lib/server/governance/route-ids'
 
 const createRoleSchema = z.object({
   name: z.string().min(1).max(200),
@@ -20,6 +21,8 @@ export const GET: RequestHandler = async ({ params, locals }) => {
   if (!user || !hasRole(user.roles, Role.Member)) {
     return json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
+  const malformedId = malformedIdResponse(params.id)
+  if (malformedId) return malformedId
   // R29-F104-KTWIN (kernel twin of F1-FIX-04 / S3#33, operator decision D-3):
   // role holders are roster data, so a committee_only unit's roles go only to
   // its members and CouncilAdmins. Same 404 as the members endpoint for a
@@ -43,6 +46,8 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
   if (!user || !hasRole(user.roles, Role.CouncilAdmin)) {
     return json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
+  const malformedId = malformedIdResponse(params.id)
+  if (malformedId) return malformedId
   const body = await request.json()
   const parsed = createRoleSchema.safeParse(body)
   if (!parsed.success) {

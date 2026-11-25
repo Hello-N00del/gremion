@@ -9,6 +9,7 @@ import { canSeeOrgUnit, seesAllGovernance } from '$lib/server/governance/visibil
 import { addMember } from '$lib/server/governance/provisioning/orchestrator'
 import { getKeycloakAdminClient } from '$lib/server/keycloak-admin'
 import { writeAuditEntry } from '$lib/server/audit-db'
+import { malformedIdResponse } from '$lib/server/governance/route-ids'
 
 const addMemberSchema = z.object({
   userKeycloakId: z.string().min(1),
@@ -23,6 +24,8 @@ export const GET: RequestHandler = async ({ params, locals }) => {
   if (!user || !hasRole(user.roles, Role.Member)) {
     return json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
+  const malformedId = malformedIdResponse(params.id)
+  if (malformedId) return malformedId
   // R29-F104-KTWIN (kernel twin of F1-FIX-04 / S3#33, operator decision D-3):
   // the unit must be visible to the caller (a committee_only unit only to its
   // members and CouncilAdmins), and email addresses go only to members of the
@@ -58,6 +61,8 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
   if (!user || !hasRole(user.roles, Role.CouncilAdmin)) {
     return json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
+  const malformedId = malformedIdResponse(params.id)
+  if (malformedId) return malformedId
   if (!(await getOrgUnit(params.id))) {
     return json({ success: false, error: 'Not found' }, { status: 404 })
   }

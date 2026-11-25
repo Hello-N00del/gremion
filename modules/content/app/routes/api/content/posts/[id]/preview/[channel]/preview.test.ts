@@ -31,6 +31,10 @@ vi.mock('$lib/server/content/channels/instagram-renderer', () => ({
 
 import { GET } from './+server'
 
+// Content ids are UUIDs; the route answers 404 for anything else before a backend call.
+const PID = '0b7c6f1e-4a8e-4c51-9f3a-2d1e8c7b6a50'
+const BAD_ID = 'not-a-uuid'
+
 type Ev = Parameters<typeof GET>[0]
 
 function makeEvent(opts: {
@@ -39,7 +43,7 @@ function makeEvent(opts: {
   channel?: string
 }): Ev {
   const channel = opts.channel ?? 'email'
-  const id = opts.id ?? 'p1'
+  const id = opts.id ?? PID
   const request = new Request(`http://stura.test/api/content/posts/${id}/preview/${channel}`)
   return {
     request,
@@ -50,11 +54,11 @@ function makeEvent(opts: {
 
 describe('GET /api/content/posts/[id]/preview/[channel]', () => {
   beforeEach(() => {
-    mockGetPost.mockReset().mockResolvedValue({ id: 'p1', title: 'T', body_html: '<p>x</p>' })
+    mockGetPost.mockReset().mockResolvedValue({ id: PID, title: 'T', body_html: '<p>x</p>' })
     mockListMedia.mockReset().mockResolvedValue([])
     mockGetChannels
       .mockReset()
-      .mockResolvedValue([{ post_id: 'p1', channel: 'email', enabled: true, overrides: {} }])
+      .mockResolvedValue([{ post_id: PID, channel: 'email', enabled: true, overrides: {} }])
     mockEmailDerive.mockReset().mockReturnValue({ subject: 'T', html: '<p>x</p>', warnings: [] })
   })
 
@@ -81,5 +85,12 @@ describe('GET /api/content/posts/[id]/preview/[channel]', () => {
     await expect(
       GET(makeEvent({ user: { roles: ['member'], groups: [], id: 'u1' } })),
     ).rejects.toMatchObject({ status: 404 })
+  })
+
+  it('404s a malformed post id before any backend call', async () => {
+    await expect(
+      GET(makeEvent({ user: { roles: ['member'], groups: [], id: 'u1' }, id: BAD_ID })),
+    ).rejects.toMatchObject({ status: 404 })
+    expect(mockGetPost).not.toHaveBeenCalled()
   })
 })

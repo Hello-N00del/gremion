@@ -121,8 +121,21 @@ case " $* " in
       echo "{\"enabled\":{\"user_oidc\":\"8.0\",\"richdocuments\":\"9.0\",\"groupfolders\":\"20.0\",\"polls\":\"8.0\"},\"disabled\":{}}"
     fi
     exit 0 ;;
+  *" exec "*"user_oidc:provider Keycloak-"*"--clientid"*) printf "occ provider-set-secondary\n" >> "$ORDER"; exit 0 ;;
+  *" exec "*"user_oidc:provider Keycloak-"*"--output=json"*)
+    # a SECONDARY customer'"'"'s own provider: read back by its identifier, with its own numeric id
+    printf "occ provider-read-secondary\n" >> "$ORDER"
+    if [ -f "$GREMION_ROOT/sec-provider-missing" ]; then exit 1; fi
+    cb=true; if [ -f "$GREMION_ROOT/sec-bearer-off" ]; then cb=false; fi
+    uu=true; if [ -f "$GREMION_ROOT/sec-uid-raw" ]; then uu=false; fi
+    disc="https://canary.example.test/auth/realms/'"$SLUG"'/.well-known/openid-configuration"
+    if [ -f "$GREMION_ROOT/sec-discovery-wrong" ]; then disc="https://elsewhere.example.test/auth/realms/x/.well-known/openid-configuration"; fi
+    echo "{\"id\":2,\"identifier\":\"Keycloak-'"$SLUG"'\",\"clientId\":\"nextcloud\",\"discoveryEndpoint\":\"${disc}\",\"scope\":\"openid email profile\",\"settings\":{\"checkBearer\":${cb},\"uniqueUid\":${uu}}}"
+    exit 0 ;;
   *" exec "*"user_oidc:provider Keycloak"*"--clientid"*) printf "occ provider-set\n" >> "$ORDER"; exit 0 ;;
   *" exec "*"user_oidc:provider Keycloak"*)
+    # an install whose primary customer was never wired has no provider of that name: occ answers with an error
+    if [ -f "$GREMION_ROOT/primary-provider-missing" ]; then exit 1; fi
     # The real command prints the provider with its settings nested under .settings.
     if [ -f "$GREMION_ROOT/bearer-off" ]; then echo "{\"id\":1,\"identifier\":\"Keycloak\",\"clientId\":\"nextcloud\",\"settings\":{\"checkBearer\":false}}"; else echo "{\"id\":1,\"identifier\":\"Keycloak\",\"clientId\":\"nextcloud\",\"settings\":{\"checkBearer\":true}}"; fi
     exit 0 ;;
@@ -192,7 +205,12 @@ exit 0'
 url=""; for a in "$@"; do case "$a" in https://*) url="$a" ;; esac; done
 case "$url" in
   */.well-known/openid-configuration)
-    if [ -f "$GREMION_ROOT/issuer-wrong" ]; then echo "{\"issuer\":\"https://elsewhere.example.org/auth/realms/x\"}"; else echo "{\"issuer\":\"https://pilot.guard.example.org/auth/realms/'"$SLUG"'\"}"; fi
+    # the realm answers ONLY on the customer'"'"'s registered host (a secondary one included): a request for any
+    # other host fails like an unreachable realm, so a wire that asks the wrong host cannot pass
+    h="${url#https://}"; h="${h%%/*}"; h="${h%%:*}"
+    want="pilot.guard.example.org"; if [ -f "$GREMION_ROOT/registered-host" ]; then want="$(cat "$GREMION_ROOT/registered-host")"; fi
+    if [ "$h" != "$want" ]; then echo "curl: (22) the realm does not answer on $h" >&2; exit 22; fi
+    if [ -f "$GREMION_ROOT/issuer-wrong" ]; then echo "{\"issuer\":\"https://elsewhere.example.org/auth/realms/x\"}"; else echo "{\"issuer\":\"https://${h}/auth/realms/'"$SLUG"'\"}"; fi
     exit 0 ;;
   */_matrix/client/versions) echo "{\"versions\":[\"v1.5\"]}"; exit 0 ;;
   */_matrix/client/v3/login)
@@ -850,8 +868,9 @@ exec ${real_stat} \"\$@\""
 }
 
 # ---------------------------------------------------------------------------
-# a customer on a SECONDARY host is core-only: wire refuses it, so the shared Synapse and Nextcloud stay
-# bound to the primary customer's realm
+# a customer on a SECONDARY host (SECONDARY_TENANT_HOSTS) is core-only: wire takes its own branch for it
+# (provider, CalDAV collection, mail login) and leaves the shared Synapse, the primary customer's Nextcloud
+# provider and every env file alone; a host that is neither the customer host nor listed is refused
 # ---------------------------------------------------------------------------
 
 # nothing_started_or_written -- what a refusing wire leaves behind: no docker call that changes anything,
@@ -868,19 +887,19 @@ nothing_started_or_written() {
     [ -s "${GREMION_ROOT}/host-query.log" ] || { echo "the registered host was never read"; return 1; }
 }
 
-@test "wire refuses a customer whose registered host is not PILOT_TENANT_HOST, before it writes or starts anything, and says why" {
-    printf 'canary.guard.example.org' > "${GREMION_ROOT}/registered-host"
+@test "wire refuses a customer whose registered host is neither PILOT_TENANT_HOST nor listed in SECONDARY_TENANT_HOSTS, before it writes or starts anything, and says why" {
+    printf 'canary.example.test' > "${GREMION_ROOT}/registered-host"
     wire
     [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
     [[ "$output" == *"core-only"* ]] || { echo "$output"; return 1; }
-    [[ "$output" == *"canary.guard.example.org"* && "$output" == *"pilot.guard.example.org"* ]] || { echo "$output"; return 1; }
+    [[ "$output" == *"canary.example.test"* && "$output" == *"pilot.guard.example.org"* ]] || { echo "$output"; return 1; }
     [[ "$output" == *"chat and file services stay bound to the primary customer"* ]] || { echo "$output"; return 1; }
     nothing_started_or_written
     grep -q 'is_primary' "${GREMION_ROOT}/host-query.log" || { cat "${GREMION_ROOT}/host-query.log"; return 1; }
 }
 
 @test "wire: the secondary-host refusal comes before the secret-file checks (the message is the core-only one, not 'secret absent')" {
-    printf 'canary.guard.example.org' > "${GREMION_ROOT}/registered-host"
+    printf 'canary.example.test' > "${GREMION_ROOT}/registered-host"
     rm -f "${GREMION_ROOT}/tenant-secrets/tenant_${SLUG}_client_synapse" "${GREMION_ROOT}/tenant-secrets/tenant_${SLUG}_client_nextcloud"
     wire
     [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
@@ -906,4 +925,271 @@ nothing_started_or_written() {
     [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
     [ -s "${GREMION_ROOT}/host-query.log" ] || { echo "the registered host was not read"; return 1; }
     grep -q 'compose bootstrap=1 :: .*up -d matrix' "$ORDER"
+}
+
+# ---------------------------------------------------------------------------
+# the SECONDARY branch
+# ---------------------------------------------------------------------------
+
+# secondary_customer -- the install lists canary.example.test as a secondary host and the customer is
+# registered on it. The primary customer was wired before: its realm, its bot token and its profiles are in the
+# env files, which are copied aside so that "left alone" is a comparison of the files, not a guess.
+secondary_customer() {
+    local f
+    printf 'SECONDARY_TENANT_HOSTS=canary.example.test\n' >> "${GREMION_ROOT}/etc/env/state.env"
+    sed -i 's#^SYNAPSE_KEYCLOAK_ISSUER_URL=.*#SYNAPSE_KEYCLOAK_ISSUER_URL=https://pilot.guard.example.org/auth/realms/primary-realm#' "${GREMION_ROOT}/etc/env/state.env"
+    sed -i 's#^SYNAPSE_KEYCLOAK_FETCH_URL=.*#SYNAPSE_KEYCLOAK_FETCH_URL=https://pilot.guard.example.org/auth/realms/primary-realm#' "${GREMION_ROOT}/etc/env/state.env"
+    for f in state app-blue app-green; do
+        sed -i "s#^SYNAPSE_ADMIN_TOKEN=.*#SYNAPSE_ADMIN_TOKEN=${TOKEN}#" "${GREMION_ROOT}/etc/env/${f}.env"
+        cp "${GREMION_ROOT}/etc/env/${f}.env" "${GREMION_ROOT}/etc/env/${f}.env.before"
+    done
+    printf 'canary.example.test' > "${GREMION_ROOT}/registered-host"
+}
+
+# env_files_untouched -- state.env and both app env files are byte-identical to what secondary_customer left
+env_files_untouched() {
+    local f
+    for f in state app-blue app-green; do
+        cmp "${GREMION_ROOT}/etc/env/${f}.env" "${GREMION_ROOT}/etc/env/${f}.env.before" || return 1
+    done
+}
+
+@test "wire, secondary host: registers the user_oidc provider Keycloak-<slug> against the customer's OWN host, reads it back by identifier, prints its id, and creates the CalDAV collection" {
+    secondary_customer
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    local call
+    call="$(grep "^docker .*user_oidc:provider Keycloak-${SLUG} " "$SHIM_LOG" | grep -- '--clientid' | head -1)"
+    [[ "$call" == *"exec -u www-data -e NEXTCLOUD_OIDC_CLIENT_SECRET c-nextcloud"* ]] || { echo "$call"; return 1; }
+    [[ "$call" == *'--clientsecret="$NEXTCLOUD_OIDC_CLIENT_SECRET"'* ]] || { echo "$call"; return 1; }
+    [[ "$call" == *"--clientid=nextcloud"* ]] || { echo "$call"; return 1; }
+    [[ "$call" == *"--discoveryuri=https://canary.example.test/auth/realms/${SLUG}/.well-known/openid-configuration"* ]] || { echo "$call"; return 1; }
+    [[ "$call" == *"--check-bearer=1"* && "$call" == *"--bearer-provisioning=1"* ]] || { echo "$call"; return 1; }
+    # a secondary customer's Nextcloud user ids are hashed with its provider id (--unique-uid=1), so an id its
+    # realm signs can never be the raw id of an account of the primary customer (provider 'Keycloak', --unique-uid=0)
+    [[ "$call" == *"--unique-uid=1"* ]] || { echo "$call"; return 1; }
+    [[ "$call" != *"--unique-uid=0"* ]] || { echo "$call"; return 1; }
+    grep -q "^docker exec -u www-data c-nextcloud php occ user_oidc:provider Keycloak-${SLUG} --output=json\$" "$SHIM_LOG" || { cat "$SHIM_LOG"; return 1; }
+    grep -q "^docker exec -u www-data c-nextcloud php occ dav:create-calendar admin gremion-${SLUG}\$" "$SHIM_LOG" || { cat "$SHIM_LOG"; return 1; }
+    # the provider is registered, then read back, before the collection is created
+    local p r c
+    p="$(grep -n 'occ provider-set-secondary' "$ORDER" | head -1 | cut -d: -f1)"
+    r="$(grep -n 'occ provider-read-secondary' "$ORDER" | head -1 | cut -d: -f1)"
+    c="$(grep -n 'occ create-calendar' "$ORDER" | head -1 | cut -d: -f1)"
+    [ -n "$p" ] && [ -n "$r" ] && [ -n "$c" ] || { echo "missing step: p=${p} r=${r} c=${c}"; return 1; }
+    [ "$p" -lt "$r" ] && [ "$r" -lt "$c" ] || { echo "order: p=${p} r=${r} c=${c}"; return 1; }
+    [[ "$output" == *"provider Keycloak-${SLUG}"*"id 2"* ]] || { echo "$output"; return 1; }
+    [[ "$output" == *"WIRE: ok ${SLUG}"* ]]
+}
+
+@test "wire, secondary host: the issuer and the discovery URI are the REGISTERED host's, never PILOT_TENANT_HOST's (the realm check and the in-container reachability check name it)" {
+    secondary_customer
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    local disc="https://canary.example.test/auth/realms/${SLUG}/.well-known/openid-configuration"
+    grep -q "^curl .*${disc}\$" "$SHIM_LOG" || { cat "$SHIM_LOG"; return 1; }
+    grep -q "^docker exec c-nextcloud curl .*${disc}\$" "$SHIM_LOG" || { cat "$SHIM_LOG"; return 1; }
+    assert_absent "pilot\.guard\.example\.org/auth/realms/${SLUG}" "$SHIM_LOG" "the primary customer's host was asked for the secondary customer's realm"
+}
+
+@test "wire, secondary host: no matrix start or recreate, no bot, no synapse secret, state.env and both app env files byte-identical, the primary customer's provider and the office settings untouched" {
+    secondary_customer
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    env_files_untouched
+    [ "$(sed -n 's/^SYNAPSE_KEYCLOAK_ISSUER_URL=//p' "${GREMION_ROOT}/etc/env/state.env")" = "https://pilot.guard.example.org/auth/realms/primary-realm" ]
+    [ ! -e "${GREMION_ROOT}/etc/secrets/synapse" ]
+    assert_absent '^docker compose |service=matrix|/bootstrap\.sh|whoami|BOOTSTRAP_MODE|SYNAPSE_KEYCLOAK_ISSUER_URL' "$SHIM_LOG" "the shared chat service was touched"
+    # the primary customer's provider is READ (its existence is the proof that the primary was wired) and never set
+    assert_absent 'user_oidc:provider Keycloak( --clientid| --clientsecret| --discoveryuri| --check-bearer|$)' "$SHIM_LOG" "the primary customer's provider was set"
+    grep -q "^docker exec -u www-data c-nextcloud php occ user_oidc:provider Keycloak --output=json\$" "$SHIM_LOG" || { cat "$SHIM_LOG"; return 1; }
+    assert_absent 'richdocuments:activate-config|wopi_callback_url' "$SHIM_LOG" "the install-wide office settings were rewritten"
+    # the bot is not the secondary customer's business: -e names stay the provider secret's alone
+    local names
+    names="$(grep -oE '^docker exec .*' "$SHIM_LOG" | grep -oE ' -e [A-Z_]+' | sort -u | tr -d '\n')"
+    [ "$names" = " -e NEXTCLOUD_OIDC_CLIENT_SECRET" ] || { echo "-e names: ${names}"; return 1; }
+}
+
+@test "wire, secondary host: gremion-ui is not recreated (the app re-reads the row and the config within its cache TTL), says so, and its token is read back against state.env" {
+    secondary_customer
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    assert_absent 'force-recreate|up -d' "$SHIM_LOG" "a container was recreated"
+    [[ "$output" == *"gremion-ui is not recreated"* && "$output" == *"no customer's app restarts"* ]] || { echo "$output"; return 1; }
+    grep -q '^docker exec c-ui printenv SYNAPSE_ADMIN_TOKEN$' "$SHIM_LOG" || { cat "$SHIM_LOG"; return 1; }
+}
+
+@test "wire, secondary host: a running gremion-ui that carries another bot token than state.env fails the wire BEFORE the provider, the collection or the mail login is written" {
+    secondary_customer
+    relay_mail
+    : > "${GREMION_ROOT}/ui-stale-token"
+    wire
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"SYNAPSE_ADMIN_TOKEN"* ]] || { echo "$output"; return 1; }
+    assert_absent 'user_oidc:provider Keycloak-|dav:create-calendar' "$SHIM_LOG" "the provider or the collection was written after a failed precondition"
+    [ ! -e "${GREMION_ROOT}/tenant-secrets/relay-smtp-password" ] || { echo "the mail login was written"; return 1; }
+    [ "$(jq -c . "${GREMION_ROOT}/tenant-row.json")" = '{"residencyZone":"eu"}' ] || { jq . "${GREMION_ROOT}/tenant-row.json"; return 1; }
+    env_files_untouched
+}
+
+@test "wire, secondary host: an install whose PRIMARY customer was never wired (no provider 'Keycloak', but the same token in state.env and in the running app) fails the wire before anything is written" {
+    secondary_customer
+    relay_mail
+    : > "${GREMION_ROOT}/primary-provider-missing"
+    wire
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"primary"* && "$output" == *"Keycloak"* && "$output" == *"wire"* ]] || { echo "$output"; return 1; }
+    # the read of the primary's provider is the only Nextcloud provider call; nothing of the customer's is written
+    grep -q "^docker exec -u www-data c-nextcloud php occ user_oidc:provider Keycloak --output=json\$" "$SHIM_LOG" || { cat "$SHIM_LOG"; return 1; }
+    assert_absent 'user_oidc:provider Keycloak-|dav:|^docker compose ' "$SHIM_LOG" "something of the secondary customer was written before the primary was found wired"
+    [ ! -e "${GREMION_ROOT}/tenant-secrets/relay-smtp-password" ] || { echo "the mail login was written"; return 1; }
+    [ "$(jq -c . "${GREMION_ROOT}/tenant-row.json")" = '{"residencyZone":"eu"}' ] || { jq . "${GREMION_ROOT}/tenant-row.json"; return 1; }
+    env_files_untouched
+    # a primary provider that reads back without checkBearer true is not a wired primary either
+    rm -f "${GREMION_ROOT}/primary-provider-missing"
+    : > "${GREMION_ROOT}/bearer-off"
+    wire
+    [ "$status" -eq 1 ] || { echo "bearer off: status=$status $output"; return 1; }
+    [[ "$output" == *"primary"* ]] || { echo "$output"; return 1; }
+    assert_absent 'user_oidc:provider Keycloak-|dav:' "$SHIM_LOG" "something of the secondary customer was written before the primary was found wired"
+}
+
+@test "wire, secondary host: the primary customer's provider is read BEFORE the secondary's provider is set, so Keycloak-<slug> can never take user_oidc id 1" {
+    secondary_customer
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    local r s
+    r="$(grep -n "^docker exec -u www-data c-nextcloud php occ user_oidc:provider Keycloak --output=json\$" "$SHIM_LOG" | head -1 | cut -d: -f1)"
+    s="$(grep -n "user_oidc:provider Keycloak-${SLUG} .*--clientid" "$SHIM_LOG" | head -1 | cut -d: -f1)"
+    [ -n "$r" ] && [ -n "$s" ] || { echo "missing step: r=${r} s=${s}"; return 1; }
+    [ "$r" -lt "$s" ] || { echo "order: read=${r} set=${s}"; return 1; }
+}
+
+@test "wire, secondary host: a provider that reads back without checkBearer true fails the wire before the collection is created" {
+    secondary_customer
+    : > "${GREMION_ROOT}/sec-bearer-off"
+    wire
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"checkBearer"* && "$output" == *"Keycloak-${SLUG}"* ]] || { echo "$output"; return 1; }
+    assert_absent 'dav:create-calendar' "$SHIM_LOG" "the collection was created after a failed read-back"
+}
+
+@test "wire, secondary host: a provider that reads back with raw user ids (uniqueUid false) fails the wire before the collection is created" {
+    secondary_customer
+    : > "${GREMION_ROOT}/sec-uid-raw"
+    wire
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"Keycloak-${SLUG}"* && "$output" == *"unique-uid"* ]] || { echo "$output"; return 1; }
+    assert_absent 'dav:create-calendar' "$SHIM_LOG" "the collection was created after a failed read-back"
+}
+
+@test "wire, secondary host: a provider that reads back with another discovery URI, or does not read back at all, fails the wire" {
+    secondary_customer
+    : > "${GREMION_ROOT}/sec-discovery-wrong"
+    wire
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"discovery"* ]] || { echo "$output"; return 1; }
+    rm -f "${GREMION_ROOT}/sec-discovery-wrong"
+    : > "${GREMION_ROOT}/sec-provider-missing"
+    wire
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    assert_absent 'dav:create-calendar' "$SHIM_LOG" "the collection was created after a failed read-back"
+}
+
+@test "wire, secondary host: the Nextcloud apps of the pilot are checked (a disabled one fails the wire before the collection is created)" {
+    secondary_customer
+    : > "${GREMION_ROOT}/polls-missing"
+    wire
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"polls"* ]] || { echo "$output"; return 1; }
+    assert_absent 'dav:create-calendar' "$SHIM_LOG" "the collection was created after a failed app check"
+    rm -f "${GREMION_ROOT}/polls-missing"
+    : > "${GREMION_ROOT}/wopi-missing"
+    wire
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"public_wopi_url"* ]] || { echo "$output"; return 1; }
+    assert_absent 'dav:create-calendar' "$SHIM_LOG" "the collection was created after a failed wopi check"
+}
+
+@test "wire, secondary host: the realm must answer on the customer's own host before anything is written (an issuer of another host refuses)" {
+    secondary_customer
+    : > "${GREMION_ROOT}/issuer-wrong"
+    wire
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"issuer"* ]] || { echo "$output"; return 1; }
+    env_files_untouched
+    assert_absent 'user_oidc:provider|dav:|^docker compose ' "$SHIM_LOG" "something was written after a failed realm check"
+}
+
+@test "wire refuses a host that is neither PILOT_TENANT_HOST nor an ENTRY of SECONDARY_TENANT_HOSTS (a suffix of one is no entry), and nothing is written" {
+    secondary_customer
+    printf 'other.example.test' > "${GREMION_ROOT}/registered-host"
+    wire
+    [ "$status" -eq 1 ] || { echo "other host: status=$status $output"; return 1; }
+    [[ "$output" == *"other.example.test"* && "$output" == *"SECONDARY_TENANT_HOSTS"* && "$output" == *"core-only"* ]] || { echo "$output"; return 1; }
+    printf 'example.test' > "${GREMION_ROOT}/registered-host"
+    wire
+    [ "$status" -eq 1 ] || { echo "suffix host: status=$status $output"; return 1; }
+    env_files_untouched
+    [ ! -s "$ORDER" ] || { echo "the wire did something: $(cat "$ORDER")"; return 1; }
+    [ ! -e "${GREMION_ROOT}/etc/secrets/synapse" ]
+    [ "$(jq -c . "${GREMION_ROOT}/tenant-row.json")" = '{"residencyZone":"eu"}' ]
+    assert_absent 'user_oidc|dav:|^docker compose ' "$SHIM_LOG" "something ran after a refusal"
+}
+
+@test "wire, secondary host with MAIL_TRANSPORT=relay: the customer's mail login is wired (password copy, tenant row, config.json) and the creation order marks it wired, all without recreating any app" {
+    secondary_customer
+    relay_mail
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [ "$(tr -d '\r\n' < "${GREMION_ROOT}/tenant-secrets/relay-smtp-password")" = "$RELAY_PW" ]
+    [ "$(jq -r '.smtp.host' "${GREMION_ROOT}/tenant-row.json")" = relay.example.org ]
+    [ "$(jq -r '.residencyZone' "${GREMION_ROOT}/tenant-row.json")" = eu ]
+    [ -n "$(jq -r '.servicesWiredAt // empty' "${GREMION_ROOT}/tenant-row.json")" ] || { jq . "${GREMION_ROOT}/tenant-row.json"; return 1; }
+    [ "$(jq -r '.smtp.configured' "${GREMION_ROOT}/ui-config.json")" = true ]
+    assert_absent 'force-recreate|up -d' "$SHIM_LOG" "a container was recreated"
+    env_files_untouched
+}
+
+@test "wire, secondary host: a second run is as good as the first (the provider is updated in place, the collection is not created twice, nothing recreated)" {
+    secondary_customer
+    wire
+    [ "$status" -eq 0 ] || { echo "first: status=$status $output"; return 1; }
+    wire
+    [ "$status" -eq 0 ] || { echo "second: status=$status $output"; return 1; }
+    [ "$(grep -c 'occ create-calendar' "$ORDER")" -eq 1 ]
+    [ "$(grep -c 'occ provider-set-secondary' "$ORDER")" -eq 2 ]
+    env_files_untouched
+}
+
+@test "wire: a listed secondary host does not move the PRIMARY customer onto the secondary branch (registered on PILOT_TENANT_HOST it is wired as before)" {
+    printf 'SECONDARY_TENANT_HOSTS=canary.example.test\n' >> "${GREMION_ROOT}/etc/env/state.env"
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    grep -q 'compose bootstrap=1 :: .*up -d matrix' "$ORDER"
+    grep -q '^docker exec .*user_oidc:provider Keycloak --clientid=nextcloud' "$SHIM_LOG"
+}
+
+# The PRIMARY wire's docker argv log, normalised (the throwaway root becomes <ROOT>), is the one the program wrote
+# BEFORE the secondary branch existed: recorded from the unchanged program, one line per call, in call order.
+@test "wire: the PRIMARY wire's docker argv log is identical to the golden recorded before the secondary branch" {
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    local got="${GREMION_ROOT}/docker-argv.got"
+    grep '^docker ' "$SHIM_LOG" | sed "s#${GREMION_ROOT}#<ROOT>#g" > "$got"
+    diff "${HOST_TEST_DIR}/fixtures/services-wire/primary-wire-docker-argv.golden" "$got"
+}
+
+@test "wire, secondary host: needs no synapse client secret file (the shared chat service is not its business), but its nextcloud client secret file is a precondition checked before anything is written" {
+    secondary_customer
+    rm -f "${GREMION_ROOT}/tenant-secrets/tenant_${SLUG}_client_synapse"
+    wire
+    [ "$status" -eq 0 ] || { echo "no synapse secret: status=$status $output"; return 1; }
+    [[ "$output" == *"WIRE: ok ${SLUG}"* ]]
+    rm -f "${GREMION_ROOT}/tenant-secrets/tenant_${SLUG}_client_nextcloud"
+    : > "$SHIM_LOG"
+    wire
+    [ "$status" -eq 2 ] || { echo "no nextcloud secret: status=$status $output"; return 1; }
+    [[ "$output" == *"nextcloud client secret is absent"* ]] || { echo "$output"; return 1; }
+    assert_absent 'user_oidc:provider|dav:|^docker compose ' "$SHIM_LOG" "something ran after a failed precondition"
 }
