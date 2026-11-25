@@ -123,8 +123,11 @@ what a deploy returns when a contract the release must supply is not there.
 
 ## 4. The commands
 
-All under `/opt/gremion/bin`, all `bash`, all asserting post-conditions rather
-than exit codes.
+All `bash`, all asserting post-conditions rather than exit codes. All are installed under
+`/opt/gremion/bin` except `gremion-isolation`, `gremion-services` and `gremion-tenant`: they source
+the release's own customer libraries (`lib/customer-ops.sh`, `lib/executor/db.sh`, `lib/access-log.sh`),
+which the install does not copy, so they run from the release tree, `/opt/gremion/current/infra/host/bin/`
+(the gates of a release run the candidate tree's own `gremion-isolation`).
 
 | Command | Purpose |
 |---|---|

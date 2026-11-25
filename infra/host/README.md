@@ -15,7 +15,7 @@ infra/host/
   lib/common.sh          primitives every gremion-* program sources
   lib/access-log.sh      the vendor/operator access record writer
   lib/customer-ops.sh, lib/executor/   the host-side executor's library and request handlers
-  bin/gremion-*          the host programs
+  bin/gremion-*          the host programs (the cd stage installs all but gremion-isolation, -services and -tenant, which run from the release tree)
   templates/env/*.tmpl   one template per compose project (app.env.tmpl serves both colours)
   templates/{systemd,edge,nftables}/   unit files, edge router and firewall templates
   ops/                   the host half of the ops stack (see ops/README.md)
