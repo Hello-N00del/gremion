@@ -203,9 +203,7 @@ describe('/tasks load — boards for the switcher', () => {
 })
 
 // ?board=<id> of a board outside the member's scope used to render the normal page with no board and no word
-// why. The load now says so. Every id the member's scope does not list gets the same answer, so the page
-// tells an existing board of another committee apart from an id that never existed no better than the API's
-// "no access" answer does.
+// why. The load now says so. Every id the member's scope does not list gets the one same answer from the page.
 describe('/tasks load - a board the member may not see', () => {
   const runFor = (board: string) =>
     load({ locals: member, url: new URL(`http://x/tasks?board=${encodeURIComponent(board)}`) } as any) as Promise<any>
@@ -236,7 +234,8 @@ describe('/tasks load - a board the member may not see', () => {
   it('answers an id that never existed exactly like one that exists elsewhere', async () => {
     const a = await runFor('b-other-committee')
     const b = await runFor('00000000-0000-4000-8000-000000000000')
-    expect(b.boardDenied).toBe(a.boardDenied)
+    expect(a.boardDenied).toBe(true)
+    expect(b.boardDenied).toBe(true)
     expect(b.deck).toEqual(a.deck)
   })
 

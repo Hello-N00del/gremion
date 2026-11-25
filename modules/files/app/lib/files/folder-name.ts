@@ -3,7 +3,8 @@
 // The files API already refuses a name that would leave the folder it is created in (a path separator, a dot
 // segment, a control character), and creates nothing. Without this check the dialog sent the name anyway and
 // closed with no word, so the person saw no folder and no reason. The dialog asks here first and shows the reason.
-// The API stays the authority; this mirrors its refusals so the person is told before the round trip.
+// The API stays the authority; this covers its common refusals so the person is told before the round trip.
+// Anything else it refuses still gets the dialog's generic failure message.
 
 export type FolderNameProblem = 'empty' | 'separator' | 'dots' | 'characters'
 

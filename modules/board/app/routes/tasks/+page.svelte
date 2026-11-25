@@ -136,7 +136,7 @@
 
 {#if createError}<div class="create-error" role="alert">{createError}</div>{/if}
 
-{#if data.boardDenied}<div class="create-error" role="alert">Kein Zugriff auf dieses Board. Wähle ein Board deiner Gremien aus der Liste.</div>{/if}
+{#if data.boardDenied}<div class="create-error" role="alert">Kein Zugriff auf dieses Board.{data.boards.length > 0 ? ' Wähle ein Board deiner Gremien aus der Liste.' : ''}</div>{/if}
 
 {#if data.boards.length === 0}
   <div class="empty-state">

@@ -50,7 +50,7 @@ async function openDialogAndType(name: string) {
 }
 
 const create = () => screen.getByRole('button', { name: de['files.create'] })
-const writes = (calls: Array<{ method: string }>) => calls.filter((c) => c.method !== 'GET')
+const writes = (calls: Array<{ url: string; method: string }>) => calls.filter((c) => c.method !== 'GET')
 
 describe('FileBrowser new folder: a refused name says why', () => {
   it.each([
