@@ -4,6 +4,8 @@ import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth'
 import { getProtocol, setProtocolStatus, listResolutions } from '$lib/server/protocols/protocol-db'
 import { untalliedResolutionsMessage } from '$lib/governance/resolution-vote-state'
+import { firstMisfittingResolution } from '$lib/governance/resolution-plausibility'
+import { getQuorumContext } from '$lib/server/governance/quorum'
 import { requireUuidParams } from '$lib/server/protocols/route-ids'
 
 function requireAuth(event: RequestEvent): SessionUser {
@@ -27,8 +29,26 @@ export async function POST(event: RequestEvent) {
     // resolution nobody voted on. A fresh row is 0/0/0 with the rule engine's
     // placeholder "rejected"; submitting it would freeze a decision that was never
     // taken. The admin enters the count, withdraws the resolution or deletes it.
-    const untallied = untalliedResolutionsMessage(await listResolutions(protocol.id))
+    const resolutions = await listResolutions(protocol.id)
+    const untallied = untalliedResolutionsMessage(resolutions)
     if (untallied) throw error(422, untallied)
+
+    // Every decision has to fit the meeting before the protocol leaves draft: once it is
+    // submitted the attendance is frozen and a counted resolution is not editable, so a
+    // count above the members present, or a decision of a meeting that is not
+    // beschlussfähig, would leave publish refused with the attendance out of reach. The
+    // same rule as the resolution routes and the publish gate; a withdrawn resolution is
+    // exempt (it is the way out).
+    if (resolutions.some((r) => r.result !== 'withdrawn')) {
+      const misfit = firstMisfittingResolution(resolutions, await getQuorumContext(protocol.id))
+      if (misfit) {
+        throw error(
+          422,
+          `Beschluss ${misfit.resolution.sequence_nr}: ${misfit.refusal.message} ` +
+            'Vor dem Einreichen die Anwesenheit korrigieren oder den Beschluss zurückziehen.',
+        )
+      }
+    }
 
     // (open-core carve) Submission previously created a Nextcloud Polls approval
     // vote and stored its id on the protocol. Nextcloud Polls is a feature

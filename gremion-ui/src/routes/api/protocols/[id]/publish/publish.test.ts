@@ -360,6 +360,9 @@ describe('POST /api/protocols/[id]/publish — body_html sanitization', () => {
     const err = await POST(makeEvent()).catch((e) => e)
     expect(err.status).toBe(422)
     expect(err.body.message).toMatch(/anwesend/)
+    // The attendance is frozen once submitted: the exit offered is the one that exists.
+    expect(err.body.message).toMatch(/zurückziehen/)
+    expect(err.body.message).not.toMatch(/Anwesenheit.*korrigier/)
     expect(mockPublishFile).not.toHaveBeenCalled()
     expect(mockSetProtocolStatus).not.toHaveBeenCalled()
   })

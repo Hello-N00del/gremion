@@ -212,8 +212,12 @@
         </select>
       {/if}
     </div>
-    <!-- INV-5: result is computed, not chosen. Shown read-only, tagged 'berechnet'. -->
-    {#if draftHasNoVote}
+    <!-- INV-5: result is computed, not chosen. Shown read-only, tagged 'berechnet'.
+         Not while a refusal is shown: next to "Nicht beschlussfähig" a computed
+         "Angenommen" would read as if the decision had been taken. -->
+    {#if misfit || error}
+      <!-- the refusal above says why nothing is stored -->
+    {:else if draftHasNoVote}
       <!-- Nothing counted yet: a computed "Abgelehnt" for 0/0/0 would read as a
            decision that was never taken (finding 7). -->
       <div class="text-sm text-ink-muted">Ergebnis: noch keine Abstimmung</div>

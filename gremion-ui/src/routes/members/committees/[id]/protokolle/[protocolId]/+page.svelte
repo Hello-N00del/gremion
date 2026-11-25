@@ -15,6 +15,7 @@
     votes_abstain: number
     result: 'passed' | 'rejected' | 'withdrawn'
     required_majority: 'simple' | 'two_thirds' | 'absolute'
+    adoption_mode?: 'tally' | 'acclamation'
   }
   import { hasRole, Role } from '$lib/auth'
   import { page } from '$app/stores'
@@ -23,7 +24,7 @@
   import AttendanceSection from '$lib/components/protocols/AttendanceSection.svelte'
   import ResolutionRow from '$lib/components/protocols/ResolutionRow.svelte'
   import ActionItemRow from '$lib/components/protocols/ActionItemRow.svelte'
-  import type { AttendanceBasis } from '$lib/governance/resolution-plausibility'
+  import { checkResolutionAgainstAttendance, type AttendanceBasis } from '$lib/governance/resolution-plausibility'
   import { protocolBodyMode } from '$lib/governance/protocol-body-mode'
   import ProtocolBodyEditor from '$lib/components/protocols/ProtocolBodyEditor.svelte'
   import ProtokollgenehmigungPanel from '$lib/components/protocols/ProtokollgenehmigungPanel.svelte'
@@ -50,12 +51,17 @@
   }
 
   let resolutions = $state<ResolutionLike[]>(data.resolutions)
-  // Resolutions are edited in the draft. One exception: a submitted protocol that
-  // still holds a resolution nobody voted on cannot be published, so the admin
-  // must be able to enter that count, withdraw the resolution or delete it. The
-  // resolution API accepts the edit until the protocol is published.
+  // Resolutions are edited in the draft. Two exceptions, both in a submitted protocol
+  // that publish would refuse and whose attendance is frozen: a resolution nobody voted
+  // on, and one whose stored decision does not fit the meeting (more votes than members
+  // present, or a meeting that is not beschlussfähig). The admin must be able to enter
+  // the count, withdraw the resolution or delete it. The resolution API accepts the edit
+  // until the protocol is published.
   const canEditResolution = (r: ResolutionLike) =>
-    Boolean(isAdmin) && (isEditable || (data.protocol.status === 'submitted' && isUntalliedResolution(r)))
+    Boolean(isAdmin) &&
+    (isEditable ||
+      (data.protocol.status === 'submitted' &&
+        (isUntalliedResolution(r) || checkResolutionAgainstAttendance(r, liveAttendance) !== null)))
   // The attendance as the roster shows it NOW: AttendanceSection reports it after
   // every saved click, so a decision is judged against the live roster and not the
   // numbers of the page load (data.quorum).

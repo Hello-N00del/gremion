@@ -93,3 +93,18 @@ export function checkResolutionAgainstAttendance(
   }
   return null
 }
+
+/**
+ * The first of `resolutions` that does not fit the meeting, with its refusal, or null when
+ * all fit. One loop for the submit and publish gates, so both refuse the same rows.
+ */
+export function firstMisfittingResolution<T extends ResolutionPlausibilityRow>(
+  resolutions: readonly T[],
+  attendance: AttendanceBasis,
+): { resolution: T; refusal: ResolutionRefusal } | null {
+  for (const resolution of resolutions) {
+    const refusal = checkResolutionAgainstAttendance(resolution, attendance)
+    if (refusal) return { resolution, refusal }
+  }
+  return null
+}

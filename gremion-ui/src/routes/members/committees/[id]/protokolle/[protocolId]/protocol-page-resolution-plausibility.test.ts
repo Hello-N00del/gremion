@@ -24,7 +24,10 @@ import Page from './+page.svelte'
 type Status = 'present' | 'absent' | 'excused'
 
 // A body of two voting members; `status` is what the page load saw.
-const pageData = (status: Status) => {
+const pageData = (
+  status: Status,
+  over: { protocolStatus?: string; resolutions?: unknown[] } = {},
+) => {
   const attendance = [
     { user_id: 'u1', status, displayName: 'Anna Beispiel' },
     { user_id: 'u2', status, displayName: 'Ben Muster' },
@@ -33,12 +36,12 @@ const pageData = (status: Status) => {
   return {
     protocol: {
       id: 'p1', committee_id: 'c1', title: 'Sitzung', meeting_date: '2026-11-01', location: null,
-      status: 'draft', guest_edit_enabled: false, body_html: '<p>Text</p>', hasDraftDocument: false,
+      status: over.protocolStatus ?? 'draft', guest_edit_enabled: false, body_html: '<p>Text</p>', hasDraftDocument: false,
     },
     attendance,
     advisoryAttendance: [],
     quorum: { eligibleVotingCount: 2, presentVotingCount: present, quorate: present * 2 > 2 },
-    resolutions: [],
+    resolutions: over.resolutions ?? [],
     actionItems: [],
     wopiToken: null,
     pendingApprovals: [],
@@ -54,12 +57,17 @@ const createdRow = {
 
 let fetchMock: ReturnType<typeof vi.fn>
 let resolutionAnswer: Response | null
+let resolutionPatchAnswer: Response | null
 
 beforeEach(() => {
   resolutionAnswer = null
+  resolutionPatchAnswer = null
   fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     if (String(url).endsWith('/resolutions') && init?.method === 'POST') {
       return resolutionAnswer ?? new Response(JSON.stringify({ resolution: createdRow }), { status: 201 })
+    }
+    if (init?.method === 'PATCH' && String(url).includes('/resolutions/')) {
+      return resolutionPatchAnswer ?? new Response(JSON.stringify({ resolution: createdRow }), { status: 200 })
     }
     // attendance chip save
     return new Response('{}', { status: 200 })
@@ -67,6 +75,10 @@ beforeEach(() => {
   vi.stubGlobal('fetch', fetchMock)
 })
 afterEach(() => vi.unstubAllGlobals())
+
+const resolutionPatches = () =>
+  fetchMock.mock.calls.filter(([url, init]) =>
+    String(url).includes('/resolutions/') && (init as RequestInit | undefined)?.method === 'PATCH')
 
 const resolutionPosts = () =>
   fetchMock.mock.calls.filter(([url, init]) =>
@@ -93,6 +105,15 @@ describe('protocol page: a decision that does not fit the meeting', () => {
     expect(resolutionPosts()).toHaveLength(0)
     // The form stays open with what was typed.
     expect((screen.getByPlaceholderText('Beschlusstext') as HTMLInputElement).value).toBe('Antrag A')
+  })
+
+  it('the refused form shows no computed verdict next to the refusal (it would read as Angenommen)', async () => {
+    render(Page, { props: { data: pageData('absent') as never } })
+    await enterDecision(999)
+
+    await screen.findByRole('alert')
+    expect(screen.queryAllByText(/Angenommen/)).toEqual([])
+    expect(screen.queryAllByText(/berechnet/)).toEqual([])
   })
 
   it('more votes than members present in a beschlussfähig meeting is refused, naming both numbers', async () => {
@@ -157,5 +178,59 @@ describe('protocol page: a decision that does not fit the meeting', () => {
     render(Page, { props: { data: pageData('absent') as never } })
     await enterDecision(0)
     await waitFor(() => expect(resolutionPosts()).toHaveLength(1))
+  })
+})
+
+// Once a protocol is submitted the attendance is frozen and a counted row is not editable, so
+// a stored decision that no longer fits the meeting (a protocol submitted before the rule, or
+// an attendance lowered after the decision) would leave publish refused with no way out. Such a
+// row is therefore opened for withdrawal; a row that fits stays locked.
+describe('protocol page: a submitted protocol with a decision that does not fit', () => {
+  const counted = (over: Record<string, unknown> = {}) => ({
+    ...createdRow, votes_yes: 2, votes_no: 0, votes_abstain: 0, ...over,
+  })
+
+  it('a stored count above the members present can be edited (withdrawn) in the submitted state', async () => {
+    render(Page, {
+      props: { data: pageData('present', { protocolStatus: 'submitted', resolutions: [counted({ votes_yes: 999 })] }) as never },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'Bearbeiten' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Zurückziehen' }))
+
+    await waitFor(() => expect(resolutionPatches()).toHaveLength(1))
+    expect(JSON.parse((resolutionPatches()[0][1] as RequestInit).body as string).result).toBe('withdrawn')
+  })
+
+  it('a decision of a meeting that is not beschlussfähig can be edited in the submitted state', async () => {
+    render(Page, {
+      props: { data: pageData('absent', { protocolStatus: 'submitted', resolutions: [counted({ votes_yes: 1 })] }) as never },
+    })
+    expect(screen.getByRole('button', { name: 'Bearbeiten' })).toBeTruthy()
+  })
+
+  it('a decision that fits stays locked in the submitted state', () => {
+    render(Page, {
+      props: { data: pageData('present', { protocolStatus: 'submitted', resolutions: [counted()] }) as never },
+    })
+    expect(screen.queryByRole('button', { name: 'Bearbeiten' })).toBeNull()
+  })
+})
+
+// An acclamation row carries no count unless the chair gives an informational one; clearing the
+// fields must not be read as an implausible count.
+describe('protocol page: an acclamation row without counts', () => {
+  it('is saved with blank count fields in a beschlussfähig meeting', async () => {
+    const acclamation = {
+      id: 'r9', sequence_nr: 1, global_nr: null, text: 'Antrag per Akklamation', adoption_mode: 'acclamation',
+      votes_yes: null, votes_no: null, votes_abstain: null, result: 'passed', required_majority: 'simple',
+    }
+    render(Page, { props: { data: pageData('present', { resolutions: [acclamation] }) as never } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Bearbeiten' }))
+    await fireEvent.input(screen.getByLabelText('Ja'), { target: { value: '3' } })
+    await fireEvent.input(screen.getByLabelText('Ja'), { target: { value: '' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Speichern' }))
+
+    await waitFor(() => expect(resolutionPatches()).toHaveLength(1))
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 })
