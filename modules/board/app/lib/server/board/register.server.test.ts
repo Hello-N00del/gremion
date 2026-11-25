@@ -20,10 +20,12 @@ describe('board register.server', () => {
     expect(h.registered).toEqual([boardErasureHook])
   })
 
-  it('registers the org-unit boards cascade under the key the kernel delete asks for, and nothing else', async () => {
+  it('registers the org-unit boards cascade and the boards-before-delete question under the keys the kernel delete asks for, and nothing else', async () => {
     const { deleteBoardsOfOrgUnit } = await import('./erasure')
-    expect([...h.providers.keys()]).toEqual(['board:delete-org-unit-boards'])
+    expect([...h.providers.keys()]).toEqual(['board:delete-org-unit-boards', 'board:org-unit-refs'])
     expect(h.providers.get('board:delete-org-unit-boards')).toBe(deleteBoardsOfOrgUnit)
+    const { boardRefsOfOrgUnit } = await import('./org-unit-refs')
+    expect(h.providers.get('board:org-unit-refs')).toBe(boardRefsOfOrgUnit)
   })
 
   it('declares that the board module seals no retained records (otherwise its retained step fails closed)', async () => {

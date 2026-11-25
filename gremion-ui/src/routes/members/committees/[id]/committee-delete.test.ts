@@ -38,6 +38,23 @@ describe('Gremium löschen', () => {
     expect(nav.goto).not.toHaveBeenCalled()
   })
 
+  it('says on the button what a delete needs, not only "no members"', () => {
+    mount()
+    const hint = screen.getByRole('button', { name: 'Gremium löschen' }).getAttribute('title') ?? ''
+    for (const word of ['Mitglieder', 'Protokolle', 'Beschlüsse', 'Boards', 'Termine']) expect(hint).toContain(word)
+  })
+
+  it('shows the 503 text when a module could not be asked, and does not leave the page', async () => {
+    vi.stubGlobal('confirm', () => true)
+    const text = 'Das Gremium wurde nicht gelöscht: Boards konnten nicht geprüft werden, weil das zuständige Modul gerade nicht antwortet. Bitte später erneut versuchen.'
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      new Response(JSON.stringify({ success: false, error: text }), { status: 503, headers: { 'Content-Type': 'application/json' } })))
+    mount()
+    await fireEvent.click(screen.getByRole('button', { name: 'Gremium löschen' }))
+    expect(await screen.findByText(text)).toBeTruthy()
+    expect(nav.goto).not.toHaveBeenCalled()
+  })
+
   it('goes back to the overview after a clean delete', async () => {
     vi.stubGlobal('confirm', () => true)
     vi.stubGlobal('fetch', vi.fn(async () =>

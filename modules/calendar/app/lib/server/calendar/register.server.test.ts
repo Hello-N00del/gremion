@@ -59,6 +59,13 @@ function ev(over: Partial<DbEvent> & { id: string; startAt: Date; endAt: Date },
 
 const weekly: DbRecurrence = { frequency: 'weekly', interval: 1, until: null, count: null, byday: null, exceptions: null }
 
+describe('calendar org-unit refs provider', () => {
+  it('registers the question the kernel committee delete asks before it deletes', async () => {
+    const { calendarRefsOfOrgUnit } = await import('./org-unit-refs')
+    expect(h.providers.get('calendar:org-unit-refs')).toBe(calendarRefsOfOrgUnit)
+  })
+})
+
 describe('calendar Karenz retention declaration', () => {
   it('declares that the calendar seals no retained records (otherwise a council switch-off fails its retained step and can never be finalized or switched back on)', async () => {
     const { hasRetentionDeclaration, extractorsFor } = await import('$lib/server/module-karenz/retained/extractors')

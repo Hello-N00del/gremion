@@ -36,9 +36,6 @@ vi.mock('$lib/server/governance/org-units-db', () => ({
   getChildOrgUnits: h.getChildOrgUnits,
   updateOrgUnit: vi.fn(),
   deleteOrgUnit: vi.fn(),
-  hasMembers: vi.fn(),
-  hasElections: vi.fn(),
-  hasProtocols: vi.fn(),
 }))
 vi.mock('$lib/server/governance/governance-db', () => ({
   listRoles: h.listRoles,

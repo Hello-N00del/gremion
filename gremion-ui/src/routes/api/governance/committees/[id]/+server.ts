@@ -5,12 +5,15 @@ import type { RequestHandler } from './$types'
 import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
 import {
-  getOrgUnit, updateOrgUnit, deleteOrgUnit,
+  getOrgUnit, updateOrgUnit, deleteOrgUnit, deleteBoardsAfterCommit,
   listOrgUnitMembers, getChildOrgUnits, isMemberOf
 } from '$lib/server/governance/org-units-db'
 import {
-  getOrgUnitDependents, describeOrgUnitDependents, isForeignKeyViolation, ORG_UNIT_STILL_REFERENCED
+  getOrgUnitDependents, describeOrgUnitDependents, describeCheckUnavailable, askModulesAboutOrgUnit,
+  isForeignKeyViolation, OrgUnitCheckUnavailable, ORG_UNIT_STILL_REFERENCED,
+  type ModuleRefCounts
 } from '$lib/server/governance/org-unit-dependents'
+import { getDb } from '$lib/server/db'
 import { canSeeOrgUnit, seesAllGovernance } from '$lib/server/governance/visibility'
 import { listRoles } from '$lib/server/governance/governance-db'
 import { deprovisionOrgUnit } from '$lib/server/governance/provisioning/orchestrator'
@@ -61,6 +64,13 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
   return json({ success: true, data: updated })
 }
 
+/** Thrown inside the delete transaction: roll it back and answer with `response`. */
+class RollbackWith extends Error {
+  constructor(readonly response: Response) {
+    super('rollback')
+  }
+}
+
 export const DELETE: RequestHandler = async ({ params, locals }) => {
   const session = await locals.auth()
   const user = session?.user as SessionUser | undefined
@@ -70,24 +80,52 @@ export const DELETE: RequestHandler = async ({ params, locals }) => {
   const unit = await getOrgUnit(params.id)
   if (!unit) return json({ success: false, error: 'Not found' }, { status: 404 })
 
-  // The database refusal comes first: nothing is torn down in Keycloak, Nextcloud
-  // or Matrix for a unit that still has records the database will not orphan.
-  const stillThere = describeOrgUnitDependents(await getOrgUnitDependents(params.id))
-  if (stillThere) return json({ success: false, error: stillThere }, { status: 409 })
-
-  const report = await deprovisionOrgUnit(params.id)
-  if (report.subsystems.some((s) => s.status === 'failed')) {
-    // Keep the row so the teardown can be retried — no orphaned external resources lost.
-    return json({ success: false, error: 'Abbau einzelner Dienste fehlgeschlagen.', data: { report } }, { status: 207 })
-  }
+  // Installed modules (board, calendar, finance) are asked first, outside the transaction:
+  // their data can live in a database of their own. A module that is installed and cannot
+  // answer stops the delete; "no answer" is never read as "nothing".
+  let modules: ModuleRefCounts
   try {
-    await deleteOrgUnit(params.id) // CASCADE clears provisioning_resources + members
+    modules = await askModulesAboutOrgUnit(params.id)
   } catch (err) {
-    // A record appeared after the check above: still a refusal, never a raw 500.
-    if (!isForeignKeyViolation(err)) throw err
-    const error = describeOrgUnitDependents(await getOrgUnitDependents(params.id)) ?? ORG_UNIT_STILL_REFERENCED
-    return json({ success: false, error }, { status: 409 })
+    if (!(err instanceof OrgUnitCheckUnavailable)) throw err
+    return json({ success: false, error: describeCheckUnavailable(err.what) }, { status: 503 })
   }
+
+  // The database comes first. One transaction locks the unit row (a record that points at
+  // it has to wait), counts what hangs on it, DELETEs the row (a foreign key nobody
+  // anticipated fails right here) and only then tears the external resources down, with
+  // the transaction still open. A refusal, a failed teardown or a crash rolls the delete
+  // back and leaves the Keycloak group, the Nextcloud folder and the Matrix room as they
+  // were; nothing is answered 409 after something external is already gone.
+  try {
+    await getDb().begin(async (tx) => {
+      const locked = await tx`SELECT id FROM org_units WHERE id = ${params.id} FOR UPDATE`
+      if (locked.length === 0) throw new RollbackWith(json({ success: false, error: 'Not found' }, { status: 404 }))
+
+      const stillThere = describeOrgUnitDependents(await getOrgUnitDependents(tx, params.id, modules))
+      if (stillThere) throw new RollbackWith(json({ success: false, error: stillThere }, { status: 409 }))
+
+      try {
+        await deleteOrgUnit(tx, params.id) // CASCADE clears the unit's own rows (org-unit-dependents.ts)
+      } catch (err) {
+        if (!isForeignKeyViolation(err)) throw err
+        throw new RollbackWith(json({ success: false, error: ORG_UNIT_STILL_REFERENCED }, { status: 409 }))
+      }
+
+      const report = await deprovisionOrgUnit(params.id)
+      if (report.subsystems.some((s) => s.status === 'failed')) {
+        // Keep the unit so the teardown can be retried: the rollback puts the row back.
+        throw new RollbackWith(
+          json({ success: false, error: 'Abbau einzelner Dienste fehlgeschlagen.', data: { report } }, { status: 207 })
+        )
+      }
+    })
+  } catch (err) {
+    if (err instanceof RollbackWith) return err.response
+    throw err
+  }
+  // The unit is gone for good. Boards kept in the board module's own database go now.
+  await deleteBoardsAfterCommit(params.id)
   await writeAuditEntry({
     userId: user.id, field: 'org_unit.delete', oldValue: unit.name, newValue: params.id
   })

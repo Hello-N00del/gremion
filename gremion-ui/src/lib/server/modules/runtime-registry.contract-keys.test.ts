@@ -14,6 +14,8 @@ import {
 
 const PORTED_KEYS = [
   'finance:org-unit-refs',
+  'board:org-unit-refs',
+  'calendar:org-unit-refs',
   'finance:handover-retention',
   'finance:handover-facts',
   'messages:unread-rooms',
@@ -34,6 +36,8 @@ describe('DataProviderContract: ported provider keys', () => {
       pendingVierAugen: 0,
     }
     registerDataProvider('finance:org-unit-refs', async () => ({ referenced: false, counts: {} }))
+    registerDataProvider('board:org-unit-refs', async () => ({ referenced: false, counts: {} }))
+    registerDataProvider('calendar:org-unit-refs', async () => ({ referenced: false, counts: {} }))
     registerDataProvider('finance:handover-retention', async () => null)
     registerDataProvider('finance:handover-facts', async () => facts)
     registerDataProvider('messages:unread-rooms', async () => [])
