@@ -190,6 +190,28 @@ set_svc() {
     jq -cn --arg u "$url" --arg s "${4:-UP}" '{loadBalancer: {servers: [{url: $u}]}, serverStatus: {($u): $s}}' > "${DK}/traefik.${1}"
 }
 
+# set_svc_used NAME SVC COLOUR [STATUS] -- a service a router uses: usedBy names the router and
+# the server has a health state, as Traefik reports it.
+set_svc_used() {
+    local url="http://${2}-${3}:3000"
+    jq -cn --arg u "$url" --arg s "${4:-UP}" '{loadBalancer: {servers: [{url: $u}]}, usedBy: ["some-router@file"], serverStatus: {($u): $s}}' > "${DK}/traefik.${1}"
+}
+
+# set_svc_unused NAME SVC COLOUR -- a service NO router uses: the servers are listed, usedBy is
+# null and there is no serverStatus at all (Traefik builds no load balancer and runs no health
+# check for it).
+set_svc_unused() {
+    local url="http://${2}-${3}:3000"
+    jq -cn --arg u "$url" '{loadBalancer: {servers: [{url: $u}]}, usedBy: null}' > "${DK}/traefik.${1}"
+}
+
+# place_portal_router -- the hand-placed router file of the public portal exists: the install
+# expects a router for public@file.
+place_portal_router() {
+    mkdir -p "${GREMION_ROOT}/etc/edge"
+    printf 'http: {}\n' > "${GREMION_ROOT}/etc/edge/public-host.yml"
+}
+
 # world_good -- everything about the new colour (green) is fine, the old one (blue) is ready.
 world_good() {
     printf '200|{"ready":true}' > "${DK}/pub.readyz"
@@ -621,6 +643,101 @@ BAD='.public.ok = false | .public.readyz = "503"'
     set_svc public@file gremion-public blue
     run --separate-stderr wl 'cd_watch_sample'
     [ "$(jq -r '.route.ok' <<<"$output")" = false ]
+}
+
+# ---- a service that no router uses has no health state
+# The tolerance is for public@file alone, and only while the install places no portal router
+# (etc/edge/public-host.yml): app@file, the -next services and an install that expects a router
+# keep the full rule.
+
+route_rc() { run -- wl "_cd_watch_route $* && echo rc=0 || echo rc=\$?"; }
+
+@test "route: a service a router uses must be UP on every server (used and UP, used and DOWN, used without a health state)" {
+    world_good
+    set_svc_used public@file gremion-public green UP
+    route_rc public@file gremion-public green "${GREMION_ROOT}/etc/edge/public-host.yml"
+    [ "$output" = "rc=0" ]
+    set_svc_used public@file gremion-public green DOWN
+    route_rc public@file gremion-public green "${GREMION_ROOT}/etc/edge/public-host.yml"
+    [ "$output" = "rc=1" ]
+    # used by a router whose chain failed to build: servers listed, no health state
+    jq -c 'del(.serverStatus)' "${DK}/traefik.public@file" > "${DK}/x" && mv "${DK}/x" "${DK}/traefik.public@file"
+    route_rc public@file gremion-public green "${GREMION_ROOT}/etc/edge/public-host.yml"
+    [ "$output" = "rc=1" ]
+}
+
+@test "route: public@file that no router uses passes when the install places no portal router" {
+    world_good
+    set_svc_unused public@file gremion-public green
+    route_rc public@file gremion-public green "${GREMION_ROOT}/etc/edge/public-host.yml"
+    [ "$output" = "rc=0" ]
+}
+
+@test "route: a service no router uses is bad when the install expects a router (the portal router file is placed)" {
+    world_good
+    place_portal_router
+    set_svc_unused public@file gremion-public green
+    route_rc public@file gremion-public green "${GREMION_ROOT}/etc/edge/public-host.yml"
+    [ "$output" = "rc=1" ]
+}
+
+@test "route: a service no router uses never passes on the other colour, an empty server list or a foreign url" {
+    world_good
+    set_svc_unused public@file gremion-public blue
+    route_rc public@file gremion-public green "${GREMION_ROOT}/etc/edge/public-host.yml"
+    [ "$output" = "rc=1" ]
+    echo '{"loadBalancer":{"servers":[]},"usedBy":null}' > "${DK}/traefik.public@file"
+    route_rc public@file gremion-public green "${GREMION_ROOT}/etc/edge/public-host.yml"
+    [ "$output" = "rc=1" ]
+    echo '{"loadBalancer":{"servers":[{"url":"http://gremion-public-green:3000"},{"url":"http://gremion-public-blue:3000"}]},"usedBy":[]}' > "${DK}/traefik.public@file"
+    route_rc public@file gremion-public green "${GREMION_ROOT}/etc/edge/public-host.yml"
+    [ "$output" = "rc=1" ]
+    echo '{"loadBalancer":{"servers":[{"url":"http://elsewhere:3000"}]},"usedBy":null}' > "${DK}/traefik.public@file"
+    route_rc public@file gremion-public green "${GREMION_ROOT}/etc/edge/public-host.yml"
+    [ "$output" = "rc=1" ]
+}
+
+@test "route: app@file and the -next services get no tolerance for an unused service" {
+    world_good
+    set_svc_unused app@file gremion-ui green
+    route_rc app@file gremion-ui green
+    [ "$output" = "rc=1" ]
+    set_svc_unused app-next@file gremion-ui blue
+    route_rc app-next@file gremion-ui blue
+    [ "$output" = "rc=1" ]
+}
+
+@test "route: an unreadable API answer stays code 4 with the tolerance too" {
+    world_good
+    touch "${DK}/traefik.down"
+    route_rc public@file gremion-public green "${GREMION_ROOT}/etc/edge/public-host.yml"
+    [ "$output" = "rc=4" ]
+    rm -f "${DK}/traefik.down"
+    echo 'not json' > "${DK}/traefik.public@file"
+    route_rc public@file gremion-public green "${GREMION_ROOT}/etc/edge/public-host.yml"
+    [ "$output" = "rc=4" ]
+}
+
+@test "sample: public@file that no router uses (no portal on the install) leaves route.ok true and every other field good" {
+    world_good
+    seed
+    set_svc_unused public@file gremion-public green
+    run --separate-stderr wl 'cd_watch_sample'
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.route.ok' <<<"$output")" = true ]
+    [ "$(jq -r '.route.known' <<<"$output")" = true ]
+    [ "$(jq -r '.public.ok' <<<"$output")" = true ]
+    [ "$(jq -r '.portal.ok' <<<"$output")" = true ]
+}
+
+@test "sample: an unused public@file with the portal router file placed is route.ok false" {
+    world_good
+    seed
+    place_portal_router
+    set_svc_unused public@file gremion-public green
+    run --separate-stderr wl 'cd_watch_sample'
+    [ "$(jq -r '.route.ok' <<<"$output")" = false ]
+    [ "$(jq -r '.route.known' <<<"$output")" = true ]
 }
 
 @test "sample: a Traefik API that does not answer is an unknown route and an unhealthy shared service" {
