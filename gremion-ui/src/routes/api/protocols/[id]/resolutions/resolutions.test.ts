@@ -754,6 +754,20 @@ describe('POST /api/protocols/[id]/resolutions — votes must fit the attendance
     expect(mockAddResolution).not.toHaveBeenCalled()
   })
 
+  it.each(['2', '0x2', '1e0', ' 2 ', '-1'])(
+    'an acclamation count sent as the string %j → 400, nothing stored (number-only, like the tally path)',
+    async (raw) => {
+      mockGetQuorumContext.mockResolvedValue({ eligibleVotingCount: 4, presentVotingCount: 4, quorate: true })
+      const err = await POST(makePostEvent({
+        text: 'Akklamation', adoption_mode: 'acclamation', declared_result: 'passed',
+        votesYes: raw, votesNo: 0, votesAbstain: 0,
+      })).catch((e) => e)
+      expect(refusal(err).status).toBe(400)
+      expect(refusal(err).body.message).toMatch(/ganze Zahl/)
+      expect(mockAddResolution).not.toHaveBeenCalled()
+    },
+  )
+
   it('an acclamation count that is not a whole number → 400, nothing stored', async () => {
     await expect(
       POST(makePostEvent({
@@ -841,6 +855,20 @@ describe('PATCH /api/protocols/[id]/resolutions/[resId] — votes must fit the a
     expect(refusal(err).body.message).toMatch(/ganze Zahl/)
     expect(mockUpdateResolution).not.toHaveBeenCalled()
   })
+
+  it.each(['2', '0x2', '1e0', ' 2 ', '-1'])(
+    'an acclamation edit with a count sent as the string %j → 400, nothing updated (number-only, like the tally path)',
+    async (raw) => {
+      mockSql.mockResolvedValue([storedAcclamationRow])
+      mockGetQuorumContext.mockResolvedValue({ eligibleVotingCount: 4, presentVotingCount: 4, quorate: true })
+      const err = await PATCH(makePatchEvent({
+        declared_result: 'passed', votesYes: 0, votesNo: raw, votesAbstain: 0,
+      })).catch((e) => e)
+      expect(refusal(err).status).toBe(400)
+      expect(refusal(err).body.message).toMatch(/ganze Zahl/)
+      expect(mockUpdateResolution).not.toHaveBeenCalled()
+    },
+  )
 
   it('an acclamation edit with a count that is not a whole number → 400, nothing updated', async () => {
     mockSql.mockResolvedValue([storedAcclamationRow])

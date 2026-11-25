@@ -53,6 +53,15 @@ const isValidCount = (v: unknown): boolean => {
   return Number.isInteger(n) && n >= 0
 }
 
+/**
+ * Write-side variant: what the routes accept as a count from a client. Number-only (no
+ * numeric strings such as '2', '0x2' or '1e0', which the stored-row reader above
+ * tolerates but which must never reach the integer column); null/undefined (no count)
+ * passes.
+ */
+export const isWholeNumberCountInput = (v: unknown): boolean =>
+  v === null || v === undefined || (typeof v === 'number' && Number.isInteger(v) && v >= 0)
+
 export function notQuorateMessage(attendance: AttendanceBasis): string {
   return (
     `Nicht beschlussfähig: ${attendance.presentVotingCount} von ${attendance.eligibleVotingCount} ` +

@@ -9,7 +9,7 @@ import type { AdoptionMode, RequiredMajority } from '$lib/server/protocols/proto
 import { requireUuidParams } from '$lib/server/protocols/route-ids'
 import { requireResolutionText } from '$lib/server/protocols/resolution-text'
 import { getDb } from '$lib/server/db'
-import { assertResolutionFitsMeeting } from '$lib/server/protocols/resolution-plausibility'
+import { assertResolutionFitsMeeting, requireWholeNumberCounts } from '$lib/server/protocols/resolution-plausibility'
 import { decideResolution } from '$lib/server/governance/resolution-decision'
 import { getQuorumContext } from '$lib/server/governance/quorum'
 import { isDecisionRuleInputError } from '$lib/server/governance/decision-rule'
@@ -130,6 +130,9 @@ export async function PATCH(event: RequestEvent) {
     if (providedVotes !== 0 && providedVotes !== 3) {
       throw error(400, 'Informative Stimmzahlen entweder vollständig (Ja/Nein/Enthaltung) oder gar nicht angeben')
     }
+    // An informational count is a JSON number, like a tally: the integer column never
+    // sees a client string.
+    requireWholeNumberCounts(votesYes, votesNo, votesAbstain)
     // Any edit of a declared (not withdrawn) decision needs a quorate meeting, and an
     // informational count has to fit the members present (mirror of the POST gate).
     assertResolutionFitsMeeting(

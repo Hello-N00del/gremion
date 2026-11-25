@@ -63,10 +63,10 @@ beforeEach(() => {
   resolutionAnswer = null
   resolutionPatchAnswer = null
   fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-    if (String(url).endsWith('/resolutions') && init?.method === 'POST') {
+    if (url.endsWith('/resolutions') && init?.method === 'POST') {
       return resolutionAnswer ?? new Response(JSON.stringify({ resolution: createdRow }), { status: 201 })
     }
-    if (init?.method === 'PATCH' && String(url).includes('/resolutions/')) {
+    if (init?.method === 'PATCH' && url.includes('/resolutions/')) {
       return resolutionPatchAnswer ?? new Response(JSON.stringify({ resolution: createdRow }), { status: 200 })
     }
     // attendance chip save
@@ -78,11 +78,11 @@ afterEach(() => vi.unstubAllGlobals())
 
 const resolutionPatches = () =>
   fetchMock.mock.calls.filter(([url, init]) =>
-    String(url).includes('/resolutions/') && (init as RequestInit | undefined)?.method === 'PATCH')
+    url.includes('/resolutions/') && (init as RequestInit | undefined)?.method === 'PATCH')
 
 const resolutionPosts = () =>
   fetchMock.mock.calls.filter(([url, init]) =>
-    String(url).endsWith('/resolutions') && (init as RequestInit | undefined)?.method === 'POST')
+    url.endsWith('/resolutions') && (init as RequestInit | undefined)?.method === 'POST')
 
 async function enterDecision(yes: number, no = 0, abstain = 0) {
   await fireEvent.click(screen.getByText('+ Beschluss hinzufügen'))
