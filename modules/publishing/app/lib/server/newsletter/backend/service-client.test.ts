@@ -419,6 +419,20 @@ describe('ServiceNewsletterClient — method routing', () => {
     expect(result).toBeNull()
   })
 
+  it('getNewsletter still throws for a leaf 400 about the tenant context (not an id fault)', async () => {
+    for (const error of [
+      'missing x-tenant-id header',
+      'x-tenant-id must be a canonical lowercase UUID',
+      'missing x-tenant-slug header',
+      'invalid_tenant_id',
+      'invalid_tenant_slug',
+    ]) {
+      resetStub({ firstStatus: 400, body: { success: false, error } })
+      const client = new ServiceNewsletterClient()
+      await expect(withTenant(() => client.getNewsletter(1))).rejects.toMatchObject({ status: 400 })
+    }
+  })
+
   it('getNewsletter still throws for a leaf 500', async () => {
     resetStub({ firstStatus: 500, body: { success: false, error: 'boom' } })
     const client = new ServiceNewsletterClient()
