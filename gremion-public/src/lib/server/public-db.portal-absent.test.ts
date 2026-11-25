@@ -1,6 +1,6 @@
 // When does the DB layer say "this instance has no portal"? Only when the portal
-// database was not named explicitly AND it lacks the portal tables (or does not
-// exist). A named database that fails, and any other failure, stay failures.
+// database was not named explicitly AND it holds none of the portal tables (or does
+// not exist). One missing table while another exists is a broken schema. A named database that fails, and any other failure, stay failures.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const envState = vi.hoisted(() => ({
@@ -8,10 +8,24 @@ const envState = vi.hoisted(() => ({
 } as Record<string, string | undefined>));
 vi.mock('$env/dynamic/private', () => ({ env: envState }));
 
-const mockState = vi.hoisted(() => ({ failWith: null as unknown }));
+// failWith: what every portal read rejects with. relations: which portal tables the
+// database holds (the confirming to_regclass query answers from it); confirmFails makes
+// that confirming query itself fail.
+const mockState = vi.hoisted(() => ({
+  failWith: null as unknown,
+  relations: { protocols: false, org_units: false },
+  confirmFails: false,
+}));
 vi.mock('postgres', () => {
   const sql = Object.assign(
-    () => (mockState.failWith ? Promise.reject(mockState.failWith) : Promise.resolve([])),
+    (strings: TemplateStringsArray) => {
+      if (strings.join('?').includes('to_regclass')) {
+        if (mockState.confirmFails) return Promise.reject(new Error('confirm failed'));
+        const { protocols, org_units } = mockState.relations;
+        return Promise.resolve([{ absent: !protocols && !org_units }]);
+      }
+      return mockState.failWith ? Promise.reject(mockState.failWith) : Promise.resolve([]);
+    },
     { unsafe: () => Promise.resolve([]), end: () => Promise.resolve() }
   );
   return { default: () => sql };
@@ -26,6 +40,8 @@ const pgError = (code: string) => Object.assign(new Error(`pg ${code}`), { code 
 describe('portal database absent', () => {
   beforeEach(() => {
     mockState.failWith = null;
+    mockState.relations = { protocols: false, org_units: false };
+    mockState.confirmFails = false;
     delete envState.PORTAL_DB_EXPLICIT;
   });
 
@@ -41,6 +57,24 @@ describe('portal database absent', () => {
   it('a missing database without a named portal database is PortalAbsentError', async () => {
     mockState.failWith = pgError('3D000');
     await expect(getPublishedProtocols()).rejects.toBeInstanceOf(PortalAbsentError);
+  });
+
+  it('a missing relation while another portal table exists is a broken schema, not "no portal"', async () => {
+    mockState.failWith = pgError('42P01');
+    mockState.relations = { protocols: false, org_units: true };
+    const err = await getPublishedProtocols().catch((e: unknown) => e);
+    expect(err).not.toBeInstanceOf(PortalAbsentError);
+    expect(err).toBe(mockState.failWith);
+    mockState.relations = { protocols: true, org_units: false };
+    expect(await getAllCommittees().catch((e: unknown) => e)).toBe(mockState.failWith);
+  });
+
+  it('a confirming query that fails leaves the original failure standing', async () => {
+    mockState.failWith = pgError('42P01');
+    mockState.confirmFails = true;
+    const err = await getPublishedProtocols().catch((e: unknown) => e);
+    expect(err).not.toBeInstanceOf(PortalAbsentError);
+    expect(err).toBe(mockState.failWith);
   });
 
   it('a portal database that IS named and fails the same way stays the original failure', async () => {

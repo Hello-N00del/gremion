@@ -9,9 +9,11 @@
 // pooled install that name is known only after the tenant exists; until the host
 // names it, the portal reads the install's default database, which carries no
 // portal tables. That query fails with "relation does not exist" (or "database
-// does not exist"). Only that failure, and only while the host did not name the
-// portal database, is taken for "no portal". Any other failure, and the same
-// failure on a database the host DID name, stays a failure.
+// does not exist"). Only that failure, only while the host did not name the
+// portal database, and for a missing relation only after one more query shows that
+// the database holds none of the portal tables, is taken for "no portal". Any other
+// failure, one missing table beside an existing one (a migration broke the schema),
+// and the same failure on a database the host DID name, stays a failure.
 import { error } from '@sveltejs/kit';
 
 /** Response header that marks the clean "no portal" answer; read by the CD probe. */
@@ -29,11 +31,24 @@ export class PortalAbsentError extends Error {
   }
 }
 
-/** Postgres: 42P01 undefined_table, 3D000 invalid_catalog_name. */
+function pgCode(err: unknown): unknown {
+  if (typeof err !== 'object' || err === null) return undefined;
+  return (err as { code?: unknown }).code;
+}
+
+/** Postgres 42P01 undefined_table. One query's word only: see public-db.ts for the confirmation. */
+export function isMissingRelation(err: unknown): boolean {
+  return pgCode(err) === '42P01';
+}
+
+/** Postgres 3D000 invalid_catalog_name: the database itself does not exist. */
+export function isMissingDatabase(err: unknown): boolean {
+  return pgCode(err) === '3D000';
+}
+
+/** Either failure: the portal database may be absent (a candidate, not yet a verdict). */
 export function isPortalDatabaseAbsent(err: unknown): boolean {
-  if (typeof err !== 'object' || err === null) return false;
-  const code = (err as { code?: unknown }).code;
-  return code === '42P01' || code === '3D000';
+  return isMissingRelation(err) || isMissingDatabase(err);
 }
 
 /**

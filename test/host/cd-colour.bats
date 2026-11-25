@@ -1067,7 +1067,7 @@ portal_case() { # COLOUR -- the probe, then the rc and the case it saw
     [[ "$output" != *"no public portal"* ]]
 }
 
-@test "ready: layer 2, a customer without a public portal passes the portal layer, in every round" {
+@test "ready: layer 2, non-regression: a customer without a public portal still passes the portal layer, in every round (the old probe passed any 404 too; the guard for the no-portal case is the probe tests above)" {
     happy
     printf '404\\nnone\n' > "$DK/portal.c-pub"
     ready_green

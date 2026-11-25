@@ -6,7 +6,7 @@ import postgres from 'postgres';
 import { env } from '$env/dynamic/private';
 import type { PublicProtocol, PublicCommittee } from '@gremion/db/public-types';
 import { isUuid } from '$lib/validate';
-import { PortalAbsentError, isPortalDatabaseAbsent } from './portal-absent';
+import { PortalAbsentError, isMissingDatabase, isMissingRelation } from './portal-absent';
 
 let _db: ReturnType<typeof postgres> | null = null;
 
@@ -20,16 +20,38 @@ export function getPublicDb(): ReturnType<typeof postgres> {
 }
 
 /**
- * Run one read. A portal database that holds no portal tables (or does not
- * exist) is PortalAbsentError, but only while the host did not name the portal
+ * True only when the connected database holds NONE of the portal tables. One missing
+ * table while the other exists is a broken schema (a migration that renamed or dropped
+ * it), which must stay a failure. A confirming query that itself fails says nothing,
+ * so it is "not absent": the original error stands.
+ */
+async function holdsNoPortalTables(): Promise<boolean> {
+  try {
+    const rows = await getPublicDb()<{ absent: boolean }[]>`
+      SELECT to_regclass('protocols') IS NULL AND to_regclass('org_units') IS NULL AS absent
+    `;
+    return rows[0]?.absent === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Run one read. A portal database that holds no portal tables at all, or does not
+ * exist, is PortalAbsentError, but only while the host did not name the portal
  * database (PORTAL_DB_EXPLICIT is the host's PUBLIC_PORTAL_DB_NAME, set or not):
- * a database the host named that fails the same way is a real failure.
+ * a database the host named that fails the same way is a real failure. The decision
+ * is made for the whole database, not from the error code of one query: a missing
+ * relation counts only when none of the portal relations exist.
  */
 async function read<T>(run: () => Promise<T>): Promise<T> {
   try {
     return await run();
   } catch (err) {
-    if (isPortalDatabaseAbsent(err) && !env.PORTAL_DB_EXPLICIT) throw new PortalAbsentError();
+    if (!env.PORTAL_DB_EXPLICIT) {
+      if (isMissingDatabase(err)) throw new PortalAbsentError();
+      if (isMissingRelation(err) && (await holdsNoPortalTables())) throw new PortalAbsentError();
+    }
     throw err;
   }
 }

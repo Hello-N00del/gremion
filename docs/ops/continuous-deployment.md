@@ -999,7 +999,9 @@ seen once.
   `control`. The protection is the expand-only rule of the chains plus the dump. On an install whose
   customer has no public portal set up, the portal answers its own 404 with an `x-gremion-portal: none`
   header; the probe passes with one plain line saying so, and that signal is then absent (only the 5xx
-  count remains). A 5xx is always a failure.
+  count remains). The portal gives that answer only when `PUBLIC_PORTAL_DB_NAME` is not set and the
+  database it reads holds none of the portal tables (`protocols`, `org_units`); one missing table beside
+  an existing one, or any failure on a named database, stays a 5xx. A 5xx is always a failure.
 - **The quiet-night window.** `CD_QUIET_WINDOWS` keeps releases away from the nightly jobs; the Karenz
   run at minute 17 is not guarded.
 - **A release in flight when the CD process dies** leaves a gap of up to five minutes with both locks
