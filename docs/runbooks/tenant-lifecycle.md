@@ -476,7 +476,14 @@ when the realm emits none), the value the executor compares it with, not the gre
 server's clock; an ID token without either, or older than the 3600 s evidence window, also
 gets `401 STEP_UP_REQUIRED`.
 
-**The confirmed switch survives the step-up.** With that `401` the server keeps the confirmed
+**The second factor comes before the switch-off warning.** `GET /api/settings/modules?preview=<id>`
+(what the warning shows) answers the same `401 STEP_UP_REQUIRED` for a stale session, so the
+page goes to the second factor first and opens the warning when it is back; the admin then
+confirms once, and there is nothing to carry across the round trip. The POST still checks the
+second factor itself.
+
+**The confirmed switch survives the step-up** (a switch-on, the restore, or a switch-off whose
+second factor lapsed while the warning was open). With that `401` the server keeps the confirmed
 input for the round trip (tenant table `module_switch_pending`, migration `0065`): one row per
 person, found by the SHA-256 of a random handle that the browser holds in an HttpOnly,
 SameSite=Strict cookie scoped to `/api/settings/modules`. Back on the settings page, the page
@@ -521,6 +528,20 @@ gremion-ui reads the finished request and writes `config.modules`. Where a platf
 enablement row exists, it is the source of truth for "is a module on". A module without a
 row (every module of a customer that predates the switch) is *unmanaged* and keeps following
 `config.modules`, which defaults every toggleable module to on.
+
+**When the module's routes turn off.** The route gate and the navigation read `config.modules`
+from the customer's `config.json` on every request: there is no cache of module state in the
+app, so no TTL to wait out. The file changes when the reconciler applies the request, and
+that follows the host: not when the switch-off is accepted (the request is `queued`, then
+`running`), but when the request has `succeeded`. The Karenz steps (archive, publish the read-only copies) start after that, from
+the applied switch. From then on the lag is the reconciler's own: at most one 10 s timer tick
+(`MODULE_SWITCH_INTERVAL_MS`), or, while the settings page is open, at most one poll (5 s),
+because `GET /api/settings/modules` runs the same pass first. That on-demand pass goes through
+the worker seam: a colour whose worker gate is `off`, or a pass already running for the
+customer in that process, runs nothing from the request and the page shows what is stored. The
+gate is deliberately not switched at acceptance: the platform enablement, which the host
+changes, is the source of truth, and a request that fails, is refused or expires must leave the
+module exactly as it was; a gate that went off ahead of the host would have to be taken back.
 
 **Reading a failed switch.** The settings section shows the failure text of the newest
 switch of each module. The states of the tenant-side record are `queued`, `succeeded`,

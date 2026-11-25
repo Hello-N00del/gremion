@@ -141,6 +141,58 @@ describe('ModuleOffWarning.svelte', () => {
     expect(container.textContent).toContain('gesetzliche Aufbewahrung')
   })
 
+  // The dialog sits inline in the page, so a handler on the dialog element alone would fire only while focus is
+  // inside it. The person has focus on the button that opened it (now gone), on the page, or in the name field:
+  // Escape closes it from all three.
+  describe('Escape closes the dialog', () => {
+    it('from the page body (nothing in the dialog focused)', async () => {
+      const p = props(preview())
+      render(ModuleOffWarning, { props: p })
+      await fireEvent.keyDown(document.body, { key: 'Escape' })
+      expect(p.oncancel).toHaveBeenCalledTimes(1)
+    })
+
+    it('from the name field', async () => {
+      const p = props(preview())
+      render(ModuleOffWarning, { props: p })
+      const field = screen.getByLabelText(/Namen des Moduls/)
+      field.focus()
+      await fireEvent.keyDown(field, { key: 'Escape' })
+      expect(p.oncancel).toHaveBeenCalledTimes(1)
+    })
+
+    it('from the "not yet available" notice too', async () => {
+      const p = props(preview({ graceDays: null }))
+      render(ModuleOffWarning, { props: p })
+      await fireEvent.keyDown(document.body, { key: 'Escape' })
+      expect(p.oncancel).toHaveBeenCalledTimes(1)
+    })
+
+    it('not while the switch-off request is in flight (the cancel button is disabled then as well)', async () => {
+      const p = props(preview(), { busy: true })
+      render(ModuleOffWarning, { props: p })
+      await fireEvent.keyDown(document.body, { key: 'Escape' })
+      expect(p.oncancel).not.toHaveBeenCalled()
+    })
+
+    it('other keys do nothing, and an Escape that is part of an IME composition is left alone', async () => {
+      const p = props(preview())
+      render(ModuleOffWarning, { props: p })
+      await fireEvent.keyDown(document.body, { key: 'Enter' })
+      await fireEvent.keyDown(document.body, { key: 'a' })
+      await fireEvent.keyDown(document.body, { key: 'Escape', isComposing: true })
+      expect(p.oncancel).not.toHaveBeenCalled()
+    })
+
+    it('stops listening once the dialog is gone', async () => {
+      const p = props(preview())
+      const { unmount } = render(ModuleOffWarning, { props: p })
+      unmount()
+      await fireEvent.keyDown(document.body, { key: 'Escape' })
+      expect(p.oncancel).not.toHaveBeenCalled()
+    })
+  })
+
   it('has a labelled alertdialog region and the input is reachable by its label', () => {
     render(ModuleOffWarning, { props: props(preview()) })
     const dialog = screen.getByRole('alertdialog')

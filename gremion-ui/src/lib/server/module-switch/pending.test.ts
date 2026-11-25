@@ -6,7 +6,7 @@
 // database in pending.integration.test.ts.
 import { describe, expect, it, vi } from 'vitest'
 import type { Sql } from '@gremion/db'
-import { armPendingSwitch, checkPendingSwitch, claimPendingSwitch, normalizePendingInput, PENDING_COOKIE_PATH, PENDING_TTL_SECONDS, type PendingSwitch } from './pending'
+import { armPendingSwitch, checkPendingSwitch, claimPendingSwitch, normalizePendingInput, PENDING_COOKIE_MAX_AGE_SECONDS, PENDING_COOKIE_PATH, PENDING_TTL_SECONDS, type PendingSwitch } from './pending'
 
 const kept = (over: Partial<PendingSwitch> = {}): PendingSwitch => ({
   userId: 'u1',
@@ -26,6 +26,22 @@ describe('normalizePendingInput', () => {
       dpia: { requiresDpia: true, documentRef: 'TOM 4.2' },
     })
     expect(normalizePendingInput({ moduleId: 'votes', action: 'enable' })).toEqual({ moduleId: 'votes', action: 'enable' })
+  })
+
+  // The three bodies TabModules.svelte posts (switch-off with the typed name, switch-on with the DPIA answer, the
+  // restore without one) for EVERY module the council can switch: a body that is not kept leaves no cookie, and the
+  // way back then answers "gone". The cause of a lost carry is not in these shapes.
+  it('keeps what the settings page posts, for every switchable module', async () => {
+    const { SWITCHABLE_CATALOGUE_IDS } = await import('$lib/modules/catalogue-map')
+    expect(SWITCHABLE_CATALOGUE_IDS.size).toBeGreaterThan(0)
+    for (const moduleId of SWITCHABLE_CATALOGUE_IDS) {
+      const off = { moduleId, action: 'disable', confirm: 'Name des Moduls' }
+      const on = { moduleId, action: 'enable', dpia: { requiresDpia: false, documentRef: '' } }
+      const restore = { moduleId, action: 'enable' }
+      expect(normalizePendingInput(off), moduleId).toEqual(off)
+      expect(normalizePendingInput(on), moduleId).toEqual(on)
+      expect(normalizePendingInput(restore), moduleId).toEqual(restore)
+    }
   })
 
   it('drops every field it does not know', () => {
@@ -112,5 +128,8 @@ describe('the handle', () => {
   it('waits no longer than the second factor stays fresh, on the module API path only', () => {
     expect(PENDING_TTL_SECONDS).toBeLessThanOrEqual(300)
     expect(PENDING_COOKIE_PATH).toBe('/api/settings/modules')
+    // the row, not the browser, ends the wait: the cookie lives a little longer, so an expiry is told as an expiry
+    expect(PENDING_COOKIE_MAX_AGE_SECONDS).toBeGreaterThan(PENDING_TTL_SECONDS)
+    expect(PENDING_COOKIE_MAX_AGE_SECONDS).toBeLessThanOrEqual(PENDING_TTL_SECONDS + 120)
   })
 })

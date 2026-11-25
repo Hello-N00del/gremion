@@ -36,7 +36,18 @@
   let typed = $state('')
   const available = $derived(preview.graceDays !== null)
   const matches = $derived(confirmationMatches(typed, preview.confirmPhrase))
+
+  // Escape closes the dialog. It sits inline in the page, not in a modal, so the listener is on the window:
+  // focus is on the page, in the name field, or nowhere (the button that opened it is gone). Not while the
+  // request is in flight (the cancel button is disabled then as well), and not for an Escape that belongs to
+  // an input method composition.
+  function onKeydown(e: KeyboardEvent) {
+    if (e.key !== 'Escape' || e.isComposing || busy || e.defaultPrevented) return
+    oncancel()
+  }
 </script>
+
+<svelte:window onkeydown={onKeydown} />
 
 <div
   role="alertdialog"

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { untrack } from 'svelte'
+  import { invalidateAll } from '$app/navigation'
   import { Button } from '$lib/components/ui/button'
   import { Input } from '$lib/components/ui/input'
   import { Label } from '$lib/components/ui/label'
@@ -33,6 +34,7 @@
   const API = '/api/settings/modules'
   const STEP_UP = '/auth/step-up?returnTo=/settings/module'
   const RESUME_MARK = 'gremion.module-switch.resume'
+  const REOPEN_MARK = 'gremion.module-switch.reopen'
   const RESUME_MARK_MAX_AGE_MS = 15 * 60_000
 
   type Load = 'loading' | 'ready' | 'notConfigured' | 'error'
@@ -62,6 +64,25 @@
     console.warn('[settings/modules] refresh failed:', why)
   }
 
+  /** Did any module's on/off state change between two lists? The server reports the state the gate has (a pending request keeps the old one). */
+  function stateChanged(before: ModuleOverview, after: ModuleOverview): boolean {
+    const was = new Map(before.modules.map((m) => [m.moduleId, m.enabled]))
+    return after.modules.some((m) => was.has(m.moduleId) && was.get(m.moduleId) !== m.enabled)
+  }
+
+  /**
+   * The navigation comes from the root layout load (config.modules), which does not run again while this page stays
+   * open: ask for it, or the entry of a module that was just switched off stays in the rail (and one that was
+   * switched on does not appear). A failed reload is only logged: the list on this page is right either way.
+   */
+  async function reloadShell(): Promise<void> {
+    try {
+      await invalidateAll()
+    } catch (err) {
+      console.warn('[settings/modules] the navigation could not be reloaded:', err instanceof Error ? err.message : err)
+    }
+  }
+
   async function refresh(): Promise<void> {
     try {
       const res = await fetch(API)
@@ -76,22 +97,46 @@
         refreshFailed(res.status)
         return
       }
-      overview = body.data as ModuleOverview
+      const next = body.data as ModuleOverview
+      const switched = overview !== null && stateChanged(overview, next)
+      overview = next
       load = 'ready'
       stale = false
+      if (switched) void reloadShell()
     } catch (err) {
       refreshFailed(err instanceof Error ? err.message : err)
     }
   }
 
-  /** Leave for the second factor; the mark tells this page, once it is back, that a switch is waiting on the server. */
-  function toStepUp(): void {
+  /**
+   * Leave for the second factor. Two kinds of mark, both without content:
+   *  - no module: a confirmed switch is waiting on the server; once back, this page asks for it to be carried out;
+   *  - a module id (the preview asked for the second factor BEFORE the warning opened): nothing was confirmed yet,
+   *    the mark only says whose warning to open again, so the admin confirms once, after the round trip.
+   */
+  function toStepUp(reopenFor?: string): void {
     try {
-      sessionStorage.setItem(RESUME_MARK, Date.now().toString())
+      if (reopenFor === undefined) sessionStorage.setItem(RESUME_MARK, Date.now().toString())
+      else sessionStorage.setItem(REOPEN_MARK, `${Date.now()}:${reopenFor}`)
     } catch {
-      // no tab storage: the switch is repeated by hand after the second factor
+      // no tab storage: the action is repeated by hand after the second factor
     }
     navigate(STEP_UP)
+  }
+
+  /** The module whose warning to open again after the second factor, once; a stale or malformed mark is dropped. */
+  function takeReopenMark(): string | null {
+    try {
+      const left = sessionStorage.getItem(REOPEN_MARK)
+      if (left === null) return null
+      sessionStorage.removeItem(REOPEN_MARK)
+      const at = left.indexOf(':')
+      if (at < 1) return null
+      const age = Date.now() - Number(left.slice(0, at))
+      return Number.isFinite(age) && age >= 0 && age <= RESUME_MARK_MAX_AGE_MS ? left.slice(at + 1) : null
+    } catch {
+      return null
+    }
   }
 
   /**
@@ -144,8 +189,13 @@
   $effect(() => {
     untrack(() => {
       void (async () => {
+        const reopen = takeReopenMark()
         if (takeResumeMark()) await resumeKept()
         await refresh()
+        // back from the second factor that the warning asked for: open that module's warning again (once; if the
+        // second factor is still missing, onDisable says so instead of leaving a second time)
+        const m = reopen === null ? undefined : overview?.modules.find((x) => x.moduleId === reopen)
+        if (m && m.enabled && m.pending.length === 0 && overview?.disableAvailable) await onDisable(m, true)
       })()
     })
   })
@@ -237,12 +287,19 @@
     void enable(m, { requiresDpia: dpiaAnswer === 'yes', documentRef: dpiaRef.trim() })
   }
 
-  async function onDisable(m: ModuleOverviewItem) {
+  async function onDisable(m: ModuleOverviewItem, backFromSecondFactor = false) {
     busyId = m.moduleId
     setError(m.moduleId, null)
     try {
       const res = await fetch(`${API}?preview=${encodeURIComponent(m.moduleId)}`)
       const body = await res.json().catch(() => null)
+      if (res.status === 401 && body?.error === 'STEP_UP_REQUIRED') {
+        // The warning is where the switch-off is confirmed: the second factor comes first, the warning after it.
+        // Back from it and still refused: say so, never a second round trip by itself.
+        if (backFromSecondFactor) setError(m.moduleId, $t('settings.modules.error.stepUp'))
+        else toStepUp(m.moduleId)
+        return
+      }
       if (!res.ok || !body?.success) {
         setError(m.moduleId, String(body?.error ?? $t('settings.modules.error.generic')))
         return

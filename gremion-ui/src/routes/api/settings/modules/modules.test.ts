@@ -24,6 +24,7 @@ const h = vi.hoisted(() => {
     loadModuleOverview: vi.fn(),
     previewSwitchOff: vi.fn(),
     loadOperatorModules: vi.fn(),
+    runModuleSwitchPassNow: vi.fn(async () => ({ ran: true, value: { applied: 0, failed: 0, adopted: 0 } })),
     rows,
     /** An empty table, and the first handle again (handle-1, key-1). */
     reset: () => {
@@ -56,6 +57,7 @@ vi.mock('$lib/server/module-switch/pending', async (orig) => ({
   armPendingSwitch: h.arm,
   claimPendingSwitch: h.claim,
 }))
+vi.mock('$lib/server/module-switch/on-demand', () => ({ runModuleSwitchPassNow: h.runModuleSwitchPassNow }))
 vi.mock('$lib/server/module-switch/preview', () => ({ previewSwitchOff: h.previewSwitchOff }))
 vi.mock('$lib/server/module-switch/operator-modules', () => ({ loadOperatorModules: h.loadOperatorModules }))
 vi.mock('$lib/server/module-switch/council-db', async (orig) => ({ ...(await orig<typeof import('$lib/server/module-switch/council-db')>()) }))
@@ -157,7 +159,10 @@ describe('POST /api/settings/modules: a switch confirmed before the second facto
     expect(cookies.set).toHaveBeenCalledTimes(1)
     const [name, handle, opts] = cookies.set.mock.calls[0]!
     expect(name).toBe(COOKIE)
-    expect(opts).toMatchObject({ path: COOKIE_PATH, httpOnly: true, sameSite: 'strict', maxAge: 300 })
+    // the cookie outlives the row by a minute: a round trip that took too long is then answered "expired", the true
+    // reason, instead of "gone" because the browser dropped the cookie in the same instant the row ran out
+    expect(opts).toMatchObject({ path: COOKIE_PATH, httpOnly: true, sameSite: 'strict', maxAge: 360 })
+    expect(opts.maxAge).toBeGreaterThan(300)
     expect(answer).not.toContain(handle)
 
     const res = await post({ resume: true }, sessionOf(AFTER), cookies)
@@ -274,6 +279,52 @@ describe('POST /api/settings/modules: a switch confirmed before the second facto
     expect(h.submitModuleSwitch).not.toHaveBeenCalled()
   })
 
+  // "Die bestätigte Aktion liegt nicht mehr vor" is one answer for four different causes. The page says it once;
+  // the log says which one, without the handle or the switch, so the next live case can be told apart.
+  describe('a refused resume says why in the log (never the handle, never the input)', () => {
+    const logged = (warn: { mock: { calls: unknown[][] } }) => warn.mock.calls.flat().join(' ')
+
+    it('no cookie', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      await post({ resume: true }, sessionOf(AFTER))
+      expect(logged(warn)).toContain('resume refused: no-cookie')
+      warn.mockRestore()
+    })
+
+    it('a cookie whose row is gone (used, expired away, never written)', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const cookies = jar()
+      await confirmBeforeSecondFactor(DISABLE, cookies)
+      const handle = cookies.values.get(COOKIE)!
+      h.rows.clear()
+      await post({ resume: true }, sessionOf(AFTER), jar({ [COOKIE]: handle }))
+      expect(logged(warn)).toContain('resume refused: no-row')
+      expect(logged(warn)).not.toContain(handle)
+      warn.mockRestore()
+    })
+
+    it("another person's row, an expired row and a second factor that is not newer are told apart", async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      let cookies = jar()
+      await confirmBeforeSecondFactor(DISABLE, cookies)
+      await post({ resume: true }, sessionOf({ id: 'u2', ...AFTER }), cookies)
+      expect(logged(warn)).toContain('resume refused: other-user')
+
+      cookies = jar()
+      await confirmBeforeSecondFactor(DISABLE, cookies)
+      h.rows.get(cookies.values.get(COOKIE)!)!.expired = true
+      await post({ resume: true }, sessionOf(AFTER), cookies)
+      expect(logged(warn)).toContain('resume refused: expired')
+
+      cookies = jar()
+      await confirmBeforeSecondFactor(DISABLE, cookies)
+      await post({ resume: true }, sessionOf(BEFORE), cookies)
+      expect(logged(warn)).toContain('resume refused: unconfirmed')
+      expect(logged(warn)).not.toContain('Abstimmungen')
+      warn.mockRestore()
+    })
+  })
+
   it('a non-admin cannot resume: 403 before the kept switch is touched', async () => {
     const cookies = jar()
     await confirmBeforeSecondFactor(DISABLE, cookies)
@@ -315,6 +366,17 @@ describe('POST /api/settings/modules: a switch confirmed before the second facto
     expect(h.arm).not.toHaveBeenCalled()
     expect(cookies.set).not.toHaveBeenCalled()
     expect(cookies.values.has(COOKIE)).toBe(false)
+  })
+
+  // Nothing kept means the way back will find no cookie and say "gone": the log is where the cause shows (this
+  // one, or a failed write, or a resume that found no cookie).
+  it('a body that is not kept is said in the log (the cause only, never the body)', async () => {
+    const log = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await confirmBeforeSecondFactor({ moduleId: 'nope-secret-module', action: 'enable' }, jar())
+    const lines = log.mock.calls.map((c) => c.join(' '))
+    expect(lines.some((l) => l.includes('not kept for the second factor'))).toBe(true)
+    expect(lines.join('\n')).not.toContain('nope-secret-module')
+    log.mockRestore()
   })
 
   it('only the known fields are kept', async () => {
@@ -413,7 +475,17 @@ describe('GET /api/settings/modules', () => {
     const res = await get()
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ success: true, data: { modules: [], disableAvailable: false, problem: null, operatorModules: [] } })
-    expect(h.loadModuleOverview).toHaveBeenCalledWith(TENANT)
+    expect(h.loadModuleOverview).toHaveBeenCalledWith(TENANT, { reconcile: expect.any(Function) })
+  })
+
+  // The page polls this while a request is pending. config.modules (the gate, the navigation) is written only by the
+  // reconciler pass, which the timer runs every 10 s: the poll runs the same pass first, so the gate follows a
+  // request that has succeeded within one poll.
+  it('hands the overview the reconciler pass of the request tenant', async () => {
+    await get()
+    const { reconcile } = h.loadModuleOverview.mock.calls[0]![1] as { reconcile: (t: unknown) => Promise<unknown> }
+    await reconcile(TENANT)
+    expect(h.runModuleSwitchPassNow).toHaveBeenCalledWith(TENANT)
   })
 
   it('carries the modules the council cannot switch but the customer has, next to the switchable ones', async () => {
@@ -464,6 +536,40 @@ describe('GET /api/settings/modules', () => {
     expect(await res.json()).toEqual({ success: true, data: { moduleId: 'votes', graceDays: null } })
     expect(h.previewSwitchOff).toHaveBeenCalledWith(TENANT, 'votes')
     expect(h.loadModuleOverview).not.toHaveBeenCalled()
+  })
+
+  // The second factor is asked for BEFORE the warning opens, so the admin confirms once, after it, with nothing to
+  // carry across the round trip. The POST still checks it on its own (the guard chain is unchanged): this one only
+  // decides whether the dialog may open.
+  describe('?preview=<id> needs a fresh second factor, so the dialog only opens after it', () => {
+    const stale = [
+      ['a password-only sign-in', { loa: 1, authTime: nowSec() }],
+      ['a second factor given long ago', { loa: 2, authTime: nowSec() - 3_600 }],
+      ['no second-factor time at all', { loa: 2, authTime: 0 }],
+    ] as const
+
+    it.each(stale)('%s answers 401 STEP_UP_REQUIRED, reads nothing and keeps nothing', async (_name, user) => {
+      const res = await get('?preview=votes', sessionOf(user))
+      expect(res.status).toBe(401)
+      expect(await res.json()).toEqual({ error: 'STEP_UP_REQUIRED', requiredLoa: 2 })
+      expect(h.previewSwitchOff).not.toHaveBeenCalled()
+      expect(h.arm).not.toHaveBeenCalled()
+    })
+
+    it('a fresh second factor gets the preview', async () => {
+      const res = await get('?preview=votes', sessionOf({ loa: 2, authTime: nowSec() - 30 }))
+      expect(res.status).toBe(200)
+      expect(h.previewSwitchOff).toHaveBeenCalledTimes(1)
+    })
+
+    it('a module that cannot be switched is refused as such first (nothing is learnt about it by a stale session)', async () => {
+      const res = await get('?preview=files', sessionOf(BEFORE))
+      expect(res.status).toBe(422)
+    })
+
+    it('the plain list needs no second factor', async () => {
+      expect((await get('', sessionOf(BEFORE))).status).toBe(200)
+    })
   })
 
   it('?preview=<id> of a module that is not council-switchable is 422 MODULE_NOT_SWITCHABLE', async () => {
