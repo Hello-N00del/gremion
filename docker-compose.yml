@@ -776,7 +776,8 @@ services:
       SYNAPSE_DB_USER:              synapse
       SYNAPSE_DB_PASSWORD:          ${SYNAPSE_DB_PASSWORD}
       # Blank until the realm exists (TASK-028 contract); the shim refuses a
-      # blank issuer at boot. A blank fetch URL derives the in-network one.
+      # blank issuer at boot unless SYNAPSE_JWT_LOGIN=off (no issuer is rendered then).
+      # A blank fetch URL derives the in-network one.
       SYNAPSE_KEYCLOAK_ISSUER_URL:  ${SYNAPSE_KEYCLOAK_ISSUER_URL:-}
       SYNAPSE_KEYCLOAK_FETCH_URL:   ${SYNAPSE_KEYCLOAK_FETCH_URL:-}
       # Unused while the file below is named (the file wins, and a named unreadable file is a
