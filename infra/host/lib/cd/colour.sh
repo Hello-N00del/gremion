@@ -534,8 +534,10 @@ _cd_colour_base_path() {
 #           (once per colour in a process)
 #   broken  a 5xx (a marker on a 5xx is never believed)
 # and is empty when no answer was read.
+# shellcheck disable=SC2034  # read by data.sh, which sources this file
 CD_COLOUR_PORTAL_CASE=''
 _CD_COLOUR_PORTAL_NOTED=''
+# shellcheck disable=SC2034  # CD_COLOUR_PORTAL_CASE is read by data.sh
 cd_colour_portal_probe() {
     local colour="${1:-}" cid base out status marker=''
     CD_COLOUR_PORTAL_CASE=''
