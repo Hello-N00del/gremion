@@ -81,7 +81,9 @@ route_keycloak() { # method path bearer data
             reply 200 "[{\"id\":\"uid-${s}\",\"username\":\"${FAKE_RET_USER:-$USERN}\",\"enabled\":true,\"requiredActions\":${ra}}]" ;;
         "PUT users/uid-${s}/reset-password")
             printf '%s' "$data" > "$D/cap-reset-${s}"
-            if sw reset-forbidden; then reply 403 '{"error":"HTTP 403 Forbidden"}'; else reply 204 ''; fi ;;
+            if sw reset-forbidden; then reply 403 '{"error":"HTTP 403 Forbidden"}'
+            elif sw reset-policy; then reply 400 '{"error":"invalidPasswordMinSpecialCharsMessage"}'
+            else reply 204 ''; fi ;;
         "POST clients")
             printf '%s' "$data" > "$D/cap-client-${s}"
             id="$(jq -r '.clientId' <<< "$data")"
@@ -185,7 +187,7 @@ route_customer() { # host method path bearer data
     esac
     if [[ -n "$word" ]] && sw "moddis-${word}"; then reply 403 'Module disabled'; return 0; fi
     o="$(other "$s")"
-    local id evs fl fn ef eh mx room pid
+    local id evs fl fn ef eh mx room pid pl
     case "$method ${path%%\?*}" in
         "GET /api/calendar/events")
             if sw no-event; then reply 200 '{"success":true,"data":[]}'; return 0; fi
@@ -200,7 +202,10 @@ route_customer() { # host method path bearer data
             else reply 404 '{"success":false,"error":"Not found"}'; fi ;;
         "GET /api/polls")
             if sw no-poll; then reply 200 '{"success":true,"data":[]}'; return 0; fi
-            reply 200 "{\"success\":true,\"data\":[{\"id\":$(poll_id "$s"),\"title\":\"isoprobe-${s}\"}]}" ;;
+            # the shape of GET /api/polls: raw NcPoll objects (modules/votes polls-client), the title under configuration
+            pl="{\"id\":$(poll_id "$s"),\"type\":\"textPoll\",\"configuration\":{\"title\":\"isoprobe-${s}\",\"description\":\"\",\"allowComment\":false,\"anonymous\":false,\"expire\":0},\"status\":{\"expired\":false,\"countOptions\":2},\"currentUserStatus\":{\"userRole\":\"owner\",\"isLocked\":false,\"countVotes\":0}}"
+            if sw polls-listing-leak; then pl+=",{\"id\":$(poll_id "$o"),\"type\":\"textPoll\",\"configuration\":{\"title\":\"isoprobe-${o}\"}}"; fi
+            reply 200 "{\"success\":true,\"data\":[${pl}]}" ;;
         "GET /api/polls/"*)
             pid="${path#/api/polls/}"
             if [[ "$pid" == "$(poll_id "$s")" ]]; then
@@ -281,7 +286,8 @@ fake_occ() { # args after `php occ`
     local sub realm
     case "$1" in
         groupfolders:list)
-            if sw shared-folder; then
+            # shared-folder: the app leaks too; shared-folder-id: ONLY the folder list holds one folder for both
+            if sw shared-folder || sw shared-folder-id; then
                 printf '[{"id":11,"mount_point":"%s","groups":{"ou-%s":{"permissions":31},"ou-%s":{"permissions":31}},"quota":-3,"size":0,"acl":false}]' "$UNIT" "$A" "$B"
             else
                 printf '[{"id":11,"mount_point":"%s","groups":{"ou-%s":{"permissions":31}},"quota":-3,"size":0,"acl":false},{"id":12,"mount_point":"%s","groups":{"ou-%s":{"permissions":31}},"quota":-3,"size":0,"acl":false}]' "$UNIT" "$A" "$UNIT" "$B"

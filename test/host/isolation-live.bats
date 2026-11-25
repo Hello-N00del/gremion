@@ -15,7 +15,8 @@ CLIENT_SUFFIX='cafe0001'
 
 setup() {
     REAL_OPENSSL="$(command -v openssl)"
-    export REAL_OPENSSL
+    REAL_JQ="$(command -v jq)"
+    export REAL_OPENSSL REAL_JQ
     setup_host_root
     PROBE="${HOST_SRC}/bin/gremion-isolation-live"
     FAKE_DIR="${GREMION_ROOT}/fake"
@@ -48,6 +49,8 @@ ENV
   "rand -hex 4") echo '"$CLIENT_SUFFIX"' ;;
   *) exec "$REAL_OPENSSL" "$@" ;;
 esac'
+    # jq is recorded too (it is a program the secrets could reach on an argv); the real one does the work
+    shim jq 'exec "$REAL_JQ" "$@"'
     export GREMION_ISOLATION_HTTP_TIMEOUT=5
 }
 
@@ -169,9 +172,13 @@ all_sections_pass() {
     assert_absent 'SECRET-alpha-rat' "$SHIM_LOG" "a realm admin client secret is on an argv"
     assert_absent 'SECRET-beta-fox' "$SHIM_LOG" "a realm admin client secret is on an argv"
     assert_absent 'TOKMARK' "$SHIM_LOG" "a token is on an argv"
+    assert_absent 'OID\.' "$SHIM_LOG" "a Matrix OpenID token is on an argv"
     # not vacuous: the secrets really were handed over, on the stdin config
     assert_present "$PW_SENTINEL" "${FAKE_DIR}/stdin.log" "the password never reached the stdin config"
     assert_present 'SECRET-alpha-rat' "${FAKE_DIR}/stdin.log" "the client secret never reached the stdin config"
+    assert_present 'OID\.alpha-rat' "${FAKE_DIR}/stdin.log" "the OpenID token never reached the stdin config"
+    # not vacuous either: jq is in the argv log (the secrets are built into JSON bodies with it)
+    assert_recorded jq 'isoprobe-alpha-rat'
 }
 
 @test "the password and the tokens are never printed" {
@@ -245,6 +252,14 @@ all_sections_pass() {
     probe "$A" "$B"
     [ "$status" -eq 2 ]
     grep -q 'NOT-READY' <<< "$output"
+    refute_recorded docker '/clients'
+}
+
+@test "a realm password policy that rejects the password is NOT-READY and says so, not 'may not reset'" {
+    sw_on reset-policy
+    probe "$A" "$B"
+    [ "$status" -eq 2 ]
+    grep -q 'password policy' <<< "$output"
     refute_recorded docker '/clients'
 }
 
@@ -377,6 +392,20 @@ all_sections_pass() {
     section_is polls PASS
 }
 
+@test "polls: the fixture is found by configuration.title, the title the real NcPoll listing carries" {
+    probe "$A" "$B"
+    [ "$status" -eq 0 ]
+    section_is polls PASS
+    assert_recorded curl 'https://alpha.example.org/api/polls/101'
+}
+
+@test "polls: the other customer's poll listed on this host FAILS" {
+    sw_on polls-listing-leak
+    probe "$A" "$B"
+    [ "$status" -eq 1 ]
+    section_is polls FAIL
+}
+
 @test "polls: the other customer's poll answering 200 FAILS" {
     sw_on polls-open
     probe "$A" "$B"
@@ -417,6 +446,17 @@ all_sections_pass() {
     [ "$status" -eq 1 ]
     section_is files FAIL
     grep -q 'one folder' <<< "$output"
+}
+
+@test "files: ONE folder id for both customers FAILS on its own, with the app API and WebDAV still refusing" {
+    sw_on shared-folder-id
+    probe "$A" "$B"
+    [ "$status" -eq 1 ]
+    section_is files FAIL
+    grep -q 'both customers resolve to one folder id (11)' <<< "$output"
+    # the folder identity is the ONLY failing check: nothing else in the section answered FAIL
+    [ "$(grep -c 'FAIL:' <<< "$output")" -eq 1 ]
+    section_is office PASS
 }
 
 @test "files: the other customer's user root answering on this bearer FAILS" {
@@ -476,7 +516,9 @@ all_sections_pass() {
     probe "$A" "$B"
     [ "$status" -eq 0 ]
     section_is chat PASS
-    assert_recorded curl '/_matrix/client/v3/rooms/!room-beta-fox%3Aplat.example.org/messages'
+    # jq 1.6 leaves the '!' of a room id as it is in @uri, jq 1.7 and later write %21: match what both write
+    assert_recorded curl '/_matrix/client/v3/rooms/'
+    assert_recorded curl 'room-beta-fox%3Aplat.example.org/messages'
     assert_recorded curl '/send/'
 }
 
