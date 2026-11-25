@@ -580,6 +580,7 @@ optin() { printf 'SECONDARY_TENANT_MODULES=%s\n' "$1" >> "${GREMION_ROOT}/etc/en
     [[ "$output" == *"core-only"* && "$output" == *"secondary host"* ]] || { echo "$output"; return 1; }
     if enable_ran; then echo "the container verb ran without the opt-in"; return 1; fi
     # the key names files: files passes, nothing else joins
+    rm -f "${GREMION_ROOT}/host-reads.log"
     optin files
     : > "$ORDER"
     drive handle_enable_module
@@ -621,11 +622,11 @@ optin() { printf 'SECONDARY_TENANT_MODULES=%s\n' "$1" >> "${GREMION_ROOT}/etc/en
     [[ "$output" == *"SYNAPSE_JWT_LOGIN"* ]] || { echo "$output"; return 1; }
     if enable_ran; then echo "the container verb ran"; return 1; fi
     printf 'SYNAPSE_JWT_LOGIN=off\n' >> "${GREMION_ROOT}/etc/env/state.env"
-    printf 'MATRIX_IDENTITY=namespaced\n' > "${GREMION_ROOT}/etc/env/app-blue.env"
+    printf 'MATRIX_IDENTITY=namespaced\n' >> "${GREMION_ROOT}/etc/env/app-blue.env"
     drive handle_enable_module
     [ "$status" -ne 0 ] || { echo "messaging was enabled with one colour unswitched"; return 1; }
     [[ "$output" == *"MATRIX_IDENTITY"* && "$output" == *"app-green.env"* ]] || { echo "$output"; return 1; }
-    printf 'MATRIX_IDENTITY=namespaced\n' > "${GREMION_ROOT}/etc/env/app-green.env"
+    printf 'MATRIX_IDENTITY=namespaced\n' >> "${GREMION_ROOT}/etc/env/app-green.env"
     : > "$ORDER"
     drive handle_enable_module
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }

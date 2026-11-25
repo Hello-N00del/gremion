@@ -830,8 +830,8 @@ secondary_optin() {
 # chat_switches -- the messaging prerequisites: Synapse's JWT login off, the namespaced identity on both colours
 chat_switches() {
     printf 'SYNAPSE_JWT_LOGIN=off\n' >> "${GREMION_ROOT}/etc/env/state.env"
-    printf 'MATRIX_IDENTITY=namespaced\n' > "${GREMION_ROOT}/etc/env/app-blue.env"
-    printf 'MATRIX_IDENTITY=namespaced\n' > "${GREMION_ROOT}/etc/env/app-green.env"
+    printf 'MATRIX_IDENTITY=namespaced\n' >> "${GREMION_ROOT}/etc/env/app-blue.env"
+    printf 'MATRIX_IDENTITY=namespaced\n' >> "${GREMION_ROOT}/etc/env/app-green.env"
 }
 
 @test "secondary opt-in: with files opted in the create enables files, writes NO files pin or switch, and still pins messages and every other shared-service module" {

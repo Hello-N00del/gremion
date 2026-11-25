@@ -823,18 +823,18 @@ CASES
     [ "$status" -eq 0 ]; [ "$output" = 'files votes board ' ] || { echo "[$output]"; return 1; }
 }
 
-@test "secondary_optin_load: a refused opt-in dies naming the key (no host, no value), and messaging reads its switches from state.env and both app files beside it" {
+@test "secondary_optin_load: a refused opt-in returns 1 with the opt-in empty and the reason in SECONDARY_OPTIN_WHY (no host, no value), and messaging reads its switches from state.env and both app files beside it" {
     local d="${BATS_TEST_TMPDIR}/optin"; mkdir -p "$d"
     printf 'SECONDARY_TENANT_HOSTS=canary.example.org\nSECONDARY_TENANT_MODULES=bogus\n' > "$d/state.env"
-    run_with 'secondary_optin_load "$1"' "$d/state.env"
-    [ "$status" -ne 0 ]; [[ "$output" == *"SECONDARY_TENANT_MODULES"* && "$output" != *"canary.example.org"* ]] || { echo "$output"; return 1; }
+    run_with 'rc=0; secondary_optin_load "$1" || rc=$?; printf "%s|[%s]|%s" "$rc" "$SECONDARY_TENANT_MODULES" "$SECONDARY_OPTIN_WHY"' "$d/state.env"
+    [ "$status" -eq 0 ]; [[ "$output" == "1|[]|entry 1"* &&"$output" != *"canary.example.org"* && "$output" != *"bogus"* ]] || { echo "$output"; return 1; }
     printf 'SECONDARY_TENANT_HOSTS=canary.example.org\nSECONDARY_TENANT_MODULES=messaging\n' > "$d/state.env"
-    run_with 'secondary_optin_load "$1"' "$d/state.env"
-    [ "$status" -ne 0 ]; [[ "$output" == *"SYNAPSE_JWT_LOGIN"* && "$output" == *"MATRIX_IDENTITY"* ]] || { echo "$output"; return 1; }
+    run_with 'secondary_optin_load "$1" || printf "%s" "$SECONDARY_OPTIN_WHY"' "$d/state.env"
+    [[ "$output" == *"SYNAPSE_JWT_LOGIN"* && "$output" == *"MATRIX_IDENTITY"* ]] || { echo "$output"; return 1; }
     printf 'SYNAPSE_JWT_LOGIN=off\n' >> "$d/state.env"
     printf 'MATRIX_IDENTITY=namespaced\n' > "$d/app-blue.env"
-    run_with 'secondary_optin_load "$1"' "$d/state.env"
-    [ "$status" -ne 0 ]; [[ "$output" == *"app-green.env"* ]] || { echo "$output"; return 1; }
+    run_with 'secondary_optin_load "$1" || printf "%s" "$SECONDARY_OPTIN_WHY"' "$d/state.env"
+    [[ "$output" == *"app-green.env"* && "$output" != *"app-blue.env"* ]] || { echo "$output"; return 1; }
     printf 'MATRIX_IDENTITY=namespaced\n' > "$d/app-green.env"
     run_with 'secondary_optin_load "$1"; secondary_host_module_allowed messaging && printf yes' "$d/state.env"
     [ "$status" -eq 0 ]; [ "$output" = yes ] || { echo "$output"; return 1; }
