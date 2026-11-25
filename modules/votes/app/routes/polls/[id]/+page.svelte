@@ -12,12 +12,18 @@
   let submitting = $state(false)
   let voted = $state(data.poll.currentUserStatus.countVotes > 0)
   let errorMsg = $state('')
+  // Shown next to the options when "Abstimmen" is pressed with nothing chosen.
+  let choiceMsg = $state('')
 
   let poll = $derived(data.poll)
   let isLocked = $derived(poll.status.expired || poll.currentUserStatus.isLocked || voted)
 
   async function submitVote() {
-    if (selectedOptionId === null || isLocked) return
+    if (isLocked) return
+    if (selectedOptionId === null) {
+      choiceMsg = 'Bitte wähle eine Option aus.'
+      return
+    }
     submitting = true
     errorMsg = ''
 
@@ -80,7 +86,10 @@
         <Alert variant="destructive">{errorMsg}</Alert>
       {/if}
 
-      <fieldset disabled={isLocked}>
+      <fieldset
+        disabled={isLocked}
+        aria-describedby={choiceMsg ? 'poll-choice-msg' : undefined}
+      >
         <legend class="sr-only">Abstimmungsoptionen</legend>
         <ul class="space-y-2" role="list">
           {#each poll.options ?? [] as option (option.id)}
@@ -95,9 +104,11 @@
                   value={option.id}
                   bind:group={selectedOptionId}
                   disabled={isLocked}
+                  aria-labelledby={`poll-option-${option.id}`}
+                  onchange={() => (choiceMsg = '')}
                   class="h-4 w-4 accent-accent"
                 />
-                <span class="flex-1 text-sm">{option.text}</span>
+                <span id={`poll-option-${option.id}`} class="flex-1 text-sm">{option.text}</span>
                 {#if voted}
                   <span class="text-sm text-ink-muted">{voteCount(option.votes.count)}</span>
                 {/if}
@@ -105,12 +116,15 @@
             </li>
           {/each}
         </ul>
+        {#if choiceMsg}
+          <p id="poll-choice-msg" role="alert" class="mt-2 text-sm text-rust">{choiceMsg}</p>
+        {/if}
       </fieldset>
 
       {#if !isLocked}
         <Button
           onclick={submitVote}
-          disabled={selectedOptionId === null || submitting}
+          disabled={submitting}
           class="w-full"
         >
           {submitting ? 'Wird abgestimmt…' : 'Abstimmen'}

@@ -15,6 +15,7 @@ import { calendarErasureHook } from './erasure'
 import { startNotificationScheduler } from './notification-scheduler'
 import { startCalDavSyncWorker } from './caldav-sync'
 import { getCalendarBackend } from './backend'
+import { calendarRefsOfOrgUnit } from './org-unit-refs'
 import { expandRecurringEvents } from './recurrence-expand'
 import { makeLogTracer, noopTracer } from '$lib/server/ports/tracer'
 import { platformEnv } from '$lib/server/env/platform-env'
@@ -112,6 +113,11 @@ registerDataProvider('calendar:upcoming-events', async (range) => {
     return []
   }
 })
+
+// The question before an org unit is deleted: does it still have calendar events? The kernel's committee
+// delete asks this first and refuses while the answer is yes. Unlike the provider above, a failure is NOT
+// degraded to an empty answer: the delete refuses on a failure instead of reading it as "no events".
+registerDataProvider('calendar:org-unit-refs', calendarRefsOfOrgUnit)
 
 /**
  * One event per id from a start-sorted expansion: the first occurrence that

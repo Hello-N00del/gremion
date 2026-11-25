@@ -276,7 +276,7 @@
   }
 
   async function deleteCommittee() {
-    if (!confirm(`Gremium „${data.committee.name}" wirklich löschen? Dies entfernt auch die zugehörige Keycloak-Gruppe.`)) return
+    if (!confirm(`Gremium „${data.committee.name}" wirklich löschen? Dies entfernt auch, soweit vorhanden, die zugehörige Keycloak-Gruppe, den Nextcloud-Ordner und den Matrix-Raum.`)) return
     deleteError = ''
     deleting = true
     try {
@@ -366,7 +366,7 @@
           onclick={deleteCommittee}
           disabled={deleting}
           class="rounded-md border border-rust/40 px-3 py-1.5 text-xs font-medium text-rust hover:bg-rust-soft disabled:opacity-50"
-          title="Löscht dieses Gremium (nur möglich, wenn keine Mitglieder mehr zugeordnet sind)"
+          title="Löscht dieses Gremium (nur möglich, wenn nichts mehr daran hängt: Mitglieder, Untergruppen, Wahlen, Protokolle, Beschlüsse, Fraktionen, laufende Ämter, Boards, Termine, Finanzdaten)"
         >
           {deleting ? 'Löscht…' : 'Gremium löschen'}
         </button>

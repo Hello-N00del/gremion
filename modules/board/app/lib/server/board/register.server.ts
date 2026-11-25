@@ -5,6 +5,7 @@
 import { registerDataProvider, registerErasureHook } from '$lib/server/modules/runtime-registry'
 import { registerNoRetention } from '$lib/server/module-karenz/retained/extractors'
 import { boardErasureHook, deleteBoardsOfOrgUnit } from './erasure'
+import { boardRefsOfOrgUnit } from './org-unit-refs'
 
 registerErasureHook(boardErasureHook)
 
@@ -13,6 +14,10 @@ registerErasureHook(boardErasureHook)
 // (the leaf keeps no foreign key to the kernel's org units), so the kernel's deleteOrgUnit(id) asks here
 // after its own commit. The kernel reaches it only through this seam: it never imports module code.
 registerDataProvider('board:delete-org-unit-boards', deleteBoardsOfOrgUnit)
+
+// The question before the delete: does the unit still have boards? The kernel's committee delete asks
+// this first and refuses while the answer is yes, so a council never loses its cards through a delete.
+registerDataProvider('board:org-unit-refs', boardRefsOfOrgUnit)
 
 // Module Karenz (phase 2): the board is a module like finance. Where its rows live is one flag per
 // customer (backend/location.ts): in the customer's kernel tables (migration 0034, read through getDb()) or,
