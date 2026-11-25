@@ -389,14 +389,14 @@ foreign_protected_hosts() {
         while IFS= read -r h; do printf '%s\t%s\n' "${h,,}" "a customer"; done < <(grep -Ev '^[[:space:]]*(#|$)' "$HOSTS_FILE" || true)
     fi
     # every host a router that is not foreign (and not internal-only) pins in its rule
-    excluded="$(printf '%s\n' "${!FOREIGN_ROUTER[@]}" | jq -Rsc 'split("\n") | map(select(length > 0) | . + "@docker")')"
+    excluded="$(printf '%s\n' "${!FOREIGN_ROUTER[@]}" | jq -Rsc 'split("\n") | map(select(length > 0) | (.) + "@docker")')"
     printf '%s' "$ROUTERS_JSON" | jq -r --argjson ex "$excluded" '
         .[]
         | select((.name | endswith("@internal")) | not)
         | select((.name | ascii_downcase) as $n | ($ex | index($n)) == null)
         | select((.entryPoints // []) as $e | $e != ["internaltest"] and $e != ["ping"])
         | (.rule // "") | match("host(?:header)?\\(`([^`]+)`\\)"; "gi") | .captures[0].string
-        | ascii_downcase | select(endswith(".invalid") | not) | . + "\ta host of the kernel'"'"'s own routers"' 2>/dev/null || true
+        | ascii_downcase | select(endswith(".invalid") | not) | (.) + "\ta host of the kernel'"'"'s own routers"' 2>/dev/null || true
 }
 
 check_foreign_docker_objects() {
