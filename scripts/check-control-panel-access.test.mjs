@@ -162,7 +162,9 @@ test('labels: the ops realm login path has its own router, with the auth rate li
   const pri = Number(r.priority)
   assert.ok(pri > Number(l['traefik.http.routers.keycloak.priority']), 'it does not outrank the keycloak router')
   assert.ok(pri < Number(l['traefik.http.routers.keycloak-admin.priority']), 'it outranks the admin router')
-  assert.equal(l['traefik.http.middlewares.kc-admin-allowlist.ipallowlist.sourcerange'] !== undefined, true)
+  // the admin allowlist lives on the traefik container (gremion-verify refuses an @docker middleware anywhere else)
+  assert.equal(labels()['traefik.http.middlewares.kc-admin-allowlist.ipallowlist.sourcerange'] !== undefined, true)
+  assert.equal(l['traefik.http.middlewares.kc-admin-allowlist.ipallowlist.sourcerange'], undefined)
 })
 
 // ── 3. active.yml ──────────────────────────────────────────────────────────
