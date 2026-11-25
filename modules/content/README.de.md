@@ -1,4 +1,4 @@
-<!-- i18n-sync: source=README.md sha256=4c1fb3e2e1975a900e29ac26f18012a34421d44ca9c44d779d3e980e23d96754 -->
+<!-- i18n-sync: source=README.md sha256=8315495c73c95e931fedfc5878d68445f9196007055de48b5adecb2fe44ae700 -->
 [English](./README.md) | **Deutsch**
 
 # content
@@ -90,7 +90,7 @@ zurückgehalten (`module.json`). Dort sind zwei zeitgesteuerte Jobs deklariert,
 | `CONTENT_PG_URL` | Leaf | PostgreSQL-Server des Moduls; Pflicht, kein Standardwert. |
 | `NATS_URL` | Leaf | Aktiviert das Outbox-Relay. |
 | `KERNEL_BASE_URL` | Leaf | Basis-URL des Kernels für die Callbacks zu Portal-Veröffentlichung, Mailversand und Gruppenauflösung. |
-| `PUBLIC_BASE_URL` | Leaf | Dient zum Bilden öffentlicher Links und Folien-URLs. |
+| `PUBLIC_BASE_URL` | Leaf | Dient den Instagram-Folien-URLs. Der Leaf protokolliert sie sonst nur beim Start: die Basis der Links in einer E-Mail (der Abmelde-Link) ist der eigene Host des sendenden Mandanten, den der Leaf bei jedem E-Mail-Versand beim Kernel erfragt (`GET /api/internal/content/link-base`). |
 | `CONTENT_ALLOW_LOOPBACK_LINKS` | Leaf | Erlaubt Loopback-Basen für Links (Entwicklung). |
 | `CONTENT_SCHEDULER_ENABLED`, `SCHEDULER_ENABLED` | Leaf | Schalten den Veröffentlichungs-Scheduler ein oder aus; die modulspezifische Variable hat Vorrang, wenn sie nicht leer ist. |
 | `CONTENT_INSTAGRAM_IG_USER_ID`, `CONTENT_INSTAGRAM_TOKEN_REF` | Kernel-App | Instagram-Konto-ID und ein Verweis auf das Token. |
