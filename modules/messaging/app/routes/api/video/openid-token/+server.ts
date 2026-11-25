@@ -8,6 +8,7 @@ import type { RequestHandler } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { serviceEnv } from '$lib/server/env/service-env'
 import { getMessagesBackend } from '$lib/server/messages/backend'
+import { isChatRefusal } from '$lib/server/messages/chat-identity-guard'
 
 interface OpenIdToken {
   access_token: string
@@ -60,6 +61,7 @@ export const GET: RequestHandler = async (event) => {
     const result: MatrixCredentials = { userId, matrixBaseUrl: matrixPublicBase, openidToken }
     return json(result)
   } catch (err) {
+    if (isChatRefusal(err)) throw err
     return json(
       { error: err instanceof Error ? err.message : 'Internal error' },
       { status: 500 }

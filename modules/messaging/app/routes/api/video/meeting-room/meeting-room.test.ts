@@ -129,6 +129,22 @@ describe('POST /api/video/meeting-room', () => {
     expect(mockCreateRoom).toHaveBeenCalledWith('Besprechung', `Videobesprechung – ${EVT}`, EVT_ALIAS)
   })
 
+  it('namespaced identity: the room is created with the customer marker (a taken alias is adopted only with it); legacy passes none', async () => {
+    const { runWithTenant } = await import('$lib/server/tenant/context')
+    const acme = { id: 'tid-acme', slug: 'acme', issuer: 'https://id.example.org/realms/acme' } as never
+    process.env.MATRIX_IDENTITY = 'namespaced'
+    try {
+      const res = await runWithTenant(acme, () => POST(makeEvent({ authed: true, body: { eventId: EVT } })))
+      expect(res.status).toBe(200)
+    } finally {
+      delete process.env.MATRIX_IDENTITY
+    }
+    expect(mockCreateRoom).toHaveBeenCalledWith('Besprechung', `Videobesprechung – ${EVT}`, EVT_ALIAS, { tenantId: 'tid-acme' })
+    mockCreateRoom.mockClear()
+    await POST(makeEvent({ authed: true, body: { eventId: EVT } }))
+    expect((mockCreateRoom.mock.calls[0] as unknown[]).length).toBe(3)
+  })
+
   it('returns 401 when unauthenticated and never touches Matrix', async () => {
     const res = await POST(makeEvent({ authed: false, body: { eventId: EVT } }))
     expect(res.status).toBe(401)

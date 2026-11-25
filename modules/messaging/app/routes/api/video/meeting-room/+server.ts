@@ -13,6 +13,8 @@ import type { RequestHandler } from '@sveltejs/kit'
 import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
 import { getMessagesBackend } from '$lib/server/messages/backend'
+import { matrixIdentityMode } from '$lib/server/messages/matrix-namespace'
+import { getTenant } from '$lib/server/tenant/context'
 import { resolveCalendarBackendOr503 } from '$lib/server/calendar/backend/resolve'
 import { canManageEvent, loadEventAuthzContext } from '$lib/server/calendar/event-authz'
 
@@ -86,11 +88,14 @@ export const POST: RequestHandler = async (event) => {
 
   const mc = backend.matrix()
   try {
-    const roomId = await mc.createRoom(
-      title ?? 'Besprechung',
-      `Videobesprechung – ${title ?? calEvent.id}`,
-      aliasLocalpart
-    )
+    const roomName = title ?? 'Besprechung'
+    const roomTopic = `Videobesprechung – ${title ?? calEvent.id}`
+    // MATRIX_IDENTITY=namespaced: the room carries the customer marker and a room found behind a taken
+    // alias is adopted only with it. Legacy calls createRoom exactly as before.
+    const roomId =
+      matrixIdentityMode() === 'namespaced'
+        ? await mc.createRoom(roomName, roomTopic, aliasLocalpart, { tenantId: getTenant().id })
+        : await mc.createRoom(roomName, roomTopic, aliasLocalpart)
     // Make the caller a member before the embedded call starts: admin invites,
     // user joins. Both are idempotent (already-member is a no-op).
     await mc.inviteUser(roomId, creds.userId)

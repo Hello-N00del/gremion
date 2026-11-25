@@ -327,7 +327,7 @@ class FakeSynapses {
     if ((m = /^\/_synapse\/admin\/v1\/join\/(.+)$/.exec(path)) && method === 'POST') {
       if (kind !== 'admin') return json(403)
       const room = server.rooms.get(m[1]!)
-      const who = String(body.user_id)
+      const who = body.user_id as string
       if (!room || !server.users.has(who)) return json(404)
       room.members.add(who)
       return json(200, { room_id: m[1] })
@@ -338,7 +338,7 @@ class FakeSynapses {
       const alias = aliasName ? `#${aliasName}:${server.serverName}` : undefined
       if (alias && [...server.rooms.values()].some((r) => r.aliases.has(alias))) return json(400, { errcode: 'M_ROOM_IN_USE', error: 'Room alias already taken' })
       const id = `!new-${++server.roomSeq}:${server.serverName}`
-      server.room(id, String(body.name), [server.bot], alias)
+      server.room(id, body.name as string, [server.bot], alias)
       for (const e of (body.initial_state as Array<{ type: string; state_key: string; content: unknown }> | undefined) ?? []) {
         server.rooms.get(id)!.state.set(e.type, { sender: server.bot, content: e.content })
       }
