@@ -934,7 +934,7 @@ pl_state_pre() { pl_state_release; }
 # waits in the queue for the tick)
 pl_state_release() {
     pl_apply_world
-    printf '{"services":{"postgres":{"image":"postgres:17"}}}\n' >"$DK/compose.state.${C_B:0:12}.json"
+    printf '{"services":{"postgres":{"image":"example/db:17"}}}\n' >"$DK/compose.state.${C_B:0:12}.json"
     "${HOST_SRC}/bin/gremion-cd" release-now "${C_B:0:12}" --with-state >/dev/null
 }
 
