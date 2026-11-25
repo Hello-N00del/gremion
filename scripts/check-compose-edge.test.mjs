@@ -606,9 +606,9 @@ test('guard 9: every public docker router carries the verify universal, and ever
     assert.equal(rt.tls, 'true', `${who}: tls`)
     assert.ok(rt['tls.certresolver'], `${who}: a router that names no resolver serves the default certificate, silently`)
     assert.equal(rt['tls.certresolver'], env.TRAEFIK_CERT_RESOLVER, `${who}: the resolver is the install's TRAEFIK_CERT_RESOLVER`)
-    const chain = String(rt.middlewares ?? '').split(',').filter(Boolean)
-    assert.ok(/^edge-hostpin-/.test(chain[0] ?? ''), `${who}: the host pin is not first in the chain (${chain.join(',')})`)
-    assert.equal(chain.filter((m) => /^edge-hostpin-/.test(m)).length, 1, `${who}: exactly one host pin`)
+    const chain = (rt.middlewares ?? '').split(',').filter(Boolean)
+    assert.ok((chain[0] ?? '').startsWith('edge-hostpin-'), `${who}: the host pin is not first in the chain (${chain.join(',')})`)
+    assert.equal(chain.filter((m) => m.startsWith('edge-hostpin-')).length, 1, `${who}: exactly one host pin`)
     assert.ok(chain.some((m) => /^edge-hsts-(platform|custom)@docker$/.test(m)), `${who}: no HSTS middleware`)
     assert.ok(chain.some((m) => /^edge-ratelimit-.+@docker$/.test(m)), `${who}: no edge-ratelimit-* middleware`)
     for (const m of chain) {
