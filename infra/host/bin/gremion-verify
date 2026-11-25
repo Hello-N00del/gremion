@@ -399,9 +399,63 @@ foreign_protected_hosts() {
         | ascii_downcase | select(endswith(".invalid") | not) | (.) + "\ta host of the kernel'"'"'s own routers"' 2>/dev/null || true
 }
 
+# rule_pins_host <rule> -> "pinned" when EVERY request the rule matches names a host (a positive
+# Host/HostRegexp/HostHeader matcher the request must satisfy), else "open". A recursive-descent
+# reading of Traefik's rule syntax: a disjunction is pinned only when every branch is, a conjunction
+# when any factor is, a negation never is, and anything it cannot parse is open (fail closed).
+# Strings are backtick (no escapes) or double-quoted (backslash escapes).
+rule_pins_host() {
+    RULE="$1" awk '
+    function skipws() { while (substr(s, pos, 1) ~ /[ \t]/) pos++ }
+    function parse_or(   v, t) {
+        v = parse_and(); skipws()
+        while (substr(s, pos, 2) == "||") { pos += 2; t = parse_and(); v = (v && t) ? 1 : 0; skipws() }
+        return v
+    }
+    function parse_and(   v, t) {
+        v = parse_factor(); skipws()
+        while (substr(s, pos, 2) == "&&") { pos += 2; t = parse_factor(); v = (v || t) ? 1 : 0; skipws() }
+        return v
+    }
+    function parse_factor(   name, v, c, q, depth, lname) {
+        skipws()
+        if (substr(s, pos, 1) == "!") { pos++; v = parse_factor(); return 0 }
+        if (substr(s, pos, 1) == "(") {
+            pos++; v = parse_or(); skipws()
+            if (substr(s, pos, 1) == ")") pos++; else bad = 1
+            return v
+        }
+        name = ""
+        while (substr(s, pos, 1) ~ /[A-Za-z]/) { name = name substr(s, pos, 1); pos++ }
+        if (name == "" || substr(s, pos, 1) != "(") { bad = 1; return 0 }
+        pos++; depth = 1; q = ""
+        while (pos <= length(s) && depth > 0) {
+            c = substr(s, pos, 1); pos++
+            if (q != "") {
+                if (q == "\"" && c == "\\") pos++
+                else if (c == q) q = ""
+                continue
+            }
+            if (c == "`" || c == "\"") { q = c; continue }
+            if (c == "(") depth++
+            else if (c == ")") depth--
+        }
+        if (depth != 0) bad = 1
+        lname = tolower(name)
+        return (lname == "host" || lname == "hostregexp" || lname == "hostheader") ? 1 : 0
+    }
+    BEGIN {
+        s = ENVIRON["RULE"]; pos = 1; bad = 0
+        v = parse_or(); skipws()
+        if (pos <= length(s)) bad = 1
+        r = (bad == 0 && v == 1) ? "pinned" : "open"
+        print r
+    }'
+}
+
 check_foreign_docker_objects() {
     (( ${#FOREIGN_LISTED[@]} > 0 )) || return 0
-    local kind name project rule lower token re h why n claimed
+    local kind name project rule token re h why n claimed
     local -A protected=()
     local -a tokens
     while IFS='|' read -r kind name project; do
@@ -416,10 +470,8 @@ check_foreign_docker_objects() {
     while IFS='|' read -r kind name project; do
         [[ "$kind" == router ]] || continue
         rule="$(printf '%s' "$ROUTERS_JSON" | jq -r --arg n "$name" '[.[] | select(.name == $n)][0].rule // ""')"
-        lower="${rule,,}"
-        if [[ "$lower" != *"host("* && "$lower" != *"hostregexp("* && "$lower" != *"hostheader("* ]]; then
-            fail "foreign router ${name} (compose project ${project}) names no host, so it answers every host of the platform, the control panel and every customer: ${rule}"
-            continue
+        if [[ "$(rule_pins_host "$rule")" != pinned ]]; then
+            fail "foreign router ${name} (compose project ${project}) is not confined to a host (a branch of its rule, or the whole of it, needs none, or the rule cannot be read), so it can answer every host of the platform, the control panel and every customer: ${rule}"
         fi
         # a backtick token equal to a protected host (any letter case, any matcher)
         claimed=""
