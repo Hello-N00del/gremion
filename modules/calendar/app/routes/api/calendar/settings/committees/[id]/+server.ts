@@ -8,6 +8,7 @@ import type { RequestHandler } from './$types'
 import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
 import { resolveCalendarBackendOr503 } from '$lib/server/calendar/backend/resolve'
+import { malformedIdResponse } from '$lib/server/governance/route-ids'
 
 const bodySchema = z.object({
   color: z
@@ -21,6 +22,9 @@ export const GET: RequestHandler = async ({ params, locals }) => {
   if (!user || !hasRole(user.roles, Role.Guest)) {
     return json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
+  // The id is a uuid column: a malformed one names nothing (404), it never reaches the driver.
+  const malformed = malformedIdResponse(params.id)
+  if (malformed) return malformed
   const resolved = resolveCalendarBackendOr503()
   if (resolved instanceof Response) return resolved
   const backend = resolved
@@ -34,6 +38,8 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
   if (!user || !hasRole(user.roles, Role.CouncilAdmin)) {
     return json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
+  const malformed = malformedIdResponse(params.id)
+  if (malformed) return malformed
 
   const resolved = resolveCalendarBackendOr503()
   if (resolved instanceof Response) return resolved

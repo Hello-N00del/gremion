@@ -6,6 +6,7 @@ import { getNewsPostById, updateNewsBodyHtml } from '$lib/server/news/news-db';
 import { createNextcloudClient } from '$lib/server/files/nextcloud-client';
 import { createEmptyOdt, convertOdtToHtml } from '$lib/server/newsletter/collabora-convert';
 import { sanitizeRichHtml } from '$lib/server/security/html-sanitize';
+import { parseNewsId } from '$lib/server/content/news-id';
 import { internalFetch } from '$lib/server/internal-fetch';
 import { getTenant } from '$lib/server/tenant/context';
 import { ensureNewsDraft, newsDraftPath, NEWS_DRAFT_USER as ADMIN_USER } from '$lib/server/news/draft-file';
@@ -24,8 +25,8 @@ export const load: PageServerLoad = async ({ params, locals, url }) => {
     throw error(403, 'Forbidden');
   }
 
-  const id = Number(params.id);
-  if (!Number.isSafeInteger(id) || id <= 0) throw error(400, 'Invalid ID');
+  const id = parseNewsId(params.id);
+  if (id === null) throw error(400, 'Invalid ID');
 
   const post = await getNewsPostById(id);
   if (!post) throw error(404, 'Not found');
@@ -53,8 +54,8 @@ export const actions: Actions = {
       throw error(403, 'Forbidden');
     }
 
-    const id = Number(params.id);
-    if (!Number.isSafeInteger(id) || id <= 0) throw error(400, 'Invalid ID');
+    const id = parseNewsId(params.id);
+    if (id === null) throw error(400, 'Invalid ID');
     const post = await getNewsPostById(id);
     if (!post) throw error(404, 'Not found');
 
@@ -82,7 +83,8 @@ export const actions: Actions = {
       throw error(403, 'Forbidden');
     }
 
-    const id = Number(params.id);
+    const id = parseNewsId(params.id);
+    if (id === null) throw error(400, 'Invalid ID');
     const res = await internalFetch(`/api/news/${id}`, {
       method: 'PATCH',
       body: JSON.stringify({ action: 'publish' }),
@@ -98,7 +100,8 @@ export const actions: Actions = {
       throw error(403, 'Forbidden');
     }
 
-    const id = Number(params.id);
+    const id = parseNewsId(params.id);
+    if (id === null) throw error(400, 'Invalid ID');
     const res = await internalFetch(`/api/news/${id}`, {
       method: 'PATCH',
       body: JSON.stringify({ action: 'unpublish' }),

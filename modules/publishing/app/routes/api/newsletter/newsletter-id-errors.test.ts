@@ -118,6 +118,52 @@ describe('list routes refuse an id the leaf would refuse, as a client error', ()
   })
 })
 
+describe('list member routes refuse a malformed id as a client error', () => {
+  it.each(['0', '1abc', 'abc'])('POST /api/newsletter/lists/%s/members is 400', async (id) => {
+    const { POST } = await import('./lists/[id]/members/+server')
+    expect(await status(POST as Handler, id, 'POST', { email: 'a@example.org' })).toBe(400)
+  })
+  it.each([
+    ['1abc', '1'],
+    ['0', '1'],
+    ['1', '1abc'],
+    ['1', '0'],
+  ])('DELETE /api/newsletter/lists/%s/members/%s is 400', async (listId, memberId) => {
+    const { DELETE } = await import('./lists/[id]/members/[memberId]/+server')
+    const e = {
+      params: { id: listId, memberId },
+      locals,
+      url: new URL('http://localhost/x'),
+      request: new Request('http://localhost/x', { method: 'DELETE' }),
+    } as never
+    expect((await (DELETE as Handler)(e)).status).toBe(400)
+  })
+})
+
+describe('newsletter pages answer for a malformed id like the API', () => {
+  const pageEvent = (id: string) => ({ params: { id }, locals, url: new URL('http://localhost/x'), fetch }) as never
+  async function pageStatus(load: (e: never) => unknown, id: string): Promise<number> {
+    try {
+      await load(pageEvent(id))
+      return 200
+    } catch (e) {
+      return isHttpError(e) ? e.status : 500
+    }
+  }
+  it.each(['0abc', '1abc', 'abc', '-3'])('newsletter/%s answers 404', async (id) => {
+    const { load } = await import('../../newsletter/[id]/+page.server')
+    expect(await pageStatus(load, id)).toBe(404)
+  })
+  it.each(['0abc', '1abc', 'abc', '-3'])('newsletter/%s/preview answers 404', async (id) => {
+    const { load } = await import('../../newsletter/[id]/preview/+page.server')
+    expect(await pageStatus(load, id)).toBe(404)
+  })
+  it.each(['0', '1abc', 'abc'])('newsletter/lists/%s answers 400', async (id) => {
+    const { load } = await import('../../newsletter/lists/[id]/+page.server')
+    expect(await pageStatus(load, id)).toBe(400)
+  })
+})
+
 describe('a valid id behaves as before', () => {
   it('GET /api/newsletter/1 answers 200 with the newsletter', async () => {
     const { GET } = await import('./[id]/+server')

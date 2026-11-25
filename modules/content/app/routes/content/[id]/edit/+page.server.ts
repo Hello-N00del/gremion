@@ -7,6 +7,7 @@
 import type { PageServerLoad } from './$types'
 import { error } from '@sveltejs/kit'
 import { requireContentRead } from '$lib/server/content/route-auth'
+import { requireContentId } from '$lib/server/content/ids'
 import { resolveContentBackendForPage } from '$lib/server/content/backend/resolve'
 import type { ChannelId, ChannelStatus } from '$lib/server/content/types'
 
@@ -16,7 +17,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
   requireContentRead(locals.user)
 
   const backend = resolveContentBackendForPage()
-  const post = await backend.getPost(params.id)
+  const post = await backend.getPost(requireContentId(params.id))
   if (!post) throw error(404, 'Not found')
 
   const [channels, media] = await Promise.all([backend.getChannels(post.id), backend.listMedia(post.id)])

@@ -17,6 +17,7 @@
 import { json, error } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { requireContentAuthor } from '$lib/server/content/route-auth'
+import { requireContentId } from '$lib/server/content/ids'
 import { resolveContentBackendOr503 } from '$lib/server/content/backend/resolve'
 import { getKeycloakAdminClientForCurrentTenant } from '$lib/server/keycloak-admin'
 import { listOrgUnitGroupIds, onlyOrgUnitGroups } from '$lib/server/content/recipient-groups'
@@ -33,7 +34,7 @@ export const GET: RequestHandler = async (event) => {
   if (resolved instanceof Response) return resolved
   const backend = resolved
 
-  const post = await backend.getPost(event.params.id)
+  const post = await backend.getPost(requireContentId(event.params.id))
   if (!post) throw error(404, 'Not found')
 
   const [recipients, lists] = await Promise.all([
@@ -68,7 +69,7 @@ export const PUT: RequestHandler = async (event) => {
   if (resolved instanceof Response) return resolved
   const backend = resolved
 
-  const post = await backend.getPost(event.params.id)
+  const post = await backend.getPost(requireContentId(event.params.id))
   if (!post) throw error(404, 'Not found')
 
   let body: unknown

@@ -4,6 +4,7 @@ import { createNextcloudClient } from '$lib/server/files/nextcloud-client'
 import { buildWebdavPath } from '$lib/server/files/webdav-path'
 import { isEditableFile } from '$lib/files/editable-types'
 import type { SessionUser } from '$lib/auth'
+import { describeUpstreamFailure } from '$lib/server/files/upstream-failure'
 
 export const load: PageServerLoad = async ({ params, locals, url }) => {
   const user = locals.user as SessionUser | undefined
@@ -36,7 +37,9 @@ export const load: PageServerLoad = async ({ params, locals, url }) => {
     return { editorUrl, tokenTtl, fileName, backPath, paramPath }
   } catch (err) {
     if ((err as { status?: number }).status) throw err
-    const msg = err instanceof Error ? err.message : String(err)
-    throw error(502, `Editor konnte nicht geöffnet werden: ${msg}`)
+    // The upstream text carries the DAV path and the user's Nextcloud id: it goes to
+    // the server log, the page shows a plain German sentence.
+    const failure = describeUpstreamFailure(err, '[files:upstream]', { op: 'edit-page', requestPath: paramPath })
+    throw error(failure.status, failure.message)
   }
 }

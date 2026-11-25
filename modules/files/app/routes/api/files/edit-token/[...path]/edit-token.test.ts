@@ -137,6 +137,28 @@ describe('GET /api/files/edit-token/[...path]', () => {
     ).rejects.toMatchObject({ status: 502 })
   })
 
+  it('answers a plain German message without the DAV path or the user id, and logs the detail', async () => {
+    const uid = '3f0c9c1e-6a53-4f6e-9a3b-2f4a1c7d8e90'
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    mockGetFileId.mockRejectedValue(
+      new Error(`Nextcloud PROPFIND /remote.php/dav/files/${uid}/missing.odt → 404: <d:error>sabre</d:error>`)
+    )
+    const { GET } = await import('./+server')
+    let text = ''
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (GET as any)(makeEvent('missing.odt', [Role.Member]))
+    } catch (e) {
+      text = JSON.stringify((e as { body?: unknown }).body ?? {})
+    }
+    expect(text).toContain('Dokumentenspeicher')
+    expect(text).not.toContain('remote.php')
+    expect(text).not.toContain(uid)
+    expect(text).not.toContain('Nextcloud PROPFIND')
+    expect(JSON.stringify(log.mock.calls)).toContain('remote.php')
+    log.mockRestore()
+  })
+
   it('returns 400 for .md (not supported by Collabora)', async () => {
     const { GET } = await import('./+server')
     await expect(

@@ -25,6 +25,7 @@ import {
   requireContentPublishInstagram,
 } from '$lib/server/content/route-auth'
 import { getContentBackend } from '$lib/server/content/backend'
+import { requireContentId } from '$lib/server/content/ids'
 import { ChannelNotPublishableError, TenantIdentityMismatchError } from '$lib/server/content/publish-errors'
 import type { ChannelId } from '$lib/server/content/types'
 
@@ -49,11 +50,12 @@ export const POST: RequestHandler = async (event) => {
   //     per-channel path against ITS OWN DB + kernel callbacks and returns the
   //     PublishResult. No more split-brain write against a stale kernel DB, and
   //     no more 503 — the delegation is wired. See docs/runbooks/content-cutover.md.
+  const postId = requireContentId(event.params.id)
   const backend = getContentBackend(event.locals.correlationId)
 
   let result
   try {
-    result = await backend.publish(event.params.id, channel)
+    result = await backend.publish(postId, channel)
   } catch (err) {
     if (err instanceof TenantIdentityMismatchError) throw error(502, err.message)
     if (err instanceof ChannelNotPublishableError) throw error(409, err.message)

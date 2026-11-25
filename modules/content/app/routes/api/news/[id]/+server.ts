@@ -12,6 +12,7 @@ import {
   deleteNewsPost,
 } from '$lib/server/news/news-db';
 import { sanitizeRichHtml } from '$lib/server/security/html-sanitize';
+import { parseNewsId } from '$lib/server/content/news-id';
 
 export const PATCH: RequestHandler = async (event) => {
   // G-075: accept either a CouncilAdmin session OR a trusted internal
@@ -26,8 +27,8 @@ export const PATCH: RequestHandler = async (event) => {
     }
   }
 
-  const id = Number(event.params.id);
-  if (isNaN(id)) throw error(400, 'Invalid ID');
+  const id = parseNewsId(event.params.id);
+  if (id === null) throw error(400, 'Invalid ID');
 
   const post = await getNewsPostById(id);
   if (!post) throw error(404, 'Not found');
@@ -64,8 +65,8 @@ export const DELETE: RequestHandler = async (event) => {
     throw error(403, 'Forbidden');
   }
 
-  const id = Number(event.params.id);
-  if (isNaN(id)) throw error(400, 'Invalid ID');
+  const id = parseNewsId(event.params.id);
+  if (id === null) throw error(400, 'Invalid ID');
 
   const post = await getNewsPostById(id);
   if (!post) throw error(404, 'Not found');
