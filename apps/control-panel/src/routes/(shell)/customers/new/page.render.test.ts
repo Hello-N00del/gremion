@@ -140,3 +140,47 @@ describe('Neuer Mandant host field: the secondary customer hosts', () => {
     expect(text).toBe('Host')
   })
 })
+
+describe('Neuer Mandant host field: the opted-in modules of a secondary host', () => {
+  const PRIMARY = { ...DATA, expectedHost: 'rat.proof.example', secondaryHosts: ['canary.example.org'] }
+  const NOTE_START = 'Ein Mandant auf einem dieser zusätzlichen Hosts hat'
+
+  it('no opt-in (key absent, empty, or an older page data): the note is the one it always was', () => {
+    const base = hostHints(PRIMARY)
+    expect(base).toContain('Ein Mandant auf einem dieser zusätzlichen Hosts hat keinen Chat, keine Dateien, keine Dokumentbearbeitung und keine Videokonferenz; auch Abstimmungen, Inhalte und Newsletter sind dort nicht verfügbar.')
+    expect(hostHints({ ...PRIMARY, secondaryModules: [] })).toBe(base)
+    expect(base).not.toContain('freigegeben')
+  })
+
+  it('files and votes opted in: the note lists what the customer has and what it still lacks, and says existing customers keep their locks', () => {
+    const text = hostHints({ ...PRIMARY, secondaryModules: ['files', 'votes'] })
+    expect(text).toContain(`${NOTE_START} Anmeldung, Board und Kalender sowie, für diese Installation freigegeben: Dateien, Dokumentbearbeitung und Abstimmungen.`)
+    expect(text).toContain('Nicht verfügbar sind dort: Chat, Videokonferenz, Inhalte und Newsletter.')
+    expect(text).toContain('Bereits angelegte Mandanten auf diesen Hosts behalten ihre bisherigen Sperren')
+    expect(text).not.toContain('keine Dateien')
+    expect(text).not.toContain('keinen Chat')
+    expect(text).toContain('Zusätzlich erlaubt: canary.example.org')
+  })
+
+  it('only votes opted in: files and office editing stay on the lacking side', () => {
+    const text = hostHints({ ...PRIMARY, secondaryModules: ['votes'] })
+    expect(text).toContain('freigegeben: Abstimmungen.')
+    expect(text).toContain('Nicht verfügbar sind dort: Chat, Dateien, Dokumentbearbeitung, Videokonferenz, Inhalte und Newsletter.')
+  })
+
+  it('messaging opted in: chat moves to the available side, video never does', () => {
+    const text = hostHints({ ...PRIMARY, secondaryModules: ['messaging'] })
+    expect(text).toContain('freigegeben: Chat.')
+    expect(text).toContain('Nicht verfügbar sind dort: Dateien, Dokumentbearbeitung, Videokonferenz, Abstimmungen, Inhalte und Newsletter.')
+  })
+
+  it('every opt-in of the set: only video, content and newsletter remain unavailable', () => {
+    const text = hostHints({ ...PRIMARY, secondaryModules: ['files', 'votes', 'messaging'] })
+    expect(text).toContain('Nicht verfügbar sind dort: Videokonferenz, Inhalte und Newsletter.')
+  })
+
+  it('the opt-in is shown only next to secondary hosts and a known customer host', () => {
+    expect(hostHints({ ...PRIMARY, secondaryHosts: [], secondaryModules: ['files'] })).not.toContain('freigegeben')
+    expect(hostHints({ ...PRIMARY, expectedHost: null, secondaryModules: ['files'] })).toBe('Host')
+  })
+})
