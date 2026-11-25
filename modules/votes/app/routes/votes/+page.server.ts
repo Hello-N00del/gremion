@@ -155,7 +155,7 @@ export const actions: Actions = {
 
     if (!title) return fail(400, { error: 'Titel ist erforderlich' })
     // A repeated option is refused with a message, not dropped without one (the form checks first; this covers a
-    // request that skipped the form). The poll API still de-duplicates whatever it is given.
+    // request that skipped the form). The options handed to createPoll are therefore always distinct.
     const { options, duplicates } = parsePollOptions(optionsRaw)
     const repeated = duplicateOptionMessage(duplicates)
     if (repeated) return fail(400, { error: repeated })

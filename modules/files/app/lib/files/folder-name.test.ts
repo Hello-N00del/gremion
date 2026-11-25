@@ -11,7 +11,7 @@ describe('folderNameProblem', () => {
   it.each(['a/b', '../x', '/etc', 'a\\b', '..\\x', 'x/'])('refuses the path separator in %j', (name) => {
     expect(folderNameProblem(name)).toBe('separator')
   })
-  it.each(['..', '.', ' .. ', '. '])('refuses the dot name %j', (name) => {
+  it.each(['..', '.', ' .. ', '. ', '..?x', '..#x', '.. #y'])('refuses the dot name %j', (name) => {
     expect(folderNameProblem(name)).toBe('dots')
   })
   it.each(['a\nb', 'a\u0000b', 'a\u007fb'])('refuses a control character in %j', (name) => {

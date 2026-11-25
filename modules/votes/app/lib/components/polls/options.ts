@@ -1,7 +1,7 @@
 // The options textarea of the quick-poll form holds one option per line. Both the form (before it sends anything)
 // and the create action (for a request that skipped the form's check) read it through here, so they agree on what
-// counts as the same option: the trimmed line, compared exactly. The poll API still de-duplicates what it is given;
-// this exists so a person is told about a repeated line instead of finding it silently gone.
+// counts as the same option: the trimmed line, compared exactly. A repeated line is refused with a message, so a
+// person is never left to find it silently gone.
 
 export interface ParsedPollOptions {
   /** Non-empty trimmed lines, in order, repeats removed (what the poll will hold). */

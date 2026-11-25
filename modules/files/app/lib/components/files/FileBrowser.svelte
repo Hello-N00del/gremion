@@ -248,7 +248,8 @@
     }
     const folderPath = (rootPath ? rootPath + '/' : '') + newFolderName
     try {
-      const res = await fetch('/api/files/' + folderPath + '?mkdir=true', { method: 'PUT' })
+      // Each segment is encoded, as for an upload: a raw # or ? in the name would end the URL path there.
+      const res = await fetch('/api/files/' + folderPath.split('/').map(encodeURIComponent).join('/') + '?mkdir=true', { method: 'PUT' })
       if (!res.ok) {
         folderError = $t('files.folderCreateFailed')
         return

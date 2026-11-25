@@ -105,6 +105,24 @@ describe('FileBrowser new folder: a valid name', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
   })
 
+  it('encodes each path segment: a # ? or % in the name stays in the path and mkdir=true stays the query', async () => {
+    const calls = stubFetch()
+    render(FileBrowser, { props: { rootPath: 'docs/Sitzung 1', readonly: false } })
+    for (const name of ['Plan #2', 'Wer? Wie?', '100%']) {
+      await fireEvent.click(screen.getByRole('button', { name: de['files.newFolder'] }))
+      await fireEvent.input(screen.getByPlaceholderText(de['files.folderName']), { target: { value: name } })
+      await fireEvent.click(create())
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    }
+    const urls = writes(calls).map((c) => c.url)
+    expect(urls).toEqual([
+      '/api/files/docs/Sitzung%201/Plan%20%232?mkdir=true',
+      '/api/files/docs/Sitzung%201/Wer%3F%20Wie%3F?mkdir=true',
+      '/api/files/docs/Sitzung%201/100%25?mkdir=true',
+    ])
+    for (const u of urls) expect(new URL(u, 'https://example.test').search).toBe('?mkdir=true')
+  })
+
   it('keeps the dialog open with a message when the server refuses it', async () => {
     stubFetch(() => ({ ok: false, status: 400 }))
     await openDialogAndType('Protokolle')

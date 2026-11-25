@@ -8,11 +8,12 @@
 export type FolderNameProblem = 'empty' | 'separator' | 'dots' | 'characters'
 
 export function folderNameProblem(name: string): FolderNameProblem | null {
-  const trimmed = name.trim()
-  if (!trimmed) return 'empty'
+  if (!name.trim()) return 'empty'
   if (/[/\\]/.test(name)) return 'separator'
-  // The API treats a segment of only dots (a space around them does not help) as a way up out of the folder.
-  if (trimmed === '.' || trimmed === '..') return 'dots'
+  // The API treats a segment that is only dots as a way up out of the folder: a space around them does not help,
+  // and neither does text after a ? or # (it reads the segment up to there).
+  const head = name.split(/[?#]/, 1)[0].trim()
+  if (head === '.' || head === '..') return 'dots'
   // oxlint-disable-next-line no-control-regex -- the pattern exists to REFUSE control characters
   if (/[\u0000-\u001f\u007f]/.test(name)) return 'characters'
   return null
