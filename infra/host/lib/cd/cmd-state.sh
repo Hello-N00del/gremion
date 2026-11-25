@@ -95,8 +95,9 @@ cd_cmd_status() {
     local mods_j=null leaves_j=null rec_j=null left_j=null
     if [[ "$adopted" == true ]]; then
         hold_j="$(printf '%s' "$doc" | jq -c '.hold')"
-        # a failed rollback stops nothing: the colour of the release it was leaving may still be running
-        left_j="$(printf '%s' "$doc" | jq -c 'if .hold.kind == "rollback_failed" then (.release.colour // .live.colour // null) else null end')"
+        # a rollback that failed before it stopped the colour it was leaving (or whose stop did not take) says so in the hold:
+        # the release record is gone by now and live is the old colour, which serves, so nothing is inferred from them
+        left_j="$(printf '%s' "$doc" | jq -c 'if .hold.kind == "rollback_failed" then (.hold.left_running // null) else null end')"
         live_j="$(printf '%s' "$doc" | jq -c '.live | if . == null then null else {sha12, tag, colour, since, proof: (.proof // false)} end')"
         prev_j="$(printf '%s' "$doc" | jq -c '.previous | if . == null then null else {sha12, tag, colour, startable} end')"
         rel_j="$(printf '%s' "$doc" | jq -c '.release | if . == null then null else {id, sha12, colour, stage, stage_status, attempt: (.attempt // 1), committed: (.committed_at != null)} end')"

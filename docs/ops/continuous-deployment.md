@@ -455,7 +455,9 @@ samples after a resume are never a trigger.
    `unhealthy_after_rollback`). The new colour is not stopped then, but the host is not left half
    rolled back: the new colour's worker gate goes off and the old colour's on, the new commit is
    blocked, the hold stays `rollback_failed`, and the mail carries the note
-   `new_colour_still_running` (`gremion-cd status` says the same);
+   `new_colour_still_running`. The hold records that colour (`left_running`, kept until the hold
+   clears), and `gremion-cd status` names it from there, not from the live colour, which is the one
+   that serves. A rollback that failed after the stop step records none;
 6. switch the new colour's worker gate off, then the old colour's on;
 7. stop the new colour (keeping a 0600 tail of its log), put the env tag back, write the block and
    the hold, move `current` and the tag files back when they had moved, record the isolation

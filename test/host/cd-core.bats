@@ -357,6 +357,20 @@ cd_state_get ".phase"; cd_state_get ".poll.api_calls_hour"; cd_state_get ".poll.
     [ "$status" -ne 0 ]
 }
 
+@test "state: hold_set takes the colour left running as a fourth argument, a value that is no colour is refused, hold_clear drops it" {
+    cd_need_flock
+    cd_seed_state
+    run cd_lib 'cd_lock_take; cd_hold_set rollback_failed unhealthy_after_rollback 0123456789ab green
+cd_state_get ".hold.left_running"; cd_hold_clear; cd_state_get ".hold"'
+    [ "$status" -eq 0 ]
+    [ "${lines[0]}" = "green" ]
+    [ "${lines[1]}" = "null" ]
+    run cd_lib 'cd_lock_take; cd_hold_set rollback_failed r 0123456789ab; cd_state_get ".hold | has(\"left_running\")"'
+    [ "$output" = "false" ]
+    run cd_lib 'cd_lock_take; cd_hold_set rollback_failed r 0123456789ab purple'
+    [ "$status" -ne 0 ]
+}
+
 @test "state: hold_clear empties the hold; hold_set records kind, reason, sha12 and a time" {
     cd_need_flock
     cd_seed_state
@@ -1121,16 +1135,28 @@ cd_block_open_list | cut -d" " -f1' "$C2" "$D1" "$C3"
     [ "$(printf '%s' "$output" | jq -r .serving.sha12)" = "bbbbbbbbbbbb" ]
 }
 
-@test "status: a failed rollback says that the colour of the rolled-back release is not stopped and may still be running" {
-    local rel='{"id":"bbbbbbbbbbbb-1","sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","sha12":"bbbbbbbbbbbb","tag":"pilot-bbbbbbbbbbbb","colour":"green","tree":"/t","mode":"auto","stage":"watch","stage_status":"started","attempt":1,"committed_at":null}'
-    cd_seed_state ".phase = \"idle\" | .live = ${CD_LIVE_JSON} | .hold = {\"kind\":\"rollback_failed\",\"reason\":\"unhealthy_after_rollback\",\"sha12\":\"bbbbbbbbbbbb\",\"since\":\"2026-11-17T02:00:00Z\"} | .release = ${rel}"
+@test "status: a failed rollback names the colour it left running, read from the hold and not guessed from the release or from live" {
+    # the state the driver leaves after a failed automatic rollback: no release record (the release ended),
+    # live is still the OLD colour (it serves), the hold carries the colour of the release that was left
+    cd_seed_state ".phase = \"idle\" | .release = null | .live = ${CD_LIVE_JSON} | .hold = {\"kind\":\"rollback_failed\",\"reason\":\"unhealthy_after_rollback\",\"sha12\":\"bbbbbbbbbbbb\",\"since\":\"2026-11-17T02:00:00Z\",\"left_running\":\"green\"}"
     run cd_prog status
     [ "$status" -eq 0 ]
     [[ "$output" == *"rollback_failed (unhealthy_after_rollback)"* ]]
     [[ "$output" == *"not stopped"*"green"*"may still be running"* ]]
+    [[ "$output" != *"blue may still be running"* ]]
     run cd_prog status --json
     [ "$(printf '%s' "$output" | jq -r .new_colour_left_running)" = "green" ]
-    # any other hold says nothing of the kind
+    [ "$(printf '%s' "$output" | jq -r .live.colour)" = "blue" ]
+}
+
+@test "status: a rollback_failed hold without the colour (failure after the stop step) and a hold of another kind say nothing of a running colour" {
+    cd_seed_state ".phase = \"idle\" | .release = null | .live = ${CD_LIVE_JSON} | .hold = {\"kind\":\"rollback_failed\",\"reason\":\"block_failed\",\"sha12\":\"bbbbbbbbbbbb\",\"since\":\"2026-11-17T02:00:00Z\"}"
+    run cd_prog status
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"rollback_failed (block_failed)"* ]]
+    [[ "$output" != *"not stopped"* ]]
+    run cd_prog status --json
+    [ "$(printf '%s' "$output" | jq -r .new_colour_left_running)" = "null" ]
     cd_seed_state ".live = ${CD_LIVE_JSON} | .hold = {\"kind\":\"operator\",\"reason\":\"x\",\"sha12\":\"\",\"since\":\"2026-11-17T02:00:00Z\"}"
     run cd_prog status
     [[ "$output" != *"not stopped"* ]]

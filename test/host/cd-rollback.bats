@@ -666,6 +666,8 @@ fingerprint() {
     [ "$(blocks '.[0].rule')" = watch_readiness ]
     [ "$(sj .hold.kind)" = rollback_failed ]
     [ "$(sj .hold.reason)" = unhealthy_after_rollback ]
+    # the hold keeps the colour that was left running: the release record is gone by the time anyone asks
+    [ "$(sj .hold.left_running)" = green ]
     [ "$(sj .phase)" = idle ]
     # the mail names the failure and that the new colour is still running; block and hold are in place before it
     assert_present '^sim notify rollback_failed .*notes=unhealthy_after_rollback,new_colour_still_running .*\[blocks=1 hold=rollback_failed\]' "$SHIM_LOG"
@@ -699,11 +701,45 @@ fingerprint() {
     assert_absent '^sim down' "$SHIM_LOG"
 }
 
+@test "window: a failed watch on the old colour under proof_end writes no block and sets the hold the rule's way (no block for a rule that writes none)" {
+    cd_write_cfg CD_POST_ROLLBACK_S=180
+    sim_on
+    printf 'bad\n' > "$DK/sample.seq"
+    run rb proof_end
+    [[ "$output" == *"rc=1 reason=unhealthy_after_rollback"* ]]
+    [ ! -e "${GREMION_ROOT}/data/cd/blocked.json" ]
+    [ "$(cat "${GREMION_ROOT}/runtime/workers/blue")" = on ]
+    [ "$(sj .hold.kind)" = rollback_failed ]
+    [ "$(sj .hold.left_running)" = green ]
+}
+
+@test "a rollback that fails after the stop step leaves no colour running: the hold has no left_running and the mail no such note" {
+    sim_on
+    export RL_SIM="${RL_SIM}"$'\n''cd_block_add() { _sim_log "block_add"; return 1; }'
+    run rb watch_readiness
+    [[ "$output" == *"rc=1 reason=block_failed"* ]]
+    assert_present '^sim down ' "$SHIM_LOG"
+    [ "$(sj .hold.kind)" = rollback_failed ]
+    [ "$(sj .hold.left_running)" = null ]
+    assert_present '^sim notify rollback_failed ' "$SHIM_LOG"
+    assert_absent 'new_colour_still_running' "$SHIM_LOG"
+}
+
+@test "a stop that failed and a later failure: the new colour is still up, so the hold and the mail say so" {
+    sim_on
+    export RL_SIM="${RL_SIM}"$'\n''cd_colour_down() { _sim_log "down $1 $2"; return 4; }'$'\n''cd_block_add() { _sim_log "block_add"; return 1; }'
+    run rb watch_readiness
+    [[ "$output" == *"rc=1 reason=block_failed"* ]]
+    [ "$(sj .hold.left_running)" = green ]
+    assert_present '^sim notify rollback_failed .*notes=new_colour_still_running' "$SHIM_LOG"
+}
+
 @test "a failure before the confirm settles nothing: the gate is not touched, no block is written, and the mail still says the new colour runs" {
     sim_on
     printf 'fail\n' > "$DK/switch.mode"
     run rb watch_readiness
     [[ "$output" == *"rc=1 reason=switch_failed"* ]]
+    [ "$(sj .hold.left_running)" = green ]
     assert_absent '^sim workers' "$SHIM_LOG"
     [ ! -e "${GREMION_ROOT}/data/cd/blocked.json" ]
     assert_present '^sim notify rollback_failed .*notes=new_colour_still_running' "$SHIM_LOG"

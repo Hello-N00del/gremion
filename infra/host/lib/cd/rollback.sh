@@ -558,6 +558,7 @@ _cd_rb_s_stop() {
     _cd_rb_keep_logs
     if ! cd_colour_down "$RB_NEW_TREE" "$RB_NEW_COLOUR"; then
         cd_hist rollback_stop_failed colour="$RB_NEW_COLOUR" || true
+        RB_STOP_FAILED=1
         _cd_rb_err "the ${RB_NEW_COLOUR} colour could not be stopped; the switch back is done, stop it by hand"
     fi
     return 0
@@ -690,15 +691,17 @@ _cd_rb_s_mail() {
 # runs the sequence again), a critical mail, the sidecar goes. The new colour is left as it is.
 # The release record stays for the operator. Returns 1.
 _cd_rb_fail() {
-    local reason="${CD_ROLLBACK_REASON:-failed}" notes="${RB_NOTE:-}" running=1
+    local reason="${CD_ROLLBACK_REASON:-failed}" notes="${RB_NOTE:-}" running=1 left=""
     local -a f=()
     reason="${reason//[^a-z0-9_]/_}"
-    # the new colour is stopped only by the stop step: a rollback that failed before it leaves the new
-    # colour running, and the mail says so (stopping it is the operator's call). Read before the
-    # sidecar goes.
-    if _cd_rb_done stop; then running=0; fi
+    # the new colour is stopped only by the stop step: a rollback that failed before it, or whose stop
+    # did not take, leaves the new colour running (stopping it is the operator's call). The hold keeps
+    # the colour, because the release record is gone when `gremion-cd status` is asked and the
+    # state's live colour is the OLD one, the colour that serves. Read before the sidecar goes.
+    if _cd_rb_done stop && [[ "${RB_STOP_FAILED:-0}" -eq 0 ]]; then running=0; fi
     cd_hist rollback_failed reason="$reason" rule="$RB_RULE" || true
-    cd_hold_set rollback_failed "$reason" "$RB_NEW_SHA12" || true
+    if [[ "$running" -eq 1 ]]; then left="$RB_NEW_COLOUR"; fi
+    cd_hold_set rollback_failed "$reason" "$RB_NEW_SHA12" "$left" || true
     if [[ "$RB_SYNTH" == 1 ]]; then
         # the record was made for this rollback (nothing was in flight): a failed rollback must not
         # leave it behind, a reader could take it for a commit with steps pending
@@ -738,6 +741,7 @@ cd_rollback_run() {
     local rule="${1:-}" rc=0 s
     CD_ROLLBACK_REASON=''
     RB_NOTE=''
+    RB_STOP_FAILED=0
     RB_CONFIRMED_AT=0
     [[ "$#" -eq 1 ]] || { _cd_rb_err "cd_rollback_run: usage: RULE"; return 2; }
     [[ "$rule" =~ ^[a-z0-9_]{1,40}$ && "$_CD_RB_RULES" == *" ${rule} "* ]] || { _cd_rb_err "cd_rollback_run: not a rollback rule"; return 2; }
