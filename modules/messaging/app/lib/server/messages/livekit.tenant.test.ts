@@ -31,6 +31,7 @@ interface MintRecord {
   key: string
   secret: string
   identity?: string
+  name?: string
   grant?: Record<string, unknown>
 }
 const aliasMock = vi.hoisted(() => vi.fn())
@@ -45,11 +46,11 @@ vi.mock('livekit-server-sdk', () => ({
     constructor(
       public key: string,
       public secret: string,
-      public opts: { identity?: string },
+      public opts: { identity?: string; name?: string },
     ) {}
     addGrant(g: Record<string, unknown>) {
       this.grant = g
-      minted.push({ key: this.key, secret: this.secret, identity: this.opts?.identity, grant: g })
+      minted.push({ key: this.key, secret: this.secret, identity: this.opts?.identity, name: this.opts?.name, grant: g })
     }
     async toJwt() {
       return `jwt.${this.key}.${String(this.grant?.room)}`
@@ -288,5 +289,21 @@ describe('handleSfuRequest — per-tenant validate + membership gate + namespace
     )
 
     expect(minted[0].grant).toMatchObject({ room: 't.muni.stura-room-mine' })
+  })
+
+  it('the participant name is the username behind the customer prefix in namespaced mode, the localpart as before otherwise', async () => {
+    stubFetch({ sub: '@muni.alice:muni.example.org', members: ['@muni.alice:muni.example.org'] })
+    const req = { room: '!abc:muni.example.org', openid_token: { access_token: 'tok', token_type: 'Bearer' } }
+
+    await runWithTenant(MUNI_CTX, () => handleSfuRequest(req))
+    expect(minted[0].name).toBe('muni.alice')
+
+    process.env.MATRIX_IDENTITY = 'namespaced'
+    try {
+      await runWithTenant(MUNI_CTX, () => handleSfuRequest(req))
+    } finally {
+      delete process.env.MATRIX_IDENTITY
+    }
+    expect(minted[1].name).toBe('alice')
   })
 })

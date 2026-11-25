@@ -202,16 +202,39 @@ class SynapseAdminClient {
     }
   }
 
-  // Get a short-lived Matrix access token for any user via admin API.
+  // Get a Matrix access token for any user via admin API.
   // POST /_synapse/admin/v1/users/{userId}/login
-  async getUserLoginToken(localpart: string): Promise<string> {
+  // `validUntilMs` (epoch ms) makes the homeserver itself end the token; without it the body is empty,
+  // as it always was. The endpoint takes no device_id and the token belongs to no device (a device-less
+  // token): a client that needs a device, for end-to-end encryption keys, cannot use it.
+  async getUserLoginToken(localpart: string, opts: { validUntilMs?: number } = {}): Promise<string> {
     const userId = `@${localpart}:${this.serverName}`
     const res = await this.apiRequest(
       'POST',
       `/_synapse/admin/v1/users/${encodeURIComponent(userId)}/login`,
-      {}
+      opts.validUntilMs === undefined ? {} : { valid_until_ms: opts.validUntilMs }
     )
     return (res as { access_token: string }).access_token
+  }
+
+  // Make sure @localpart:server exists, WITHOUT touching an existing account: no display name is
+  // overwritten and a deactivated (erased) account is not reactivated, which createUser's PUT
+  // (displayname + deactivated:false) would do. A missing account is created by that same idempotent
+  // PUT, so two callers racing each other are harmless. Returns 'deactivated' for an account that
+  // was deactivated; the caller must not mint a login for it.
+  // GET, then PUT, /_synapse/admin/v2/users/{userId}
+  async ensureUser(localpart: string, displayName?: string): Promise<'ok' | 'deactivated'> {
+    const userId = `@${localpart}:${this.serverName}`
+    const path = `/_synapse/admin/v2/users/${encodeURIComponent(userId)}`
+    let existing: { deactivated?: unknown } | null = null
+    try {
+      existing = (await this.apiRequest('GET', path)) as { deactivated?: unknown }
+    } catch (err) {
+      if (!(err instanceof SynapseError && err.status === 404)) throw err
+    }
+    if (existing) return existing.deactivated === true ? 'deactivated' : 'ok'
+    await this.apiRequest('PUT', path, { ...(displayName ? { displayname: displayName } : {}), deactivated: false })
+    return 'ok'
   }
 
   // Kicks userId from roomId.

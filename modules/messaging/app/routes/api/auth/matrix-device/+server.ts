@@ -1,6 +1,7 @@
 import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { getMessagesBackend } from '$lib/server/messages/backend'
+import { currentMatrixLocalpart } from '$lib/server/messages/matrix-namespace'
 
 /**
  * DELETE /api/auth/matrix-device
@@ -36,7 +37,8 @@ export const DELETE: RequestHandler = async ({ request, locals }) => {
 
   // localpart → the backend forms @{localpart}:{serverName} (per-tenant in-process,
   // or the leaf's SYNAPSE_SERVER_NAME in service mode) — same as the pre-seam route.
-  const localpart = user.preferredUsername ?? user.id
+  // MATRIX_IDENTITY=namespaced: the account of THIS customer (<slug>.<escaped username>), never the bare username.
+  const localpart = currentMatrixLocalpart(user.preferredUsername ?? user.id)
 
   try {
     await getMessagesBackend().synapse().deleteDevice(localpart, deviceId)

@@ -2,6 +2,7 @@ import { error, json } from '@sveltejs/kit'
 import { z } from 'zod'
 import type { RequestEvent, RequestHandler } from '@sveltejs/kit'
 import { getMessagesBackend } from '$lib/server/messages/backend'
+import { isChatRefusal } from '$lib/server/messages/chat-identity-guard'
 import { getTenant } from '$lib/server/tenant/context'
 import { serviceEnv } from '$lib/server/env/service-env'
 import type { SessionUser } from '$lib/auth'
@@ -57,6 +58,8 @@ export const GET: RequestHandler = async (event) => {
     const keycloakJwt = await getKeycloakJwt(event)
     matrixToken = await mc.getMatrixToken(keycloakJwt)
   } catch (e) {
+    // A refusal of the token exchange (503: chat not available, 403: not this customer's token) is passed on as it is.
+    if (isChatRefusal(e)) throw e
     const msg = e instanceof Error ? e.message : String(e)
     throw error(502, `Matrix authentication failed: ${msg}`)
   }

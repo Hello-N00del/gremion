@@ -1,7 +1,13 @@
 import { env } from '$env/dynamic/private'
+import { error } from '@sveltejs/kit'
 import { currentTenantId, getTenant } from '$lib/server/tenant/context'
+import { assertIssMatch } from '$lib/server/tenant/iss-match'
 import { serviceEnv } from '$lib/server/env/service-env'
 import { resolveSecret } from '$lib/server/tenant/secrets'
+import { isShowableName } from '$lib/components/messaging/sender-label'
+import { TENANT_MARKER_TYPE, matrixIdentityMode, matrixLocalpart } from './matrix-namespace'
+import { __resetChatIdentityGuardForTests, assertNamespacedChatReady } from './chat-identity-guard'
+import { getSynapseAdmin } from './synapse-admin'
 
 // Cache Matrix access tokens per Keycloak user sub.
 // Avoids a /login round-trip on every API request and prevents 429s.
@@ -16,6 +22,9 @@ interface CachedMatrixToken {
 // app-server address, so Synapse's per-address login rate limit answers 429 and
 // each login creates a new device.
 const MATRIX_TOKEN_TTL_MS = 3_600_000
+// An app-minted token (namespaced identity) is ended by the homeserver at mint time + the TTL; the
+// cache hands it out until this long before that, so a request never starts on a token about to die.
+const MATRIX_TOKEN_EXPIRY_MARGIN_MS = 60_000
 const matrixTokenCache = new Map<string, CachedMatrixToken>()
 // In-flight login promises per cache key — prevents concurrent cache misses from
 // all firing a /login request simultaneously (thundering herd on server restart).
@@ -118,6 +127,8 @@ class MatrixClient {
   // Caches the result per user+device; deduplicates concurrent inflight requests
   // for the same user (prevents thundering herd on server restart).
   async getMatrixToken(keycloakJwt: string, deviceId?: string): Promise<string> {
+    // MATRIX_IDENTITY=namespaced: the app mints the token itself and ignores deviceId (see mintNamespacedToken).
+    if (matrixIdentityMode() === 'namespaced') return this.mintNamespacedToken(keycloakJwt)
     const payload = decodeJwtPayload(keycloakJwt)
     const sub = (payload.sub as string | undefined) ?? keycloakJwt.slice(-20)
     const keycloakExp = typeof payload.exp === 'number' ? payload.exp * 1000 : 0
@@ -163,6 +174,59 @@ class MatrixClient {
     return loginPromise
   }
 
+  // MATRIX_IDENTITY=namespaced: Matrix token of a customer's member, minted by the app.
+  //
+  //   1. whose token is it: the JWT's issuer must be THIS request's customer (the signature was
+  //      verified by the hooks or by Auth.js; this is the check that it was verified for this customer),
+  //      and it must carry the username the account is named after;
+  //   2. may chat run at all (chat-identity-guard.ts);
+  //   3. the account `<slug>.<escaped username>` is created if missing (never reactivated, never
+  //      renamed), then the Synapse admin API issues a login for it that the homeserver itself ends at
+  //      now + MATRIX_TOKEN_TTL_MS (valid_until_ms).
+  //
+  // That endpoint takes no device_id and the token belongs to no device (device-less), so there is NO
+  // device continuity and `deviceId` is ignored. The check of step 1 runs before the cache is read, so a cached token
+  // is never handed to a token of another customer.
+  private async mintNamespacedToken(keycloakJwt: string): Promise<string> {
+    const tenant = getTenant()
+    const payload = decodeJwtPayload(keycloakJwt)
+    if (!assertIssMatch({ tokenIss: typeof payload.iss === 'string' ? payload.iss : undefined, tenantIssuer: tenant.issuer })) {
+      throw error(403, 'Die Anmeldung gehört nicht zu diesem Mandanten.')
+    }
+    const username = typeof payload.preferred_username === 'string' ? payload.preferred_username : ''
+    if (username === '') throw error(403, 'Der Anmeldung fehlt der Benutzername für den Chat.')
+    const localpart = matrixLocalpart(tenant.slug, username)
+
+    await assertNamespacedChatReady(this.baseUrl)
+
+    const cacheKey = `${tenant.id}|${localpart}`
+    const cached = matrixTokenCache.get(cacheKey)
+    if (cached && Date.now() < cached.expiresAt) return cached.matrixToken
+    const inflight = matrixTokenInflight.get(cacheKey)
+    if (inflight) return inflight
+
+    const keycloakExp = typeof payload.exp === 'number' ? payload.exp * 1000 : 0
+    if (keycloakExp > 0 && Date.now() >= keycloakExp) {
+      throw new Error('Keycloak JWT is expired — session refresh required')
+    }
+
+    const displayName = typeof payload.name === 'string' && isShowableName(payload.name) ? payload.name.trim() : undefined
+    const admin = getSynapseAdmin()
+    const mint = (async () => {
+      if ((await admin.ensureUser(localpart, displayName)) === 'deactivated') {
+        throw error(403, 'Dieses Chat-Konto ist deaktiviert.')
+      }
+      const validUntilMs = Date.now() + MATRIX_TOKEN_TTL_MS
+      const matrixToken = await admin.getUserLoginToken(localpart, { validUntilMs })
+      matrixTokenCache.set(cacheKey, { matrixToken, expiresAt: validUntilMs - MATRIX_TOKEN_EXPIRY_MARGIN_MS })
+      return matrixToken
+    })().finally(() => {
+      matrixTokenInflight.delete(cacheKey)
+    })
+    matrixTokenInflight.set(cacheKey, mint)
+    return mint
+  }
+
   // Resolve a room alias (e.g. "#stura-vorstand:srv") to its room id.
   // Returns the room_id on 200, null on 404 (alias not registered), and lets
   // genuinely-unexpected errors surface. Used by provisioning to adopt a room
@@ -188,7 +252,10 @@ class MatrixClient {
   // alias so future reseeds can adopt it via getRoomIdByAlias. If the alias is
   // already taken (M_ROOM_IN_USE — a race or a legacy room), the existing room
   // is resolved and returned instead of throwing.
-  async createRoom(name: string, topic: string, aliasLocalpart?: string): Promise<string> {
+  // `opts.tenantId` (namespaced identity only): the room is created with the initial state event
+  // org.gremion.tenant { tenant_id }, and a room found behind a taken alias is adopted only when it
+  // carries that marker (roomBelongsToTenant); without `opts` the call is what it always was.
+  async createRoom(name: string, topic: string, aliasLocalpart?: string, opts: { tenantId?: string } = {}): Promise<string> {
     const body: Record<string, unknown> = {
       name,
       topic,
@@ -206,6 +273,9 @@ class MatrixClient {
       },
     }
     if (aliasLocalpart) body.room_alias_name = aliasLocalpart
+    if (opts.tenantId) {
+      body.initial_state = [{ type: TENANT_MARKER_TYPE, state_key: '', content: { tenant_id: opts.tenantId } }]
+    }
 
     const res = await fetch(this.baseUrl + '/_matrix/client/v3/createRoom', {
       method: 'POST',
@@ -219,11 +289,26 @@ class MatrixClient {
       if (err.errcode === 'M_ROOM_IN_USE' && aliasLocalpart) {
         const serverName = this.adminBotUserId.split(':')[1] ?? ''
         const existing = await this.getRoomIdByAlias(`#${aliasLocalpart}:${serverName}`)
-        if (existing) return existing
+        if (existing) {
+          if (opts.tenantId && !(await this.roomBelongsToTenant(existing, opts.tenantId))) {
+            throw new Error(`Matrix room alias #${aliasLocalpart} is held by a room that does not belong to this tenant (${opts.tenantId}); not adopted`)
+          }
+          return existing
+        }
       }
       throw new Error(`Matrix POST /_matrix/client/v3/createRoom → ${res.status}: ${err.error ?? ''}`)
     }
     return (await res.json() as { room_id: string }).room_id
+  }
+
+  // Namespaced identity: does this room carry the org.gremion.tenant marker of `tenantId`, written by
+  // the admin bot (a room member cannot write it: state events need power level 50)? A room without
+  // the marker, with another customer's, or with one somebody else wrote is not this tenant's.
+  async roomBelongsToTenant(roomId: string, tenantId: string): Promise<boolean> {
+    const marker = await this.getRoomStateEvent(roomId, TENANT_MARKER_TYPE)
+    if (!marker || marker.sender === '' || marker.sender !== this.adminBotUserId) return false
+    const content = marker.content as { tenant_id?: unknown } | null
+    return typeof content?.tenant_id === 'string' && content.tenant_id === tenantId
   }
 
   // Invite a user to a room as the admin bot. IDEMPOTENT: Synapse returns
@@ -652,6 +737,7 @@ export const matrixClient = new Proxy({} as MatrixClient, {
 
 /** Test-only: clear the per-tenant client registry + token/inflight caches. */
 export function __resetMatrixCachesForTests(): void {
+  __resetChatIdentityGuardForTests()
   _clientByTenant.clear()
   matrixTokenCache.clear()
   matrixTokenInflight.clear()

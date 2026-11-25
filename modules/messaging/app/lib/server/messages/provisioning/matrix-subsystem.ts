@@ -6,11 +6,14 @@
 import type { KeycloakAdminClient } from '../../keycloak-admin'
 import type { OrgUnit } from '../../governance/org-units-db'
 import type { ProvisioningSubsystem } from '../../governance/provisioning/types'
+import { matrixLocalpart, unitAliasLocalpart, unitNameSlug } from '../matrix-namespace'
 
 interface MatrixDeps {
   matrix: {
-    createRoom(name: string, topic: string, aliasLocalpart?: string): Promise<string>
+    createRoom(name: string, topic: string, aliasLocalpart?: string, opts?: { tenantId?: string }): Promise<string>
     getRoomIdByAlias(alias: string): Promise<string | null>
+    /** Namespaced identity only: does the room carry this customer's org.gremion.tenant marker? */
+    roomBelongsToTenant?(roomId: string, tenantId: string): Promise<boolean>
   }
   synapse: {
     createUser(localpart: string, displayName: string): Promise<void>
@@ -19,6 +22,12 @@ interface MatrixDeps {
     deleteRoom(roomId: string): Promise<void>
   }
   kc: Pick<KeycloakAdminClient, 'getUser'>
+}
+
+/** Present only in MATRIX_IDENTITY=namespaced mode: the customer whose rooms and accounts this adapter manages. */
+export interface MatrixIdentity {
+  readonly slug: string
+  readonly tenantId: string
 }
 
 interface MatrixUserInfo {
@@ -41,31 +50,29 @@ interface MatrixUserInfo {
  * avoid collisions with unrelated rooms.
  */
 export function aliasLocalpart(name: string): string {
-  const slug = name
-    .toLowerCase()
-    .replace(/ä/g, 'ae')
-    .replace(/ö/g, 'oe')
-    .replace(/ü/g, 'ue')
-    .replace(/ß/g, 'ss')
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '') // strip any remaining diacritics (é→e)
-    .replace(/[^a-z0-9]+/g, '-') // any non-alphanumeric run → single '-'
-    .replace(/^-+|-+$/g, '') // trim leading/trailing '-'
-  return `stura-${slug}`
+  return `stura-${unitNameSlug(name)}`
 }
 
 /**
  * Matrix adapter. `external_id` is the room id.
- * Matrix localpart = Keycloak username (Synapse jwt_config.subject_claim).
+ *
+ * Without `identity` (MATRIX_IDENTITY=legacy, the default) the Matrix localpart is the Keycloak
+ * username (Synapse jwt_config.subject_claim) and the alias is `stura-<unit>`.
+ *
+ * With `identity` (MATRIX_IDENTITY=namespaced, a homeserver shared by several customers) the localpart
+ * is `<slug>.<escaped username>` and the alias `stura.<slug>.<unit>` (matrix-namespace.ts), a created
+ * room carries the org.gremion.tenant marker, and a room found behind the alias is adopted only when
+ * that marker names this customer: a room that does not carry it is somebody else's, and the unit
+ * gets no room until the conflict is resolved (provisioning retries and reports the error).
  */
-export function createMatrixSubsystem(deps: MatrixDeps, serverName: string): ProvisioningSubsystem {
+export function createMatrixSubsystem(deps: MatrixDeps, serverName: string, identity?: MatrixIdentity): ProvisioningSubsystem {
   async function resolveUser(userKeycloakId: string): Promise<MatrixUserInfo> {
     const user = await deps.kc.getUser(userKeycloakId)
-    const localpart = user.username
+    const localpart = identity ? matrixLocalpart(identity.slug, user.username) : user.username
     const displayName =
       user.firstName && user.lastName
         ? `${user.firstName} ${user.lastName}`
-        : localpart
+        : user.username
     return { localpart, displayName, matrixId: `@${localpart}:${serverName}` }
   }
 
@@ -76,14 +83,22 @@ export function createMatrixSubsystem(deps: MatrixDeps, serverName: string): Pro
       if (existing) return { externalId: existing } // ledger hit — reuse
       // The alias is derived once and used for BOTH the lookup and the create so
       // the adopted/created room are guaranteed to share the same canonical alias.
-      const localpart = aliasLocalpart(unit.name)
+      const localpart = identity ? unitAliasLocalpart(identity.slug, unit.name) : aliasLocalpart(unit.name)
       const alias = `#${localpart}:${serverName}`
       // Adopt a room a prior seed created before minting. A Postgres-only wipe
       // empties the ledger but leaves the Synapse room reachable by its alias;
       // adopting it instead of creating a new one is the cross-reseed dedupe.
       const adopted = await deps.matrix.getRoomIdByAlias(alias)
-      if (adopted) return { externalId: adopted }
-      const roomId = await deps.matrix.createRoom(unit.name, `Gruppenraum für ${unit.name}`, localpart)
+      if (adopted) {
+        if (identity && !(await deps.matrix.roomBelongsToTenant?.(adopted, identity.tenantId))) {
+          throw new Error(`Matrix room alias ${alias} is held by a room that does not belong to this tenant (${identity.tenantId}); not adopted`)
+        }
+        return { externalId: adopted }
+      }
+      const topic = `Gruppenraum für ${unit.name}`
+      const roomId = identity
+        ? await deps.matrix.createRoom(unit.name, topic, localpart, { tenantId: identity.tenantId })
+        : await deps.matrix.createRoom(unit.name, topic, localpart)
       return { externalId: roomId }
     },
 
