@@ -929,9 +929,11 @@ async function ensureControlDb(adminUrl: string, dbPrefix: string): Promise<Sql>
     const ctrl = postgres(controlUrl, { max: 2, prepare: true })
     try {
       // Concurrent CREATE TABLE IF NOT EXISTS from two processes can still collide on the catalogue
-      // (42P07, 23505 on pg_type): take the first-contact lock around it.
-      await withAdvisoryLock(controlUrl, FIRST_CONTACT_LOCK, async () => {
-        await ctrl.unsafe(`
+      // (42P07, 23505 on pg_type): run it under a transaction-level first-contact lock, on the pool
+      // itself (no extra connection, and the lock cannot outlive the statement).
+      await ctrl.begin(async (tx) => {
+        await tx`SELECT pg_advisory_xact_lock(hashtextextended(${FIRST_CONTACT_LOCK}, 0))`
+        await tx.unsafe(`
           CREATE TABLE IF NOT EXISTS tenant_catalog (
             tenant_id  UUID PRIMARY KEY,
             slug       TEXT NOT NULL UNIQUE,
