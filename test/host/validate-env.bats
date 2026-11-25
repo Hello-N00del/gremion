@@ -762,7 +762,7 @@ secondary_fixture() {
         sed -i "s/^SYNAPSE_JWT_LOGIN=.*/SYNAPSE_JWT_LOGIN=${v}/" "${ENV_DIR}/state.env"
         run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
         [ "$status" -eq 0 ] || { echo "refused '${v}': ${output}"; return 1; }
-        [[ "$output" == *"SYNAPSE_JWT_LOGIN: ${v}"* ]] || { echo "no line for '${v}': ${output}"; return 1; }
+        [[ "$output" == *"Synapse login switch: ${v}"* ]] || { echo "no line for '${v}': ${output}"; return 1; }
     done
 }
 
