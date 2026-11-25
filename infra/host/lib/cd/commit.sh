@@ -710,6 +710,8 @@ _cd_commit_step8() {
     if [[ "$since" =~ ^[0-9]{1,12}$ ]]; then
         now="$(cd_now)" || now="$since"
         span=$(((now - since) / 60))
+        # a clock that went back is no negative span (the driver's history line does the same)
+        ((span < 0)) && span=0
         args+=("hostlock_min=${span}")
         cap="$(_cd_commit_int CD_LOCK_SPAN_MIN)" || cap=0
         if ((cap > 0 && span > cap)); then notes+=(lock_span_over); fi

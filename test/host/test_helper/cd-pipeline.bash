@@ -12,6 +12,8 @@
 #   docker, curl     one world each (fixtures/cd/pipeline/docker.body and curl.body), state under $DK
 #   git              the REAL git, recorded (the code host is a local bare repository)
 #   logger, systemctl, df, ionice, renice
+#   mv               passes every call to the real one; it adds a `workers <colour> <mode>` line to the order
+#                    log per gate file written and fails a write named in $DK/mv.fail (see pl_setup)
 #   gremion-switch, gremion-render, gremion-tenant   committed into the release trees (as the program
 #                    finds them: <tree>/infra/host/bin, current/infra/host/bin)
 #   gremion-migration-dump, gremion-isolation, gremion-verify, gremion-mail   in $GREMION_ROOT/bin
@@ -67,6 +69,8 @@ pl_after() {
     [ "$b" -gt "$a" ] || { echo "pl_after: '$2' ($b) is not after '$1' ($a)" >&2; cat "$DK/order.log" >&2; return 1; }
 }
 pl_count() { grep -c -E -- "$1" "$DK/order.log" 2>/dev/null || true; }
+# pl_workers -- the gate files as the world saw them written, in order: `green off,blue off,green on`
+pl_workers() { grep '^workers ' "$DK/order.log" | sed 's/^workers //' | paste -s -d, -; }
 # pl_mails KIND -- how many mails of the kind left the program: the relay took them (the curl world keeps
 # a copy of each) or they still wait in the outbox
 pl_mails() {
@@ -108,6 +112,13 @@ pl_fingerprint() {
     } | sha256sum
 }
 
+# pl_span_ended SHA12 -- the span of the host lock of the release is over: its span file is gone and the last
+# `hostlock_released` line of the history (what `status` reads) names the release
+pl_span_ended() {
+    [ ! -e "${GREMION_ROOT}/data/cd/hostlock-since" ]
+    [ "$(jq -s '[.[] | select(.event == "hostlock_released")] | last | .sha12' "${GREMION_ROOT}/data/cd/history.jsonl")" = "\"$1\"" ]
+}
+
 # pl_tick [ARGS] -- one tick of the program, to the end
 pl_tick() { "${HOST_SRC}/bin/gremion-cd" tick "$@" </dev/null; }
 
@@ -132,6 +143,7 @@ pl_assert_committed() {
     [ "$(pl_blocks)" = 0 ]
     pl_hostlock_free
     pl_cdlock_free
+    pl_span_ended "$b12"
     [ ! -s "$DK/live.tsv" ]
 }
 
@@ -271,6 +283,7 @@ pl_envs() { # LIVE_TAG
 STACK=teststack
 COMPOSE_PROJECT_NAME=teststack-state
 COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml:docker-compose.state-pins.yml
+IMAGE_TAG=${tag}
 PLATFORM_DOMAIN=example.org
 EDGE_BIND_IP=203.0.113.10
 EDGE_HTTPS_PORT=443
@@ -434,6 +447,20 @@ exec "$GH_REAL_GIT" "$@"'
     shim logger
     shim ionice
     shim renice
+    # mv: the one program every durable write of the libraries ends in (atomic_write, the gate files, the
+    # symlink swaps). It passes every call to the real one; it adds a line `workers <colour> <mode>` to the
+    # order log for each gate file written (the order of the gates, read from the world and not from the
+    # libraries), and it fails a write whose target is named in $DK/mv.fail (a write that cannot land,
+    # injected by a file of the world, never by chmod)
+    PL_REAL_MV="$(command -v mv)"
+    export PL_REAL_MV
+    shim mv 'dest="${@: -1}"
+case "$dest" in
+    */workers/*) printf "workers %s %s
+" "${dest##*/}" "$(cat "${@: -2:1}" 2>/dev/null)" >>"$DK/order.log" ;;
+esac
+if [ -f "$DK/mv.fail" ] && [ "${dest##*/}" = "$(cat "$DK/mv.fail")" ]; then exit 1; fi
+exec "$PL_REAL_MV" "$@"'
     # the timer list; while the reconcile stage runs (a customer has been reconciled and the stage has not
     # ended) it also notes whether another descriptor can take the host lock at this very moment
     shim systemctl 'cat "$DK/timers.json" 2>/dev/null || exit 1
@@ -449,6 +476,29 @@ fi'
     export CD_COLOUR_STABLE_S=1 CD_COLOUR_ROUND_S=1 CD_COLOUR_ROUTE_WAIT_S=4 CD_WAIT_POLL_S=0.1
     cd_write_cfg CD_REPO_URL=https://github.com/org/repo CD_POST_RECONCILE_S=0 CD_WATCH_MINUTES=2 CD_WATCH_INTERVAL_S=30 "$@"
     pl_timers
+}
+
+# pl_apply_world -- what the host and state apply stages of a release-now --with-state need: the installed
+# set of the host (the backup the apply takes first), a systemd directory of the world, and a sudo that
+# is a shim of the world (the root unit is outside the family): it runs the hook, notes the call in the
+# order log and exits 1 where $DK/sudo.fail exists
+pl_apply_world() {
+    local u
+    export GREMION_CD_TESTING=1 GREMION_CD_SYSTEMD_DIR="${GREMION_ROOT}/.systemd"
+    mkdir -p "$GREMION_CD_SYSTEMD_DIR" "${GREMION_ROOT}/lib/cd"
+    printf '#!/bin/sh\necho installed gremion-cd\n' >"${GREMION_ROOT}/bin/gremion-cd"
+    printf '# installed common\n' >"${GREMION_ROOT}/lib/common.sh"
+    printf '# installed core\n' >"${GREMION_ROOT}/lib/cd/core.sh"
+    printf '#!/bin/sh\necho installed apply-root\n' >"${GREMION_ROOT}/lib/cd/apply-root.sh"
+    chmod 755 "${GREMION_ROOT}/bin/gremion-cd" "${GREMION_ROOT}/lib/cd/apply-root.sh"
+    for u in gremion-cd.service gremion-cd.timer gremion-cd-watchdog.service gremion-cd-watchdog.timer \
+        gremion-cd-resume.service 'gremion-cd-apply@.service'; do
+        printf '[Unit]\nDescription=installed %s\n' "$u" >"${GREMION_CD_SYSTEMD_DIR}/${u}"
+    done
+    shim sudo '[ -f "$DK/hook.sh" ] && . "$DK/hook.sh" && pl_hook "sudo $*"
+echo "sudo $*" >>"$DK/order.log"
+[ -f "$DK/sudo.fail" ] && exit 1
+exit 0'
 }
 
 # pl_lib 'snippet' [args] -- a fresh bash with EVERY library of gremion-cd, the way the program loads

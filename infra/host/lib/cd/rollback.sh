@@ -48,8 +48,9 @@
 #                manual rollback after the commit point; a commit_stuck rollback after commit
 #                step 2); live and previous of the state follow after a committed release.
 #       isolation the isolation record of the OLD tip, when the new tip was recorded (a committed
-#                release, commit_stuck, and any rule while the stage is commit: commit step 1
-#                records the new tip before the commit point). A failure is only a mail.
+#                release, commit_stuck, and the operator's request while the stage is commit:
+#                commit step 1 records the new tip before the commit point). A proof_end rollback
+#                at that stage never recorded one. A failure is only a mail.
 #       mail     `rolled_back`.
 #     Then phase idle and release null. A rollback never restores a database.
 #
@@ -616,10 +617,14 @@ _cd_rb_s_current() {
 # refuses ISOLATION_STALE_TIP otherwise. A failure here is a mail, never a blocker.
 _cd_rb_s_isolation() {
     local rc=0
-    # The new tip is recorded at commit step 1, before the commit point, so any rollback of a release
-    # whose commit stage began (an operator's request taken while the steps retry, a kill switch park
-    # that ends in one) must put the old tip back, not only commit_stuck.
-    if [[ "$RB_COMMITTED" -ne 1 && "$RB_RULE" != commit_stuck && "$RB_STAGE" != commit ]]; then
+    # The new tip is recorded at commit step 1, before the commit point, so the operator's request
+    # taken while the steps retry (or parked by the kill switch) must put the old tip back, not only
+    # commit_stuck. proof_end at the same stage does not: a proof release never ran step 1. The state
+    # keeps no mark of step 1 (the commit stage is entered before it, and a park at its first boundary
+    # or an operator request that takes over an interrupted proof_end rollback is the same stage), so
+    # such a request re-records the old tip as well: idempotent, and a fresh isolation run only where
+    # the old tip's evidence file is gone.
+    if [[ "$RB_COMMITTED" -ne 1 && "$RB_RULE" != commit_stuck && ! ( "$RB_RULE" == manual_rollback && "$RB_STAGE" == commit ) ]]; then
         return 0
     fi
     cd_colour_isolation_record "$RB_OLD_TREE" >/dev/null 2>&1 </dev/null || rc=$?
@@ -661,7 +666,8 @@ _cd_rb_s_mail() {
 
 # _cd_rb_fail - the rollback did not complete: hold rollback_failed, phase idle (so no resume tick
 # runs the sequence again), a critical mail, the sidecar goes. The new colour is left as it is.
-# The release record stays for the operator. Returns 1.
+# The release record is left in the state with phase idle (the hold is the news): the driver ends it
+# (_cd_drv_after_rollback, and the watch and commit stages when the rollback ran inside them). Returns 1.
 _cd_rb_fail() {
     local reason="${CD_ROLLBACK_REASON:-failed}" notes="${RB_NOTE:-}"
     local -a f=()
