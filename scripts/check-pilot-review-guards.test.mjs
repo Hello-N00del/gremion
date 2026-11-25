@@ -5,7 +5,8 @@ import { test } from 'node:test'
 const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8')
 
 test('Collabora accepts exactly one literal WOPI host, with no regex metacharacters', () => {
-  const m = read('docker-compose.yml').match(/aliasgroup1:\s*"([^"]+)"/)
+  // the environment is a list since the secondary hosts: `- aliasgroup1=<host>` (a map entry `aliasgroup1: "<host>"` reads the same)
+  const m = read('docker-compose.yml').match(/aliasgroup1(?:=|:\s*")([^"\s]+)"?\s*$/m)
   assert.ok(m, 'aliasgroup1 is set')
   assert.doesNotMatch(new URL(m[1]).hostname, /[*+?()[\]|]/)
   assert.ok(!/[*+?()[\]|]/.test(m[1]), `aliasgroup1 is literal: ${m[1]}`)
