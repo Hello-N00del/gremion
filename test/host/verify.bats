@@ -2696,3 +2696,65 @@ foreign_claims() {
     body="$(sed -n '/^run_pass() {/,/^}/p' "$VERIFY")"
     [[ "$body" == *$'fetch_api\n    classify_foreign_docker_objects\n    check_foreign_docker_objects\n    check_routers'* ]]
 }
+
+# A fully-qualified host (trailing dot) is the same host to the edge: the router matches a
+# request for the bare name, so the protected-host scan reads both spellings as one.
+@test "foreign: a trailing dot does not hide the platform host" {
+    foreign_site
+    foreign_claims 'Host(`example.org.`)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"claims example.org (the platform)"* ]]
+}
+
+@test "foreign: a trailing dot and capitals do not hide the control panel host" {
+    foreign_site
+    foreign_claims 'Host(`CONTROL.example.org.`)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"claims control.example.org (the control panel)"* ]]
+}
+
+@test "foreign: a trailing dot does not hide a customer host" {
+    foreign_site
+    foreign_claims 'Host(`tenant-a.example.org.`)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"claims tenant-a.example.org (a customer)"* ]]
+}
+
+@test "foreign: a double-quoted host with a trailing dot does not hide a customer host" {
+    foreign_site
+    foreign_claims 'Host("tenant-a.example.org.")'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"claims tenant-a.example.org (a customer)"* ]]
+}
+
+@test "foreign: a HostRegexp that only matches the fully-qualified spelling of a protected host is refused" {
+    foreign_site
+    foreign_claims 'HostRegexp(`^tenant-a[.]example[.]org[.]$`)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"HostRegexp"*"tenant-a.example.org"* ]]
+}
+
+@test "foreign: a trailing dot on a host nobody protects is fine" {
+    foreign_site
+    foreign_claims 'Host(`sales.example.net.`)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+}
+
+# The name collision: a kernel container that declares router `keycloak` keeps the kernel's
+# router judged even when a foreign container declares the same name.
+@test "foreign: a foreign container declaring a router name a kernel container also declares does not make the kernel's router foreign" {
+    fake_container c2 keycloak "keycloak" running healthy 0 10.90.250.4 \
+        '{"com.docker.compose.project":"staging-state","com.docker.compose.service":"keycloak","org.gremion.stack":"staging","traefik.enable":"true","traefik.http.routers.keycloak.rule":"Host(`tenant-a.example.org`) && PathPrefix(`/auth`)"}'
+    foreign_site "$(foreign_labels '. + {"traefik.http.routers.keycloak.rule":"Host(`sales.example.net`) && PathPrefix(`/kc`)"}')"
+    api_edit routers '(.[] | select(.name=="keycloak@docker")).tls = {}'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router keycloak@docker: no certresolver"* ]]
+    [[ "$output" != *"foreign docker router keycloak@docker"* ]]
+}
