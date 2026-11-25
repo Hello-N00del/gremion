@@ -53,6 +53,8 @@ import {
   UNREAD_CACHE_MAX,
 } from './unread-cache'
 import { karenzParticipantsFor } from '$lib/server/module-karenz/participants'
+import { runWithTenant, type TenantContext } from '$lib/server/tenant/context'
+import { createMatrixSubsystem } from './provisioning/matrix-subsystem'
 // Side-effect import: registers the messages module's providers/hooks.
 import './register.server'
 
@@ -268,5 +270,40 @@ describe('sender-name resolver on the tenant eviction seam', () => {
     expect(getSenderNameResolver()).toBe(first)
     runtimeRegistry.runTenantEvictHooks('tenant-evict')
     expect(getSenderNameResolver()).not.toBe(first)
+  })
+})
+
+// The provisioning factory is the one place that hands the customer identity to the Matrix
+// subsystem. Without it, namespaced provisioning would PUT and force-join bare-username accounts
+// again (the cross-customer overwrite the switch exists to prevent), while the login mints a
+// different account. Legacy must pass nothing, so legacy provisioning stays byte-identical.
+describe('matrix provisioning factory hands the customer identity to the subsystem', () => {
+  const tenant = { id: 'tid-b', slug: 'b' } as unknown as TenantContext
+  const kc = { listUsers: vi.fn() } as never
+  const saved = process.env.MATRIX_IDENTITY
+
+  beforeEach(() => vi.mocked(createMatrixSubsystem).mockClear())
+  afterEach(() => {
+    if (saved === undefined) delete process.env.MATRIX_IDENTITY
+    else process.env.MATRIX_IDENTITY = saved
+  })
+
+  function thirdArgFor(mode: string | undefined): unknown {
+    if (mode === undefined) delete process.env.MATRIX_IDENTITY
+    else process.env.MATRIX_IDENTITY = mode
+    runWithTenant(tenant, () => runtimeRegistry.buildModuleProvisioningSubsystems(kc))
+    const calls = vi.mocked(createMatrixSubsystem).mock.calls
+    expect(calls).toHaveLength(1)
+    return calls[0][2]
+  }
+
+  it('namespaced: passes the current customer slug and id', () => {
+    expect(thirdArgFor('namespaced')).toEqual({ slug: 'b', tenantId: 'tid-b' })
+  })
+
+  it('legacy and unset: pass no identity at all', () => {
+    expect(thirdArgFor('legacy')).toBeUndefined()
+    vi.mocked(createMatrixSubsystem).mockClear()
+    expect(thirdArgFor(undefined)).toBeUndefined()
   })
 })
