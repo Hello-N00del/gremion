@@ -1134,6 +1134,9 @@ stage_timers() {
 # nothing, and this script, which runs as root, reads only the SOURCE tree. The programs a launcher
 # starts are the live release's own code, which the pipeline already builds images from and the
 # executor already sources; they are run by whoever started the launcher, never by this stage.
+# This stage runs as root and writes only the files it installs, each by a rename inside a directory
+# it has checked is not a link (bin/, lib/, lib/cd/); it deletes nothing it did not install
+# itself (the leftovers of a hand install, CD_LEFTOVER_LIBS, are named and left).
 #
 # It is run twice in a host's life: by hand at the first adoption, and by
 # lib/cd/apply-root.sh (the unit gremion-cd-apply@<sha12>.service) at every later apply of
@@ -1151,15 +1154,19 @@ CD_UNITS=(gremion-cd.service gremion-cd.timer gremion-cd-watchdog.service gremio
 # self-contained, and requires every entry here to need the exemption.
 CD_TREE_RUN_PROGRAMS=(gremion-isolation gremion-services gremion-tenant)
 
-# Files of an earlier hand install: the libraries someone put beside a copy of a tree-run program
-# so that it would start (the copy itself is replaced by the launcher). Nothing installed sources
-# them any more, and a copy of customer code that nothing keeps current is a trap. Removed by exact
-# name.
-CD_STALE_LIBS=(lib/customer-ops.sh lib/access-log.sh lib/executor/db.sh)
+# Files an earlier hand install may have left: the libraries someone put beside a copy of a tree-run
+# program so that it would start (the copy itself is replaced by the launcher). Nothing installed
+# sources them any more, so they are inert. They are REPORTED and never touched: they lie outside
+# what apply-root.sh backs up and restores (a failed apply must put the host back as it was, and a
+# deleted file is not in the backup), a removal by path follows a link that stands where a directory
+# was (a lib/executor that points into the live release would take the release's own library with
+# it), and an operator's own script may still name one. Taking them away is the operator's step.
+CD_LEFTOVER_LIBS=(lib/customer-ops.sh lib/access-log.sh lib/executor/db.sh)
 
 # cd_launcher_text <program name> -- the whole text of <root>/bin/<name> for a tree-run program.
 # It sources nothing: it finds the program of the current release and execs it, so that program,
-# its libraries and the release it works on are one commit.
+# its libraries and the release it works on are one commit. The root is GREMION_ROOT when set, else
+# the directory above the launcher's own (a host whose root is not /opt/gremion needs no variable).
 cd_launcher_text() {
     cat <<EOF
 #!/usr/bin/env bash
@@ -1167,7 +1174,11 @@ cd_launcher_text() {
 # $1 sources the release's own libraries, which the install does not copy, so the
 # program runs from the current release tree. This launcher only finds it.
 set -euo pipefail
-prog="\${GREMION_ROOT:-/opt/gremion}/current/infra/host/bin/$1"
+root="\${GREMION_ROOT:-}"
+if [[ -z "\$root" ]]; then
+    root="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")/.." && pwd)" || exit 2
+fi
+prog="\${root}/current/infra/host/bin/$1"
 if [[ ! -f "\$prog" || ! -x "\$prog" ]]; then
     printf '%s\\n' "$1: \${prog} is not there (no release is current yet)" >&2
     exit 2
@@ -1279,13 +1290,11 @@ stage_cd() {
         install_cd_file 0755 "$dep" "$f" "${root}/bin/${f##*/}"
         n=$((n + 1))
     done
-    for f in "${CD_STALE_LIBS[@]}"; do
+    for f in "${CD_LEFTOVER_LIBS[@]}"; do
         if [[ -e "${root}/${f}" || -L "${root}/${f}" ]]; then
-            rm -f -- "${root}/${f}" && ok "removed ${root}/${f}, no installed program sources it"
+            info "${root}/${f} is a leftover of a hand install: nothing installed sources it, it is left as it is (remove it by hand when no script of yours names it)"
         fi
     done
-    # the directory of the hand-placed executor library, only when it is empty now
-    rmdir -- "${root}/lib/executor" 2>/dev/null || true
     install_cd_file 0644 "$dep" "$slib/common.sh" "${root}/lib/common.sh"
     for f in "$slib"/cd/*.sh; do
         [[ -f "$f" ]] || continue
@@ -1332,9 +1341,6 @@ stage_cd() {
         fi
         [[ -f "${root}/bin/${f##*/}" && ! -L "${root}/bin/${f##*/}" ]] || die "${root}/bin/${f##*/} is not a real file" 1
         cmp -s "$f" "${root}/bin/${f##*/}" || die "${root}/bin/${f##*/} differs from the tree" 1
-    done
-    for f in "${CD_STALE_LIBS[@]}"; do
-        [[ ! -e "${root}/${f}" && ! -L "${root}/${f}" ]] || die "${root}/${f} is still there" 1
     done
     cmp -s "$slib/common.sh" "${root}/lib/common.sh" || die "${root}/lib/common.sh differs from the tree" 1
     for f in "$slib"/cd/*.sh; do

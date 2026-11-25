@@ -13,6 +13,8 @@
 // copy: it is listed in CD_TREE_RUN_PROGRAMS of bootstrap.sh and runs from the release tree, where
 // program, libraries and the code under test are one commit (<root>/bin holds a launcher that
 // sources nothing and execs the current release's program, so the documented command still works).
+// A tree-run program is walked too: every library it sources, and what those source in turn, must be
+// present in the release tree it runs from (a program that sources lib/nope.sh fails, naming it).
 // The programs of lib/cd name installed programs only through the install root
 // (`<root>/bin/<name>`); one that names a tree-run program that way would run the LIVE release's
 // program where the candidate's is meant, so the gates use the candidate tree's own.
@@ -111,12 +113,34 @@ export function resolveSource(arg, file) {
   return null
 }
 
-// Walk the installed set. Returns the list of problems, each one naming the file.
-//   readFile(rel) -> text or null; exists(rel) -> bool; installed -> Set of repo paths
-export function walk({ installed, readFile, exists }) {
+// Walk the installed set, and the programs that run from the release tree. Returns the list of
+// problems, each one naming the file.
+//   readFile(rel) -> text or null; exists(rel) -> bool; installed -> Set of repo paths;
+//   treeRun -> repo paths of the programs the stage does not install (they run from the release tree:
+//   every library they source must be in that tree, and so must what those libraries source)
+export function walk({ installed, treeRun = [], readFile, exists }) {
   const problems = []
   let seen = 0
   const releaseQueue = []
+  for (const file of [...treeRun].toSorted((a, b) => a.localeCompare(b))) {
+    const text = readFile(file)
+    if (text === null) {
+      problems.push(`${file}: runs from the release tree but is not there`)
+      continue
+    }
+    for (const { line, arg } of sourceStatements(text)) {
+      seen += 1
+      const r = resolveSource(arg, file)
+      if (r === null) {
+        problems.push(`${file}:${line}: cannot resolve the source expression ${arg} (add the form to the walker on purpose)`)
+        continue
+      }
+      for (const t of r.targets) {
+        if (!exists(t)) problems.push(`${file}:${line}: sources ${t.slice(`${HOST}/`.length)}, which the release tree it runs from does not carry`)
+        else releaseQueue.push(t)
+      }
+    }
+  }
   for (const file of [...installed].toSorted((a, b) => a.localeCompare(b))) {
     const text = readFile(file)
     if (text === null) {
@@ -174,11 +198,39 @@ const realFs = {
   exists: (rel) => existsSync(path.join(ROOT, rel)),
 }
 
-test('every library an installed host program sources is installed by the same stage', () => {
-  const installed = installedSet(read(BOOTSTRAP))
-  const { problems, seen } = walk({ installed, ...realFs })
+const treeRunPaths = (text) => treeRunPrograms(text).map((n) => `${HOST}/bin/${n}`)
+
+test('every library an installed host program sources is installed by the same stage, and every one a tree-run program sources is in the tree', () => {
+  const text = read(BOOTSTRAP)
+  const { problems, seen } = walk({ installed: installedSet(text), treeRun: treeRunPaths(text), ...realFs })
   assert.ok(seen >= 20, `the walker saw only ${seen} source statements: it is not reaching the programs`)
   assert.deepEqual(problems, [])
+})
+
+test('the tree-run programs are walked: a library one of them sources that the tree lacks is named (the real gremion-isolation, one source added)', () => {
+  const text = read(BOOTSTRAP)
+  const prog = `${HOST}/bin/gremion-isolation`
+  assert.ok(treeRunPaths(text).includes(prog), 'gremion-isolation is no longer a tree-run program: pick another one for this test')
+  const changed = `${read(prog)}\n. "$SCRIPT_DIR/../lib/nope.sh"\n`
+  const { problems } = walk({
+    installed: installedSet(text),
+    treeRun: treeRunPaths(text),
+    readFile: (rel) => (rel === prog ? changed : realFs.readFile(rel)),
+    exists: realFs.exists,
+  })
+  assert.equal(problems.length, 1)
+  assert.match(problems[0], /gremion-isolation:\d+: sources lib\/nope\.sh, which the release tree it runs from does not carry/)
+})
+
+test('the tree-run programs are walked transitively: a library of the tree that sources a missing file is named', () => {
+  const files = new Map([
+    [`${HOST}/bin/gremion-x`, '. "$SCRIPT_DIR/../lib/customer-ops.sh"\n'],
+    [`${HOST}/lib/customer-ops.sh`, '. "$SCRIPT_DIR/../lib/gone.sh"\n'],
+  ])
+  const exists = (r) => files.has(r)
+  const { problems } = walk({ installed: new Set(), treeRun: [`${HOST}/bin/gremion-x`], readFile: (r) => files.get(r) ?? null, exists })
+  assert.equal(problems.length, 1)
+  assert.match(problems[0], /lib\/customer-ops\.sh:1: .*lib\/gone\.sh is not in the release tree/)
 })
 
 test('the programs of lib/cd name an installed program through the install root, never a tree-run one', () => {
@@ -222,7 +274,7 @@ test('CD_TREE_RUN_PROGRAMS names real programs, each one really sources a librar
   const listed = treeRunPrograms(text)
   // an exemption nobody needs is a hole: a listed program must be one the walker would have refused
   const everything = installedSet(text.replace(/^CD_TREE_RUN_PROGRAMS=\([^)]*\)/m, 'CD_TREE_RUN_PROGRAMS=()'))
-  const { problems } = walk({ installed: everything, ...realFs })
+  const { problems } = walk({ installed: everything, treeRun: [], ...realFs })
   const stale = []
   for (const prog of listed) {
     const file = `${HOST}/bin/${prog}`

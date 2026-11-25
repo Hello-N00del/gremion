@@ -495,42 +495,76 @@ installed_sources_resolve() {
     [ "$output" = "tenant of current: status a b" ]
 }
 
-@test "stage cd takes away what a hand install left (a copy of a tree-run program becomes the launcher, the libraries put beside it go), on a fresh install and on a re-run" {
+@test "stage cd: a copy of a tree-run program a hand install left becomes the launcher; the libraries put beside it are left exactly as they are (nothing sources them, nothing of the host is deleted), on a fresh install and on a re-run" {
     mkdir -p "${GREMION_ROOT}/bin" "${GREMION_ROOT}/lib/executor"
     local f
     for f in bin/gremion-tenant bin/gremion-isolation bin/gremion-services lib/customer-ops.sh lib/access-log.sh lib/executor/db.sh; do
-        printf '# a hand copy\n' > "${GREMION_ROOT}/${f}"
+        printf '# a hand copy
+' > "${GREMION_ROOT}/${f}"
         chmod 600 "${GREMION_ROOT}/${f}"
     done
     run_stage
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    # what is left is named, so the operator can take it away by hand
+    [[ "$output" == *"${GREMION_ROOT}/lib/customer-ops.sh"* ]]
+    [[ "$output" == *"${GREMION_ROOT}/lib/executor/db.sh"* ]]
     for f in lib/customer-ops.sh lib/access-log.sh lib/executor/db.sh; do
-        [ ! -e "${GREMION_ROOT}/${f}" ] || { echo "still there: ${f}"; return 1; }
+        [ "$(cat "${GREMION_ROOT}/${f}")" = '# a hand copy' ] || { echo "changed or gone: ${f}"; return 1; }
+        [ "$(stat -c %a "${GREMION_ROOT}/${f}")" = 600 ] || { echo "mode changed: ${f}"; return 1; }
     done
     for f in $TREE_RUN; do
         ! grep -q 'a hand copy' "${GREMION_ROOT}/bin/${f}" || { echo "the hand copy of ${f} is still there"; return 1; }
         [ "$(stat -c %a "${GREMION_ROOT}/bin/${f}")" = 755 ]
     done
-    [ ! -e "${GREMION_ROOT}/lib/executor" ]
-    # what is installed is right (mode, bytes) and a second run changes nothing
+    # what is installed is right (mode, bytes), nothing installed sources the leftovers, a second run changes nothing
     [ "$(stat -c %a "${GREMION_ROOT}/bin/gremion-cd")" = 755 ]
     cmp -s "${HOST_SRC}/lib/common.sh" "${GREMION_ROOT}/lib/common.sh"
+    printf '# a hand copy
+' > "${BATS_TEST_TMPDIR}/expected"
     run installed_sources_resolve
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     run_stage
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    cmp -s "${BATS_TEST_TMPDIR}/expected" "${GREMION_ROOT}/lib/executor/db.sh"
     run installed_sources_resolve
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
 }
 
-@test "stage cd removes the three hand-placed library names only: a directory lib/executor that holds something else stays" {
-    mkdir -p "${GREMION_ROOT}/lib/executor"
-    printf 'x\n' > "${GREMION_ROOT}/lib/executor/db.sh"
-    printf 'x\n' > "${GREMION_ROOT}/lib/executor/keep.sh"
+@test "stage cd never reaches through a link: a lib/executor that points into the live release leaves the release's library where it is" {
+    mkdir -p "${GREMION_ROOT}/current/infra/host/lib/executor"
+    printf '# the live release library
+' > "${GREMION_ROOT}/current/infra/host/lib/executor/db.sh"
+    ln -s "${GREMION_ROOT}/current/infra/host/lib/executor" "${GREMION_ROOT}/lib/executor"
     run_stage
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
-    [ ! -e "${GREMION_ROOT}/lib/executor/db.sh" ]
-    [ -f "${GREMION_ROOT}/lib/executor/keep.sh" ]
+    [ "$(cat "${GREMION_ROOT}/current/infra/host/lib/executor/db.sh")" = '# the live release library' ]
+    [ -L "${GREMION_ROOT}/lib/executor" ]
+    # and the same through a link at the file itself and one at lib/
+    ln -sf "${GREMION_ROOT}/current/infra/host/lib/executor/db.sh" "${GREMION_ROOT}/lib/customer-ops.sh"
+    run_stage
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [ "$(cat "${GREMION_ROOT}/current/infra/host/lib/executor/db.sh")" = '# the live release library' ]
+}
+
+@test "the launcher finds the current release of ITS OWN root when GREMION_ROOT is not set (a host whose root is not /opt/gremion)" {
+    run_stage
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    mkdir -p "${GREMION_ROOT}/current/infra/host/bin"
+    printf '#!/usr/bin/env bash
+echo "isolation of: $0"
+' > "${GREMION_ROOT}/current/infra/host/bin/gremion-isolation"
+    chmod +x "${GREMION_ROOT}/current/infra/host/bin/gremion-isolation"
+    run env -u GREMION_ROOT "${GREMION_ROOT}/bin/gremion-isolation" run
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [ "$output" = "isolation of: ${GREMION_ROOT}/current/infra/host/bin/gremion-isolation" ]
+    # a root that is set wins (the same as every other program of the host)
+    mkdir -p "${BATS_TEST_TMPDIR}/other/current/infra/host/bin"
+    printf '#!/usr/bin/env bash
+echo other
+' > "${BATS_TEST_TMPDIR}/other/current/infra/host/bin/gremion-isolation"
+    chmod +x "${BATS_TEST_TMPDIR}/other/current/infra/host/bin/gremion-isolation"
+    run env GREMION_ROOT="${BATS_TEST_TMPDIR}/other" "${GREMION_ROOT}/bin/gremion-isolation" run
+    [ "$output" = other ]
 }
 
 @test "stage cd renders the six units, runs daemon-reload and enables or starts nothing" {

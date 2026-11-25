@@ -877,9 +877,12 @@ _cd_colour_evidence_dir() { printf '%s' "$(_cd_colour_root)/data/isolation-evide
 # the tree it is about to judge: program, libraries and the code under test are then one commit
 # (the pipeline already runs gremion-tenant from the tree the same way). TRUST: the tree is the
 # candidate the pipeline fetched and builds its images from, the deploy user's own checkout, and
-# the program runs as the deploy user, never as root; but a program that is not a plain file
-# inside the tree (a link out of it, a directory in its place) is refused, so what runs is the
-# file the commit holds and nothing a link points at. 2 when it is not such a file.
+# the program runs as the deploy user, never as root. What THIS function checks is the program's
+# path only: a program that is not a plain executable file inside the tree (a link out of it, a
+# directory in its place) is refused. The libraries the program sources are read from the same tree
+# by the program itself, and the bytes of the working tree are not compared with the commit here:
+# that the tree is the commit is what the fetch step establishes (at the commit, clean; see
+# prepare.sh). 2 when the program is not such a file.
 _cd_colour_tree_prog() {
     local tree="$1" name="$2" prog real
     prog="${tree}/infra/host/bin/${name}"

@@ -771,8 +771,10 @@ Adoption is done once, by hand, on the live host. Nothing is enabled until the l
    (the apply script is root-owned). `gremion-isolation`, `gremion-services` and `gremion-tenant` are not
    installed as copies: they source the release's own customer libraries, so `bin/` gets a launcher for each
    that runs the program of the current release (`/opt/gremion/current/infra/host/bin/<program>`), and a copy
-   an earlier hand install left in `bin/` is replaced by it; the libraries put beside such a copy
-   (`lib/customer-ops.sh`, `lib/access-log.sh`, `lib/executor/db.sh`) are removed. The stage renders
+   an earlier hand install left in `bin/` is replaced by it. The libraries a hand install put beside such a
+   copy (`lib/customer-ops.sh`, `lib/access-log.sh`, `lib/executor/db.sh`) are inert once nothing sources
+   them: the stage names each one it finds and leaves it as it is (a failed apply must put the host back
+   as it was), so remove them by hand when no script of yours still names them. The stage renders
    the six systemd units (`gremion-cd.service` and `.timer`, `gremion-cd-watchdog.service` and
    `.timer`, `gremion-cd-resume.service`, `gremion-cd-apply@.service`), creates `data/cd`, `runtime/cd`
    and `runtime/workers`, and writes `etc/cd.env` from the template when it is absent. It enables and
