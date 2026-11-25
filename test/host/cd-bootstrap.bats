@@ -563,6 +563,20 @@ echo "isolation of: $0"
     run env -u GREMION_ROOT "${BATS_TEST_TMPDIR}/pathdir/gremion-isolation" run
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     [ "$output" = "isolation of: ${GREMION_ROOT}/current/infra/host/bin/gremion-isolation" ]
+    # and the program that is started works on THAT root, not on the /opt/gremion default: the launcher hands
+    # the root it worked out to the program (customer-ops and the release lookup read it through gremion_root)
+    mkdir -p "${GREMION_ROOT}/current/infra/host/lib"
+    cp "${HOST_SRC}/lib/common.sh" "${GREMION_ROOT}/current/infra/host/lib/common.sh"
+    printf '#!/usr/bin/env bash
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$SCRIPT_DIR/../lib/common.sh"
+echo "root the program uses: $(gremion_root)"
+' > "${GREMION_ROOT}/current/infra/host/bin/gremion-isolation"
+    run env -u GREMION_ROOT "${GREMION_ROOT}/bin/gremion-isolation" run
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [ "$output" = "root the program uses: ${GREMION_ROOT}" ] || { echo "$output"; return 1; }
+    run env -u GREMION_ROOT "${BATS_TEST_TMPDIR}/pathdir/gremion-isolation" run
+    [ "$output" = "root the program uses: ${GREMION_ROOT}" ] || { echo "$output"; return 1; }
     # a root that is set wins (the same as every other program of the host)
     mkdir -p "${BATS_TEST_TMPDIR}/other/current/infra/host/bin"
     printf '#!/usr/bin/env bash

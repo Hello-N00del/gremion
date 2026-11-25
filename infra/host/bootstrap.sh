@@ -1167,7 +1167,9 @@ CD_LEFTOVER_LIBS=(lib/customer-ops.sh lib/access-log.sh lib/executor/db.sh)
 # It sources nothing: it finds the program of the current release and execs it, so that program,
 # its libraries and the release it works on are one commit. The root is GREMION_ROOT when set, else
 # the directory above the launcher's own real path, links followed (a host whose root is not
-# /opt/gremion needs no variable, and a PATH entry that links to <root>/bin works).
+# /opt/gremion needs no variable, and a PATH entry that links to <root>/bin works). Either way the
+# root is EXPORTED, so the program it starts works on the root the launcher found and not on the
+# /opt/gremion default (every program of the host reads it through gremion_root).
 cd_launcher_text() {
     cat <<EOF
 #!/usr/bin/env bash
@@ -1180,6 +1182,7 @@ if [[ -z "\$root" ]]; then
     self="\$(readlink -f -- "\${BASH_SOURCE[0]}")" || exit 2
     root="\$(dirname -- "\$(dirname -- "\$self")")"
 fi
+export GREMION_ROOT="\$root"
 prog="\${root}/current/infra/host/bin/$1"
 if [[ ! -f "\$prog" || ! -x "\$prog" ]]; then
     printf '%s\\n' "$1: \${prog} is not there (no release is current yet)" >&2
