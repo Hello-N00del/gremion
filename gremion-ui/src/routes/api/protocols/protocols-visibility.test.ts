@@ -14,6 +14,12 @@
 // mock hasRole, which makes every caller an admin and is exactly why no test
 // ever saw this defect.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// The protocol routes read the CURRENT tenant's files switch (protocols/document-port.ts): this tenant has it on.
+vi.mock('$lib/server/config', async (orig) => ({
+  ...(await orig<typeof import('$lib/server/config')>()),
+  readConfig: () => ({ modules: { files: true } }),
+}))
 import { Role } from '$lib/auth/types'
 
 type Status = 'draft' | 'submitted' | 'published'

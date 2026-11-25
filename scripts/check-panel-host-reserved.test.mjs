@@ -21,7 +21,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parse as parseYaml } from 'yaml'
@@ -53,6 +53,62 @@ test('COMPOSE: the control panel gets PLATFORM_DOMAIN and CONTROL_PANEL_HOST for
   const e = envOf('control-panel')
   assert.match(asText(e.PLATFORM_DOMAIN), /PLATFORM_DOMAIN/)
   assert.match(asText(e.CONTROL_PANEL_HOST), /\$\{CONTROL_PANEL_HOST(:-)?\}/)
+})
+
+test('COMPOSE: the control panel alone gets SECONDARY_TENANT_HOSTS (empty by default) for the "Neuer Mandant" note', () => {
+  const e = envOf('control-panel')
+  assert.match(asText(e.SECONDARY_TENANT_HOSTS), /^\$\{SECONDARY_TENANT_HOSTS:-\}$/)
+  // no other service of the app project reads the allow-list: the host-side create takes it from state.env alone
+  for (const [name, svc] of Object.entries(SERVICES)) {
+    if (name === 'control-panel') continue
+    assert.ok(!JSON.stringify(svc.environment ?? {}).includes('SECONDARY_TENANT_HOSTS'), `${name} must not receive SECONDARY_TENANT_HOSTS`)
+  }
+})
+
+test('SCRIPTS: the host-side create reads the secondary host list from state.env only, never from the request args', () => {
+  const src = read('infra/host/lib/executor/handlers/create.sh')
+  assert.equal(count(src, 'env_key "${ROOT}/etc/env/state.env" SECONDARY_TENANT_HOSTS'), 1, 'create.sh reads the list once, from state.env')
+  assert.ok(!src.split('\n').some((l) => /secondary/i.test(l) && l.includes('"$args"') && l.includes('jq')), 'no jq read of a secondary list out of the request args')
+  const ops = read('infra/host/lib/customer-ops.sh')
+  assert.equal(count(ops, 'control_panel_key_of "$state" SECONDARY_TENANT_HOSTS'), 1, 'the module guard reads the list from state.env')
+})
+
+test('SCRIPTS: the switches of a core-only customer are enforced by the app, not only written once: create.sh stores pinned_off_modules, config.ts pins it and keeps it out of every update', () => {
+  const create = read('infra/host/lib/executor/handlers/create.sh')
+  assert.match(create, /pinned_off_modules: \$pinned/, 'create.sh writes the list into the tenant config')
+  assert.match(create, /pinned="\$\(tr ' ' .*\$SECONDARY_HOST_MODULES_OFF/, 'the list is SECONDARY_HOST_MODULES_OFF')
+  const cfg = read('gremion-ui/src/lib/server/config.ts')
+  assert.match(cfg, /configUpdateSchema = gremionConfigSchema\.omit\(\{ pinned_off_modules: true \}\)\.strict\(\)/, 'no settings update can write or empty the list')
+  assert.match(cfg, /stored\.pinned_off_modules\)/, 'the read path pins the listed modules off')
+  assert.match(cfg, /for \(const mod of current\.pinned_off_modules \?\? \[\]\)/, 'the write path pins the listed modules off from the STORED list')
+})
+
+test('SCRIPTS: every module manifest is either allowed on a secondary host or created switched OFF there (a new module cannot slip in switched on)', () => {
+  const lib = read('infra/host/lib/common.sh')
+  const listOf = (name) => (lib.match(new RegExp(`^${name}="([^"]*)"`, 'm'))?.[1] ?? '').split(/\s+/).filter(Boolean)
+  const allowed = listOf('SECONDARY_HOST_MODULES')
+  const off = listOf('SECONDARY_HOST_MODULES_OFF')
+  assert.ok(allowed.length >= 2 && off.length >= 5, `both lists are found (${allowed.join(' ')}; ${off.join(' ')})`)
+  // content builds its e-mail unsubscribe link from the one process-wide public base URL (the customer host) and its
+  // news editor stores drafts in the shared Nextcloud: neither works for a customer on another host, so it is OFF there
+  assert.deepEqual(allowed.filter((id) => ['content', 'newsletter', 'votes', 'files', 'messages'].includes(id)), [], 'a module that mails the primary host links or uses the shared services is not allowed on a secondary host')
+  assert.ok(off.includes('content'), 'content is created switched off for a secondary-host customer')
+  // the manifest ids, as the app's own config keys them (modules/*/app/lib/modules/manifests, gremion-ui's core ones)
+  const ids = new Set()
+  const dirs = ['gremion-ui/src/lib/modules/manifests', ...readdirSync(join(ROOT, 'modules')).map((m) => `modules/${m}/app/lib/modules/manifests`)]
+  for (const d of dirs) {
+    let files = []
+    try { files = readdirSync(join(ROOT, d)) } catch { continue }
+    for (const f of files.filter((x) => x.endsWith('.ts') && !x.includes('.test.') && x !== 'index.ts' && x !== 'index.generated.ts')) {
+      const m = read(`${d}/${f}`).match(/^ {2}id: '([a-z-]+)'/m)
+      if (m) ids.add(m[1])
+    }
+  }
+  assert.ok(ids.has('board') && ids.has('votes') && ids.has('messages'), `the manifests are found (${[...ids].join(' ')})`)
+  const alwaysOn = new Set(['core', 'governance'])
+  const unclassified = [...ids].filter((id) => !alwaysOn.has(id) && !allowed.includes(id) && !off.includes(id))
+  assert.deepEqual(unclassified, [], 'a manifest id in neither SECONDARY_HOST_MODULES nor SECONDARY_HOST_MODULES_OFF is switched ON for a secondary-host customer')
+  assert.deepEqual(allowed.filter((id) => off.includes(id)), [], 'a module cannot be both allowed and off')
 })
 
 test('SCRIPTS: the tenant-create CLI hands the check to the create engine and to the router renderer, from its env seam', () => {

@@ -699,6 +699,81 @@ describe('pilot held-off modules: elections off, board on, and a write cannot wi
     expect(result.modules.content).toBe(false)
   })
 
+  // A customer on a secondary host (SECONDARY_TENANT_HOSTS) is core-only. The create handler stores the ids it
+  // must keep off as `pinned_off_modules` in the tenant config; the app pins them false like the held-off set,
+  // on read and on write, and no settings request can lift or rewrite the list (it is not in the update schema).
+  describe('pinned_off_modules (a core-only customer): the tenant cannot switch the modules back on', () => {
+    const PINNED = ['elections', 'files', 'messages', 'newsletter', 'vault', 'votes']
+    const stored = () => JSON.stringify({ pinned_off_modules: PINNED, modules: Object.fromEntries(PINNED.map((id) => [id, false])) })
+
+    it('a stored `true` for a pinned id is read as false, the unpinned modules stay as they are', async () => {
+      mockFs.existsSync.mockReturnValue(true)
+      mockFs.readFileSync.mockReturnValue(JSON.stringify({ pinned_off_modules: PINNED, modules: { files: true, messages: true, newsletter: true, vault: true, votes: true, board: true } }))
+      const { readConfig } = await import('./config')
+      const cfg = readConfig()
+      for (const id of PINNED) expect(cfg.modules[id]).toBe(false)
+      expect(cfg.modules.board).toBe(true)
+      expect(cfg.modules.calendar).toBe(true)
+      expect(cfg.modules.content).toBe(true)
+    })
+
+    it('a config without the list pins nothing beyond the held-off set (the primary customer reads as today)', async () => {
+      mockFs.existsSync.mockReturnValue(true)
+      mockFs.readFileSync.mockReturnValue(JSON.stringify({ modules: { files: true, messages: true, votes: true } }))
+      const { readConfig } = await import('./config')
+      const cfg = readConfig()
+      expect(cfg.modules.files).toBe(true)
+      expect(cfg.modules.messages).toBe(true)
+      expect(cfg.modules.votes).toBe(true)
+    })
+
+    it('the settings PATCH shape (modules: files/messages/newsletter/vault true) leaves them off in the result and in the file', async () => {
+      mockFs.existsSync.mockReturnValue(true)
+      mockFs.readFileSync.mockReturnValue(stored())
+      const { writeConfig } = await import('./config')
+      const result = writeConfig({ modules: { files: true, messages: true, newsletter: true, vault: true, votes: true, board: false } })
+      for (const id of PINNED) expect(result.modules[id]).toBe(false)
+      expect(result.modules.board).toBe(false)
+      const written = JSON.parse(mockFs.writeFileSync.mock.calls.at(-1)![1] as string) as { modules: Record<string, boolean>; pinned_off_modules: string[] }
+      for (const id of PINNED) expect(written.modules[id]).toBe(false)
+      expect(written.pinned_off_modules).toEqual(PINNED)
+    })
+
+    it('the reset shape (every default module on) cannot switch a pinned module on either', async () => {
+      mockFs.existsSync.mockReturnValue(true)
+      mockFs.readFileSync.mockReturnValue(stored())
+      const { writeConfig, parseConfig } = await import('./config')
+      const result = writeConfig({ modules: parseConfig({}).modules })
+      for (const id of PINNED) expect(result.modules[id]).toBe(false)
+      expect(result.modules.board).toBe(true)
+    })
+
+    it('the list itself cannot be written, emptied or shortened through a config update', async () => {
+      mockFs.existsSync.mockReturnValue(true)
+      mockFs.readFileSync.mockReturnValue(stored())
+      const { writeConfig, configUpdateSchema } = await import('./config')
+      expect(configUpdateSchema.safeParse({ pinned_off_modules: [] }).success).toBe(false)
+      expect(() => writeConfig({ pinned_off_modules: [] } as never)).toThrow(/invalid update/)
+      expect(mockFs.writeFileSync).not.toHaveBeenCalled()
+    })
+
+    it('an unrelated write keeps the list in the file', async () => {
+      mockFs.existsSync.mockReturnValue(true)
+      mockFs.readFileSync.mockReturnValue(stored())
+      const { writeConfig } = await import('./config')
+      writeConfig({ backups: { retention_days: 14 } })
+      const written = JSON.parse(mockFs.writeFileSync.mock.calls.at(-1)![1] as string) as { pinned_off_modules: string[] }
+      expect(written.pinned_off_modules).toEqual(PINNED)
+    })
+
+    it('materializing the create-time config (parseConfig) keeps the list and the switches', async () => {
+      const { parseConfig } = await import('./config')
+      const cfg = parseConfig(JSON.parse(stored()))
+      expect(cfg.pinned_off_modules).toEqual(PINNED)
+      for (const id of PINNED) expect(cfg.modules[id]).toBe(false)
+    })
+  })
+
   it('defaultModulesConfig reads defaultEnabled from a manifest (a toggleable manifest defaults ON unless it says false)', async () => {
     vi.doMock('$lib/modules/registry', async (importOriginal) => {
       const actual = await importOriginal<typeof import('$lib/modules/registry')>()

@@ -594,3 +594,70 @@ need_docker_cli() {
     run docker ps -aq --filter "label=com.docker.compose.project=${project}"
     [ -z "$output" ]
 }
+
+# SECONDARY_TENANT_HOSTS (optional, comma-separated lowercase DNS names): extra customer hosts for core-only customers.
+# Judged in any file that declares it; an empty or absent key is today's behaviour.
+secondary_fixture() {
+    render_filled
+    local f
+    for f in state app-blue app-green; do
+        sed -i 's/^PILOT_TENANT_HOST=.*/PILOT_TENANT_HOST=pilot.example.org/; s/^PLATFORM_DOMAIN=.*/PLATFORM_DOMAIN=plat.example.org/' "${ENV_DIR}/${f}.env"
+    done
+}
+
+@test "SECONDARY_TENANT_HOSTS: absent and empty validate exactly as before, and a clean list validates" {
+    secondary_fixture
+    run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" != *"SECONDARY_TENANT_HOSTS"* ]] || { echo "$output"; return 1; }
+    printf 'SECONDARY_TENANT_HOSTS=\n' >> "${ENV_DIR}/state.env"
+    run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" != *"SECONDARY_TENANT_HOSTS"* ]] || { echo "$output"; return 1; }
+    sed -i 's/^SECONDARY_TENANT_HOSTS=.*/SECONDARY_TENANT_HOSTS=canary.example.org,test.example.net/' "${ENV_DIR}/state.env"
+    run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"SECONDARY_TENANT_HOSTS: 2 host(s)"* ]] || { echo "$output"; return 1; }
+    # the app files judge it too (the panel reads it from there)
+    printf 'SECONDARY_TENANT_HOSTS=canary.example.org\n' >> "${ENV_DIR}/app-blue.env"
+    run "$VALIDATE" --env-file "${ENV_DIR}/app-blue.env" --release "$RELEASE"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+}
+
+@test "SECONDARY_TENANT_HOSTS: a scheme, port, path, wildcard, upper case, duplicate, the platform domain, the control panel host and PILOT_TENANT_HOST itself each fail the validation (exit 1) without printing the value" {
+    secondary_fixture
+    local bad
+    for bad in 'https://canary.example.org' 'canary.example.org:8443' 'canary.example.org/x' '*.example.org' 'Canary.Example.org' \
+               'canary.example.org,canary.example.org' 'plat.example.org' 'control.plat.example.org' 'pilot.example.org' 'turn.pilot.example.org' \
+               'canary.example.org,' 'canary.example.org, test.example.net'; do
+        printf 'SECONDARY_TENANT_HOSTS=%s\n' "$bad" >> "${ENV_DIR}/state.env"
+        run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
+        [ "$status" -eq 1 ] || { echo "accepted '${bad}': status=${status} ${output}"; return 1; }
+        [[ "$output" == *"SECONDARY_TENANT_HOSTS"* ]] || { echo "no key named for '${bad}': ${output}"; return 1; }
+        [[ "$output" != *"canary.example.org"* ]] || { echo "the value was printed for '${bad}': ${output}"; return 1; }
+        sed -i '/^SECONDARY_TENANT_HOSTS=/d' "${ENV_DIR}/state.env"
+    done
+}
+
+@test "SECONDARY_TENANT_HOSTS: a configured CONTROL_PANEL_HOST is refused as a secondary host too, and a list without PILOT_TENANT_HOST fails" {
+    secondary_fixture
+    printf 'CONTROL_PANEL_HOST=panel.example.net\nSECONDARY_TENANT_HOSTS=panel.example.net\n' >> "${ENV_DIR}/state.env"
+    run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
+    [ "$status" -eq 1 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"control panel host"* ]] || { echo "$output"; return 1; }
+    sed -i '/^CONTROL_PANEL_HOST=/d; /^SECONDARY_TENANT_HOSTS=/d' "${ENV_DIR}/state.env"
+    sed -i 's/^PILOT_TENANT_HOST=.*/PILOT_TENANT_HOST=/' "${ENV_DIR}/state.env"
+    printf 'SECONDARY_TENANT_HOSTS=canary.example.org\n' >> "${ENV_DIR}/state.env"
+    run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
+    [ "$status" -eq 1 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"PILOT_TENANT_HOST"* ]] || { echo "$output"; return 1; }
+}
+
+@test "SECONDARY_TENANT_HOSTS is an optional key: the state template carries it only as a comment, so an older state.env stays valid" {
+    run grep -cE '^SECONDARY_TENANT_HOSTS=' "${HOST_SRC}/templates/env/state.env.tmpl"
+    [ "$output" = 0 ]
+    run grep -cE '^# SECONDARY_TENANT_HOSTS=' "${HOST_SRC}/templates/env/state.env.tmpl"
+    [ "$output" = 1 ]
+    run grep -cE '^# SECONDARY_TENANT_HOSTS=' "${HOST_SRC}/templates/env/app.env.tmpl"
+    [ "$output" = 1 ]
+}

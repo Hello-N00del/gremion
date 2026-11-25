@@ -114,6 +114,11 @@ export interface GremionConfig {
   // key to `true` at write time, so a config can never persist a disabled core
   // module even though the type no longer encodes the literal `true`.
   modules: Record<string, boolean>
+  // A core-only customer (one on a secondary host, SECONDARY_TENANT_HOSTS): the module ids that stay OFF whatever
+  // `modules` says. Written once by the host's create handler, never by a config update (configUpdateSchema
+  // leaves it out), and pinned false on every read and write of `modules` exactly like HELD_OFF_MODULE_IDS. Absent
+  // (every other customer) pins nothing.
+  pinned_off_modules?: string[]
   // TASK-205a: the calendar module's settings (re-applied from the source; the carve removed them).
   // TASK-205b: the elections module's tracked Helios election ids (re-applied from the source).
   elections?: { tracked_uuids: string[] }
@@ -162,9 +167,11 @@ const REQUIRED_MODULES: readonly string[] = []
  * pilot. The board is NOT held off (it is a pilot key feature, served in-process). This is the surface
  * pin; level 1 per request (TASK-044-b) and the enable gate are separate and unchanged.
  */
-function pinHeldOff(modules: Record<string, boolean>): Record<string, boolean> {
+function pinHeldOff(modules: Record<string, boolean>, pinnedOff: readonly string[] = []): Record<string, boolean> {
   const out = { ...modules }
   for (const id of HELD_OFF_MODULE_IDS) out[id] = false
+  // the customer's own pinned-off list (core-only customer): same pin, per tenant instead of per build
+  for (const id of pinnedOff) out[id] = false
   return out
 }
 
@@ -471,6 +478,8 @@ export const gremionConfigSchema = z
     admin_accounts: adminAccountsSchema,
     smtp: smtpSchema,
     modules: modulesSchema,
+    // Stored only: the update schema below leaves it out, so no settings request can write, empty or shorten it.
+    pinned_off_modules: z.array(z.string()).optional(),
     elections: electionsSchema,
     calendar: calendarSchema,
     legal: legalSchema,
@@ -496,7 +505,7 @@ export const gremionConfigSchema = z
  *   StepBrandLegal → `{ brand: {...}, legal: {...} }`
  * (wizard-submit-schema.test.ts drives every step's submit against this schema.)
  */
-export const configUpdateSchema = gremionConfigSchema.strict()
+export const configUpdateSchema = gremionConfigSchema.omit({ pinned_off_modules: true }).strict()
 
 function getConfigPath(tenant: ConfigTenant): string {
   // §8.1 / D-CONFIGPATH: trust tenant.configPath UNCONDITIONALLY. The slug→path
@@ -567,7 +576,7 @@ function mergeStored(stored: StoredConfig): GremionConfig {
     brand: mergeStoredBrand(stored.brand),
     admin_accounts: { ...DEFAULT_CONFIG.admin_accounts, ...stored.admin_accounts },
     smtp: { ...DEFAULT_CONFIG.smtp, ...stored.smtp },
-    modules: pinHeldOff({ ...DEFAULT_CONFIG.modules, ...stored.modules }),
+    modules: pinHeldOff({ ...DEFAULT_CONFIG.modules, ...stored.modules }, stored.pinned_off_modules),
     elections: { ...DEFAULT_CONFIG.elections, ...stored.elections },
     calendar: { ...DEFAULT_CONFIG.calendar, ...stored.calendar },
     legal: { ...DEFAULT_CONFIG.legal, ...stored.legal },
@@ -681,7 +690,7 @@ export function readConfig(tenant: ConfigTenant = requireTenant()): GremionConfi
 // is index-typed — partial-of-Record is identical to Record itself for the
 // purpose of merging.
 type ConfigUpdate = {
-  [K in keyof GremionConfig]?: NonNullable<GremionConfig[K]> extends object
+  [K in Exclude<keyof GremionConfig, 'pinned_off_modules'>]?: NonNullable<GremionConfig[K]> extends object
     ? Partial<NonNullable<GremionConfig[K]>>
     : GremionConfig[K]
 }
@@ -708,6 +717,11 @@ export function writeConfig(update: ConfigUpdate, tenant: ConfigTenant = require
   }
   // ... and the held-off set cannot be turned on (HELD_OFF_MODULE_IDS)
   for (const mod of HELD_OFF_MODULE_IDS) {
+    ;(mergedModules as Record<string, boolean>)[mod] = false
+  }
+  // ... and so is the customer's own pinned-off list (a core-only customer's shared-service modules): the
+  // list is read from the stored config, never from the update, which cannot carry it
+  for (const mod of current.pinned_off_modules ?? []) {
     ;(mergedModules as Record<string, boolean>)[mod] = false
   }
 
