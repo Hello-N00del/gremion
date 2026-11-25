@@ -9,7 +9,7 @@ const unit: OrgUnit = {
   wants_matrix_room: true, wants_nextcloud_folder: true, created_at: new Date()
 }
 
-function fakeNc(existingFolders: Array<{ id: number; mountPoint: string }> = []) {
+function fakeNc(existingFolders: Array<{ id: number; mountPoint: string; groups: string[] }> = []) {
   return {
     groups: new Set<string>(),
     folders: [] as string[],
@@ -58,24 +58,31 @@ describe('nextcloud subsystem', () => {
 
   describe('adopt-by-name (idempotent folder creation)', () => {
     it('adopts an existing folder by mountpoint instead of minting a duplicate', async () => {
-      const nc = fakeNc([{ id: 42, mountPoint: 'Vorstand' }])
+      const nc = fakeNc([{ id: 42, mountPoint: 'Vorstand', groups: ['ou-abc'] }])
       const r = await subsystem(nc).ensureResource(unit, { parentKeycloakGroupId: null }, null)
       expect(nc.folders).toHaveLength(0) // createGroupFolder NOT called
       expect(r.externalId).toContain('42')
     })
 
     it('calls createGroupFolder once when no existing folder matches (normal path)', async () => {
-      const nc = fakeNc([{ id: 5, mountPoint: 'OtherCommittee' }])
+      const nc = fakeNc([{ id: 5, mountPoint: 'OtherCommittee', groups: ['ou-abc'] }])
       const r = await subsystem(nc).ensureResource(unit, { parentKeycloakGroupId: null }, null)
       expect(nc.folders).toHaveLength(1) // createGroupFolder called exactly once
       expect(r.externalId).toContain('77')
     })
 
+    it("does not adopt another unit's folder of the same name (its group is not ours): creates its own", async () => {
+      const nc = fakeNc([{ id: 42, mountPoint: 'Vorstand', groups: ['ou-other'] }])
+      const r = await subsystem(nc).ensureResource(unit, { parentKeycloakGroupId: null }, null)
+      expect(nc.folders).toEqual(['Vorstand'])
+      expect(r.externalId).toBe('77:ou-abc')
+    })
+
     it('adopts the LOWEST id when two folders share the mountpoint and warns', async () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
       const nc = fakeNc([
-        { id: 10, mountPoint: 'Vorstand' },
-        { id: 3, mountPoint: 'Vorstand' }
+        { id: 10, mountPoint: 'Vorstand', groups: ['ou-abc'] },
+        { id: 3, mountPoint: 'Vorstand', groups: ['ou-abc'] }
       ])
       const r = await subsystem(nc).ensureResource(unit, { parentKeycloakGroupId: null }, null)
       expect(nc.folders).toHaveLength(0) // createGroupFolder NOT called

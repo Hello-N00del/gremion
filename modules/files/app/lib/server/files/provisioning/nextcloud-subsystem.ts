@@ -54,10 +54,14 @@ export function createNextcloudSubsystem(deps: NextcloudDeps, providerId: number
       const groupId = `ou-${unit.id}`
       await nc.createGroup(groupId)
 
-      // Adopt an existing folder by mount-point to prevent orphan folders on
-      // retry (e.g. folder was created but external_id was never persisted).
+      // Adopt an existing folder to prevent orphan folders on retry (e.g. folder
+      // was created but external_id was never persisted). The folder list spans
+      // the whole Nextcloud, shared by every customer on it, so the mount point
+      // alone is no proof of ownership: adopt only a folder of this name that
+      // already carries THIS unit's group. Anything else (another customer's
+      // folder of the same name, a folder nobody was granted on) is not ours.
       const allFolders = await nc.listGroupFolders()
-      const matches = allFolders.filter((f) => f.mountPoint === unit.name)
+      const matches = allFolders.filter((f) => f.mountPoint === unit.name && f.groups.includes(groupId))
       let folderId: number
       if (matches.length > 1) {
         console.warn(
