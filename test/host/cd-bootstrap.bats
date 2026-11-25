@@ -99,11 +99,19 @@ scratch_host() {
     echo "$d"
 }
 
+# The programs that run from the release tree and are NOT installed (they source the release's own
+# libraries, which the stage does not copy). Written out here on purpose: the list in bootstrap.sh
+# is what the stage uses, this is what the test expects, and a change must touch both.
+TREE_RUN="gremion-isolation gremion-services gremion-tenant"
+is_tree_run() { case " ${TREE_RUN} " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+
 # the installed set: every source file the stage must have copied, "<src> <dest>" per line
 set_pairs() {
     local src="${1:-$HOST_SRC}" f
     for f in "$src"/bin/*; do
-        [ -f "$f" ] && echo "$f ${GREMION_ROOT}/bin/${f##*/}"
+        [ -f "$f" ] || continue
+        is_tree_run "${f##*/}" && continue
+        echo "$f ${GREMION_ROOT}/bin/${f##*/}"
     done
     echo "$src/lib/common.sh ${GREMION_ROOT}/lib/common.sh"
     for f in "$src"/lib/cd/*.sh; do
@@ -393,6 +401,104 @@ template_keys() {
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     [ ! -e "${GREMION_ROOT}/lib/cd/zz-stale.sh" ]
     [ -f "${GREMION_ROOT}/lib/cd/core.sh" ]
+}
+
+@test "stage cd does not install the programs that run from the release tree, and every other program of bin/ is installed" {
+    run_stage
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    local f
+    for f in $TREE_RUN; do
+        [ -f "${HOST_SRC}/bin/${f}" ] || { echo "the tree has no ${f}"; return 1; }
+        [ ! -e "${GREMION_ROOT}/bin/${f}" ] || { echo "installed: ${f}"; return 1; }
+    done
+    for f in "${HOST_SRC}"/bin/*; do
+        is_tree_run "${f##*/}" && continue
+        [ -f "${GREMION_ROOT}/bin/${f##*/}" ] || { echo "not installed: ${f##*/}"; return 1; }
+    done
+    # and not a single library of the customer code
+    [ ! -e "${GREMION_ROOT}/lib/customer-ops.sh" ]
+    [ ! -e "${GREMION_ROOT}/lib/access-log.sh" ]
+    [ ! -e "${GREMION_ROOT}/lib/executor" ]
+}
+
+# installed_sources_resolve -- the guard on the INSTALLED layout: every `.` of every installed
+# program and library names a file that is there. The forms are the ones the programs use; one the
+# walker does not know FAILS (a scan that skips what it cannot read reports clean).
+installed_sources_resolve() {
+    local f stmt arg target n=0 bad=0
+    for f in "${GREMION_ROOT}"/bin/* "${GREMION_ROOT}"/lib/*.sh "${GREMION_ROOT}"/lib/cd/*.sh; do
+        [ -f "$f" ] || continue
+        while IFS= read -r stmt; do
+            stmt="${stmt#"${stmt%%[![:space:]]*}"}"
+            arg="${stmt#*[[:space:]]}"
+            arg="${arg%%[[:space:]]#*}"
+            arg="${arg//\"/}"
+            n=$((n + 1))
+            case "$arg" in
+                '$SCRIPT_DIR/../lib/'* | '${SCRIPT_DIR}/../lib/'*) target="${GREMION_ROOT}/lib/${arg#*/../lib/}" ;;
+                '$SCRIPT_DIR/'* | '${SCRIPT_DIR}/'*) target="${GREMION_ROOT}/bin/${arg#*/}" ;;
+                '$CD_LIB_DIR/${cd_lib_name}.sh') continue ;;     # the glob of lib/cd, all installed
+                '$CD_LIB_DIR/'*) target="${GREMION_ROOT}/lib/cd/${arg#*/}" ;;
+                '${GREMION_CD_STUBS_DIR}/cd-stubs.sh') continue ;;  # the test hook, read only with GREMION_CD_TESTING=1
+                '${lib}/'*) continue ;;                          # gremion-executor: the release's own libraries
+                *) echo "cannot resolve '${arg}' in ${f}"; bad=1; continue ;;
+            esac
+            [ -f "$target" ] || { echo "${f} sources ${target}, which the stage did not install"; bad=1; }
+        done < <(grep -E '^[[:space:]]*(\.|source)[[:space:]]+[^[:space:]]' "$f" | grep -vE '^[[:space:]]*#')
+    done
+    # a walk that found nothing is no proof
+    [ "$n" -ge 15 ] || { echo "the walker saw only ${n} source statements"; return 1; }
+    return "$bad"
+}
+
+@test "stage cd: every library an installed program sources is installed (the guard on the installed layout)" {
+    run_stage
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    run installed_sources_resolve
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+}
+
+@test "stage cd: the installed-layout guard names the file when a library is missing (the walk is not vacuous)" {
+    run_stage
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    rm -f "${GREMION_ROOT}/lib/common.sh"
+    run installed_sources_resolve
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"/lib/common.sh, which the stage did not install"* ]]
+}
+
+@test "stage cd takes away what a hand install left (a copy of a tree-run program, the libraries put beside it), on a fresh install and on a re-run" {
+    mkdir -p "${GREMION_ROOT}/bin" "${GREMION_ROOT}/lib/executor"
+    local f
+    for f in bin/gremion-tenant bin/gremion-isolation bin/gremion-services lib/customer-ops.sh lib/access-log.sh lib/executor/db.sh; do
+        printf '# a hand copy\n' > "${GREMION_ROOT}/${f}"
+        chmod 600 "${GREMION_ROOT}/${f}"
+    done
+    run_stage
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    for f in bin/gremion-tenant bin/gremion-isolation bin/gremion-services lib/customer-ops.sh lib/access-log.sh lib/executor/db.sh; do
+        [ ! -e "${GREMION_ROOT}/${f}" ] || { echo "still there: ${f}"; return 1; }
+    done
+    [ ! -e "${GREMION_ROOT}/lib/executor" ]
+    # what is installed is right (mode, bytes) and a second run changes nothing
+    [ "$(stat -c %a "${GREMION_ROOT}/bin/gremion-cd")" = 755 ]
+    cmp -s "${HOST_SRC}/lib/common.sh" "${GREMION_ROOT}/lib/common.sh"
+    run installed_sources_resolve
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    run_stage
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    run installed_sources_resolve
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+}
+
+@test "stage cd removes the three hand-placed library names only: a directory lib/executor that holds something else stays" {
+    mkdir -p "${GREMION_ROOT}/lib/executor"
+    printf 'x\n' > "${GREMION_ROOT}/lib/executor/db.sh"
+    printf 'x\n' > "${GREMION_ROOT}/lib/executor/keep.sh"
+    run_stage
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [ ! -e "${GREMION_ROOT}/lib/executor/db.sh" ]
+    [ -f "${GREMION_ROOT}/lib/executor/keep.sh" ]
 }
 
 @test "stage cd renders the six units, runs daemon-reload and enables or starts nothing" {
