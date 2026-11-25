@@ -861,6 +861,43 @@ describe('messagingKarenz', () => {
       expect(runWithTenant).toHaveBeenCalledWith(tenant, expect.any(Function))
     })
 
+    describe('MATRIX_IDENTITY=namespaced on a homeserver shared with other customers', () => {
+      // Three bot-created meeting rooms no ledger row owns: this customer's (marker), another customer's
+      // (marker) and one without a marker. Only the first is this customer's to keep.
+      function seedSharedMeetingRooms() {
+        addRoom('!mine:matrix.test', { alias: '#meeting-mine:matrix.test' }).state.set('org.gremion.tenant', { tenant_id: 'default' })
+        addRoom('!theirs:matrix.test', { alias: '#meeting-theirs:matrix.test' }).state.set('org.gremion.tenant', { tenant_id: 'other' })
+        addRoom('!bare:matrix.test', { alias: '#meeting-bare:matrix.test' })
+      }
+      beforeEach(() => {
+        process.env.MATRIX_IDENTITY = 'namespaced'
+      })
+      afterEach(() => {
+        delete process.env.MATRIX_IDENTITY
+      })
+
+      it('the switch-off keeps only the meeting rooms that carry the marker of this customer', async () => {
+        seedSharedMeetingRooms()
+        await karenz.messagingKarenz.switchOff(ctx)
+        expect([...store.rows.values()].map((r) => r.externalId)).toEqual(['!mine:matrix.test'])
+        expect([...store.rows.values()].every((r) => r.state === 'kept')).toBe(true)
+      })
+
+      it('describe counts only the meeting rooms of this customer', async () => {
+        seedSharedMeetingRooms()
+        const d = await karenz.messagingKarenz.describe!({ id: 'default', slug: 'default' } as never)
+        expect(d.retained).toHaveLength(1)
+        expect(d.retained[0]).toMatchObject({ count: 1 })
+      })
+
+      it('legacy mode is unchanged: every bot-created meeting room is kept, marker or not', async () => {
+        delete process.env.MATRIX_IDENTITY
+        seedSharedMeetingRooms()
+        await karenz.messagingKarenz.switchOff(ctx)
+        expect([...store.rows.values()].map((r) => r.externalId).sort((a, b) => a.localeCompare(b))).toEqual(['!bare:matrix.test', '!mine:matrix.test', '!theirs:matrix.test'])
+      })
+    })
+
     it('counts the rooms a switch-off would archive and delete, and the meeting-linked rooms that stay', async () => {
       seed()
       const d = await karenz.messagingKarenz.describe!({ id: 'default', slug: 'default' } as never)

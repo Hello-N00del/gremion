@@ -14,6 +14,7 @@
 // room name, a room id or an alias. A room an admin archived BEFORE the switch-off has no ledger row,
 // is never recorded and therefore never restored or deleted by the Karenz.
 import { getMatrixClient } from './matrix-client'
+import { matrixIdentityMode } from './matrix-namespace'
 import { getSynapseAdmin } from './synapse-admin'
 import {
   getRoomArchiveMarker, unarchiveRoom, archiveRoom, resolveMatrixError, MatrixUnavailableError, RoomNotFoundError,
@@ -21,7 +22,7 @@ import {
 import { getOrgUnit, listOrgUnits } from '$lib/server/governance/org-units-db'
 import { getResource } from '$lib/server/governance/provisioning/ledger'
 import { writeAuditEntry } from '$lib/server/audit-db'
-import { runWithTenant, type TenantContext } from '$lib/server/tenant/context'
+import { getTenant, runWithTenant, type TenantContext } from '$lib/server/tenant/context'
 import {
   KarenzPartialError,
   type DeletionItem, type KarenzContext, type KarenzParticipant, type RetainedItem,
@@ -111,13 +112,22 @@ async function trySetState(ctx: KarenzContext, item: KarenzItemRow, state: ItemS
   }
 }
 
-/** Meeting-linked rooms that no ledger row owns: rooms the admin bot created with a meeting alias. */
-function unownedMeetingRooms(rooms: Map<string, HomeserverRoom>, owned: Set<string>): string[] {
-  const bot = getMatrixClient().getAdminBotUserId()
+/**
+ * Meeting-linked rooms that no ledger row owns: rooms the admin bot created with a meeting alias. On a
+ * homeserver shared by several customers (MATRIX_IDENTITY=namespaced) that list holds every customer's
+ * meeting rooms, so only a room carrying THIS customer's org.gremion.tenant marker counts as its own.
+ * Legacy mode reads no marker and lists what it always listed.
+ */
+async function unownedMeetingRooms(rooms: Map<string, HomeserverRoom>, owned: Set<string>): Promise<string[]> {
+  const client = getMatrixClient()
+  const bot = client.getAdminBotUserId()
+  const namespaced = matrixIdentityMode() === 'namespaced'
   const out: string[] = []
   for (const r of rooms.values()) {
     if (owned.has(r.room_id)) continue
-    if (isMeetingAlias(r.canonical_alias) && bot !== '' && r.creator === bot) out.push(r.room_id)
+    if (!(isMeetingAlias(r.canonical_alias) && bot !== '' && r.creator === bot)) continue
+    if (namespaced && !(await client.roomBelongsToTenant(r.room_id, getTenant().id))) continue
+    out.push(r.room_id)
   }
   return out
 }
@@ -135,7 +145,7 @@ async function switchOff(ctx: KarenzContext): Promise<void> {
       ...(meeting ? { detail: MEETING_LINK_CLASS } : {}),
     })
   }
-  for (const roomId of unownedMeetingRooms(rooms, new Set(candidates.map((c) => c.roomId)))) {
+  for (const roomId of await unownedMeetingRooms(rooms, new Set(candidates.map((c) => c.roomId)))) {
     await ctx.items.upsert({ kind: ROOM, externalId: roomId, state: 'kept', detail: MEETING_LINK_CLASS })
   }
 
@@ -306,7 +316,7 @@ async function describeForTenant(): Promise<{ deletes: DeletionItem[]; retained:
   const rooms = await homeserverRooms()
   const candidates = await ledgerRooms()
   const archivable = candidates.filter((c) => !isMeetingAlias(rooms.get(c.roomId)?.canonical_alias)).length
-  const meeting = candidates.length - archivable + unownedMeetingRooms(rooms, new Set(candidates.map((c) => c.roomId))).length
+  const meeting = candidates.length - archivable + (await unownedMeetingRooms(rooms, new Set(candidates.map((c) => c.roomId)))).length
   const deletes: DeletionItem[] = archivable > 0 ? [{ label: 'Chat-Räume', count: archivable }] : []
   const retained: RetainedItem[] = meeting > 0
     ? [{

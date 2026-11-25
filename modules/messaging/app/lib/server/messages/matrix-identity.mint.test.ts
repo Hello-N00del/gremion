@@ -275,7 +275,7 @@ describe('chat is refused while the homeserver offers another way to log in', ()
 
   test('an unknown MATRIX_IDENTITY value refuses chat instead of falling back to the legacy identity', async () => {
     process.env.MATRIX_IDENTITY = 'namespace'
-    await expect(mint(ACME, token({}))).rejects.toThrow(/MATRIX_IDENTITY/)
+    await expect(mint(ACME, token({}))).rejects.toMatchObject({ status: 503 })
     expect(calls).toEqual([])
   })
 })

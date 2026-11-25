@@ -17,6 +17,7 @@ import {
   unitNameSlug,
 } from './matrix-namespace'
 import { aliasLocalpart } from './provisioning/matrix-subsystem'
+import { isChatRefusal } from './chat-identity-guard'
 
 const tenant = (slug: string): TenantContext => ({ id: `tid-${slug}`, slug }) as unknown as TenantContext
 
@@ -127,9 +128,16 @@ describe('matrixIdentityMode', () => {
     expect(matrixIdentityMode()).toBe('namespaced')
   })
 
-  test('any other value fails closed instead of falling back to legacy', () => {
+  test('any other value fails closed instead of falling back to legacy: the German 503 the chat routes let through, not a plain Error', () => {
     process.env.MATRIX_IDENTITY = 'Namespaced'
-    expect(() => matrixIdentityMode()).toThrow(/MATRIX_IDENTITY/)
+    let thrown: unknown
+    try {
+      matrixIdentityMode()
+    } catch (e) {
+      thrown = e
+    }
+    expect(thrown).toMatchObject({ status: 503, body: { message: 'Der Chat ist derzeit nicht verfügbar. Bitte die Administration informieren.' } })
+    expect(isChatRefusal(thrown)).toBe(true)
   })
 })
 

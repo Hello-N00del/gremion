@@ -12,7 +12,10 @@ vi.mock('$lib/server/keycloak-admin', () => ({
   getKeycloakAdminClientForCurrentTenant: () => ({
     listUsers: async (q: { username: string }) => {
       KC.lookups.push(q.username)
-      return q.username === 'alice' ? [{ firstName: 'Alice', lastName: 'Muster' }] : []
+      if (q.username === 'alice') return [{ firstName: 'Alice', lastName: 'Muster' }]
+      // a member of THIS customer whose username happens to look like another customer's prefixed id
+      if (q.username === 'beta.carol') return [{ firstName: 'Fremde', lastName: 'Person' }]
+      return []
     },
   }),
 }))
@@ -54,6 +57,27 @@ describe('sender names', () => {
     const names = await runWithTenant(ACME, () => getSenderNameResolver().resolveMany(['@acme.alice:synapse.test']))
     expect(KC.lookups).toEqual(['alice'])
     expect(names.get('@acme.alice:synapse.test')).toBe('Alice Muster')
+  })
+
+  test('namespaced: an id of another customer, or without any prefix, is never looked up and shows the fallback name', async () => {
+    process.env.MATRIX_IDENTITY = 'namespaced'
+    const own = '@acme.alice:synapse.test'
+    const foreign = '@beta.carol:synapse.test'
+    const bare = '@alice:synapse.test'
+    const names = await runWithTenant(ACME, () => getSenderNameResolver().resolveMany([own, foreign, bare]))
+    // only the own prefixed id reaches this customer's Keycloak
+    expect(KC.lookups).toEqual(['alice'])
+    expect(names.get(own)).toBe('Alice Muster')
+    expect(names.get(foreign)).toBe('Beta Carol')
+    expect(names.get(bare)).toBe('Alice')
+  })
+
+  test('namespaced: an own id with nothing behind the prefix is not looked up either', async () => {
+    const seen: string[] = []
+    const r = createSenderNameResolver(async (u) => (seen.push(u), null), { slug: 'acme' })
+    const names = await r.resolveMany(['@acme.:synapse.test'])
+    expect(seen).toEqual([])
+    expect(names.get('@acme.:synapse.test')).toBe('Unbekannt')
   })
 
   test('the per-customer resolver of a legacy install looks the localpart up unchanged', async () => {

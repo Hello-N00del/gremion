@@ -10,9 +10,7 @@
 //
 // The reason goes to the server log, the user gets a neutral sentence.
 import { error, isHttpError } from '@sveltejs/kit'
-import { matrixIdentityMode } from './matrix-namespace'
-
-const UNAVAILABLE = 'Der Chat ist derzeit nicht verfügbar. Bitte die Administration informieren.'
+import { CHAT_UNAVAILABLE as UNAVAILABLE, matrixIdentityMode } from './matrix-namespace'
 
 /** Login flow types that would give a second way to name a Matrix account. */
 const FOREIGN_FLOWS = ['org.matrix.login.jwt', 'm.login.sso'] as const

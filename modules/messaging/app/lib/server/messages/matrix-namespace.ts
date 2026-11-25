@@ -16,8 +16,12 @@
 // namespace `<slug>-` of the customer adapters is therefore NOT used here.
 //
 // Pure helpers first, then the two accessors that read the switch and the request's tenant.
+import { error } from '@sveltejs/kit'
 import { getTenant } from '$lib/server/tenant/context'
 import { decodeUsername, stripTenantPrefix } from '$lib/components/messaging/sender-label'
+
+/** What a user is told when chat is refused (503). The reason goes to the server log, never to the user. */
+export const CHAT_UNAVAILABLE = 'Der Chat ist derzeit nicht verfügbar. Bitte die Administration informieren.'
 
 /** Room state event a namespaced room carries: `{ tenant_id }`, the customer the room belongs to. */
 export const TENANT_MARKER_TYPE = 'org.gremion.tenant'
@@ -128,13 +132,16 @@ export function displayUsername(slug: string, localpart: string): string {
 /**
  * The identity mode of this process. Read at call time from MATRIX_IDENTITY (a deployment switch like
  * MESSAGES_BACKEND, not a per-customer value). Unset, empty and `legacy` are legacy. Any other value
- * than `namespaced` throws: a typo must refuse chat, never fall back to the shared-username identity.
+ * than `namespaced` throws the 503 of a refused chat (German text, reason in the server log): a typo
+ * must refuse chat, never fall back to the shared-username identity, and the routes let this refusal
+ * through as they let every other one (isChatRefusal), not as an English 502.
  */
 export function matrixIdentityMode(): MatrixIdentityMode {
   const raw = process.env.MATRIX_IDENTITY
   if (raw === undefined || raw === '' || raw === 'legacy') return 'legacy'
   if (raw === 'namespaced') return 'namespaced'
-  throw new Error(`MATRIX_IDENTITY must be 'legacy' or 'namespaced', got ${JSON.stringify(raw)}`)
+  console.error(`[chat-identity] chat refused: MATRIX_IDENTITY must be 'legacy' or 'namespaced', got ${JSON.stringify(raw)}`)
+  throw error(503, CHAT_UNAVAILABLE)
 }
 
 /** The slug to strip when displaying ids: the request customer's in namespaced mode, else null. */

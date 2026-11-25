@@ -67,12 +67,21 @@ export function createSenderNameResolver(
   const now = opts.now ?? (() => Date.now())
   const slug = opts.slug ?? null
   // The Keycloak username behind a Matrix id: the localpart as it is, or in namespaced mode without the
-  // customer prefix and with the _hh encoding undone.
-  const usernameOf = (id: string): string => (slug ? displayUsername(slug, localpartOf(id)) : localpartOf(id))
+  // customer prefix and with the _hh encoding undone. In namespaced mode only an id that carries the
+  // customer's OWN prefix is looked up (null for every other: another customer's member, an unprefixed
+  // id, nothing behind the prefix), because the localpart of a foreign id read as a username here could
+  // name a different person of this customer's Keycloak.
+  const usernameOf = (id: string): string | null => {
+    const localpart = localpartOf(id)
+    if (!slug) return localpart
+    if (!localpart.startsWith(`${slug}.`)) return null
+    return displayUsername(slug, localpart) || null
+  }
   const cache = new Map<string, Entry>()
   const inflight = new Map<string, Promise<string | null>>()
 
-  function fetchName(username: string): Promise<string | null> {
+  function fetchName(username: string | null): Promise<string | null> {
+    if (username === null) return Promise.resolve(null)
     const hit = cache.get(username)
     if (hit && now() < hit.expiresAt) return Promise.resolve(hit.name)
     const pending = inflight.get(username)
