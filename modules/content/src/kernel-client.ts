@@ -2,8 +2,8 @@
 //
 // Task 17: callback HTTP client FROM the content leaf TO the kernel (gremion-ui).
 //
-// The leaf owns the publish pipeline but two privileged operations still live
-// in the kernel and are reached over HTTP at publish time:
+// The leaf owns the publish pipeline but three privileged operations, and one
+// plain fact, still live in the kernel and are reached over HTTP at publish time:
 //   1. resolveGroup(groupId)  → the members of a Keycloak group (the kernel is
 //                               the only side with KC-admin credentials).
 //   2. sendMail(msg)          → send ONE rendered email through the per-tenant
@@ -17,6 +17,16 @@
 //                               The kernel returns { id, slug, published_at,
 //                               content_origin_post_id }. This is content-specific
 //                               and is not present in the newsletter client.
+//   4. linkBase()             → the origin THIS tenant's mail links are built from
+//                               (GET /api/internal/content/link-base, on the content
+//                               secret: the kernel answers `https://<primary host>` of the
+//                               tenant the call is for, a 404 with its own body when it has
+//                               none). Asked at the start of EVERY e-mail send and used for
+//                               that send only: never kept, never cached, never sent back as
+//                               a host and never a tenant selector. It is what the unsubscribe
+//                               link in the mail is rooted at, so a second customer's
+//                               recipients are linked to their own host and not to the one
+//                               the leaf booted with.
 //
 // EVERY request forwards:
 //   - x-internal-auth : the shared INTERNAL_CONTENT_SECRET (same secret the
@@ -147,6 +157,14 @@ export interface KernelClient {
     bodyHtml: string,
     externalRef?: string,
   ): Promise<{ news_posts_id: string }>
+  /**
+   * The origin (`https://<primary host>`) this tenant's mail links are built from, as the
+   * kernel answers it, or `null` when the kernel answers that the tenant has no public host.
+   * Not checked here: the send runs it through checkLinkBase. Throws on any other failure
+   * (a kernel that is down, or one that does not know the route, is not a tenant without a
+   * host). Asked on every call; the leaf keeps no copy.
+   */
+  linkBase(): Promise<string | null>
 }
 
 /** Minimal fetch shape so we can inject a fake without pulling in DOM libs. */
@@ -199,6 +217,15 @@ function buildHeaders(opts: KernelClientOptions): Record<string, string> {
   }
 }
 
+/** The body of the kernel's 404 for a tenant that has no public host (link-base route). */
+function noPublicHost(text: string): boolean {
+  try {
+    return (JSON.parse(text) as { error?: unknown }).error === 'No public host'
+  } catch {
+    return false
+  }
+}
+
 function trimBase(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, '')
 }
@@ -224,6 +251,27 @@ export function createKernelClient(opts: KernelClientOptions): KernelClient {
   const mailHeaders = opts.mailSecret ? { ...headers, 'x-internal-auth': opts.mailSecret } : headers
 
   return {
+    async linkBase(): Promise<string | null> {
+      // The content secret, like portalPublish: this is a content callback, not a mail one.
+      const res = await fetchImpl(`${base}/api/internal/content/link-base`, {
+        method: 'GET',
+        headers,
+      })
+      if (!res.ok) {
+        const snippet = await res.text().catch(() => '')
+        // The kernel's own answer "this tenant has no public host" is a 404 carrying THIS body.
+        // Any other 404 (a kernel that predates the route, a tenant the kernel could not select)
+        // is a failure to ask, not an answer: it throws, so nothing is sent and the next attempt asks again.
+        if (res.status === 404 && noPublicHost(snippet)) return null
+        throw new Error(`kernel link-base failed: ${res.status} ${snippet.slice(0, 200)}`)
+      }
+      const data = (await res.json().catch(() => ({}))) as { origin?: unknown }
+      if (typeof data.origin !== 'string') {
+        throw new Error('kernel link-base returned no origin')
+      }
+      return data.origin
+    },
+
     async resolveGroup(groupId: string): Promise<Recipient[]> {
       const res = await fetchImpl(`${base}/api/internal/newsletter/resolve-group`, {
         method: 'POST',

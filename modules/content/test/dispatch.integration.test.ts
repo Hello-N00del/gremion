@@ -77,9 +77,16 @@ function makeFakeKernel(opts: {
   groups?: Record<string, Recipient[]>
   portalPublishResult?: { news_posts_id: string }
   portalPublishThrows?: boolean
+  /** What the kernel's link-base callback answers: an origin, null (no public host) or an Error (unreachable). */
+  linkBase?: string | null | Error
 } = {}): KernelClient {
   let portalSeq = 0
   return {
+    async linkBase(): Promise<string | null> {
+      const answer = opts.linkBase === undefined ? 'https://disptest.example' : opts.linkBase
+      if (answer instanceof Error) throw answer
+      return answer
+    },
     async resolveGroup(groupId: string): Promise<Recipient[]> {
       return opts.groups?.[groupId] ?? []
     },
@@ -170,7 +177,6 @@ describe('dispatch email — happy path', () => {
       sql,
       kernel: makeFakeKernel(),
       channels: new Map([['email', emailTransport]]),
-      origin: 'https://disptest.example',
     })
 
     expect(emailTransport.sent).toHaveLength(2)
@@ -205,10 +211,83 @@ describe('dispatch email — happy path', () => {
       sql,
       kernel: makeFakeKernel(),
       channels: new Map([['email', emailTransport]]),
-      origin: 'https://disptest.example',
     })
     expect(emailTransport.sent[0]!.html).toContain('unsubscribe?token=')
     expect(emailTransport.sent[0]!.html).toContain('https://disptest.example')
+  })
+})
+
+// ── email channel: the link base is the sending tenant's, asked of the kernel per send ──
+describe('dispatch email — the unsubscribe base comes from the kernel, per send', () => {
+  it('two customers get their own unsubscribe base: the link of each is rooted at its own host', async () => {
+    const a = await makePostWithEmailList(['alice@x.com'])
+    const transportA = makeFakeEmailTransport()
+    await dispatch(DISPATCH_TENANT, a.postId, ACTOR, {
+      sql,
+      kernel: makeFakeKernel({ linkBase: 'https://a.example.org' }),
+      channels: new Map([['email', transportA]]),
+    })
+
+    const b = await makePostWithEmailList(['bob@x.com'])
+    const transportB = makeFakeEmailTransport()
+    await dispatch(DISPATCH_TENANT, b.postId, ACTOR, {
+      sql,
+      kernel: makeFakeKernel({ linkBase: 'https://b.example.org' }),
+      channels: new Map([['email', transportB]]),
+    })
+
+    expect(transportA.sent[0]!.html).toContain('href="https://a.example.org/content/unsubscribe?token=')
+    expect(transportA.sent[0]!.html).not.toContain('b.example.org')
+    expect(transportB.sent[0]!.html).toContain('href="https://b.example.org/content/unsubscribe?token=')
+    expect(transportB.sent[0]!.html).not.toContain('a.example.org')
+  })
+
+  it('a single customer’s link is exactly the host origin plus the unsubscribe path and its token', async () => {
+    const { postId } = await makePostWithEmailList(['alice@x.com'])
+    const emailTransport = makeFakeEmailTransport()
+    await dispatch(DISPATCH_TENANT, postId, ACTOR, {
+      sql,
+      kernel: makeFakeKernel({ linkBase: 'https://a.example.org' }),
+      channels: new Map([['email', emailTransport]]),
+    })
+    const tokens = await sql<{ token: string }[]>`SELECT token FROM content.send_tokens WHERE post_id = ${postId}`
+    expect(tokens).toHaveLength(1)
+    expect(emailTransport.sent[0]!.html).toBe(
+      `<h2>Intro</h2><p>Hello World</p><p style="font-size:12px;color:#888;"><a href="https://a.example.org/content/unsubscribe?token=${encodeURIComponent(tokens[0]!.token)}">Abmelden</a></p>`,
+    )
+  })
+
+  it('a kernel that cannot be asked refuses the email channel before any recipient is claimed', async () => {
+    const { postId } = await makePostWithEmailList(['alice@x.com', 'bob@x.com'])
+    const emailTransport = makeFakeEmailTransport()
+    await expect(
+      dispatch(DISPATCH_TENANT, postId, ACTOR, {
+        sql,
+        kernel: makeFakeKernel({ linkBase: new Error('kernel link-base failed: 503') }),
+        channels: new Map([['email', emailTransport]]),
+      }),
+    ).rejects.toThrow(/link-base failed: 503/)
+
+    expect(emailTransport.sent).toHaveLength(0)
+    const claims = await sql<{ c: string }[]>`SELECT count(*) AS c FROM content.deliveries WHERE post_id = ${postId}`
+    expect(Number(claims[0]!.c)).toBe(0)
+    const toks = await sql<{ c: string }[]>`SELECT count(*) AS c FROM content.send_tokens WHERE post_id = ${postId}`
+    expect(Number(toks[0]!.c)).toBe(0)
+  })
+
+  it('a tenant the kernel has no host for is refused through the unusable-base path, nobody claimed', async () => {
+    const { postId } = await makePostWithEmailList(['alice@x.com'])
+    const emailTransport = makeFakeEmailTransport()
+    await expect(
+      dispatch(DISPATCH_TENANT, postId, ACTOR, {
+        sql,
+        kernel: makeFakeKernel({ linkBase: null }),
+        channels: new Map([['email', emailTransport]]),
+      }),
+    ).rejects.toThrow(/unsubscribe link base unusable: .*no public host/)
+    expect(emailTransport.sent).toHaveLength(0)
+    const claims = await sql<{ c: string }[]>`SELECT count(*) AS c FROM content.deliveries WHERE post_id = ${postId}`
+    expect(Number(claims[0]!.c)).toBe(0)
   })
 })
 
@@ -241,7 +320,6 @@ describe('dispatch email — recipient assembly', () => {
 
     await dispatch(DISPATCH_TENANT, post.id, ACTOR, {
       sql, kernel, channels: new Map([['email', emailTransport]]),
-      origin: 'https://o',
     })
 
     const tos = emailTransport.sent.map((m) => m.to).sort()
@@ -266,7 +344,6 @@ describe('dispatch email — per-recipient SMTP failure', () => {
         dispatch(DISPATCH_TENANT, postId, ACTOR, {
           sql, kernel: makeFakeKernel(),
           channels: new Map([['email', failing]]),
-          origin: 'https://o',
         }),
       ).rejects.toThrow()
       const lines = spy.mock.calls.filter((c) => String(c[0]).startsWith('[dispatch] email send'))
@@ -295,7 +372,6 @@ describe('dispatch email — per-recipient SMTP failure', () => {
       dispatch(DISPATCH_TENANT, postId, ACTOR, {
         sql, kernel: makeFakeKernel(),
         channels: new Map([['email', emailTransport]]),
-        origin: 'https://o',
       }),
     ).rejects.toThrow()
 
@@ -321,13 +397,13 @@ describe('dispatch email — per-recipient SMTP failure', () => {
     const failing = makeFakeEmailTransport({ failFor: new Set(['bad@x.com']) })
     await expect(
       dispatch(DISPATCH_TENANT, postId, ACTOR, {
-        sql, kernel: makeFakeKernel(), channels: new Map([['email', failing]]), origin: 'https://o',
+        sql, kernel: makeFakeKernel(), channels: new Map([['email', failing]]),
       }),
     ).rejects.toThrow()
 
     const healthy = makeFakeEmailTransport()
     await dispatch(DISPATCH_TENANT, postId, ACTOR, {
-      sql, kernel: makeFakeKernel(), channels: new Map([['email', healthy]]), origin: 'https://o',
+      sql, kernel: makeFakeKernel(), channels: new Map([['email', healthy]]),
     })
 
     expect(healthy.countFor('bad@x.com')).toBe(1)
@@ -353,7 +429,7 @@ describe('dispatch email — per-recipient SMTP failure', () => {
     try {
       await expect(
         dispatch(DISPATCH_TENANT, postId, ACTOR, {
-          sql, kernel: makeFakeKernel(), channels: new Map([['email', transport]]), origin: 'https://o',
+          sql, kernel: makeFakeKernel(), channels: new Map([['email', transport]]),
         }),
       ).rejects.toThrow(/do not re-publish before checking the delivery log/)
     } finally {
@@ -390,7 +466,7 @@ describe('dispatch email — the mail server refuses the login (EAUTH)', () => {
     try {
       await expect(
         dispatch(DISPATCH_TENANT, postId, ACTOR, {
-          sql, kernel: makeFakeKernel(), channels: new Map([['email', refusing]]), origin: 'https://o',
+          sql, kernel: makeFakeKernel(), channels: new Map([['email', refusing]]),
         }),
       ).rejects.toThrow(/SMTP login refused, send stopped after the first attempt/)
     } finally {
@@ -406,7 +482,7 @@ describe('dispatch email — the mail server refuses the login (EAUTH)', () => {
     // once the login is corrected, the next publish reaches all three
     const healthy = makeFakeEmailTransport()
     await dispatch(DISPATCH_TENANT, postId, ACTOR, {
-      sql, kernel: makeFakeKernel(), channels: new Map([['email', healthy]]), origin: 'https://o',
+      sql, kernel: makeFakeKernel(), channels: new Map([['email', healthy]]),
     })
     expect(healthy.sent.map((m) => m.to).sort()).toEqual(['a@x.com', 'b@x.com', 'c@x.com'])
   })
@@ -434,7 +510,6 @@ describe('dispatch portal — happy path', () => {
       sql,
       kernel: wrappedKernel,
       channels: new Map([['portal', { send: async () => ({ id: '' }) }]]),
-      origin: 'https://disptest.example',
     })
 
     expect(portalCalls).toBe(1)
@@ -470,7 +545,6 @@ describe('dispatch portal — happy path', () => {
         sql,
         kernel: wrappedKernel,
         channels: new Map([['portal', { send: async () => ({ id: '' }) }]]),
-        origin: 'https://disptest.example',
       }).catch(() => {})
 
     await run()
@@ -493,7 +567,6 @@ describe('dispatch instagram — enqueue publish_op', () => {
       sql,
       kernel: makeFakeKernel(),
       channels: new Map([['instagram', { send: async () => ({ id: '' }) }]]),
-      origin: 'https://disptest.example',
     })
 
     // A publish_op row should be created for this post.
@@ -530,7 +603,6 @@ describe('dispatch — three-channel combined', () => {
         ['portal', { send: async () => ({ id: '' }) }],
         ['instagram', { send: async () => ({ id: '' }) }],
       ]),
-      origin: 'https://disptest.example',
     })
 
     // Email sent
@@ -567,7 +639,6 @@ describe('DoD-c — duplicate-send prevention', () => {
         sql,
         kernel: makeFakeKernel(),
         channels: new Map([['email', emailTransport]]),
-        origin: 'https://o',
       }).catch(() => {})
 
     // CONCURRENT: two dispatches at once.

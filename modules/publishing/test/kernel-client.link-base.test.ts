@@ -67,6 +67,13 @@ describe('createKernelClient.linkBase', () => {
     expect(await client.linkBase()).toBeNull()
   })
 
+  it('throws on a 404 that is not the kernel’s answer: a kernel without the route is not a tenant without a host', async () => {
+    const noRoute = clientFor(() => ({ ok: false, status: 404, body: 'Not found' }))
+    await expect(noRoute.client.linkBase()).rejects.toThrow(/kernel link-base failed: 404/)
+    const otherJson = clientFor(() => ({ ok: false, status: 404, body: { message: 'Not found' } }))
+    await expect(otherJson.client.linkBase()).rejects.toThrow(/kernel link-base failed: 404/)
+  })
+
   it('throws, not null, on any other failure: a kernel that is down is not a tenant without a host', async () => {
     const down = clientFor(() => ({ ok: false, status: 503, body: 'down' }))
     await expect(down.client.linkBase()).rejects.toThrow(/kernel link-base failed: 503/)

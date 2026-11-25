@@ -517,9 +517,9 @@ export async function dispatch(
     const answered = await kernel.linkBase()
     if (answered === null) {
       throw new LinkBaseUnusableError(
-        `[newsletter] the kernel has no public host for tenant ${tenant.slug} (or does not know the ` +
-          `link-base callback) — refusing ${sendContext}. Every dispatched newsletter carries an ` +
-          `unsubscribe link rooted at the tenant's own host.`,
+        `[newsletter] the kernel has no public host for tenant ${tenant.slug} — refusing ` +
+          `${sendContext}. Every dispatched newsletter carries an unsubscribe link rooted at the ` +
+          `tenant's own host.`,
         'missing',
       )
     }
