@@ -122,6 +122,32 @@ export function currentArchiveAliasPrefix(): string {
   return matrixIdentityMode() === 'namespaced' ? `#stura-archiv.${getTenant().slug}.` : '#stura-archiv-'
 }
 
+/** The event id part of a meeting room alias: lower-cased, anything outside [a-z0-9._-] replaced by '-'. */
+function meetingEventSlug(eventId: string): string {
+  return eventId.toLowerCase().replace(/[^a-z0-9._-]/g, '-')
+}
+
+/**
+ * The alias localpart of a meeting room in namespaced mode: `meeting.<slug>.<event id>`. The alias
+ * directory of a shared homeserver is global, so the same calendar event opened by two customers
+ * would otherwise name one alias and one room.
+ */
+export function meetingAliasLocalpart(slug: string, eventId: string): string {
+  assertSlug(slug)
+  return `meeting.${slug}.${meetingEventSlug(eventId)}`
+}
+
+/** The meeting room alias localpart of the request's customer: `meeting-<event id>` in legacy mode (unchanged). */
+export function currentMeetingAliasLocalpart(eventId: string): string {
+  return matrixIdentityMode() === 'namespaced' ? meetingAliasLocalpart(getTenant().slug, eventId) : `meeting-${meetingEventSlug(eventId)}`
+}
+
+/** What a meeting room alias of the request's customer starts with, `#` included: `#meeting-` in legacy
+ *  mode, `#meeting.<slug>.` in namespaced mode (the closing dot keeps a slug from matching a longer one). */
+export function currentMeetingAliasPrefix(): string {
+  return matrixIdentityMode() === 'namespaced' ? `#meeting.${getTenant().slug}.` : '#meeting-'
+}
+
 export { stripTenantPrefix }
 
 /** The Keycloak username a localpart of this customer stands for (prefix stripped, _hh undone). */
