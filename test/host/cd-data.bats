@@ -1564,6 +1564,15 @@ cd_data_live_portal_probe; echo rc=$?; cd_state_get ".release.rollback_target"'
     [ "$(cat "${GREMION_ROOT}/.probe-n")" -eq 3 ]
 }
 
+@test "live portal probe: a live colour whose customer has no public portal is a pass, said in one plain line, and is never 'looks broken'" {
+    run --separate-stderr dat 'cd_colour_portal_probe() { CD_COLOUR_PORTAL_CASE=none; return 0; }
+cd_data_live_portal_probe; echo rc=$?; cd_state_get ".release.rollback_target"'
+    [ "${lines[0]}" = "rc=0" ]
+    [ "${lines[1]}" = "null" ]
+    [[ "$stderr" == *"the live colour has no public portal"* ]]
+    [[ "$stderr" != *"looks broken"* ]]
+}
+
 @test "live portal probe: a pass on the first try stops there" {
     cd_stub_set cd_colour_portal_probe 0
     run --separate-stderr dat 'cd_data_live_portal_probe; echo rc=$?'

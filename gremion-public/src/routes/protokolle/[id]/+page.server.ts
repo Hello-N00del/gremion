@@ -4,15 +4,16 @@ import { error } from '@sveltejs/kit';
 import { getPublishedProtocolById } from '$lib/server/public-db';
 import { sanitizeHtml } from '$lib/sanitize';
 import { isUuid } from '$lib/validate';
+import { orNoPortal } from '$lib/server/portal-absent';
 
-export const load: PageServerLoad = async ({ params }) => {
+export const load: PageServerLoad = async ({ params, locals }) => {
   const id = params.id;
   // #262 D5: reject a non-UUID id with a 404 BEFORE it reaches `${id}::uuid`,
   // which would otherwise 500 with "invalid input syntax for type uuid" on a
   // fully public, scriptable route.
   if (!id || !isUuid(id)) error(404, 'Protokoll nicht gefunden');
 
-  const protocol = await getPublishedProtocolById(id);
+  const protocol = await orNoPortal(locals, () => getPublishedProtocolById(id));
   if (!protocol) error(404, 'Protokoll nicht gefunden');
 
   return {
