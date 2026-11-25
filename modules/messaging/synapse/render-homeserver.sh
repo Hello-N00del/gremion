@@ -14,6 +14,13 @@
 # injects the realm key afterwards (or disables jwt_config), and
 # healthcheck.sh is what judges the result.
 #
+# SYNAPSE_JWT_LOGIN=on|off (default on, byte-identical to the render before the
+# switch existed). off renders neither jwt_config nor oidc_providers: the
+# homeserver then offers no JWT and no SSO login, the issuer and the OIDC client
+# secret are not needed (a blank issuer is no refusal, a named secret file is
+# never read), and the post-render assertion refuses an output that still
+# carries a login block. Anything but on|off is a refusal.
+#
 # registration_shared_secret only appears in the rendered config when
 # BOOTSTRAP_MODE=1. Outside of that one-time bootstrap window, the line is
 # stripped so the shared-secret admin-register endpoint is unreachable even
@@ -30,6 +37,7 @@
 #                      (default: /data/homeserver.yaml)
 #   BOOTSTRAP_MODE     "1" -> keep registration_shared_secret;
 #                      anything else -> strip it (default: "0")
+#   SYNAPSE_JWT_LOGIN  "on" (default) | "off": see above
 #   SYNAPSE_OIDC_CLIENT_SECRET_FILE  the OIDC client secret as a file; wins
 #                      over SYNAPSE_OIDC_CLIENT_SECRET. When unset, the default
 #                      /run/secrets/synapse-oidc-client-secret is read if it
@@ -54,6 +62,14 @@ die() {
   exit 1
 }
 
+# The login switch: unset is on; set empty, or anything but on|off, is a refusal
+# (the compose service always passes a non-empty value).
+export SYNAPSE_JWT_LOGIN="${SYNAPSE_JWT_LOGIN-on}"
+case "$SYNAPSE_JWT_LOGIN" in
+  on|off) ;;
+  *) die "SYNAPSE_JWT_LOGIN must be 'on' or 'off'" ;;
+esac
+
 # Defaults apply to an UNSET key only (`=`, not `:-`): a key set empty is a
 # refusal below, not a quiet fallback.
 : "${SYNAPSE_DB_HOST=messaging-postgres}"
@@ -77,8 +93,14 @@ if [[ "${1:-}" == "--fetch-url" ]]; then
 fi
 
 # The OIDC client secret: the file wins (the provisioner's host file, mounted
-# as a secret), the env value is the scratch fallback.
-if [[ -n "${SYNAPSE_OIDC_CLIENT_SECRET_FILE:-}" ]]; then
+# as a secret), the env value is the scratch fallback. With the login switch off
+# no OIDC provider is rendered: neither the file nor the env value is read, and
+# the issuer is not rendered either.
+if [[ "$SYNAPSE_JWT_LOGIN" == off ]]; then
+  secret_file=""
+  SYNAPSE_OIDC_CLIENT_SECRET=""
+  SYNAPSE_KEYCLOAK_ISSUER_URL=""
+elif [[ -n "${SYNAPSE_OIDC_CLIENT_SECRET_FILE:-}" ]]; then
   [[ -r "$SYNAPSE_OIDC_CLIENT_SECRET_FILE" ]] || die "SYNAPSE_OIDC_CLIENT_SECRET_FILE names a file that cannot be read"
   secret_file="$SYNAPSE_OIDC_CLIENT_SECRET_FILE"
 elif [[ -e "$DEFAULT_SECRET_FILE" ]]; then
@@ -95,15 +117,20 @@ if [[ -n "$secret_file" ]]; then
 fi
 export SYNAPSE_OIDC_CLIENT_SECRET="${SYNAPSE_OIDC_CLIENT_SECRET:-}"
 
-for v in SYNAPSE_SERVER_NAME MATRIX_PUBLIC_URL SYNAPSE_DB_HOST SYNAPSE_DB_PORT \
-         SYNAPSE_DB_NAME SYNAPSE_DB_USER SYNAPSE_DB_PASSWORD \
-         SYNAPSE_KEYCLOAK_ISSUER_URL SYNAPSE_OIDC_CLIENT_SECRET; do
+required_vars="SYNAPSE_SERVER_NAME MATRIX_PUBLIC_URL SYNAPSE_DB_HOST SYNAPSE_DB_PORT
+SYNAPSE_DB_NAME SYNAPSE_DB_USER SYNAPSE_DB_PASSWORD"
+# the issuer and the OIDC client secret belong to the login blocks, which the off render does not have
+if [[ "$SYNAPSE_JWT_LOGIN" == on ]]; then
+  required_vars="$required_vars SYNAPSE_KEYCLOAK_ISSUER_URL SYNAPSE_OIDC_CLIENT_SECRET"
+fi
+for v in $required_vars; do
   [[ -n "${!v:-}" ]] || die "$v is empty or unset -- refusing to render"
 done
 case "$SYNAPSE_DB_PORT" in
   *[!0-9]*) die "SYNAPSE_DB_PORT must be a plain integer" ;;
 esac
-export SYNAPSE_SERVER_NAME MATRIX_PUBLIC_URL SYNAPSE_DB_PASSWORD SYNAPSE_KEYCLOAK_ISSUER_URL
+export SYNAPSE_SERVER_NAME MATRIX_PUBLIC_URL SYNAPSE_DB_PASSWORD
+export SYNAPSE_KEYCLOAK_ISSUER_URL="${SYNAPSE_KEYCLOAK_ISSUER_URL:-}"
 # The admin bot is the only account allowed to create room aliases (alias_creation_rules).
 # Required: an empty or malformed id would render a rule that locks the bot out or allows everyone.
 [[ -n "${SYNAPSE_ADMIN_BOT_USER_ID:-}" ]] || die "SYNAPSE_ADMIN_BOT_USER_ID is empty or unset -- refusing to render"
@@ -186,7 +213,34 @@ if os.environ["BOOTSTRAP_MODE"] != "1":
     # substitution, so no value can ever reach the render through it. Only
     # matches at column 0 so commented references are left untouched.
     text = "".join(line for line in text.splitlines(keepends=True) if not line.startswith("registration_shared_secret:"))
-names = set(os.environ["SYNAPSE_RENDER_VARS"].split())
+JWT_OFF = os.environ["SYNAPSE_JWT_LOGIN"] == "off"
+# The login blocks the off render does not have: the JWT block and the OIDC provider list.
+LOGIN_BLOCKS = ("jwt_config", "oidc_providers")
+LOGIN_KEYS = LOGIN_BLOCKS + ("oidc_config", "cas_config", "saml2_config")
+
+
+def strip_block(src, key):
+    """Drops the top-level block `key:` with the comment lines right above it. A block runs over its
+    indented lines (comments included); the blank line after it stays."""
+    lines = src.splitlines(keepends=True)
+    at = next((i for i, line in enumerate(lines) if line.startswith(key + ":")), None)
+    if at is None:
+        return src
+    first = at
+    while first > 0 and lines[first - 1].startswith("#"):
+        first -= 1
+    last = at + 1
+    while last < len(lines) and (lines[last].strip() == "" or lines[last][0] in " \t"):
+        last += 1
+    while last > at + 1 and lines[last - 1].strip() == "":
+        last -= 1
+    return "".join(lines[:first] + lines[last:])
+
+
+if JWT_OFF:
+    for block in LOGIN_BLOCKS:
+        text = strip_block(text, block)
+names =set(os.environ["SYNAPSE_RENDER_VARS"].split())
 # One pass: a substituted value is never scanned again for ${...}.
 text = re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", lambda m: os.environ.get(m.group(1), "") if m.group(1) in names else m.group(0), text)
 try:
@@ -232,11 +286,19 @@ expect = {
     "database.args.dbname": os.environ["SYNAPSE_DB_NAME"],
     "database.args.host": os.environ["SYNAPSE_DB_HOST"],
     "database.args.port": int(os.environ["SYNAPSE_DB_PORT"]),
-    "jwt_config.issuer": issuer,
-    "oidc_providers.0.issuer": issuer,
-    "oidc_providers.0.client_secret": os.environ["SYNAPSE_OIDC_CLIENT_SECRET"],
-    "oidc_providers.0.token_endpoint": issuer + "/protocol/openid-connect/token",
 }
+if JWT_OFF:
+    # no login block of any kind may survive: the homeserver must offer no JWT and no SSO login
+    for key in LOGIN_KEYS:
+        if key in cfg:
+            problems.append(f"{key} is rendered while SYNAPSE_JWT_LOGIN=off")
+else:
+    expect.update({
+        "jwt_config.issuer": issuer,
+        "oidc_providers.0.issuer": issuer,
+        "oidc_providers.0.client_secret": os.environ["SYNAPSE_OIDC_CLIENT_SECRET"],
+        "oidc_providers.0.token_endpoint": issuer + "/protocol/openid-connect/token",
+    })
 for key, want in expect.items():
     got = get(key)
     if got in (None, ""):
