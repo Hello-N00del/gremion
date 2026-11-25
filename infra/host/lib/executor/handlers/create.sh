@@ -45,15 +45,19 @@ handle_create() {
                 || die "create ${id}: SECONDARY_TENANT_HOSTS in state.env is malformed (${why}); nothing was created" "$GREMION_EXIT_ASSERT"
             secondary_hosts_has "$secondary" "$got_host" \
                 || die "create ${id}: the host ${got_host} is not allowed here: this install's customer host is ${want_host} (PILOT_TENANT_HOST) and the secondary hosts are ${secondary} (SECONDARY_TENANT_HOSTS); nothing was created" "$GREMION_EXIT_ASSERT"
+            # the opt-in (SECONDARY_TENANT_MODULES, state.env only): validated here, a refused one stops the create
+            # before anything is made; unset it leaves exactly the core-only default
+            secondary_optin_load "${ROOT}/etc/env/state.env" \
+                || die "create ${id}: SECONDARY_TENANT_MODULES in state.env is refused (${SECONDARY_OPTIN_WHY}); nothing was created" "$GREMION_EXIT_ASSERT"
             while IFS= read -r mod; do
                 secondary_host_module_allowed "$mod" \
-                    || die "create ${id}: the module ${mod} cannot be enabled for a customer on the secondary host ${got_host}: it runs on the shared chat or file services or writes the customer host ${want_host} into its links, and those stay bound to that host; a secondary host is core-only (${SECONDARY_HOST_MODULES// /, }); nothing was created" "$GREMION_EXIT_ASSERT"
+                    || die "create ${id}: the module ${mod} cannot be enabled for a customer on the secondary host ${got_host}: it runs on the shared chat or file services or writes the customer host ${want_host} into its links, and those stay bound to that host; a secondary host is core-only (${SECONDARY_HOST_MODULES// /, })${SECONDARY_TENANT_MODULES:+; opted in by the install: ${SECONDARY_TENANT_MODULES}}; nothing was created" "$GREMION_EXIT_ASSERT"
             done < <(jq -r '(.enable // [])[]' "$args")
             # a config reads every toggleable module as ON until it says otherwise: switch the others OFF
             # record them as pinned_off_modules too: the app pins those ids false on every read and write of the
             # config, so the customer's own settings (a write, a reset to defaults) cannot switch them back on;
-            # the switches alone are a value the tenant may overwrite.
-            pinned="$(tr ' ' '\n' <<< "$SECONDARY_HOST_MODULES_OFF" | jq -R . | jq -sc '(.)')" \
+            # the switches alone are a value the tenant may overwrite. The opted-in ids are left out of both.
+            pinned="$(secondary_host_modules_pinned_off | jq -R . | jq -sc '(.)')" \
                 || die "create ${id}: could not build the pinned-off module list of the secondary-host customer; nothing was created" "$GREMION_EXIT_ASSERT"
             off="$(jq -c 'map({key: ., value: false}) | from_entries' <<< "$pinned")" \
                 || die "create ${id}: could not build the module switches of the secondary-host customer; nothing was created" "$GREMION_EXIT_ASSERT"

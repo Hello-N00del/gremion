@@ -39,6 +39,14 @@ set -euo pipefail
 #                                     domain, a platform host, the control panel host or
 #                                     PILOT_TENANT_HOST (nor its turn. relay host); the list needs
 #                                     PILOT_TENANT_HOST. Empty or absent: nothing is judged: exit 1.
+#   7. secondary tenant modules    -- SECONDARY_TENANT_MODULES (optional; the shared-service
+#                                     modules a secondary-host customer may have), when a file
+#                                     declares it with a value: space-separated ids of the fixed
+#                                     set (files votes messaging), none twice, and the key needs
+#                                     SECONDARY_TENANT_HOSTS; messaging also needs
+#                                     SYNAPSE_JWT_LOGIN=off in state.env and MATRIX_IDENTITY=namespaced
+#                                     in app-blue.env and app-green.env (read from the directory
+#                                     of the judged file). Empty or absent: nothing is judged: exit 1.
 #
 # Alias equality is judged WITHIN one file. A pair split across files (e.g.
 # app-blue.env's AUTH_KEYCLOAK_SECRET against state.env's
@@ -255,6 +263,28 @@ check_secondary_tenant_hosts() {
     ok "SECONDARY_TENANT_HOSTS: ${n} host(s), each a lowercase DNS name distinct from the customer, platform and control hosts"
 }
 
+# SECONDARY_TENANT_MODULES is an OPTIONAL key too (space-separated ids of the fixed opt-in set; a comment in the
+# templates): judged only when a file declares it with a value. An unknown or not-yet-allowed id, a duplicate and
+# the key without SECONDARY_TENANT_HOSTS fail; messaging also needs SYNAPSE_JWT_LOGIN=off in state.env and
+# MATRIX_IDENTITY=namespaced in both app files, which are read from the directory of the judged file (the
+# judgement is the same whichever of the three files declares the key). Findings name the key and the entry's
+# position, never a value.
+check_secondary_tenant_modules() {
+    local list="${SECONDARY_TENANT_MODULES-}" dir why jwt blue green
+    local -a entries=()
+    [[ -n "${list//[[:space:]]/}" ]] || return 0
+    dir="$(dirname "$__gve_env_file")"
+    jwt="$(control_panel_key_of "${dir}/state.env" SYNAPSE_JWT_LOGIN)" || exit $?
+    blue="$(control_panel_key_of "${dir}/app-blue.env" MATRIX_IDENTITY)" || exit $?
+    green="$(control_panel_key_of "${dir}/app-green.env" MATRIX_IDENTITY)" || exit $?
+    if ! why="$(secondary_tenant_modules_problem "$list" "${SECONDARY_TENANT_HOSTS-}" "$jwt" "$blue" "$green")"; then
+        fail "SECONDARY_TENANT_MODULES is refused: ${why}"
+        return 0
+    fi
+    read -r -a entries <<< "$list"
+    ok "SECONDARY_TENANT_MODULES: ${#entries[@]} module(s) of the opt-in set, with SECONDARY_TENANT_HOSTS set"
+}
+
 main() {
     parse_args "$@"
     need_cmd grep sed
@@ -280,6 +310,7 @@ main() {
     check_aliases
     check_board_app_password
     check_secondary_tenant_hosts
+    check_secondary_tenant_modules
     if [[ "$__gve_failures" -gt 0 ]]; then
         die "VALIDATE-ENV: ${__gve_failures} problem(s) in $(basename "$__gve_env_file")" "$GREMION_EXIT_ASSERT"
     fi

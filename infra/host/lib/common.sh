@@ -588,13 +588,127 @@ SECONDARY_HOST_MODULES="board calendar"
 # shellcheck disable=SC2034  # read by infra/host/lib/executor/handlers/create.sh, which sources this file
 SECONDARY_HOST_MODULES_OFF="content elections files messages newsletter vault votes"
 
-# secondary_host_module_allowed <module> -> 0 when a customer on a secondary host may enable it.
+# OPT-IN (state.env SECONDARY_TENANT_MODULES, optional, space-separated catalogue ids): a shared-service module
+# a customer on a secondary host may have, once its isolation work exists. The set is FIXED here: an id outside
+# it is never allowed, whatever the key says. Left out on purpose: publishing (the newsletter's mail links still
+# name the install's customer host) and content, elections, vault. messaging is in the set but needs three
+# switches (secondary_tenant_modules_problem). The key absent or empty: exactly the default deny above.
+# shellcheck disable=SC2034  # read by scripts/check-panel-host-reserved.test.mjs, which pins it against the manifests
+SECONDARY_TENANT_MODULES_SET="files votes messaging"
+
+# secondary_optin_manifest_id <catalogue id> -> prints the manifest id (the app's config.modules key) of an
+# opt-in id, the vocabulary of SECONDARY_HOST_MODULES_OFF; returns 1 for anything outside the fixed set.
+secondary_optin_manifest_id() {
+    case "${1:-}" in
+        files)     printf '%s' files ;;
+        votes)     printf '%s' votes ;;
+        messaging) printf '%s' messages ;;
+        *) return 1 ;;
+    esac
+}
+
+# secondary_host_module_allowed <module> -> 0 when a customer on a secondary host may enable it: a core module,
+# or an id of the fixed opt-in set that SECONDARY_TENANT_MODULES lists. The variable is set from state.env by
+# secondary_optin_load (which validates it); unset or empty, only the core modules are allowed.
 secondary_host_module_allowed() {
     local m="${1:-}" a
+    local -a optin=()
     [[ -n "$m" ]] || return 1
     for a in $SECONDARY_HOST_MODULES; do
         [[ "$m" == "$a" ]] && return 0
     done
+    secondary_optin_manifest_id "$m" >/dev/null || return 1
+    read -r -a optin <<< "${SECONDARY_TENANT_MODULES:-}"
+    for a in ${optin[@]+"${optin[@]}"}; do
+        [[ "$m" == "$a" ]] && return 0
+    done
+    return 1
+}
+
+# secondary_host_modules_pinned_off -> prints, one per line, the manifest ids a secondary-host customer is
+# created with switched OFF and pinned off: SECONDARY_HOST_MODULES_OFF less the opted-in ids. With no opt-in it
+# is that list, in its order.
+secondary_host_modules_pinned_off() {
+    local m c opted=" " id
+    local -a optin=()
+    read -r -a optin <<< "${SECONDARY_TENANT_MODULES:-}"
+    for c in ${optin[@]+"${optin[@]}"}; do
+        id="$(secondary_optin_manifest_id "$c")" || continue
+        opted+="${id} "
+    done
+    for m in $SECONDARY_HOST_MODULES_OFF; do
+        [[ "$opted" == *" ${m} "* ]] || printf '%s\n' "$m"
+    done
+}
+
+# secondary_tenant_modules_problem <list> <SECONDARY_TENANT_HOSTS> <SYNAPSE_JWT_LOGIN> <MATRIX_IDENTITY of
+# app-blue.env> <MATRIX_IDENTITY of app-green.env> -> prints what is wrong with the opt-in and returns 1; prints
+# nothing and returns 0 when it is acceptable (an empty list is: the feature is off). The list is space-
+# separated ids of the fixed set, no id twice; it needs SECONDARY_TENANT_HOSTS; messaging also needs Synapse's
+# JWT login off and the namespaced Matrix identity on both colours, and the output names only the switches that
+# are missing. Entries are named by position, never by value.
+secondary_tenant_modules_problem() {
+    local list="${1:-}" hosts="${2:-}" jwt="${3:-}" blue="${4:-}" green="${5:-}" e n=0 k joined=""
+    local -a entries=() missing=()
+    [[ -n "${list//[[:space:]]/}" ]] || return 0
+    if [[ -z "$hosts" ]]; then
+        printf 'it needs SECONDARY_TENANT_HOSTS: a module of a secondary host is meaningless without a secondary host'
+        return 1
+    fi
+    read -r -a entries <<< "$list"
+    for e in "${entries[@]}"; do
+        n=$((n + 1))
+        if ! secondary_optin_manifest_id "$e" >/dev/null; then
+            if [[ "$e" == publishing ]]; then
+                printf 'entry %s: publishing stays out of the opt-in set: its mail links still name the install'"'"'s customer host' "$n"
+            else
+                printf 'entry %s: not an id of the opt-in set (%s; separate them with spaces, lower case)' "$n" "$SECONDARY_TENANT_MODULES_SET"
+            fi
+            return 1
+        fi
+        for (( k = 1; k < n; k++ )); do
+            if [[ "${entries[k-1]}" == "$e" ]]; then
+                printf 'entry %s: it is a duplicate of entry %s' "$n" "$k"
+                return 1
+            fi
+        done
+        if [[ "$e" == messaging ]]; then
+            [[ "$jwt" == off ]] || missing+=("SYNAPSE_JWT_LOGIN=off in state.env")
+            [[ "$blue" == namespaced ]] || missing+=("MATRIX_IDENTITY=namespaced in app-blue.env")
+            [[ "$green" == namespaced ]] || missing+=("MATRIX_IDENTITY=namespaced in app-green.env")
+            if (( ${#missing[@]} > 0 )); then
+                for k in "${missing[@]}"; do joined+="${joined:+; }${k}"; done
+                printf 'entry %s: messaging needs %s' "$n" "$joined"
+                return 1
+            fi
+        fi
+    done
+    return 0
+}
+
+# secondary_optin_load <state.env> -> sets SECONDARY_TENANT_MODULES to the VALIDATED opt-in of that file ("" when
+# the file is absent, the key is absent or empty), whatever the caller's environment held, and returns 0. A refused
+# opt-in leaves it empty, sets SECONDARY_OPTIN_WHY to the reason (no value in it) and returns 1; the caller says
+# so in its own words. The one reader of the key for the create and the module guard: it reads state.env, and the
+# app-blue.env / app-green.env beside it for the messaging switch, never a request.
+# shellcheck disable=SC2034  # SECONDARY_OPTIN_WHY is read by create.sh and customer-ops.sh, which source this file
+secondary_optin_load() {
+    local state="${1:-}" dir list hosts jwt blue green why
+    SECONDARY_TENANT_MODULES=""
+    SECONDARY_OPTIN_WHY=""
+    [[ -f "$state" ]] || return 0
+    dir="$(dirname "$state")"
+    list="$(control_panel_key_of "$state" SECONDARY_TENANT_MODULES)" || exit $?
+    [[ -n "${list//[[:space:]]/}" ]] || return 0
+    hosts="$(control_panel_key_of "$state" SECONDARY_TENANT_HOSTS)" || exit $?
+    jwt="$(control_panel_key_of "$state" SYNAPSE_JWT_LOGIN)" || exit $?
+    blue="$(control_panel_key_of "${dir}/app-blue.env" MATRIX_IDENTITY)" || exit $?
+    green="$(control_panel_key_of "${dir}/app-green.env" MATRIX_IDENTITY)" || exit $?
+    if why="$(secondary_tenant_modules_problem "$list" "$hosts" "$jwt" "$blue" "$green")"; then
+        SECONDARY_TENANT_MODULES="$list"
+        return 0
+    fi
+    SECONDARY_OPTIN_WHY="$why"
     return 1
 }
 

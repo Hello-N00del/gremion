@@ -73,12 +73,28 @@ function secondaryHosts(): string[] {
   return out
 }
 
+/** The shared-service modules a secondary-host customer may have: a FIXED set, as the host-side create knows it. */
+const SECONDARY_OPT_IN = ['files', 'votes', 'messaging']
+
+/**
+ * The modules the install opts in for customers on a secondary host (SECONDARY_TENANT_MODULES, space-separated, passed
+ * to the panel by the app compose file like SECONDARY_TENANT_HOSTS). Shown on the form only: the host-side create
+ * reads state.env and decides. An id outside the fixed set and a repeat are left out; empty when unset.
+ */
+function secondaryModules(): string[] {
+  const out: string[] = []
+  for (const part of (env.SECONDARY_TENANT_MODULES ?? '').split(/\s+/)) {
+    if (SECONDARY_OPT_IN.includes(part) && !out.includes(part)) out.push(part)
+  }
+  return out
+}
+
 export const load: PageServerLoad = async () => {
   const r = loadConfig(env)
   if (!r.ok) error(503, 'the control panel is not configured')
   const s = await situation(r.config)
   // the idempotency key of THIS form: a re-post of it never writes a second row
-  return { disabled: s.disabled, modules: s.modules, key: randomUUID(), expectedHost: expectedHost(), secondaryHosts: secondaryHosts() }
+  return { disabled: s.disabled, modules: s.modules, key: randomUUID(), expectedHost: expectedHost(), secondaryHosts: secondaryHosts(), secondaryModules: secondaryModules() }
 }
 
 export const actions: Actions = {
