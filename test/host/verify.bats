@@ -2518,6 +2518,30 @@ foreign_claims() {
     [ "$status" -eq 0 ]
 }
 
+# Traefik reads a double-quoted string as well as a backtick one: a claim in quotes is still a claim.
+@test "foreign: a protected host written as a double-quoted literal is refused" {
+    foreign_site
+    foreign_claims 'Host("tenant-a.example.org")'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"claims tenant-a.example.org"* ]]
+}
+
+@test "foreign: a HostRegexp in double quotes that matches a protected host is refused" {
+    foreign_site
+    foreign_claims 'HostRegexp("^tenant-.[.]example[.]org$")'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"HostRegexp"*"tenant-a.example.org"* ]]
+}
+
+@test "foreign: a double-quoted host that is not protected is fine" {
+    foreign_site
+    foreign_claims 'Host("sales.example.net")'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+}
+
 @test "foreign: a foreign router that names no host answers every host and is refused" {
     foreign_site
     foreign_claims 'PathPrefix(`/shop`)'
