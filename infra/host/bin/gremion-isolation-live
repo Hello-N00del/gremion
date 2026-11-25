@@ -239,6 +239,12 @@ jwt_payload() {   # <token> -> the claims as JSON
 
 urlenc() { jq -rn --arg v "$1" '$v|@uri'; }
 
+# openid_body <room> <openid token> <server name> -> the LiveKit token request body. The token is a
+# credential: jq reads it from stdin (-R), never from an argv (room and server name are not secret).
+openid_body() {
+    jq -Rc --arg r "$1" --arg s "$3" '{room: $r, openid_token: {access_token: ., token_type: "Bearer", matrix_server_name: $s}}' <<< "$2"
+}
+
 # ---------------------------------------------------------------- Keycloak (admin)
 
 kc_admin_token() {   # <index> -> ADM[i]
@@ -303,11 +309,16 @@ realm_tokens() {
     if [[ "$ra" != 0 ]]; then not_ready "${slug}: the user ${PROBE_USER} has a required action: a password grant would be refused; it is left untouched (clear it by hand in the realm)"; return 1; fi
 
     PW[i]="$(openssl rand -hex 24 | tr -d '\r\n')"
-    body="$(jq -cn --arg v "${PW[$i]}" '{type: "password", value: $v, temporary: false}')"
+    # the password is read by jq from stdin (-R), never from an argv (a here-string is a pipe or a private file)
+    body="$(jq -Rc '{type: "password", value: ., temporary: false}' <<< "${PW[$i]}")"
     cfg_reset; cfg_bearer "${ADM[$i]}"; cfg_json "$body"
     http_net PUT "${KC_URL}/admin/realms/${slug}/users/${uid}/reset-password"
     body=""; CFG=""
-    if [[ "$R_CODE" != 204 ]]; then not_ready "${slug}: setting the fixture user's password answered ${R_CODE}: the realm admin client may not reset a password"; return 1; fi
+    case "$R_CODE" in
+        204) ;;
+        400) not_ready "${slug}: setting the fixture user's password answered 400: a password policy of the realm may reject the generated password (48 hex characters); relax it for the probe user or set the policy aside for the run"; return 1 ;;
+        *) not_ready "${slug}: setting the fixture user's password answered ${R_CODE}: the realm admin client may not reset a password"; return 1 ;;
+    esac
 
     # armed BEFORE the create: the clean-up looks the client up by name
     CLIENT_ID[i]="isoprobe-$(openssl rand -hex 4 | tr -d '\r\n')"
@@ -417,13 +428,13 @@ sec_by_id() {   # <name> <list path> <item path prefix> <noun>
         y=$((1 - x))
         api_get "$x" "$listp"
         if own_ok "${SLUG[$x]}: own ${noun} listing"; then
-            id="$(jq -r --arg t "isoprobe-${SLUG[$x]}" '[.data[]? | select((.title // "") | test("(^|[^a-z0-9-])" + $t + "($|[^a-z0-9-])"))][0].id // empty' <<< "$R_BODY" 2>/dev/null || true)"
+            id="$(jq -r --arg t "isoprobe-${SLUG[$x]}" '[.data[]? | select((.configuration.title // .title // "") | test("(^|[^a-z0-9-])" + $t + "($|[^a-z0-9-])"))][0].id // empty' <<< "$R_BODY" 2>/dev/null || true)"
             if [[ -z "$id" ]]; then
                 s_nr "no ${noun} titled isoprobe-${SLUG[$x]} on ${SLUG[$x]}: the operator makes it"
             else
                 ids[x]="$id"; rdy[x]=1
             fi
-            if jq -e --arg t "isoprobe-${SLUG[$y]}" 'any(.data[]?; (.title // "") | test("(^|[^a-z0-9-])" + $t + "($|[^a-z0-9-])"))' <<< "$R_BODY" >/dev/null 2>&1; then
+            if jq -e --arg t "isoprobe-${SLUG[$y]}" 'any(.data[]?; (.configuration.title // .title // "") | test("(^|[^a-z0-9-])" + $t + "($|[^a-z0-9-])"))' <<< "$R_BODY" >/dev/null 2>&1; then
                 s_fail "$(dir_label "$x"): the ${noun} of ${SLUG[$y]} is listed on ${SLUG[$x]}'s host"
             fi
         fi
@@ -642,7 +653,7 @@ sec_call() {
         OIDSRV[x]="$(jq -r '.matrix_server_name // empty' <<< "$R_BODY" 2>/dev/null || true)"
         R_BODY=""
         if [[ -z "${OID[$x]}" ]]; then s_fail "${SLUG[$x]}: the Matrix OpenID answer carries no token"; continue; fi
-        body="$(jq -cn --arg r "${ROOM[$x]}" --arg t "${OID[$x]}" --arg s "${OIDSRV[$x]:-$PLATFORM}" '{room: $r, openid_token: {access_token: $t, token_type: "Bearer", matrix_server_name: $s}}')"
+        body="$(openid_body "${ROOM[$x]}" "${OID[$x]}" "${OIDSRV[$x]:-$PLATFORM}")"
         cfg_reset; cfg_json "$body"
         http_edge "${HOST[$x]}" POST "/livekit/jwt/get_token"
         body=""; CFG=""
@@ -655,7 +666,7 @@ sec_call() {
             s_fail "${SLUG[$x]}: the own call room '${room}' does not start with ${prefix}"
             continue
         fi
-        body="$(jq -cn --arg r "${ROOM[$y]}" --arg t "${OID[$x]}" --arg s "${OIDSRV[$x]:-$PLATFORM}" '{room: $r, openid_token: {access_token: $t, token_type: "Bearer", matrix_server_name: $s}}')"
+        body="$(openid_body "${ROOM[$y]}" "${OID[$x]}" "${OIDSRV[$x]:-$PLATFORM}")"
         cfg_reset; cfg_json "$body"
         http_edge "${HOST[$x]}" POST "/livekit/jwt/get_token"
         body=""; CFG=""
