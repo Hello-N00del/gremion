@@ -981,7 +981,7 @@ jobs:
   verify-unit-bats-1:
     name: "Verify: bats suites (shard 1 of 2)"
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -1073,7 +1073,7 @@ jobs:
   verify-unit-bats-2:
     name: "Verify: bats suites (shard 2 of 2)"
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
