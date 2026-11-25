@@ -816,3 +816,119 @@ create_refused_before_phase_a() {
     run sed -n 2p "${GREMION_ROOT}/config-seen"
     [ "$output" = '{"brand":{"product":"Ratsportal","org_short":"AR"},"modules":{}}' ] || { echo "$output"; return 1; }
 }
+
+# ---------------------------------------------------------------------------
+# SECONDARY_TENANT_MODULES (state.env, optional): the opt-in that lets a secondary-host customer have files, votes
+# or messaging. Key absent = every test above (default deny); the create reads it from state.env alone.
+# ---------------------------------------------------------------------------
+
+# secondary_optin <ids> -- the opt-in key in state.env (after secondary_install)
+secondary_optin() {
+    printf 'SECONDARY_TENANT_MODULES=%s\n' "$1" >> "${GREMION_ROOT}/etc/env/state.env"
+}
+
+# chat_switches -- the messaging prerequisites: Synapse's JWT login off, the namespaced identity on both colours
+chat_switches() {
+    printf 'SYNAPSE_JWT_LOGIN=off\n' >> "${GREMION_ROOT}/etc/env/state.env"
+    printf 'MATRIX_IDENTITY=namespaced\n' > "${GREMION_ROOT}/etc/env/app-blue.env"
+    printf 'MATRIX_IDENTITY=namespaced\n' > "${GREMION_ROOT}/etc/env/app-green.env"
+}
+
+@test "secondary opt-in: with files opted in the create enables files, writes NO files pin or switch, and still pins messages and every other shared-service module" {
+    secondary_install rat.pilot.example 'rat.alpha.example'
+    secondary_optin 'files'
+    verdict_enable calendar files
+    queue create
+    run "$EXEC" --once
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; steps; return 1; }
+    create_ran || { steps; return 1; }
+    run sed -n 2p "${GREMION_ROOT}/config-seen"
+    [ "$output" = '{"brand":{"product":"Ratsportal","org_short":"AR"},"modules":{"content":false,"elections":false,"messages":false,"newsletter":false,"vault":false,"votes":false},"pinned_off_modules":["content","elections","messages","newsletter","vault","votes"]}' ] || { echo "$output"; return 1; }
+    run steps
+    [[ "$output" == *"tc phase-b alpha-rat"* ]] || { echo "$output"; return 1; }
+}
+
+@test "secondary opt-in: files and votes opted in leave only their two ids out of the switches and the pins" {
+    secondary_install rat.pilot.example 'rat.alpha.example'
+    secondary_optin 'files votes'
+    verdict_enable calendar votes files
+    queue create
+    run "$EXEC" --once
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; steps; return 1; }
+    run sed -n 2p "${GREMION_ROOT}/config-seen"
+    [ "$output" = '{"brand":{"product":"Ratsportal","org_short":"AR"},"modules":{"content":false,"elections":false,"messages":false,"newsletter":false,"vault":false},"pinned_off_modules":["content","elections","messages","newsletter","vault"]}' ] || { echo "$output"; return 1; }
+}
+
+@test "secondary opt-in: a module that is not opted in stays refused before phase A, even when another one is (votes with only files opted in; messaging; publishing)" {
+    secondary_install rat.pilot.example 'rat.alpha.example'
+    secondary_optin 'files'
+    local m
+    for m in votes messaging publishing newsletter content; do
+        verdict_enable calendar "$m"
+        : > "$ORDER"
+        queue create
+        run "$EXEC" --once
+        create_refused_before_phase_a || { echo "module ${m} was not refused"; return 1; }
+        grep -q "^error .*${m}.*secondary host" "${GREMION_ROOT}/events.log" || { echo "no reason for ${m}"; cat "${GREMION_ROOT}/events.log"; return 1; }
+    done
+}
+
+@test "secondary opt-in: messaging opted in without its switches is refused before phase A, naming the missing switch and never a host" {
+    secondary_install rat.pilot.example 'rat.alpha.example'
+    secondary_optin 'messaging'
+    verdict_enable calendar
+    queue create
+    run "$EXEC" --once
+    create_refused_before_phase_a
+    grep -q 'SECONDARY_TENANT_MODULES.*SYNAPSE_JWT_LOGIN.*nothing was created' "${GREMION_ROOT}/events.log" || { cat "${GREMION_ROOT}/events.log"; return 1; }
+    grep -q 'SECONDARY_TENANT_MODULES.*MATRIX_IDENTITY' "${GREMION_ROOT}/events.log" || { cat "${GREMION_ROOT}/events.log"; return 1; }
+}
+
+@test "secondary opt-in: messaging opted in with SYNAPSE_JWT_LOGIN=off and MATRIX_IDENTITY=namespaced on both colours enables messaging and leaves messages unpinned" {
+    secondary_install rat.pilot.example 'rat.alpha.example'
+    secondary_optin 'messaging'
+    chat_switches
+    verdict_enable calendar messaging
+    queue create
+    run "$EXEC" --once
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; steps; return 1; }
+    run sed -n 2p "${GREMION_ROOT}/config-seen"
+    [ "$output" = '{"brand":{"product":"Ratsportal","org_short":"AR"},"modules":{"content":false,"elections":false,"files":false,"newsletter":false,"vault":false,"votes":false},"pinned_off_modules":["content","elections","files","newsletter","vault","votes"]}' ] || { echo "$output"; return 1; }
+}
+
+@test "secondary opt-in: a malformed opt-in refuses a create on a secondary host outright, and never stops the primary host" {
+    local bad
+    for bad in 'bogus' 'publishing' 'files files' 'files,votes'; do
+        sed -i '/^PILOT_TENANT_HOST=/d; /^SECONDARY_TENANT_HOSTS=/d; /^SECONDARY_TENANT_MODULES=/d; /^PLATFORM_DOMAIN=/d' "${GREMION_ROOT}/etc/env/state.env"
+        secondary_install rat.pilot.example 'rat.alpha.example'
+        secondary_optin "$bad"
+        verdict_enable calendar
+        : > "$ORDER"
+        queue create
+        run "$EXEC" --once
+        create_refused_before_phase_a || { echo "opt-in '${bad}' was accepted"; return 1; }
+        grep -q 'SECONDARY_TENANT_MODULES.*nothing was created' "${GREMION_ROOT}/events.log" || { echo "no reason for '${bad}'"; cat "${GREMION_ROOT}/events.log"; return 1; }
+    done
+    # the primary host is judged by PILOT_TENANT_HOST alone
+    sed -i '/^PILOT_TENANT_HOST=/d; /^SECONDARY_TENANT_HOSTS=/d; /^SECONDARY_TENANT_MODULES=/d; /^PLATFORM_DOMAIN=/d' "${GREMION_ROOT}/etc/env/state.env"
+    secondary_install rat.alpha.example 'canary.example.org'
+    secondary_optin 'bogus'
+    verdict_enable calendar votes
+    : > "$ORDER"
+    queue create
+    run "$EXEC" --once
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; steps; return 1; }
+    run sed -n 2p "${GREMION_ROOT}/config-seen"
+    [ "$output" = '{"brand":{"product":"Ratsportal","org_short":"AR"},"modules":{}}' ] || { echo "$output"; return 1; }
+}
+
+@test "secondary opt-in: the opt-in key does not change a create on the primary host or an install without secondary hosts, byte for byte" {
+    secondary_install rat.alpha.example 'canary.example.org'
+    secondary_optin 'files votes'
+    verdict_enable calendar votes files
+    queue create
+    run "$EXEC" --once
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; steps; return 1; }
+    run sed -n 2p "${GREMION_ROOT}/config-seen"
+    [ "$output" = '{"brand":{"product":"Ratsportal","org_short":"AR"},"modules":{}}' ] || { echo "$output"; return 1; }
+}
