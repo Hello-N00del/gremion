@@ -103,10 +103,12 @@ export interface DispatchDeps {
    * send-mail callback (Option B2 — no leaf-side SMTP); tests inject a fake.
    */
   transport: MailTransport
-  /** This tenant's external origin for unsubscribe links (no trailing slash). */
-  origin: string
   /**
    * Whether a LOOPBACK origin is acceptable for this dispatch.
+   *
+   * The origin itself is NOT a dependency: dispatch() asks `kernel.linkBase()` at the start of every
+   * send, because the link base is a fact about THIS tenant's host that only the kernel holds. A
+   * value fixed at boot would link every customer's recipients to one host.
    *
    * PASSED IN, not read from the environment here: index.ts already resolves
    * NEWSLETTER_ALLOW_LOOPBACK_LINKS once at boot, and a second env read beside
@@ -492,7 +494,7 @@ export function injectUnsubscribeFooter(html: string, unsubscribeUrl: string): s
  * @param tenant       tenant identity (used for correlation/logging).
  * @param newsletterId the newsletter to send.
  * @param actor        the sub responsible for the send (audit + outbox payload).
- * @param deps         injected sql / kernel / transport / origin.
+ * @param deps         injected sql / kernel / transport.
  */
 export async function dispatch(
   tenant: TenantRef,
@@ -504,13 +506,27 @@ export async function dispatch(
   // Fail closed BEFORE anything is claimed or rendered: a send with a relative
   // origin would mail an unresolvable unsubscribe link to every recipient, and
   // the pre-T05R3 code did exactly that with no signal beyond one boot warn.
+  //
+  // The origin is THIS tenant's, asked of the kernel for THIS send (never kept):
+  // the leaf holds no host for any tenant. A kernel that cannot be asked refuses
+  // the send like a tenant without a host does, before anything is claimed, so
+  // the newsletter stays as it was and the next attempt asks again.
+  const sendContext = `newsletter #${newsletterId} (tenant ${tenant.slug})`
   let origin: string
   try {
-    origin = requireUsableLinkBase(
-      deps.origin,
-      `newsletter #${newsletterId} (tenant ${tenant.slug})`,
-      { allowLoopback: deps.allowLoopbackLinks === true },
-    )
+    const answered = await kernel.linkBase()
+    if (answered === null) {
+      throw new LinkBaseUnusableError(
+        `[newsletter] the kernel has no public host for tenant ${tenant.slug} (or does not know the ` +
+          `link-base callback) — refusing ${sendContext}. Every dispatched newsletter carries an ` +
+          `unsubscribe link rooted at the tenant's own host.`,
+        'missing',
+      )
+    }
+    origin = requireUsableLinkBase(answered, sendContext, {
+      allowLoopback: deps.allowLoopbackLinks === true,
+      varNames: 'the kernel link-base answer',
+    })
   } catch (err) {
     console.error(
       `[dispatch] REFUSING to send newsletter #${newsletterId} (tenant ${tenant.slug}): ` +

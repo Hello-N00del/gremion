@@ -153,26 +153,25 @@ async function main(): Promise<void> {
   // a tenant from the x-tenant-id it sends (Tenancy D1 HARDENING-3 below), never
   // from a host. Building an absolute link is not tenant selection.
   //
-  // RESIDUAL (design, pre-existing): this is ONE global link base in a
-  // multi-tenant dispatcher whose unsubscribe route resolves the tenant from the
-  // request host. A second tenant on a different host gets working-but-wrong
-  // unsubscribe links. Tracked as a follow-up, not fixed here.
+  // The value read here is INFORMATION ONLY. The base every link in a mail is built
+  // from is the sending tenant's own host, which dispatch() asks the kernel for at
+  // the start of every send (KernelClient.linkBase): one boot-time value would link
+  // every customer's recipients to one host. So an unusable value here no longer
+  // breaks a send; it is reported for the operator and nothing else reads it.
   const linkBase = resolveLinkBase(process.env, 'boot')
+  const bootNote = '(boot value, informational only: each send uses the tenant host the kernel reports)'
   logLinkBaseResolution(linkBase, {
-    error: (msg) => console.error(msg),
-    warn: (msg) => console.warn(msg),
-    info: (msg) => console.log(msg),
+    error: (msg) => console.warn(`${msg} ${bootNote}`),
+    warn: (msg) => console.warn(`${msg} ${bootNote}`),
+    info: (msg) => console.log(`${msg} ${bootNote}`),
   })
   // BOOT CONTINUES on an unusable base. Both values this repo provisions (in
   // docker-compose.yml and k8s/base/newsletter/configmap.yaml) are loopback, so
   // failing the boot closed here would crash-loop the leaf on the DEPLOYED
-  // configuration and take down every route that sends
-  // no mail at all — the /healthz probes, the list and recipient CRUD, the
-  // outbox relay. The refusal belongs on the one operation the bad value
-  // corrupts, and dispatch() enforces it before a single recipient is claimed.
-  // What is carried forward is the RAW value: it re-fails the same check inside
-  // dispatch(), so the leaf cannot accidentally send with a sanitised stand-in.
-  const origin = linkBase.usable ? linkBase.base : linkBase.raw
+  // configuration and take down every route that sends no mail at all. The
+  // refusal belongs on the one operation a bad link base corrupts, and
+  // dispatch() enforces it, on the kernel's answer, before a single recipient
+  // is claimed.
   const allowLoopbackLinks = linkBase.usable && linkBase.loopbackOverride
 
   // F3 (T16): TRACE_EXPORTER — 'log' activates logTracer (default for the leaf);
@@ -209,7 +208,6 @@ async function main(): Promise<void> {
           sql,
           kernel,
           transport: kernelMailTransport(kernel),
-          origin,
           allowLoopbackLinks,
           correlationId,
           tracer: makeTracer(correlationId),
@@ -267,7 +265,6 @@ async function main(): Promise<void> {
             sql,
             kernel,
             transport: kernelMailTransport(kernel),
-            origin,
             allowLoopbackLinks,
             correlationId: corrId,
             tracer: makeTracer(corrId),
