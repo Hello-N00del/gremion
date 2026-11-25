@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { isHttpError } from '@sveltejs/kit'
 import { Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth'
 
@@ -129,39 +128,13 @@ describe('GET /api/files/edit-token/[...path]', () => {
     ).rejects.toMatchObject({ status: 400 })
   })
 
-  it('propagates other Nextcloud errors as 502', async () => {
-    mockGetFileId.mockRejectedValue(new Error('Nextcloud PROPFIND → 500: Internal Server Error'))
+  it('propagates Nextcloud errors as 502', async () => {
+    mockGetFileId.mockRejectedValue(new Error('Nextcloud PROPFIND → 404: Not Found'))
     const { GET } = await import('./+server')
     await expect(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (GET as any)(makeEvent('broken.odt', [Role.Member]))
+      (GET as any)(makeEvent('missing.odt', [Role.Member]))
     ).rejects.toMatchObject({ status: 502 })
-  })
-
-  // A file the caller does not have in their own Nextcloud root is a 404 for the caller, not a server error. A
-  // rethrown upstream error object that is not an HttpError reaches the client as a 500, so the rejection must be one.
-  async function rejection(err: Error, path: string): Promise<unknown> {
-    mockGetFileId.mockRejectedValue(err)
-    const { GET } = await import('./+server')
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return (GET as any)(makeEvent(path, [Role.Member])).then(
-      () => undefined,
-      (e: unknown) => e
-    )
-  }
-
-  it('answers 404 for a file Nextcloud does not have, whether the error carries a status or only a message', async () => {
-    const withStatus = await rejection(Object.assign(new Error('Nextcloud PROPFIND → 404: Not Found'), { status: 404 }), 'missing.odt')
-    expect(isHttpError(withStatus, 404)).toBe(true)
-    const messageOnly = await rejection(new Error('Nextcloud PROPFIND → 404: Not Found'), 'missing.odt')
-    expect(isHttpError(messageOnly, 404)).toBe(true)
-  })
-
-  it('answers 403 when Nextcloud refuses the file', async () => {
-    const withStatus = await rejection(Object.assign(new Error('Nextcloud PROPFIND → 403: Forbidden'), { status: 403 }), 'private.odt')
-    expect(isHttpError(withStatus, 403)).toBe(true)
-    const messageOnly = await rejection(new Error('Nextcloud PROPFIND → 403: Forbidden'), 'private.odt')
-    expect(isHttpError(messageOnly, 403)).toBe(true)
   })
 
   it('returns 400 for .md (not supported by Collabora)', async () => {

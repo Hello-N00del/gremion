@@ -109,13 +109,18 @@ route_nextcloud() { # method path bearer
     if [[ "$method" != PROPFIND ]]; then reply 405 '{}'; return 0; fi
     # dav-own-fail: the own folder does not answer either (the positive control of the WebDAV denial fails)
     if sw dav-own-fail; then reply 404 '<d:error/>'; return 0; fi
+    # dav-401: the other user's root answers 401, a code that is neither of the two refusals the program accepts
+    if [[ "$sub" != "$psub" ]] && sw dav-401; then reply 401 '<d:error/>'; return 0; fi
     if [[ "$sub" == "$psub" ]] || sw dav-open; then reply 207 '<d:multistatus xmlns:d="DAV:"/>'; else reply 404 '<d:error/>'; fi
     return 0
 }
 
 route_platform() { # method path bearer data
     local path="$2" bearer="$3" s room
+    # matrix-unrouted: the edge has no router for /_matrix on the platform host (it answers its own 404)
+    if sw matrix-unrouted && [[ "$path" == /_matrix/* ]]; then reply 404 '404 page not found'; return 0; fi
     case "$path" in
+        /_matrix/client/versions) reply 200 '{"versions":["v1.1"]}' ;;
         /_matrix/client/v3/user/*/openid/request_token)
             s="${bearer#MXTOK.}"
             reply 200 "{\"access_token\":\"OID.${s}\",\"token_type\":\"Bearer\",\"matrix_server_name\":\"${PLAT}\",\"expires_in\":3600}" ;;
@@ -231,6 +236,7 @@ route_customer() { # host method path bearer data
             if [[ "$ef" == "isoprobe-${s}.odt" ]] || sw editor-open; then
                 reply 200 "{\"token\":\"t\",\"tokenTtl\":1,\"editorUrl\":\"https://${eh}/office/browser/x/cool.html?WOPISrc=x\"}"
             elif sw editor-502; then reply 502 '{}'
+            elif sw editor-500; then reply 500 '{}'
             else reply 404 '{}'; fi ;;   # the route maps a Nextcloud 404 or 403 for a file the caller's own root lacks to 404 or 403
         "GET /api/auth/matrix-token")
             mx="@u-${s}:${PLAT}"
@@ -308,7 +314,7 @@ fake_occ() { # args after `php occ`
 
 fake_docker() {
     case "${1:-}" in
-        ps) printf 'c-nextcloud\n' ;;
+        ps) if ! sw no-nextcloud; then printf 'c-nextcloud\n'; fi ;;
         exec)
             shift
             while [[ "${1:-}" == -* ]]; do
@@ -316,7 +322,12 @@ fake_docker() {
             done
             shift   # the container
             case "${1:-}" in
-                curl) shift; fake_curl "$@" ;;
+                curl)
+                    shift
+                    # no-curl: the Nextcloud image carries no curl
+                    if sw no-curl; then echo 'OCI runtime exec failed: exec: "curl": executable file not found in PATH' >&2; return 127; fi
+                    if [[ "${1:-}" == --version ]]; then echo 'curl 8.0.0'; return 0; fi
+                    fake_curl "$@" ;;
                 php) shift; shift; fake_occ "$@" ;;
                 *) return 1 ;;
             esac ;;

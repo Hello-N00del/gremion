@@ -88,21 +88,22 @@ set -euo pipefail
 #   files       each customer's folder is identified by its group-folder id, read with occ through the
 #               groups of the fixture user -- never by the mount name, which is the unit name in both
 #               customers. PASS needs two different folder ids, each the ONLY folder of that name in the
-#               groups of its customer's fixture user (a user whose groups carry two folders of that name
-#               FAILS, so a shared folder group does not go unseen); ONE folder id for both customers is a
-#               FAIL. Besides: A's own folder lists and serves A's file,
-#               A's bearer on B's user root at http://nextcloud and the app API for B's file answer
-#               403 or 404.
-#               The rule is the same on every release and reports what the install really holds: two
-#               different folder ids and no shared group PASS (the probe users' units hold separate
-#               folders), one folder id for both FAILs. A PASS says nothing about other units.
+#               groups of its customer's fixture user. Two rules decide it: a probe user whose groups carry
+#               n >= 2 folders of that name FAILS (so a folder shared through a group does not go unseen; none
+#               at all is NOT-READY), and ONE folder id for both customers FAILS. Besides: A's own folder lists
+#               and serves A's file, A's bearer on B's user root at http://nextcloud and the app API for B's file
+#               answer 403 or 404 (any other answer FAILS, see UNCHECKED below).
+#               The rule is the same on every release and reports what the install really holds. A PASS says
+#               nothing about other units or about groups the probe user is not in.
 #               Writes are not attempted: a refused write cannot be told from a successful one without
 #               trying it, and a failed denial would write into the other customer.
 #   office      the own editor URL is on A's host (its origin is https://<A's host>); the editor URL for B's
 #               file is refused (403 or 404, no editorUrl). The edit-token route resolves the file in the
 #               CALLER's own Nextcloud root, where B's file name is simply absent: Nextcloud answers 404 and
-#               the route passes it on as 404 (a 403 as 403). A 5xx is no refusal and FAILS; this needs the
-#               release whose route maps those answers. SAVE AND CLOSE stay unproven until a person
+#               the route has to pass it on as 404 (a 403 as 403). That error mapping is shipped by another
+#               unit, not by this one: the section PASSes only on a release that ships it. Until then the
+#               route answers 500 or 502 for the absent file, and that reads as FAIL with a message that names
+#               the missing mapping, never as PASS. SAVE AND CLOSE stay unproven until a person
 #               opens a document of each customer by hand on its own host.
 #   calendar    own event 200; B's event id on A's host 404; B's event is not in A's listing
 #   polls       own poll 200; B's poll id on A's host 404; B's poll is not in A's listing
@@ -110,10 +111,30 @@ set -euo pipefail
 #               room starts t.<A>.
 #   cross-host  A's token on B's host answers 401 (the same route on A's host answers 200)
 #
-# EXIT CODES. 0 every section PASS. 1 any FAIL (outranks the rest). 2 usage, or NOT-READY (a
-# precondition, a fixture part or a token precondition is missing). 3 any NOT-ENABLED with no FAIL
-# and no NOT-READY, or another host operation holds the lock. The order of precedence is
-# 1, then 2, then 3.
+# --- UNCHECKED (not established by the one-off read; each is handled so that it can never read as PASS) ---
+#   - Whether the Nextcloud image carries curl. The admin calls and the WebDAV calls run through
+#     `docker exec <nextcloud> curl`. The program asks `curl --version` there before it changes anything:
+#     no answer is NOT-READY and nothing is created.
+#   - The exact WebDAV refusal code for another user's root. Nextcloud with user_oidc may answer 403 or
+#     404 (or something else on another release); the program accepts those two and FAILS on any other
+#     code, so an unexpected code is read by the operator, never counted as a denial.
+#   - Edge routing of /_matrix on PLATFORM_DOMAIN. The Matrix client calls go through the edge on the
+#     platform host. The chat section first asks /_matrix/client/versions there; anything but 200 makes
+#     chat and call NOT-ENABLED (the section's precondition cannot be established), never PASS.
+#   - The Nextcloud group-folder admin output shape (occ groupfolders:list --output=json): a shape the
+#     program cannot read FAILS the files section.
+#   A section whose precondition the program cannot establish is reported NOT-ENABLED (or NOT-READY when
+#   the precondition is a fixture part), never PASS.
+#
+# SECRETS. No password, client secret or token is ever on an argv: not on curl's (they travel on its
+# stdin config, `curl -K -`), not on jq's (a body that holds one is built with `jq -R` reading stdin;
+# only names that are not secret, such as a room id, go through --arg). The bats file records jq's argv
+# and asserts that none of them appears there, on a passing and on a failing run.
+#
+# EXIT CODES. Exactly: 0 every section PASS. 1 any FAIL (a finding; it outranks the rest). 2 usage
+# (arguments). 3 any NOT-ENABLED or NOT-READY (a fixture part, a token or host precondition missing, or the
+# run stopped before it had a verdict) with no FAIL, or another host operation holds the lock. An
+# internal abort is never 1: 1 only ever means a section found a hole.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib/common.sh
@@ -122,6 +143,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/../lib/customer-ops.sh"
 
 umask 077
+
+# Exit code 1 of this program means one thing: a section found a hole. A library function that dies with
+# the assert code (a missing container, a missing colour) is a precondition, not a finding: it exits 3.
+# shellcheck disable=SC2317,SC2329  # called by the sourced library and below
+die() {
+    local c="${2:-$GREMION_EXIT_BLOCKED}"
+    bad "$1"
+    if [[ "$c" == "$GREMION_EXIT_ASSERT" ]]; then c="$GREMION_EXIT_BLOCKED"; fi
+    exit "$c"
+}
 
 HTTP_TIMEOUT="${GREMION_ISOLATION_HTTP_TIMEOUT:-20}"
 KC_URL="${GREMION_ISOLATION_KC_URL:-https://keycloak:8443/auth}"
@@ -142,7 +173,7 @@ usage: gremion-isolation-live <slugA> <slugB> [--unit NAME] [--user NAME]
   Proves, in both directions, that a user of customer A cannot read B's rooms, files, office
   documents, calendar, polls or call on the shared Synapse and Nextcloud. See the header of this
   file for the fixture the operator makes first (a user named isoprobe, a unit, a file, a poll and
-  an event in each customer). Exit 0 all PASS, 1 FAIL, 2 usage or NOT-READY, 3 NOT-ENABLED.
+  an event in each customer). Exit 0 all PASS, 1 any FAIL, 2 usage, 3 any NOT-ENABLED or NOT-READY.
 EOF
 }
 
@@ -154,6 +185,7 @@ STATE_ENV=""; APP_ENV=""; STACK=""; PLATFORM=""; EDGE_BIND_IP=""; EDGE_HTTPS_POR
 TSD=""; NC=""; FROM=""; TO=""
 NOTREADY=()
 CLEAN_FAILED=0
+DONE=0
 R_CODE=000; R_BODY=""
 CFG=""
 
@@ -193,6 +225,12 @@ cleanup() {
                 "${CLIENT_ID[$i]}" "${SLUG[$i]:-?}" "${SLUG[$i]:-?}" >&2
         fi
     done
+    # a stop before the verdict (a command failed under set -e) is no finding: never exit 1 for it
+    if (( DONE == 0 && rc == 1 )); then
+        rc=3
+        printf 'RESULT: ABORTED (exit 3): the run stopped before it had a verdict (no verdict, so no finding either)
+'
+    fi
     if (( CLEAN_FAILED == 1 && rc == 0 )); then rc=1; fi
     exit "$rc"
 }
@@ -291,6 +329,15 @@ client_json() {   # <clientId>
 }
 
 not_ready() { NOTREADY+=("$1"); }
+
+# need_tools <cmd...> -- a missing host tool is a missing precondition (exit 3), not usage and not a finding
+need_tools() {
+    local c
+    for c in "$@"; do
+        if ! command -v "$c" >/dev/null 2>&1; then not_ready "the host has no ${c}"; fi
+    done
+    if (( ${#NOTREADY[@]} > 0 )); then finish_not_ready; fi
+}
 
 # realm_tokens <index> -- password, client, grant, the precondition on the token. Failures are NOT-READY.
 realm_tokens() {
@@ -559,6 +606,11 @@ sec_office() {
             continue
         fi
         api_get "$x" "/api/files/edit-token/${UNIT}/isoprobe-${SLUG[$y]}.odt"
+        if [[ "$R_CODE" == 5?? ]]; then
+            # a 500 or 502 for a file the own root lacks: the route does not map Nextcloud's 404 and 403 yet
+            s_fail "$(dir_label "$x"): the editor URL for ${SLUG[$y]}'s file answered ${R_CODE}: this release lacks the error mapping of the edit-token route (a missing document must answer 404, a refused one 403), so the denial cannot be shown; the section PASSes only on a release that ships it"
+            continue
+        fi
         if expect_code "$(dir_label "$x"): the editor URL for ${SLUG[$y]}'s file on ${SLUG[$x]}'s host" 403 404; then
             if jq -e '(.editorUrl // "") != ""' <<< "$R_BODY" >/dev/null 2>&1; then
                 s_fail "$(dir_label "$x"): a refusal that still carries an editor URL"
@@ -576,6 +628,16 @@ sec_chat() {
     sec_begin chat
     CHAT_NE=0
     if no_bearer chat; then s_ne "the chat routes take no Bearer on this release"; CHAT_NE=1; sec_end; return 0; fi
+    # the Matrix client calls go through the edge on the platform host: if /_matrix is not routed there (UNCHECKED
+    # in the header), a refusal and an unreachable service would look alike, so the section cannot be judged
+    cfg_reset
+    http_edge "$PLATFORM" GET "/_matrix/client/versions"
+    if [[ "$R_CODE" != 200 ]] || ! jq -e 'has("versions")' <<< "$R_BODY" >/dev/null 2>&1; then
+        s_ne "the Matrix client API is not reachable through the edge on ${PLATFORM}: /_matrix/client/versions answered ${R_CODE}; chat and call cannot be judged"
+        CHAT_NE=1
+        sec_end
+        return 0
+    fi
     for x in 0 1; do
         MXT[x]=""; MXID[x]=""; ROOM[x]=""
         # ask the module-gated route first, so a customer without messaging reads NOT-ENABLED and not a
@@ -731,7 +793,6 @@ container_of() {   # <project> <service> -- the ONE container of a compose servi
 acquire_host_lock() {
     local lock
     if [[ "${GREMION_HOST_LOCK_HELD:-}" != 1 ]]; then
-        need_cmd flock
         mkdir -p "${ROOT}/runtime"
         lock="${ROOT}/runtime/hostd.lock"
         exec 9>>"$lock" || die "cannot open the host lock: ${lock}" 2
@@ -763,23 +824,28 @@ parse_args() {
 main() {
     local i s
     parse_args "$@"
-    need_cmd docker curl jq openssl base64 sed
+    need_tools docker curl jq openssl base64 sed flock
+    # armed once the arguments are good: it also turns a stop before the verdict into exit 3, and (later)
+    # deletes any temporary client
+    trap cleanup EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
     setup_paths
     acquire_host_lock
     active_colour
     STATE_ENV="${ROOT}/etc/env/state.env"
     APP_ENV="${ROOT}/etc/env/app-${COLOUR}.env"
-    [[ -f "$STATE_ENV" && -f "$APP_ENV" ]] || die "env files absent: ${STATE_ENV} / ${APP_ENV}" "$GREMION_EXIT_USAGE"
+    [[ -f "$STATE_ENV" && -f "$APP_ENV" ]] || die "env files absent: ${STATE_ENV} / ${APP_ENV}" "$GREMION_EXIT_BLOCKED"
     STACK="$(env_key "$STATE_ENV" STACK)"
     PLATFORM="$(env_key "$STATE_ENV" PLATFORM_DOMAIN)"
     EDGE_BIND_IP="$(env_key "$STATE_ENV" EDGE_BIND_IP)"
     EDGE_HTTPS_PORT="$(env_key "$STATE_ENV" EDGE_HTTPS_PORT)"
     TSD="$(env_key "$APP_ENV" TENANT_SECRETS_DIR)"
-    [[ -n "$STACK" ]] || die "STACK is empty in ${STATE_ENV}" "$GREMION_EXIT_USAGE"
-    [[ "$PLATFORM" =~ $HOST_RE ]] || die "PLATFORM_DOMAIN in ${STATE_ENV} is not a host name" "$GREMION_EXIT_USAGE"
-    [[ -n "$EDGE_BIND_IP" && "$EDGE_BIND_IP" != CHANGE_ME_* ]] || die "EDGE_BIND_IP in ${STATE_ENV} is not set" "$GREMION_EXIT_USAGE"
-    [[ "$EDGE_HTTPS_PORT" =~ ^[0-9]+$ ]] || die "EDGE_HTTPS_PORT in ${STATE_ENV} is not a port" "$GREMION_EXIT_USAGE"
-    [[ -n "$TSD" && "$TSD" == /* ]] || die "TENANT_SECRETS_DIR is not set (absolute) in ${APP_ENV}" "$GREMION_EXIT_USAGE"
+    [[ -n "$STACK" ]] || die "STACK is empty in ${STATE_ENV}" "$GREMION_EXIT_BLOCKED"
+    [[ "$PLATFORM" =~ $HOST_RE ]] || die "PLATFORM_DOMAIN in ${STATE_ENV} is not a host name" "$GREMION_EXIT_BLOCKED"
+    [[ -n "$EDGE_BIND_IP" && "$EDGE_BIND_IP" != CHANGE_ME_* ]] || die "EDGE_BIND_IP in ${STATE_ENV} is not set" "$GREMION_EXIT_BLOCKED"
+    [[ "$EDGE_HTTPS_PORT" =~ ^[0-9]+$ ]] || die "EDGE_HTTPS_PORT in ${STATE_ENV} is not a port" "$GREMION_EXIT_BLOCKED"
+    [[ -n "$TSD" && "$TSD" == /* ]] || die "TENANT_SECRETS_DIR is not set (absolute) in ${APP_ENV}" "$GREMION_EXIT_BLOCKED"
 
     # the facts of both customers: nothing is changed before every one holds
     for i in 0 1; do
@@ -792,14 +858,16 @@ main() {
     if [[ -n "${HOST[0]}" && "${HOST[0]}" == "${HOST[1]}" ]]; then not_ready "${SLUG[0]} and ${SLUG[1]} resolve to one host (${HOST[0]}): the probe needs two hosts"; fi
     if (( ${#NOTREADY[@]} > 0 )); then finish_not_ready; fi
     NC="$(container_of "${STACK}-state" nextcloud)"
+    # the admin and WebDAV calls run through the Nextcloud container's own curl: see UNCHECKED in the header
+    if ! docker exec "$NC" curl --version >/dev/null 2>&1; then
+        not_ready "the Nextcloud container (${NC}) has no usable curl: the admin and WebDAV calls run through it; nothing was created"
+        finish_not_ready
+    fi
 
     FROM="$(date -u -d '366 days ago' +%Y-%m-%dT%H:%M:%SZ)"
     TO="$(date -u -d '366 days' +%Y-%m-%dT%H:%M:%SZ)"
 
-    # armed before the first client exists
-    trap cleanup EXIT
-    trap 'exit 130' INT
-    trap 'exit 143' TERM
+    # the EXIT/INT/TERM trap is armed (above) before the first client can exist
 
     info "gremion-isolation-live: ${SLUG[0]} (${HOST[0]}) and ${SLUG[1]} (${HOST[1]}), unit ${UNIT}, user ${PROBE_USER}"
     for i in 0 1; do
@@ -820,8 +888,9 @@ main() {
 finish_not_ready() {
     local n
     for n in "${NOTREADY[@]}"; do printf 'NOT-READY: %s\n' "$n" >&2; done
-    printf 'RESULT: NOT-READY (exit 2): the fixture or a precondition is missing; nothing was probed\n'
-    exit 2
+    printf 'RESULT: NOT-READY (exit 3): the fixture or a precondition is missing; nothing was probed\n'
+    DONE=1
+    exit 3
 }
 
 finish() {
@@ -838,9 +907,10 @@ finish() {
     case "$res" in
         PASS) rc=0 ;;
         FAIL) rc=1 ;;
-        NOT-READY) rc=2 ;;
+        NOT-READY) rc=3 ;;
         NOT-ENABLED) rc=3 ;;
     esac
+    DONE=1
     printf 'SUMMARY: %s\n' "$line"
     printf 'RESULT: %s (exit %s)\n' "$res" "$rc"
     exit "$rc"

@@ -114,7 +114,7 @@ all_sections_pass() {
     FAKE_RET_USER='alice-real'
     export FAKE_RET_USER
     probe "$A" "$B"
-    [ "$status" -eq 2 ]
+    [ "$status" -eq 3 ]
     grep -q 'NOT-READY' <<< "$output"
     refute_recorded docker 'reset-password'
     refute_recorded docker 'clients'
@@ -146,9 +146,9 @@ all_sections_pass() {
     [ "$status" -eq 0 ]
     local s
     for s in "$A" "$B"; do
-        jq -e --arg id "isoprobe-${CLIENT_SUFFIX}" '.clientId == $id and .directAccessGrantsEnabled == true and .publicClient == true and .standardFlowEnabled == false and .serviceAccountsEnabled == false' "${FAKE_DIR}/cap-client-${s}" >/dev/null
-        jq -e '[.protocolMappers[] | select(.protocolMapper == "oidc-audience-mapper") | .config["included.client.audience"]] | (index("gremion-ui") != null) and (index("nextcloud") != null)' "${FAKE_DIR}/cap-client-${s}" >/dev/null
-        jq -e '.protocolMappers | map(.name) | index("sub") != null' "${FAKE_DIR}/cap-client-${s}" >/dev/null
+        "$REAL_JQ" -e --arg id "isoprobe-${CLIENT_SUFFIX}" '.clientId == $id and .directAccessGrantsEnabled == true and .publicClient == true and .standardFlowEnabled == false and .serviceAccountsEnabled == false' "${FAKE_DIR}/cap-client-${s}" >/dev/null
+        "$REAL_JQ" -e '[.protocolMappers[] | select(.protocolMapper == "oidc-audience-mapper") | .config["included.client.audience"]] | (index("gremion-ui") != null) and (index("nextcloud") != null)' "${FAKE_DIR}/cap-client-${s}" >/dev/null
+        "$REAL_JQ" -e '.protocolMappers | map(.name) | index("sub") != null' "${FAKE_DIR}/cap-client-${s}" >/dev/null
         grep -qx "${s} isoprobe-${CLIENT_SUFFIX}" "${FAKE_DIR}/deleted.log"
         [ ! -e "${FAKE_DIR}/clients/${s}/isoprobe-${CLIENT_SUFFIX}" ]
     done
@@ -159,7 +159,7 @@ all_sections_pass() {
     [ "$status" -eq 0 ]
     local s
     for s in "$A" "$B"; do
-        jq -e --arg pw "$PW_SENTINEL" '.type == "password" and .value == $pw and .temporary == false' "${FAKE_DIR}/cap-reset-${s}" >/dev/null
+        "$REAL_JQ" -e --arg pw "$PW_SENTINEL" '.type == "password" and .value == $pw and .temporary == false' "${FAKE_DIR}/cap-reset-${s}" >/dev/null
     done
 }
 
@@ -195,7 +195,7 @@ all_sections_pass() {
 @test "the trap deletes the temporary client of BOTH realms when a later step fails" {
     sw_on "grant-fail-${B}"
     probe "$A" "$B"
-    [ "$status" -eq 2 ]
+    [ "$status" -eq 3 ]
     grep -q 'NOT-READY' <<< "$output"
     grep -qx "${A} isoprobe-${CLIENT_SUFFIX}" "${FAKE_DIR}/deleted.log"
     grep -qx "${B} isoprobe-${CLIENT_SUFFIX}" "${FAKE_DIR}/deleted.log"
@@ -216,33 +216,33 @@ all_sections_pass() {
 
 # ---------------------------------------------------------------- NOT-READY (fixture and token preconditions)
 
-@test "a realm admin client secret that is absent is NOT-READY (exit 2), nothing is created" {
+@test "a realm admin client secret that is absent is NOT-READY (exit 3), nothing is created" {
     rm -f "${GREMION_ROOT}/tenant-secrets/tenant_${B}_client_gremion-admin"
     probe "$A" "$B"
-    [ "$status" -eq 2 ]
+    [ "$status" -eq 3 ]
     grep -q 'NOT-READY' <<< "$output"
     refute_recorded docker 'clients'
 }
 
-@test "a customer without a router file (no host) is NOT-READY (exit 2)" {
+@test "a customer without a router file (no host) is NOT-READY (exit 3)" {
     rm -f "${GREMION_ROOT}/etc/edge/tenant-${B}.yml"
     probe "$A" "$B"
-    [ "$status" -eq 2 ]
+    [ "$status" -eq 3 ]
     grep -q 'NOT-READY' <<< "$output"
 }
 
 @test "an isoprobe user with a required action is NOT-READY and is left untouched (no password reset)" {
     sw_on required-actions
     probe "$A" "$B"
-    [ "$status" -eq 2 ]
+    [ "$status" -eq 3 ]
     grep -q 'NOT-READY' <<< "$output"
     refute_recorded docker 'reset-password'
 }
 
-@test "a missing isoprobe user is NOT-READY (exit 2)" {
+@test "a missing isoprobe user is NOT-READY (exit 3)" {
     sw_on no-user
     probe "$A" "$B"
-    [ "$status" -eq 2 ]
+    [ "$status" -eq 3 ]
     grep -q 'NOT-READY' <<< "$output"
     refute_recorded docker 'reset-password'
 }
@@ -250,7 +250,7 @@ all_sections_pass() {
 @test "a realm admin client that may not reset a password is NOT-READY, and nothing is created" {
     sw_on reset-forbidden
     probe "$A" "$B"
-    [ "$status" -eq 2 ]
+    [ "$status" -eq 3 ]
     grep -q 'NOT-READY' <<< "$output"
     refute_recorded docker '/clients'
 }
@@ -258,7 +258,7 @@ all_sections_pass() {
 @test "a realm password policy that rejects the password is NOT-READY and says so, not 'may not reset'" {
     sw_on reset-policy
     probe "$A" "$B"
-    [ "$status" -eq 2 ]
+    [ "$status" -eq 3 ]
     grep -q 'password policy' <<< "$output"
     refute_recorded docker '/clients'
 }
@@ -266,7 +266,7 @@ all_sections_pass() {
 @test "a token without the nextcloud audience is NOT-READY before any section runs" {
     sw_on aud-missing
     probe "$A" "$B"
-    [ "$status" -eq 2 ]
+    [ "$status" -eq 3 ]
     grep -q 'audience' <<< "$output"
     refute_recorded curl '/api/'
 }
@@ -274,15 +274,15 @@ all_sections_pass() {
 @test "a token without the member role is NOT-READY before any section runs" {
     sw_on no-member
     probe "$A" "$B"
-    [ "$status" -eq 2 ]
+    [ "$status" -eq 3 ]
     grep -q 'member' <<< "$output"
     refute_recorded curl '/api/'
 }
 
-@test "a calendar event that the operator did not make is NOT-READY (exit 2), not a pass" {
+@test "a calendar event that the operator did not make is NOT-READY (exit 3), not a pass" {
     sw_on no-event
     probe "$A" "$B"
-    [ "$status" -eq 2 ]
+    [ "$status" -eq 3 ]
     section_is calendar NOT-READY
     section_is polls PASS
 }
@@ -291,7 +291,7 @@ all_sections_pass() {
     sw_on no-poll
     sw_on no-file
     probe "$A" "$B"
-    [ "$status" -eq 2 ]
+    [ "$status" -eq 3 ]
     section_is polls NOT-READY
     section_is files NOT-READY
     section_is office NOT-READY
@@ -492,7 +492,7 @@ all_sections_pass() {
 @test "files: an isoprobe user that is in no folder group is NOT-READY, not a pass" {
     sw_on user-in-no-group
     probe "$A" "$B"
-    [ "$status" -eq 2 ]
+    [ "$status" -eq 3 ]
     section_is files NOT-READY
 }
 
@@ -524,13 +524,6 @@ all_sections_pass() {
     [ "$status" -eq 0 ]
     section_is office PASS
     grep -q 'refused (404)' <<< "$output"
-}
-
-@test "office: a 502 for the other customer's file is not a refusal and FAILS" {
-    sw_on editor-502
-    probe "$A" "$B"
-    [ "$status" -eq 1 ]
-    section_is office FAIL
 }
 
 # ---------------------------------------------------------------- chat and call
@@ -607,7 +600,126 @@ all_sections_pass() {
     section_is cross-host FAIL
 }
 
+# ---------------------------------------------------------------- exit codes
+
+@test "exit codes: NOT-READY with no FAIL exits 3, a FAIL beside it exits 1" {
+    sw_on no-event
+    probe "$A" "$B"
+    [ "$status" -eq 3 ]
+    section_is calendar NOT-READY
+    grep -q 'RESULT: NOT-READY (exit 3)' <<< "$output"
+    sw_on polls-open
+    probe "$A" "$B"
+    [ "$status" -eq 1 ]
+    section_is calendar NOT-READY
+    section_is polls FAIL
+    grep -q 'RESULT: FAIL (exit 1)' <<< "$output"
+}
+
+@test "exit codes: NOT-READY and NOT-ENABLED together, with no FAIL, exit 3" {
+    sw_on no-event
+    sw_on moddis-polls
+    probe "$A" "$B"
+    [ "$status" -eq 3 ]
+    section_is calendar NOT-READY
+    section_is polls NOT-ENABLED
+}
+
+@test "exit codes: a precondition that dies in a library function exits 3, never 1 (a finding)" {
+    sw_on no-nextcloud
+    probe "$A" "$B"
+    [ "$status" -eq 3 ]
+    grep -q 'nextcloud' <<< "$output"
+    refute_recorded docker 'reset-password'
+    refute_recorded docker '/clients'
+}
+
+@test "exit codes: an unreadable host configuration exits 3, and only usage exits 2" {
+    rm -f "${GREMION_ROOT}/etc/env/app-blue.env"
+    probe "$A" "$B"
+    [ "$status" -eq 3 ]
+    refute_recorded docker 'exec'
+}
+
+@test "exit codes: a run that stops before it has a verdict exits 3 and says so, never 1" {
+    shim date 'exit 1'
+    probe "$A" "$B"
+    [ "$status" -eq 3 ]
+    grep -q 'no verdict' <<< "$output"
+}
+
+# ---------------------------------------------------------------- preconditions the program cannot assume
+
+@test "a Nextcloud image without curl is NOT-READY (exit 3) before anything is created" {
+    sw_on no-curl
+    probe "$A" "$B"
+    [ "$status" -eq 3 ]
+    grep -q 'curl' <<< "$output"
+    grep -q 'NOT-READY' <<< "$output"
+    refute_recorded docker 'reset-password'
+    refute_recorded docker '/clients'
+}
+
+@test "a platform host whose /_matrix is not routed at the edge makes chat and call NOT-ENABLED (exit 3), never PASS" {
+    sw_on matrix-unrouted
+    probe "$A" "$B"
+    [ "$status" -eq 3 ]
+    section_is chat NOT-ENABLED
+    section_is call NOT-ENABLED
+    section_is files PASS
+    grep -q '/_matrix' <<< "$output"
+    [ ! -e "${FAKE_DIR}/sent-${A}" ]
+    [ ! -e "${FAKE_DIR}/sent-${B}" ]
+}
+
+@test "files: an answer other than 403 or 404 for the other user's root (here 401) FAILS, it is never read as a denial" {
+    sw_on dav-401
+    probe "$A" "$B"
+    [ "$status" -eq 1 ]
+    section_is files FAIL
+    grep -q 'answered 401, expected 403 404' <<< "$output"
+}
+
+@test "office: a 500 for the other customer's file FAILS and names the missing error mapping of the route" {
+    sw_on editor-500
+    probe "$A" "$B"
+    [ "$status" -eq 1 ]
+    section_is office FAIL
+    grep -q 'error mapping' <<< "$output"
+}
+
+@test "office: a 502 for the other customer's file FAILS and names the missing error mapping of the route" {
+    sw_on editor-502
+    probe "$A" "$B"
+    [ "$status" -eq 1 ]
+    section_is office FAIL
+    grep -q 'error mapping' <<< "$output"
+}
+
+# ---------------------------------------------------------------- secrets on a failing run
+
+@test "no secret is on any argv, jq included, on a failing run either" {
+    sw_on all401
+    probe "$A" "$B"
+    [ "$status" -eq 1 ]
+    assert_absent "$PW_SENTINEL" "$SHIM_LOG" "the random password is on an argv"
+    assert_absent 'SECRET-' "$SHIM_LOG" "a realm admin client secret is on an argv"
+    assert_absent 'TOKMARK' "$SHIM_LOG" "a token is on an argv"
+    assert_absent 'OID\.' "$SHIM_LOG" "a Matrix OpenID token is on an argv"
+    assert_present "$PW_SENTINEL" "${FAKE_DIR}/stdin.log" "the password never reached the stdin config"
+    assert_recorded jq "isoprobe-${CLIENT_SUFFIX}"
+}
+
 # ---------------------------------------------------------------- the header
+
+@test "the header says what is unchecked, and no longer promises a separate shared-group check" {
+    assert_present 'UNCHECKED' "$PROBE" "the unchecked list is not in the header"
+    assert_present 'Nextcloud image' "$PROBE" "whether the Nextcloud image has curl is not recorded"
+    assert_present 'WebDAV refusal code' "$PROBE" "the exact WebDAV refusal code is not recorded as unchecked"
+    assert_present '_matrix on PLATFORM_DOMAIN' "$PROBE" "the edge routing of /_matrix is not recorded as unchecked"
+    assert_absent 'no shared group' "$PROBE" "the header still promises a separate shared-group check"
+    assert_present 'error mapping' "$PROBE" "the office section's need of the route's error mapping is not recorded"
+}
 
 @test "the header records the first-step reads and what the files section decides" {
     assert_present 'verifyBearerJwt' "$PROBE" "the Bearer verification is not recorded"

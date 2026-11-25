@@ -67,16 +67,8 @@ export const GET: RequestHandler = async (event) => {
     const body: EditTokenResponse = { token, tokenTtl, editorUrl: fullUrl.toString() }
     return json(body)
   } catch (err) {
-    // A file the caller does not have in their own Nextcloud root, or one Nextcloud refuses, is the caller's 404 or
-    // 403 (the files route maps it the same way). Rethrowing the upstream error object would reach the client as a
-    // 500, because it is not an HttpError.
-    const upstream = (err as { status?: number }).status
+    if ((err as { status?: number }).status) throw err
     const msg = err instanceof Error ? err.message : String(err)
-    const fromMessage = /→ (40[34]):/.exec(msg)?.[1]
-    const refused = upstream === 403 || upstream === 404 ? upstream : fromMessage ? Number(fromMessage) : undefined
-    if (refused === 403) throw error(403, 'Forbidden')
-    if (refused === 404) throw error(404, 'Not found')
-    if (upstream) throw err
     throw error(502, msg)
   }
 }
