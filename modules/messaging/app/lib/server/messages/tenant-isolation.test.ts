@@ -111,12 +111,15 @@ import { POST as roomArchive } from '../../../routes/api/messages/rooms/[roomId]
 import { POST as roomUnarchive } from '../../../routes/api/messages/rooms/[roomId]/unarchive/+server'
 import { GET as roomUnit } from '../../../routes/api/messages/rooms/[roomId]/unit/+server'
 import { getMessagesBackend } from './backend'
-import { archiveRoom, listOverview, unarchiveRoom } from './admin/room-admin'
+import { archiveRoom, deleteRoom, listOverview, renameRoom, unarchiveRoom } from './admin/room-admin'
 import { __resetMatrixCachesForTests, evictMatrixClient, getMatrixClient } from './matrix-client'
 import { __resetSynapseAdminForTests, getSynapseAdmin } from './synapse-admin'
 import { createMatrixSubsystem } from './provisioning/matrix-subsystem'
 import { messagingErasureHook } from './erasure'
-import { TENANT_MARKER_TYPE } from './matrix-namespace'
+import { messagingKarenz } from './karenz'
+import type { KarenzContext } from '$lib/server/module-karenz/participants'
+import type { KarenzItemRow } from '$lib/server/module-karenz/store'
+import { TENANT_MARKER_TYPE, currentMeetingAliasLocalpart } from './matrix-namespace'
 import type { OrgUnit } from '$lib/server/governance/org-units-db'
 
 // ---- two customers ---------------------------------------------------------------
@@ -285,7 +288,7 @@ class FakeSynapses {
     }
     if (path === '/_synapse/admin/v1/rooms' && method === 'GET') {
       if (kind !== 'admin') return json(403)
-      return json(200, { rooms: [...server.rooms].filter(([, r]) => !r.deleted).map(([id, r]) => ({ room_id: id, creator: server.bot, name: r.name })) })
+      return json(200, { rooms: [...server.rooms].filter(([, r]) => !r.deleted).map(([id, r]) => ({ room_id: id, creator: server.bot, name: r.name, canonical_alias: (r.state.get('m.room.canonical_alias')?.content as { alias?: string } | undefined)?.alias ?? null })) })
     }
     if ((m = /^\/_synapse\/admin\/v[12]\/rooms\/([^/]+)$/.exec(path)) && method === 'DELETE') {
       if (kind !== 'admin') return json(403)
@@ -976,6 +979,111 @@ describe('namespaced chat identity: two customers on one shared homeserver', () 
       sharedSynapse.rooms.get(room)!.aliases.add(foreign)
       await as(NS_A, () => unarchiveRoom('u1', room, { userId: 'admin' }))
       expect([...sharedSynapse.rooms.get(room)!.aliases]).toContain(foreign)
+    })
+  })
+
+  // One alias directory for every customer on the shared homeserver: what a customer archives, renames
+  // or deletes is the room ITS ledger names, whatever an alias lookup answers.
+  describe("room administration acts on the room of this customer's ledger, not on what an alias names", () => {
+    const U1 = 'u1'
+    const unit1 = { id: U1, name: 'Gremium u1' } as unknown as OrgUnit
+    const legacyAlias = (name: string) => `#stura-${name}:synapse.test`
+    const aliasesOf = (roomId: string) => [...sharedSynapse.rooms.get(roomId)!.aliases]
+
+    it("B's archive leaves a room of A that holds the alias B's unit would use untouched: alias, state and power levels", async () => {
+      const b = (await subsystem(NS_B).ensureResource(unit1, CTX, null)).externalId!
+      LEDGER.rooms.set('tid-b', new Map([[U1, b]]))
+      // The room that B's unit alias names is not B's ledger room.
+      sharedSynapse.rooms.get(b)!.aliases.clear()
+      sharedSynapse.room('!a-vorstand:synapse.test', 'Vorstand A', ['@acme.alice:synapse.test'], '#stura.beta.gremium-u1:synapse.test')
+      const before = JSON.stringify([...sharedSynapse.rooms.get('!a-vorstand:synapse.test')!.state])
+      await as(NS_B, () => archiveRoom(U1, { userId: 'admin' }))
+      const a = sharedSynapse.rooms.get('!a-vorstand:synapse.test')!
+      expect([...a.aliases]).toEqual(['#stura.beta.gremium-u1:synapse.test'])
+      expect(JSON.stringify([...a.state])).toBe(before)
+      expect(sharedSynapse.rooms.get(b)!.state.get('org.gremion.room.archived')?.content).toMatchObject({ org_unit_id: U1, tenant_id: 'tid-b' })
+    })
+
+    it("B's archive of its own unit leaves the legacy-alias room of another customer with the same unit name as it was", async () => {
+      sharedSynapse.room('!a-legacy:synapse.test', 'Gremium u1', ['@alice:synapse.test'], legacyAlias('gremium-u1'))
+      const b = (await subsystem(NS_B).ensureResource(unit1, CTX, null)).externalId!
+      LEDGER.rooms.set('tid-b', new Map([[U1, b]]))
+      const m = net.mark()
+      await as(NS_B, () => archiveRoom(U1, { userId: 'admin' }))
+      expect(aliasesOf('!a-legacy:synapse.test')).toEqual([legacyAlias('gremium-u1')])
+      expect([...sharedSynapse.rooms.get('!a-legacy:synapse.test')!.state.keys()]).toEqual(['m.room.create'])
+      expect(net.since(m).filter((r) => r.method !== 'GET' && r.path.includes('!a-legacy'))).toEqual([])
+    })
+
+    it('a ledger room that still carries a legacy alias is renamed, archived, restored and deleted by its room id', async () => {
+      sharedSynapse.room('!old:synapse.test', 'Gremium u1', ['@acme.alice:synapse.test'], legacyAlias('gremium-u1'))
+      LEDGER.rooms.set('tid-a', new Map([[U1, '!old:synapse.test']]))
+      await as(NS_A, () => renameRoom(U1, { name: 'Neuer Name', userId: 'admin' }))
+      expect(sharedSynapse.rooms.get('!old:synapse.test')!.name).toBe('Neuer Name')
+      await as(NS_A, () => archiveRoom(U1, { userId: 'admin' }))
+      LEDGER.rooms.get('tid-a')!.set(U1, '')
+      expect(sharedSynapse.rooms.get('!old:synapse.test')!.state.get('org.gremion.room.archived')?.content).toMatchObject({ org_unit_id: U1, tenant_id: 'tid-a' })
+      await as(NS_A, () => unarchiveRoom(U1, '!old:synapse.test', { userId: 'admin' }))
+      expect(aliasesOf('!old:synapse.test')).toContain('#stura.acme.gremium-u1:synapse.test')
+      LEDGER.rooms.set('tid-a', new Map([[U1, '!old:synapse.test']]))
+      await as(NS_A, () => deleteRoom(U1, '!old:synapse.test', { userId: 'admin' }))
+      expect(sharedSynapse.rooms.get('!old:synapse.test')!.deleted).toBe(true)
+    })
+  })
+
+  // The meeting rooms: one alias directory, so the alias carries the customer, and the Karenz of one
+  // customer lists the meeting rooms of that customer only.
+  describe('meeting rooms of two customers on one homeserver', () => {
+    const EVT = '0b7c6f1e-4a8e-4c51-9f3a-2d1e8c7b6a50'
+    const meetingRoom = (t: TenantContext): Promise<string> =>
+      as(t, () => getMatrixClient().createRoom('Sitzung', 'T', currentMeetingAliasLocalpart(EVT), { tenantId: t.id }))
+    const items = new Map<string, KarenzItemRow>()
+    const kctx = (t: TenantContext): KarenzContext => ({
+      tenant: t, karenzId: 'k1', catalogueId: 'messaging', manifestId: 'messages',
+      switchedOffAt: new Date('2026-11-01T00:00:00Z'), finalAt: new Date('2026-12-01T00:00:00Z'),
+      now: () => new Date('2026-11-01T12:00:00Z'), log: vi.fn(),
+      items: {
+        list: async () => [...items.values()],
+        upsert: async (i) => {
+          const row = { itemId: `item-${items.size + 1}`, karenzId: 'k1', kind: i.kind, externalId: i.externalId, state: i.state, payload: i.payload ?? null, detail: i.detail ?? null, updatedAt: new Date() } as KarenzItemRow
+          items.set(i.externalId, row)
+          return row
+        },
+        setState: async () => undefined,
+      },
+    })
+    /** The homeserver lists a room with the alias it was created under as its canonical one. */
+    const canonical = (roomId: string): void => {
+      const room = sharedSynapse.rooms.get(roomId)!
+      room.state.set('m.room.canonical_alias', { sender: sharedSynapse.bot, content: { alias: [...room.aliases][0] } })
+    }
+    beforeEach(() => {
+      items.clear()
+      LEDGER.rooms.set('tid-a', new Map())
+      LEDGER.rooms.set('tid-b', new Map())
+    })
+
+    it('the same event opened by both customers gives two rooms, each under the alias of its customer', async () => {
+      const a = await meetingRoom(NS_A)
+      const b = await meetingRoom(NS_B)
+      expect(a).not.toBe(b)
+      expect([...sharedSynapse.rooms.get(a)!.aliases]).toEqual([`#meeting.acme.${EVT}:synapse.test`])
+      expect([...sharedSynapse.rooms.get(b)!.aliases]).toEqual([`#meeting.beta.${EVT}:synapse.test`])
+    })
+
+    it("B's Karenz lists no meeting room of A, and A's lists none of B", async () => {
+      const a = await meetingRoom(NS_A)
+      const b = await meetingRoom(NS_B)
+      canonical(a)
+      canonical(b)
+      await as(NS_B, () => messagingKarenz.switchOff(kctx(NS_B)))
+      expect([...items.keys()]).toEqual([b])
+      items.clear()
+      await as(NS_A, () => messagingKarenz.switchOff(kctx(NS_A)))
+      expect([...items.keys()]).toEqual([a])
+      const d = await as(NS_B, () => messagingKarenz.describe!(NS_B))
+      expect(d.retained).toHaveLength(1)
+      expect(d.retained[0]).toMatchObject({ count: 1 })
     })
   })
 

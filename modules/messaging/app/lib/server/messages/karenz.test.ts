@@ -862,12 +862,19 @@ describe('messagingKarenz', () => {
     })
 
     describe('MATRIX_IDENTITY=namespaced on a homeserver shared with other customers', () => {
-      // Three bot-created meeting rooms no ledger row owns: this customer's (marker), another customer's
-      // (marker) and one without a marker. Only the first is this customer's to keep.
+      // Bot-created meeting rooms no ledger row owns, on one homeserver with one alias directory: this
+      // customer's (its prefix and its marker), another customer's, one without a marker, and the
+      // look-alikes that carry only one of the two: this customer's marker behind another customer's
+      // prefix, behind a prefix that merely starts like this customer's slug, and behind a legacy alias.
+      // Only the first is this customer's to keep.
       function seedSharedMeetingRooms() {
-        addRoom('!mine:matrix.test', { alias: '#meeting-mine:matrix.test' }).state.set('org.gremion.tenant', { tenant_id: 'default' })
-        addRoom('!theirs:matrix.test', { alias: '#meeting-theirs:matrix.test' }).state.set('org.gremion.tenant', { tenant_id: 'other' })
-        addRoom('!bare:matrix.test', { alias: '#meeting-bare:matrix.test' })
+        const own = { tenant_id: 'default' }
+        addRoom('!mine:matrix.test', { alias: '#meeting.default.mine:matrix.test' }).state.set('org.gremion.tenant', own)
+        addRoom('!theirs:matrix.test', { alias: '#meeting.other.theirs:matrix.test' }).state.set('org.gremion.tenant', { tenant_id: 'other' })
+        addRoom('!bare:matrix.test', { alias: '#meeting.default.bare:matrix.test' })
+        addRoom('!borrowed:matrix.test', { alias: '#meeting.other.borrowed:matrix.test' }).state.set('org.gremion.tenant', own)
+        addRoom('!longer:matrix.test', { alias: '#meeting.default-2.longer:matrix.test' }).state.set('org.gremion.tenant', own)
+        addRoom('!old:matrix.test', { alias: '#meeting-old:matrix.test' }).state.set('org.gremion.tenant', own)
       }
       beforeEach(() => {
         process.env.MATRIX_IDENTITY = 'namespaced'
@@ -876,7 +883,7 @@ describe('messagingKarenz', () => {
         delete process.env.MATRIX_IDENTITY
       })
 
-      it('the switch-off keeps only the meeting rooms that carry the marker of this customer', async () => {
+      it('the switch-off keeps only the meeting rooms that carry the prefix AND the marker of this customer', async () => {
         seedSharedMeetingRooms()
         await karenz.messagingKarenz.switchOff(ctx)
         expect([...store.rows.values()].map((r) => r.externalId)).toEqual(['!mine:matrix.test'])
@@ -890,11 +897,32 @@ describe('messagingKarenz', () => {
         expect(d.retained[0]).toMatchObject({ count: 1 })
       })
 
-      it('legacy mode is unchanged: every bot-created meeting room is kept, marker or not', async () => {
+      it('a ledger room with a meeting alias stays kept and is never archived, whichever alias form it carries', async () => {
+        addUnitRoom({ id: 'u8', name: 'Neu' }, '!m8:matrix.test', '#meeting.default.evt8:matrix.test')
+        addUnitRoom({ id: 'u9', name: 'Alt' }, '!m9:matrix.test', '#meeting-evt9:matrix.test')
+        await karenz.messagingKarenz.switchOff(ctx)
+        for (const id of ['!m8:matrix.test', '!m9:matrix.test']) {
+          expect(stateOf({ externalId: id })).toBe('kept')
+          expect(markerOf(id)).toBeUndefined()
+        }
+      })
+
+      it('the final day never deletes a room with a meeting alias of either form, even when an item points at it', async () => {
+        for (const [id, alias] of [['!m8:matrix.test', '#meeting.default.evt8:matrix.test'], ['!m9:matrix.test', '#meeting-evt9:matrix.test']] as const) {
+          addRoom(id, { alias }).state.set('org.gremion.room.archived', { org_unit_id: 'u1', tenant_id: 'default', archived_at: '2026-11-01T00:00:00Z' })
+          await store.items.upsert({ kind: 'room', externalId: id, state: 'locked', payload: { unitId: 'u1' } })
+        }
+        const r = await karenz.messagingKarenz.finalize(ctx, { dryRun: false })
+        expect(r).toEqual({ deleted: { rooms: 0 } })
+        expect(rooms.has('!m8:matrix.test') && rooms.has('!m9:matrix.test')).toBe(true)
+      })
+
+      it('legacy mode is unchanged: every bot-created #meeting-<id> room is kept, marker or not, and no other alias form counts', async () => {
         delete process.env.MATRIX_IDENTITY
         seedSharedMeetingRooms()
+        addRoom('!legacy:matrix.test', { alias: '#meeting-plain:matrix.test' })
         await karenz.messagingKarenz.switchOff(ctx)
-        expect([...store.rows.values()].map((r) => r.externalId).sort((a, b) => a.localeCompare(b))).toEqual(['!bare:matrix.test', '!mine:matrix.test', '!theirs:matrix.test'])
+        expect([...store.rows.values()].map((r) => r.externalId).sort((a, b) => a.localeCompare(b))).toEqual(['!legacy:matrix.test', '!old:matrix.test'])
       })
     })
 
