@@ -2463,7 +2463,8 @@ foreign_claims() {
 
 @test "foreign: without STACK nothing is classified foreign, everything is judged" {
     sed -i '/^STACK=/d' "${GREMION_ROOT}/etc/env/state.env"
-    foreign_site
+    # no stack label either: with an empty STACK that is the one container an unguarded comparison would call foreign
+    foreign_site "$(foreign_labels 'del(."org.gremion.stack")')"
     run "$VERIFY" --hosts "$HOSTS"
     [ "$status" -eq 1 ]
     [[ "$output" == *"router gremion-site@docker: no certresolver"* ]]
@@ -2757,4 +2758,123 @@ foreign_claims() {
     [ "$status" -eq 1 ]
     [[ "$output" == *"router keycloak@docker: no certresolver"* ]]
     [[ "$output" != *"foreign docker router keycloak@docker"* ]]
+}
+
+# A foreign router is judged by what it answers (host) AND by what it serves. Traefik v3 reads a rule as
+# v3 unless the router asks for ruleSyntax v2, where {name:regex} is the pattern form: the same text reads
+# as a literal in v3, so a v2 router can answer every host while the verifier sees no match.
+@test "foreign: a router with ruleSyntax v2 and a v2 HostRegexp that answers every host is refused" {
+    foreign_site
+    api_edit routers '(.[] | select(.name=="gremion-site@docker")) |= (.rule = "HostRegexp(`{any:.+}`)" | .ruleSyntax = "v2")'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"rule syntax v2"* ]]
+}
+
+@test "foreign: ruleSyntax v2 is refused even when the rule names only its own host" {
+    foreign_site
+    api_edit routers '(.[] | select(.name=="gremion-site@docker")).ruleSyntax = "V2"'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"rule syntax V2"* ]]
+}
+
+@test "foreign: an explicit ruleSyntax v3 is read like the default" {
+    foreign_site
+    api_edit routers '(.[] | select(.name=="gremion-site@docker")).ruleSyntax = "v3"'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+}
+
+@test "foreign: a router on its own host that serves a kernel docker service is refused" {
+    foreign_site
+    api_edit routers '(.[] | select(.name=="gremion-site@docker")).service = "keycloak@docker"'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"serves keycloak@docker"* ]]
+}
+
+@test "foreign: a router that serves a bare service name no foreign container declares is refused" {
+    foreign_site
+    api_edit routers '(.[] | select(.name=="gremion-site@docker")).service = "keycloak"'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"serves keycloak"* ]]
+}
+
+@test "foreign: a router that serves the active colour (a file-provider service) is refused" {
+    foreign_site
+    api_edit routers '(.[] | select(.name=="gremion-site@docker")).service = "app@file"'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"serves app@file"* ]]
+}
+
+@test "foreign: a router that serves an internal service (the API) is refused" {
+    foreign_site
+    api_edit routers '(.[] | select(.name=="gremion-site@docker")).service = "api@internal"'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"serves api@internal"* ]]
+}
+
+@test "foreign: a router with no service at all is refused" {
+    foreign_site
+    api_edit routers '(.[] | select(.name=="gremion-site@docker")) |= del(.service)'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"names no service"* ]]
+}
+
+@test "foreign: a router that names its own service with the docker suffix is fine" {
+    foreign_site
+    api_edit routers '(.[] | select(.name=="gremion-site@docker")).service = "gremion-site@docker"'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+}
+
+@test "foreign: a service of another provider is not a foreign service even when a foreign container declares the same bare name" {
+    foreign_site "$(foreign_labels '. + {"traefik.http.services.app.loadbalancer.server.port":"80"}')"
+    api_edit routers '(.[] | select(.name=="gremion-site@docker")).service = "app@file"'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"serves app@file"* ]]
+}
+
+@test "foreign: a service the foreign container declares under a router service label is its own" {
+    foreign_site "$(foreign_labels '. + {"traefik.http.routers.gremion-site.service":"site-backend","traefik.http.services.site-backend.loadbalancer.server.port":"8080"}')"
+    api_edit routers '(.[] | select(.name=="gremion-site@docker")).service = "site-backend"'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+}
+
+@test "foreign: a service name the kernel also declares is not a foreign service" {
+    fake_container c2 keycloak "keycloak" running healthy 0 10.90.250.4 \
+        '{"com.docker.compose.project":"staging-state","com.docker.compose.service":"keycloak","org.gremion.stack":"staging","traefik.enable":"true","traefik.http.services.shared-svc.loadbalancer.server.port":"8080"}'
+    foreign_site "$(foreign_labels '. + {"traefik.http.services.shared-svc.loadbalancer.server.port":"80"}')"
+    api_edit routers '(.[] | select(.name=="gremion-site@docker")).service = "shared-svc"'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"foreign router gremion-site@docker"*"serves shared-svc"* ]]
+}
+
+# Only a container the stack-scoped edge reads can declare an object Traefik lists: a container of
+# another stack, or one with no stack label, must not turn a genuinely foreign object into a kernel one.
+@test "foreign: a router name that a container of ANOTHER stack also declares stays foreign here" {
+    foreign_site
+    fake_container c21 other-web "other-web" running healthy 0 10.90.250.10 \
+        '{"com.docker.compose.project":"other-state","com.docker.compose.service":"web","org.gremion.stack":"otherstack","traefik.http.routers.gremion-site.rule":"Host(`other.example.net`)","traefik.http.middlewares.gremion-site-hsts.headers.stsseconds":"1"}'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"foreign docker router gremion-site@docker"* ]]
+    [[ "$output" == *"foreign docker middleware gremion-site-hsts@docker"* ]]
+}
+
+@test "foreign: a router name that a container with no stack label also declares stays foreign here" {
+    foreign_site
+    fake_container c21 other-web "other-web" running healthy 0 10.90.250.10 \
+        '{"com.docker.compose.project":"unrelated","com.docker.compose.service":"web","traefik.http.routers.gremion-site.rule":"Host(`other.example.net`)"}'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"foreign docker router gremion-site@docker"* ]]
 }

@@ -576,8 +576,11 @@ test('guard 8: livekit has one CPU core and the memory limit it had, and its ren
 //   - every container behind a public router has a healthcheck, because the census reads
 //     health=none as a failure.
 
+// a compose label value as text: the render writes strings, a hand-written file may carry a YAML boolean
+const labelText = (v) => (typeof v === 'string' ? v : v === true ? 'true' : v === false ? 'false' : '')
+
 const verifyExempt = (rt) => {
-  const eps = String(rt.entrypoints ?? '').split(',').filter(Boolean)
+  const eps = (rt.entrypoints ?? '').split(',').filter(Boolean)
   return (eps.length === 1 && eps[0] === 'internaltest') || (eps.length === 1 && eps[0] === 'ping' && rt.service === 'noop@internal')
 }
 const publicRouters = (r) =>
@@ -630,11 +633,11 @@ test('guard 9: the Keycloak admin allowlist is declared on the traefik container
 
 test('guard 9: no service asks Traefik for a default router (traefik.enable=true needs a router label)', () => {
   const r = pilotState()
-  const enabled = Object.entries(r.services).filter(([, s]) => String(s.labels?.['traefik.enable']) === 'true')
+  const enabled = Object.entries(r.services).filter(([, s]) => labelText(s.labels?.['traefik.enable']) === 'true')
   assert.ok(enabled.length >= 5, `only ${enabled.length} traefik-enabled services were read`)
   const bare = enabled.filter(([, s]) => routerNames(s.labels).length === 0).map(([n]) => n)
   assert.deepEqual(bare, [], `${bare.join(', ')} carry traefik.enable=true and no router: Traefik generates Host(<service>-<project>) on every entrypoint, with no resolver, pin, HSTS or rate limit`)
-  assert.equal(String(r.services.legal.labels['traefik.enable']), 'false', 'legal is reached over the edge network by gremion-ui, never through Traefik')
+  assert.equal(labelText(r.services.legal.labels['traefik.enable']), 'false', 'legal is reached over the edge network by gremion-ui, never through Traefik')
 })
 
 test('guard 9: every container behind a public router has a healthcheck (health=none fails the census)', () => {

@@ -209,10 +209,10 @@ services:
       # router gets a DEFAULT router, Host(`legal-<stack>-state`), on every entrypoint,
       # with no certificate resolver, no host pin, no HSTS and no rate limit. The plain-HTTP
       # entrypoint redirects, so no client reaches it in practice, but it is a router nobody
-      # asked for that every check of a public router rightly refuses. enable=false removes it;
-      # the stack label stays because the edge's label scope
-      # (scripts/check-traefik-stack-scope.mjs) is read off every service that carries any
-      # traefik.* label.
+      # asked for that every check of a public router rightly refuses. enable=false removes it.
+      # The stack label stays only as ownership marking: the label-scope guard
+      # (scripts/check-traefik-stack-scope.mjs) reads routed services and a service that is
+      # not exposed is not one, so nothing depends on it here.
       - "traefik.enable=false"
       - "org.gremion.stack=${STACK:?STACK required}"
 

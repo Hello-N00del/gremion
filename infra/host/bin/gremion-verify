@@ -176,6 +176,7 @@ declare -A MARKER_SHA=()
 # (see classify_foreign_docker_objects): the lower-cased name -> its project.
 declare -A FOREIGN_ROUTER=()
 declare -A FOREIGN_MW=()
+declare -A FOREIGN_SVC=()
 declare -a FOREIGN_LISTED=()   # "kind|name@docker|project", only what Traefik reports
 
 usage() {
@@ -287,9 +288,19 @@ rule_host() {
 # Everything this cannot attribute stays judged: no STACK, docker unreachable, a
 # container with no compose project at all, an object no label explains.
 #
+# A container of another stack, or one that carries no stack label, is not read by
+# this edge and is attributed to neither side: it can neither make an object foreign
+# nor excuse one.
+#
 # Foreign objects cost the kernel nothing and are never silent: one informational
-# line each, and a foreign ROUTER that claims a host of the platform, the control
-# panel or a customer (or no host at all, which is every host) is refused.
+# line each, and a foreign ROUTER is refused when it
+#   - claims a host of the platform, the control panel or a customer, or names no
+#     host in some branch of its rule (which is every host),
+#   - asks for a rule syntax other than v3 (a v2 {name:regex} pattern reads as a
+#     literal here and as a wildcard at the edge), or
+#   - serves anything but a service a foreign container declares (a kernel
+#     backend, the active colour, an internal service): the kernel's pin, HSTS,
+#     rate limit and allowlist protect those only on the kernel's own routers.
 # L4 routers are not exempted: check_l4_routers reads every TCP/UDP router.
 
 kernel_project_p() {   # <compose project>
@@ -324,11 +335,11 @@ traefik_normalize() {
 }
 
 classify_foreign_docker_objects() {
-    FOREIGN_ROUTER=(); FOREIGN_MW=(); FOREIGN_LISTED=()
+    FOREIGN_ROUTER=(); FOREIGN_MW=(); FOREIGN_SVC=(); FOREIGN_LISTED=()
     [[ -n "${STACK:-}" ]] || return 0
     local ids id labels project service stack enable name n
-    local -a routers mws
-    local -A kernel_router=() kernel_mw=() foreign_router_proj=() foreign_mw_proj=()
+    local -a routers mws svcs
+    local -A kernel_router=() kernel_mw=() kernel_svc=() foreign_router_proj=() foreign_mw_proj=() foreign_svc_proj=()
     ids="$(docker ps -a -q 2>/dev/null)" || return 0
     for id in $ids; do
         labels="$(docker inspect --format '{{json .Config.Labels}}' "$id" 2>/dev/null)" || continue
@@ -340,16 +351,26 @@ classify_foreign_docker_objects() {
         enable="$(jq -r '."traefik.enable" // ""' <<<"$labels")"
         mapfile -t routers < <(jq -r 'keys[] | select(startswith("traefik.http.routers.")) | split(".")[3] // empty' <<<"$labels" | sort -u)
         mapfile -t mws < <(jq -r 'keys[] | select(startswith("traefik.http.middlewares.")) | split(".")[3] // empty' <<<"$labels" | sort -u)
+        mapfile -t svcs < <(jq -r 'keys[] | select(startswith("traefik.http.services.")) | split(".")[3] // empty' <<<"$labels" | sort -u)
         # a labelled container with no router label gets the implicit router <service>-<project>
         if (( ${#routers[@]} == 0 )) && [[ "${enable,,}" == "true" && -n "$project" && -n "$service" ]]; then
             routers=("$(traefik_normalize "${service}-${project}")")
         fi
-        if [[ -n "$project" && "$stack" == "$STACK" ]] && ! kernel_project_p "$project"; then
+        # the service a labelled container gets when it declares none is named like its implicit router
+        if [[ "${enable,,}" == "true" && -n "$project" && -n "$service" ]]; then
+            svcs+=("$(traefik_normalize "${service}-${project}")")
+        fi
+        if [[ -n "$project" ]] && ! kernel_project_p "$project"; then
+            # another stack's container, or one with no stack label, is not read by this edge: it
+            # contributes no object to Traefik's lists and so neither makes one foreign nor excuses one
+            [[ "$stack" == "$STACK" ]] || continue
             for n in "${routers[@]}"; do [[ -z "$n" ]] || foreign_router_proj["${n,,}"]="$project"; done
             for n in "${mws[@]}";     do [[ -z "$n" ]] || foreign_mw_proj["${n,,}"]="$project"; done
+            for n in "${svcs[@]}";    do [[ -z "$n" ]] || foreign_svc_proj["${n,,}"]="$project"; done
         else
             for n in "${routers[@]}"; do [[ -z "$n" ]] || kernel_router["${n,,}"]=1; done
             for n in "${mws[@]}";     do [[ -z "$n" ]] || kernel_mw["${n,,}"]=1; done
+            for n in "${svcs[@]}";    do [[ -z "$n" ]] || kernel_svc["${n,,}"]=1; done
         fi
     done
     for n in "${!foreign_router_proj[@]}"; do
@@ -357,6 +378,9 @@ classify_foreign_docker_objects() {
     done
     for n in "${!foreign_mw_proj[@]}"; do
         [[ -n "${kernel_mw[$n]+x}" ]] || FOREIGN_MW["$n"]="${foreign_mw_proj[$n]}"
+    done
+    for n in "${!foreign_svc_proj[@]}"; do
+        [[ -n "${kernel_svc[$n]+x}" ]] || FOREIGN_SVC["$n"]="${foreign_svc_proj[$n]}"
     done
     # only what Traefik actually reports: a label of a container whose objects it did not load lists nothing
     while IFS= read -r name; do
@@ -455,7 +479,7 @@ rule_pins_host() {
 
 check_foreign_docker_objects() {
     (( ${#FOREIGN_LISTED[@]} > 0 )) || return 0
-    local kind name project rule token re h why n claimed
+    local kind name project rule token re h why n claimed syntax svc
     local -A protected=()
     local -a tokens
     while IFS='|' read -r kind name project; do
@@ -472,6 +496,27 @@ check_foreign_docker_objects() {
     while IFS='|' read -r kind name project; do
         [[ "$kind" == router ]] || continue
         rule="$(printf '%s' "$ROUTERS_JSON" | jq -r --arg n "$name" '[.[] | select(.name == $n)][0].rule // ""')"
+        # Traefik reads a rule as v3 unless the router asks otherwise; a v2 pattern ({name:regex}) is
+        # a literal to every reader below, so a router that asks for v2 cannot be shown to miss a host
+        syntax="$(printf '%s' "$ROUTERS_JSON" | jq -r --arg n "$name" '[.[] | select(.name == $n)][0].ruleSyntax // "" | if type == "string" then (.) else "unreadable" end')"
+        if [[ -n "$syntax" && "${syntax,,}" != v3 ]]; then
+            fail "foreign router ${name} (compose project ${project}) asks for rule syntax ${syntax}, which this verifier does not read: a pattern it takes for a literal can answer every host of the platform, the control panel and every customer: ${rule}"
+            continue
+        fi
+        # what the router serves: only a service a foreign container declares. A kernel backend or the
+        # active colour reached through a foreign host skips the kernel's pin, HSTS, rate limit and allowlist.
+        svc="$(printf '%s' "$ROUTERS_JSON" | jq -r --arg n "$name" '[.[] | select(.name == $n)][0].service // "" | if type == "string" then (.) else "" end')"
+        if [[ -z "$svc" ]]; then
+            fail "foreign router ${name} (compose project ${project}) names no service, so it cannot be shown to serve only the foreign project's own"
+        else
+            n="${svc,,}"
+            if [[ "$n" == *@* ]]; then
+                if [[ "${n##*@}" == docker ]]; then n="${n%@*}"; else n=""; fi
+            fi
+            if [[ -z "$n" || -z "${FOREIGN_SVC[$n]+x}" ]]; then
+                fail "foreign router ${name} (compose project ${project}) serves ${svc}, which no foreign container of the stack declares: a kernel backend, the active colour or an internal service is reached only through the kernel's own routers"
+            fi
+        fi
         if [[ "$(rule_pins_host "$rule")" != pinned ]]; then
             fail "foreign router ${name} (compose project ${project}) is not confined to a host (a branch of its rule, or the whole of it, needs none, or the rule cannot be read), so it can answer every host of the platform, the control panel and every customer: ${rule}"
         fi
