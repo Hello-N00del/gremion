@@ -258,20 +258,42 @@ _cd_watch_api_up() {
     curl -fsS --max-time "$t" "${api}/api/version" </dev/null >/dev/null 2>&1
 }
 
-# _cd_watch_route NAME SVC COLOUR - 0 when the Traefik service NAME has servers, every server
-# is http://SVC-COLOUR:3000 and every one is UP; 1 when not; 4 when the API gave no answer.
+# _cd_watch_route NAME SVC COLOUR [ROUTER_FILE] - 0 when the Traefik service NAME has servers, every
+# server is http://SVC-COLOUR:3000 and every one is UP; 1 when not; 4 when the API gave no answer.
+#
+# Traefik builds a load balancer, and runs its health check, only for a service that a router
+# uses. A service no router uses lists its servers and carries no serverStatus at all, so there
+# is no health state to demand of it. ROUTER_FILE is the opt-in for that case, per call: the path
+# of the file whose presence means that this install EXPECTS a router for the service (for
+# public@file, the portal router file placed by hand, etc/edge/public-host.yml: the only router
+# that targets public@file). Given, a service that no router uses passes when that file is absent,
+# at least one server is listed and every server is http://SVC-COLOUR:3000 (never the other
+# colour); when the file is there the router did not render and the route is bad. Not given
+# (app@file, the -next services) the full rule applies without exception.
+#
+# `usedBy` of the same API document says that no router uses the service. It is the router graph of
+# the same Traefik snapshot as the servers, so it is trusted for that and nothing more: it is read
+# together with serverStatus (a server with a health state was built by a router, whatever usedBy
+# says), and it never relaxes the check on its own; the install's own expectation decides.
 _cd_watch_route() {
-    local name="$1" svc="$2" colour="$3" api t body url st n=0
+    local name="$1" svc="$2" colour="$3" expect_file="${4:-}" api t body url st n=0 unused=0
     api="$(cd_traefik_api 2>/dev/null)" || return 4
     t="$(_cd_watch_ct)" || return 4
     body="$(curl -fsS --max-time "$t" "${api}/api/http/services/${name}" </dev/null 2>/dev/null)" || return 4
     printf '%s' "$body" | jq -e 'type == "object"' >/dev/null 2>&1 || return 4
+    if [[ -n "$expect_file" ]] \
+        && printf '%s' "$body" | jq -e '((.usedBy // []) | length) == 0 and ((.serverStatus // {}) | length) == 0' >/dev/null 2>&1; then
+        [[ ! -e "$expect_file" ]] || return 1
+        unused=1
+    fi
     while IFS= read -r url; do
         [[ -n "$url" ]] || continue
         n=$((n + 1))
         [[ "$url" == "http://${svc}-${colour}:3000" ]] || return 1
-        st="$(printf '%s' "$body" | jq -r --arg u "$url" '.serverStatus[$u] // "none"' 2>/dev/null)" || st=none
-        [[ "$st" == UP ]] || return 1
+        if [[ "$unused" -eq 0 ]]; then
+            st="$(printf '%s' "$body" | jq -r --arg u "$url" '.serverStatus[$u] // "none"' 2>/dev/null)" || st=none
+            [[ "$st" == UP ]] || return 1
+        fi
     done < <(printf '%s' "$body" | jq -r '.loadBalancer.servers[]?.url // empty' 2>/dev/null)
     ((n > 0))
 }
@@ -456,7 +478,7 @@ _cd_watch_sample_run() {
     r1=0
     _cd_watch_route app@file gremion-ui "$colour" || r1=$?
     r2=0
-    _cd_watch_route public@file gremion-public "$colour" || r2=$?
+    _cd_watch_route public@file gremion-public "$colour" "${CD_ROOT}/etc/edge/public-host.yml" || r2=$?
     [[ "$r1" -eq 4 || "$r2" -eq 4 ]] && route_known=false
     [[ "$r1" -eq 0 && "$r2" -eq 0 ]] && route_ok=true
     # 5. the portal page, the image identity
