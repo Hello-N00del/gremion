@@ -201,3 +201,51 @@ describe('/tasks load — boards for the switcher', () => {
     expect(data.boards[0].org_unit_name).toBe('')
   })
 })
+
+// ?board=<id> of a board outside the member's scope used to render the normal page with no board and no word
+// why. The load now says so. Every id the member's scope does not list gets the one same answer from the page.
+describe('/tasks load - a board the member may not see', () => {
+  const runFor = (board: string) =>
+    load({ locals: member, url: new URL(`http://x/tasks?board=${encodeURIComponent(board)}`) } as any) as Promise<any>
+  beforeEach(() => {
+    vi.clearAllMocks()
+    listOrgUnits.mockResolvedValue([{ id: OU_A, name: 'StuRa' }])
+    resolveScope.mockResolvedValue([OU_A])
+    listBoardsForOrgUnits.mockResolvedValue([
+      { id: 'b1', org_unit_id: OU_A, name: 'Aufgaben', archived: false },
+      { id: 'b-old', org_unit_id: OU_A, name: 'Alt', archived: true },
+    ])
+    listOrgUnitMembers.mockResolvedValue([])
+    resolveMany.mockResolvedValue(new Map())
+    deckFor.mockResolvedValue({
+      board: { id: 'b1', org_unit_id: OU_A, name: 'Aufgaben', archived: false },
+      stacks: [],
+      cards: [],
+    })
+  })
+
+  it('flags an id outside the scope and loads no deck for it', async () => {
+    const data = await runFor('b-other-committee')
+    expect(data.boardDenied).toBe(true)
+    expect(data.deck).toBeNull()
+    expect(deckFor).not.toHaveBeenCalled()
+  })
+
+  it('answers an id that never existed exactly like one that exists elsewhere', async () => {
+    const a = await runFor('b-other-committee')
+    const b = await runFor('00000000-0000-4000-8000-000000000000')
+    expect(a.boardDenied).toBe(true)
+    expect(b.boardDenied).toBe(true)
+    expect(b.deck).toEqual(a.deck)
+  })
+
+  it('does not flag a board in scope, an archived one in scope, or no board parameter at all', async () => {
+    expect((await runFor('b1')).boardDenied).toBe(false)
+    expect((await runFor('b-old')).boardDenied).toBe(false)
+    expect((await run()).boardDenied).toBe(false)
+  })
+
+  it('does not flag an empty board parameter', async () => {
+    expect((await runFor('')).boardDenied).toBe(false)
+  })
+})
