@@ -473,9 +473,10 @@ check_foreign_docker_objects() {
         if [[ "$(rule_pins_host "$rule")" != pinned ]]; then
             fail "foreign router ${name} (compose project ${project}) is not confined to a host (a branch of its rule, or the whole of it, needs none, or the rule cannot be read), so it can answer every host of the platform, the control panel and every customer: ${rule}"
         fi
-        # a backtick token equal to a protected host (any letter case, any matcher)
+        # a quoted token (backtick, or double quote as Traefik also reads it) equal to a protected host
+        # (any letter case, any matcher)
         claimed=""
-        mapfile -t tokens < <(printf '%s' "$rule" | jq -Rr 'scan("`([^`]*)`") | .[0] | ascii_downcase')
+        mapfile -t tokens < <(printf '%s' "$rule" | jq -Rr 'scan("`([^`]*)`|\"((?:[^\"\\\\]|\\\\.)*)\"") | if .[0] != null then .[0] else (.[1] | gsub("\\\\(?<c>.)"; .c)) end | ascii_downcase')
         for token in "${tokens[@]}"; do
             [[ -n "$token" && -n "${protected[$token]+x}" ]] || continue
             case " $claimed " in *" $token "*) continue ;; esac
@@ -483,7 +484,7 @@ check_foreign_docker_objects() {
             fail "foreign router ${name} (compose project ${project}) claims ${token} (${protected[$token]}): only the kernel's own routers may answer it: ${rule}"
         done
         # a HostRegexp that matches one (Oniguruma, the nearest the shell has to Traefik's RE2)
-        mapfile -t tokens < <(printf '%s' "$rule" | jq -Rr 'match("hostregexp\\(`([^`]*)`"; "gi") | .captures[0].string')
+        mapfile -t tokens < <(printf '%s' "$rule" | jq -Rr 'match("hostregexp\\((?:`([^`]*)`|\"((?:[^\"\\\\]|\\\\.)*)\")"; "gi") | .captures | if .[0].string != null then .[0].string else (.[1].string | gsub("\\\\(?<c>.)"; .c)) end')
         for re in "${tokens[@]}"; do
             [[ -n "$re" ]] || continue
             for h in "${!protected[@]}"; do
