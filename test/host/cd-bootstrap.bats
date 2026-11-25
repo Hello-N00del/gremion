@@ -99,11 +99,19 @@ scratch_host() {
     echo "$d"
 }
 
+# The programs that run from the release tree and are NOT installed (they source the release's own
+# libraries, which the stage does not copy). Written out here on purpose: the list in bootstrap.sh
+# is what the stage uses, this is what the test expects, and a change must touch both.
+TREE_RUN="gremion-isolation gremion-isolation-live gremion-services gremion-tenant"
+is_tree_run() { case " ${TREE_RUN} " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+
 # the installed set: every source file the stage must have copied, "<src> <dest>" per line
 set_pairs() {
     local src="${1:-$HOST_SRC}" f
     for f in "$src"/bin/*; do
-        [ -f "$f" ] && echo "$f ${GREMION_ROOT}/bin/${f##*/}"
+        [ -f "$f" ] || continue
+        is_tree_run "${f##*/}" && continue
+        echo "$f ${GREMION_ROOT}/bin/${f##*/}"
     done
     echo "$src/lib/common.sh ${GREMION_ROOT}/lib/common.sh"
     for f in "$src"/lib/cd/*.sh; do
@@ -393,6 +401,190 @@ template_keys() {
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     [ ! -e "${GREMION_ROOT}/lib/cd/zz-stale.sh" ]
     [ -f "${GREMION_ROOT}/lib/cd/core.sh" ]
+}
+
+@test "stage cd installs a launcher, not a copy, for the programs that run from the release tree, and every other program of bin/ as a copy" {
+    run_stage
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    local f
+    for f in $TREE_RUN; do
+        [ -f "${HOST_SRC}/bin/${f}" ] || { echo "the tree has no ${f}"; return 1; }
+        [ -f "${GREMION_ROOT}/bin/${f}" ] && [ ! -L "${GREMION_ROOT}/bin/${f}" ] || { echo "no launcher: ${f}"; return 1; }
+        ! cmp -s "${HOST_SRC}/bin/${f}" "${GREMION_ROOT}/bin/${f}" || { echo "a copy of the program is installed: ${f}"; return 1; }
+        [ "$(stat -c %a "${GREMION_ROOT}/bin/${f}")" = 755 ]
+        # it sources nothing and execs the program of the current release
+        ! grep -qE '^[[:space:]]*(\.|source)[[:space:]]' "${GREMION_ROOT}/bin/${f}" || { echo "the launcher of ${f} sources a file"; return 1; }
+        grep -qF "current/infra/host/bin/${f}" "${GREMION_ROOT}/bin/${f}"
+    done
+    for f in "${HOST_SRC}"/bin/*; do
+        is_tree_run "${f##*/}" && continue
+        [ -f "${GREMION_ROOT}/bin/${f##*/}" ] || { echo "not installed: ${f##*/}"; return 1; }
+    done
+    # and not a single library of the customer code
+    [ ! -e "${GREMION_ROOT}/lib/customer-ops.sh" ]
+    [ ! -e "${GREMION_ROOT}/lib/access-log.sh" ]
+    [ ! -e "${GREMION_ROOT}/lib/executor" ]
+}
+
+# installed_sources_resolve -- the guard on the INSTALLED layout: every `.` of every installed
+# program and library names a file that is there. The forms are the ones the programs use; one the
+# walker does not know FAILS (a scan that skips what it cannot read reports clean).
+installed_sources_resolve() {
+    local f stmt arg target n=0 bad=0
+    for f in "${GREMION_ROOT}"/bin/* "${GREMION_ROOT}"/lib/*.sh "${GREMION_ROOT}"/lib/cd/*.sh; do
+        [ -f "$f" ] || continue
+        while IFS= read -r stmt; do
+            arg="${stmt//\"/}"
+            n=$((n + 1))
+            case "$arg" in
+                '$SCRIPT_DIR/../lib/'* | '${SCRIPT_DIR}/../lib/'*) target="${GREMION_ROOT}/lib/${arg#*/../lib/}" ;;
+                '$SCRIPT_DIR/'* | '${SCRIPT_DIR}/'*) target="${GREMION_ROOT}/bin/${arg#*/}" ;;
+                '$CD_LIB_DIR/${cd_lib_name}.sh') continue ;;     # the glob of lib/cd, all installed
+                '$CD_LIB_DIR/'*) target="${GREMION_ROOT}/lib/cd/${arg#*/}" ;;
+                '${GREMION_CD_STUBS_DIR}/cd-stubs.sh') continue ;;  # the test hook, read only with GREMION_CD_TESTING=1
+                '${lib}/'*) continue ;;                          # gremion-executor: the release's own libraries
+                *) echo "cannot resolve '${arg}' in ${f}"; bad=1; continue ;;
+            esac
+            [ -f "$target" ] || { echo "${f} sources ${target}, which the stage did not install"; bad=1; }
+        done < <(grep -vE '^[[:space:]]*#' "$f" \
+            | grep -oE '(^|;|&&|\|\||!|\<if\>|\<then\>|\<do\>)[[:space:]]*(\.|source)[[:space:]]+("[^"]*"|\$[^[:space:];)]+|[^[:space:];)"]*(/|\.sh)[^[:space:];)"]*)' \
+            | sed -E 's/^([;&|!]|if|then|do|[[:space:]])*(\.|source)[[:space:]]+//')
+    done
+    # a walk that found nothing is no proof
+    [ "$n" -ge 15 ] || { echo "the walker saw only ${n} source statements"; return 1; }
+    return "$bad"
+}
+
+@test "stage cd: every library an installed program sources is installed (the guard on the installed layout)" {
+    run_stage
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    run installed_sources_resolve
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+}
+
+@test "stage cd: the installed-layout guard names the file when a library is missing (the walk is not vacuous)" {
+    run_stage
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    rm -f "${GREMION_ROOT}/lib/common.sh"
+    run installed_sources_resolve
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"/lib/common.sh, which the stage did not install"* ]]
+}
+
+@test "stage cd: the installed-layout guard sees a source in the middle of a line, not only one that starts it" {
+    run_stage
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    printf '#!/usr/bin/env bash\nSCRIPT_DIR=x\nif ! . "$SCRIPT_DIR/../lib/inline-one.sh"; then :; fi\n[[ -f x ]] && . "${SCRIPT_DIR}/../lib/inline-two.sh"\n' > "${GREMION_ROOT}/bin/gremion-zz"
+    run installed_sources_resolve
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"lib/inline-one.sh, which the stage did not install"* ]]
+    [[ "$output" == *"lib/inline-two.sh, which the stage did not install"* ]]
+}
+
+@test "the launcher of a tree-run program runs the program of the current release with its arguments, and says so when no release is current" {
+    run_stage
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    run env GREMION_ROOT="${GREMION_ROOT}" "${GREMION_ROOT}/bin/gremion-tenant" status zz
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"gremion-tenant: ${GREMION_ROOT}/current/infra/host/bin/gremion-tenant is not there"* ]]
+    mkdir -p "${GREMION_ROOT}/current/infra/host/bin"
+    printf '#!/usr/bin/env bash\necho "tenant of current: $*"\nexit 7\n' > "${GREMION_ROOT}/current/infra/host/bin/gremion-tenant"
+    chmod +x "${GREMION_ROOT}/current/infra/host/bin/gremion-tenant"
+    run env GREMION_ROOT="${GREMION_ROOT}" "${GREMION_ROOT}/bin/gremion-tenant" status "a b"
+    [ "$status" -eq 7 ]
+    [ "$output" = "tenant of current: status a b" ]
+}
+
+@test "stage cd: a copy of a tree-run program a hand install left becomes the launcher; the libraries put beside it are left exactly as they are (nothing sources them, nothing of the host is deleted), on a fresh install and on a re-run" {
+    mkdir -p "${GREMION_ROOT}/bin" "${GREMION_ROOT}/lib/executor"
+    local f
+    for f in bin/gremion-tenant bin/gremion-isolation bin/gremion-services lib/customer-ops.sh lib/access-log.sh lib/executor/db.sh; do
+        printf '# a hand copy
+' > "${GREMION_ROOT}/${f}"
+        chmod 600 "${GREMION_ROOT}/${f}"
+    done
+    run_stage
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    # what is left is named, so the operator can take it away by hand
+    [[ "$output" == *"${GREMION_ROOT}/lib/customer-ops.sh"* ]]
+    [[ "$output" == *"${GREMION_ROOT}/lib/executor/db.sh"* ]]
+    for f in lib/customer-ops.sh lib/access-log.sh lib/executor/db.sh; do
+        [ "$(cat "${GREMION_ROOT}/${f}")" = '# a hand copy' ] || { echo "changed or gone: ${f}"; return 1; }
+        [ "$(stat -c %a "${GREMION_ROOT}/${f}")" = 600 ] || { echo "mode changed: ${f}"; return 1; }
+    done
+    for f in $TREE_RUN; do
+        ! grep -q 'a hand copy' "${GREMION_ROOT}/bin/${f}" || { echo "the hand copy of ${f} is still there"; return 1; }
+        [ "$(stat -c %a "${GREMION_ROOT}/bin/${f}")" = 755 ]
+    done
+    # what is installed is right (mode, bytes), nothing installed sources the leftovers, a second run changes nothing
+    [ "$(stat -c %a "${GREMION_ROOT}/bin/gremion-cd")" = 755 ]
+    cmp -s "${HOST_SRC}/lib/common.sh" "${GREMION_ROOT}/lib/common.sh"
+    printf '# a hand copy
+' > "${BATS_TEST_TMPDIR}/expected"
+    run installed_sources_resolve
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    run_stage
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    cmp -s "${BATS_TEST_TMPDIR}/expected" "${GREMION_ROOT}/lib/executor/db.sh"
+    run installed_sources_resolve
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+}
+
+@test "stage cd never reaches through a link: a lib/executor that points into the live release leaves the release's library where it is" {
+    mkdir -p "${GREMION_ROOT}/current/infra/host/lib/executor"
+    printf '# the live release library
+' > "${GREMION_ROOT}/current/infra/host/lib/executor/db.sh"
+    ln -s "${GREMION_ROOT}/current/infra/host/lib/executor" "${GREMION_ROOT}/lib/executor"
+    run_stage
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [ "$(cat "${GREMION_ROOT}/current/infra/host/lib/executor/db.sh")" = '# the live release library' ]
+    [ -L "${GREMION_ROOT}/lib/executor" ]
+    # and the same through a link at the file itself and one at lib/
+    ln -sf "${GREMION_ROOT}/current/infra/host/lib/executor/db.sh" "${GREMION_ROOT}/lib/customer-ops.sh"
+    run_stage
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [ "$(cat "${GREMION_ROOT}/current/infra/host/lib/executor/db.sh")" = '# the live release library' ]
+}
+
+@test "the launcher finds the current release of ITS OWN root when GREMION_ROOT is not set (a host whose root is not /opt/gremion)" {
+    run_stage
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    mkdir -p "${GREMION_ROOT}/current/infra/host/bin"
+    printf '#!/usr/bin/env bash
+echo "isolation of: $0"
+' > "${GREMION_ROOT}/current/infra/host/bin/gremion-isolation"
+    chmod +x "${GREMION_ROOT}/current/infra/host/bin/gremion-isolation"
+    run env -u GREMION_ROOT "${GREMION_ROOT}/bin/gremion-isolation" run
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [ "$output" = "isolation of: ${GREMION_ROOT}/current/infra/host/bin/gremion-isolation" ]
+    # called through a link (a PATH entry that points at <root>/bin), the root is still the launcher's own
+    mkdir -p "${BATS_TEST_TMPDIR}/pathdir"
+    ln -s "${GREMION_ROOT}/bin/gremion-isolation" "${BATS_TEST_TMPDIR}/pathdir/gremion-isolation"
+    run env -u GREMION_ROOT "${BATS_TEST_TMPDIR}/pathdir/gremion-isolation" run
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [ "$output" = "isolation of: ${GREMION_ROOT}/current/infra/host/bin/gremion-isolation" ]
+    # and the program that is started works on THAT root, not on the /opt/gremion default: the launcher hands
+    # the root it worked out to the program (customer-ops and the release lookup read it through gremion_root)
+    mkdir -p "${GREMION_ROOT}/current/infra/host/lib"
+    cp "${HOST_SRC}/lib/common.sh" "${GREMION_ROOT}/current/infra/host/lib/common.sh"
+    printf '#!/usr/bin/env bash
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$SCRIPT_DIR/../lib/common.sh"
+echo "root the program uses: $(gremion_root)"
+' > "${GREMION_ROOT}/current/infra/host/bin/gremion-isolation"
+    run env -u GREMION_ROOT "${GREMION_ROOT}/bin/gremion-isolation" run
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [ "$output" = "root the program uses: ${GREMION_ROOT}" ] || { echo "$output"; return 1; }
+    run env -u GREMION_ROOT "${BATS_TEST_TMPDIR}/pathdir/gremion-isolation" run
+    [ "$output" = "root the program uses: ${GREMION_ROOT}" ] || { echo "$output"; return 1; }
+    # a root that is set wins (the same as every other program of the host)
+    mkdir -p "${BATS_TEST_TMPDIR}/other/current/infra/host/bin"
+    printf '#!/usr/bin/env bash
+echo other
+' > "${BATS_TEST_TMPDIR}/other/current/infra/host/bin/gremion-isolation"
+    chmod +x "${BATS_TEST_TMPDIR}/other/current/infra/host/bin/gremion-isolation"
+    run env GREMION_ROOT="${BATS_TEST_TMPDIR}/other" "${GREMION_ROOT}/bin/gremion-isolation" run
+    [ "$output" = other ]
 }
 
 @test "stage cd renders the six units, runs daemon-reload and enables or starts nothing" {

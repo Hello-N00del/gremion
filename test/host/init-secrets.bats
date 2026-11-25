@@ -520,6 +520,23 @@ copy_host_src() {
     grep -B6 '^SYNAPSE_ADMIN_TOKEN=' "${HOST_SRC}/templates/env/app.env.tmpl" | grep -q 'gremion-services wire'
 }
 
+@test "the copy the cd stage installs into <root>/bin finds the templates and the module profile map in the live release (it has no tree beside it)" {
+    # <root>/bin and <root>/lib hold only the programs; the data files belong to the release under <root>/current
+    mkdir -p "${GREMION_ROOT}/bin" "${GREMION_ROOT}/lib" "${GREMION_ROOT}/current/infra"
+    cp "$INIT" "${GREMION_ROOT}/bin/gremion-init-secrets"
+    cp "${HOST_SRC}/lib/common.sh" "${GREMION_ROOT}/lib/common.sh"
+    cp -r "$HOST_SRC" "${GREMION_ROOT}/current/infra/host"
+    run "${GREMION_ROOT}/bin/gremion-init-secrets" --root "$GREMION_ROOT" --stack gremion
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [ -s "${ENV_DIR}/state.env" ]
+    [[ "$(value_of "${ENV_DIR}/state.env" COMPOSE_PROFILES)" == production* ]]
+    # with no release current either, it still refuses by naming what is missing
+    rm -rf "${GREMION_ROOT}/current" "$ENV_DIR"
+    run "${GREMION_ROOT}/bin/gremion-init-secrets" --root "$GREMION_ROOT" --stack gremion
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"template directory not found"* ]]
+}
+
 @test "profiles: COMPOSE_PROFILES is rendered from module-profiles.json into state.env and both colours, and nowhere else" {
     render
     [ "$status" -eq 0 ]
