@@ -8,7 +8,7 @@
  * guard can see: that case is simulated here with two independent loads of the module.
  *
  * Runs against NEWSLETTER_TEST_PG_URL (a throwaway Postgres on a non-5432 port) and only ever
- * touches databases named newsletter_test_*; the shared newsletter_test_control is dropped and
+ * touches databases named newsletter_fc_test_*; the shared newsletter_fc_test_control is dropped and
  * re-created by the first contact itself (that creation races too).
  */
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest'
@@ -18,7 +18,7 @@ import type * as TenantStore from '../src/tenant-store.ts'
 import { requireEphemeralTestPgUrl, assertSafeTestEnv } from './support/pg-test-guard.ts'
 
 const TEST_PG_URL = requireEphemeralTestPgUrl()
-const TEST_DB_PREFIX = 'newsletter_test_'
+const TEST_DB_PREFIX = 'newsletter_fc_test_'
 assertSafeTestEnv(TEST_PG_URL, TEST_DB_PREFIX)
 
 const PARALLEL = 8
@@ -41,7 +41,7 @@ function tenant(): TenantStore.TenantRef {
 
 async function dropTestDbs(): Promise<void> {
   const rows = await admin<{ datname: string }[]>`
-    SELECT datname FROM pg_database WHERE datname LIKE 'newsletter\\_test\\_%'
+    SELECT datname FROM pg_database WHERE datname LIKE 'newsletter\\_fc\\_test\\_%'
   `
   for (const { datname } of rows) {
     await admin.unsafe(

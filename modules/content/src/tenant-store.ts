@@ -860,11 +860,27 @@ function isTemplateBusy(err: unknown): boolean {
  * exactly one caller creates it, the rest find it there.
  */
 async function createDatabaseIfMissing(adminUrl: string, dbName: string): Promise<void> {
-  await withAdvisoryLock(adminUrl, CREATE_DB_LOCK, async (admin) => {
-    const exists = await admin<{ count: string }[]>`
+  const admin = postgres(adminUrl, {
+    max: 1,
+    prepare: false,
+    connect_timeout: 10,
+    onnotice: () => {},
+    connection: { lock_timeout: FIRST_CONTACT_LOCK_TIMEOUT_MS },
+  })
+  const exists = async (): Promise<boolean> => {
+    const rows = await admin<{ count: string }[]>`
       SELECT count(*) AS count FROM pg_database WHERE datname = ${dbName}
     `
-    if (Number(exists[0].count) > 0) return
+    return Number(rows[0].count) > 0
+  }
+  try {
+    // The ordinary case, every pool re-open after an eviction: the database is there. No lock, so
+    // nothing here ever queues behind somebody else's slow CREATE DATABASE.
+    if (await exists()) return
+    // Missing: create it under the server-wide lock (held on this connection, released with it) and
+    // look again, because the holder before us may just have created it.
+    await admin`SELECT pg_advisory_lock(hashtextextended(${CREATE_DB_LOCK}, 0))`
+    if (await exists()) return
     for (let attempt = 1; ; attempt++) {
       try {
         await admin.unsafe(`CREATE DATABASE "${dbName}"`)
@@ -878,7 +894,49 @@ async function createDatabaseIfMissing(adminUrl: string, dbName: string): Promis
         throw err
       }
     }
-  })
+  } finally {
+    await admin.end({ timeout: 5 }).catch(() => {})
+  }
+}
+
+/** Two sessions creating the same object (CREATE ... IF NOT EXISTS is not atomic across sessions). */
+const MIGRATION_RACE_CODES: ReadonlySet<string> = new Set([
+  '42710', // duplicate_object
+  '42P07', // duplicate_table
+  '40P01', // deadlock_detected
+  '40001', // serialization_failure
+])
+const MIGRATION_MAX_ATTEMPTS = 3
+const MIGRATION_RETRY_MS = 200
+
+function isMigrationRace(err: unknown): boolean {
+  const code = sqlstateOf(err)
+  if (code === undefined) return false
+  if (MIGRATION_RACE_CODES.has(code)) return true
+  // Two sessions replacing one function: the loser fails with this internal-error code and no other.
+  if (code === 'XX000') return err instanceof Error && err.message.includes('tuple concurrently updated')
+  // A unique violation of a pg_ catalogue index is two sessions creating one object; of a user table, a defect.
+  if (code === '23505') {
+    const constraint = (err as { constraint_name?: unknown }).constraint_name
+    return typeof constraint === 'string' && constraint.startsWith('pg_')
+  }
+  return false
+}
+
+/**
+ * The first-contact lock serialises the processes that take it; a creator that takes none (an older
+ * colour still serving) can still collide with a migration file. The files are idempotent, so a
+ * collision with a catalogue race is retried a bounded number of times; every other error is final.
+ */
+async function migrateWithRetry(run: () => Promise<void>): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await run()
+    } catch (err) {
+      if (!isMigrationRace(err) || attempt >= MIGRATION_MAX_ATTEMPTS) throw err
+      await new Promise((resolve) => setTimeout(resolve, MIGRATION_RETRY_MS * attempt))
+    }
+  }
 }
 
 /**
@@ -1167,7 +1225,9 @@ async function openFirstContact(
   // 6. Run migrations (verifies hashes; idempotent DDL). If hash verification
   //    fails, close the pool before rethrowing — no half-open pool left behind.
   try {
-    await withAdvisoryLock(tenantUrl, FIRST_CONTACT_LOCK, () => runMigrations(sql, options._overrideManifest))
+    await withAdvisoryLock(tenantUrl, FIRST_CONTACT_LOCK, () =>
+      migrateWithRetry(() => runMigrations(sql, options._overrideManifest)),
+    )
   } catch (err) {
     await sql.end().catch(() => {})
     throw err
