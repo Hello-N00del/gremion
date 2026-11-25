@@ -8,6 +8,7 @@ import { getVotesBackend } from '$lib/server/elections/backend'
 import { retainedViewsForPage } from '$lib/server/module-karenz/retained/views'
 import { dedupeDegradedUuids, deriveHeliosStatus } from '$lib/votes/helios-status'
 import type { VoteItem } from '$lib/votes/types'
+import { duplicateOptionMessage, parsePollOptions } from '$lib/components/polls/options'
 
 /**
  * A tracked Helios election whose ballot could not be reached on the external
@@ -136,8 +137,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 export const actions: Actions = {
   // Quick-poll creation, relocated here from the now-removed /polls page (#197).
-  // Mirrors the original /polls create action: same role gate, de-duplication
-  // and Nextcloud error handling. Returns a fail() on validation/upstream error
+  // Mirrors the original /polls create action: same role gate and Nextcloud error handling;
+  // a repeated option is refused with a message (it used to be dropped silently). Returns a fail() on validation/upstream error
   // so the inline PollCreateForm surfaces it; success closes the dialog (the
   // enhanced form invalidates the load on update, refreshing the poll list).
   create: async ({ request, locals }) => {
@@ -153,16 +154,13 @@ export const actions: Actions = {
     const anonymous = data.get('anonymous') === 'on'
 
     if (!title) return fail(400, { error: 'Titel ist erforderlich' })
-    const options = [
-      ...new Set(
-        (optionsRaw ?? '')
-          .split('\n')
-          .map((o) => o.trim())
-          .filter(Boolean),
-      ),
-    ]
+    // A repeated option is refused with a message, not dropped without one (the form checks first; this covers a
+    // request that skipped the form). The poll API still de-duplicates whatever it is given.
+    const { options, duplicates } = parsePollOptions(optionsRaw)
+    const repeated = duplicateOptionMessage(duplicates)
+    if (repeated) return fail(400, { error: repeated })
     if (options.length < 2) {
-      return fail(400, { error: 'Mindestens 2 Optionen erforderlich (nach Entfernung von Duplikaten)' })
+      return fail(400, { error: 'Mindestens 2 Optionen erforderlich' })
     }
 
     try {

@@ -4,6 +4,7 @@
   import { Button } from '$lib/components/ui/button'
   import { Input } from '$lib/components/ui/input'
   import { Label } from '$lib/components/ui/label'
+  import { duplicateOptionMessage, parsePollOptions } from './options'
 
   interface Props {
     action?: string
@@ -27,7 +28,14 @@
 <form
   method="POST"
   {action}
-  use:enhance={() => {
+  use:enhance={({ formData, cancel }) => {
+    // A repeated option is refused here, before anything is sent, instead of being dropped without a word.
+    const repeated = duplicateOptionMessage(parsePollOptions(formData.get('options') as string | null).duplicates)
+    if (repeated) {
+      internalError = repeated
+      cancel()
+      return
+    }
     submitting = true
     internalError = null
     return async ({ update, result }) => {
