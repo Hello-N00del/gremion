@@ -3,6 +3,7 @@
 // ("Nextcloud PROPFIND /remote.php/dav/files/<id>/x → 404: ..."). The caller gets a
 // plain German message and the right status; the detail goes to the server log only.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { NextcloudResponseError } from '$lib/server/files/nextcloud-client'
 
 const { mockPropfind, mockDownload, mockUpload, mockDelete, mockMove } = vi.hoisted(() => ({
   mockPropfind: vi.fn(),
@@ -28,7 +29,15 @@ import { GET, PUT, DELETE, PATCH } from './+server'
 
 const UID = '3f0c9c1e-6a53-4f6e-9a3b-2f4a1c7d8e90'
 const DAV = `/remote.php/dav/files/${UID}/Missing/Folder`
-const upstream = (status: number) => new Error(`Nextcloud PROPFIND ${DAV} → ${status}: <d:error>sabre</d:error>`)
+// The shape the real client throws for a failed request: it carries a numeric `status`.
+const upstream = (status: number) =>
+  new NextcloudResponseError({
+    method: 'PROPFIND',
+    path: DAV,
+    status,
+    contentType: 'application/xml',
+    bodySnippet: '<d:error>sabre</d:error>',
+  })
 
 function event(path: string, init: { method?: string; body?: unknown } = {}) {
   return {
@@ -131,5 +140,21 @@ describe('PUT, DELETE and PATCH do not echo the internal path either', () => {
     )
     expect(status).toBe(502)
     expectClean(text)
+    expect(text).toContain('Dokumentenspeicher')
+  })
+  it('PATCH of a missing source is a 502 with the German message', async () => {
+    mockMove.mockRejectedValue(upstream(404))
+    const { status, text } = await outcome(
+      () => PATCH(event('Missing/x.txt', { method: 'PATCH', body: { action: 'move', destination: 'y.txt' } })) as Promise<Response>,
+    )
+    expect(status).toBe(502)
+    expectClean(text)
+    expect(text).toContain('Dokumentenspeicher')
+  })
+  it('PATCH with an unknown action stays a 400', async () => {
+    const { status } = await outcome(
+      () => PATCH(event('Missing/x.txt', { method: 'PATCH', body: { action: 'nope', destination: 'y.txt' } })) as Promise<Response>,
+    )
+    expect(status).toBe(400)
   })
 })

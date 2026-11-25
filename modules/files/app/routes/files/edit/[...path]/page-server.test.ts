@@ -9,7 +9,8 @@ const { mockGetFileId, mockGetCollaboraEditorUrl } = vi.hoisted(() => ({
   mockGetCollaboraEditorUrl: vi.fn()
 }))
 
-vi.mock('$lib/server/files/nextcloud-client', () => ({
+vi.mock('$lib/server/files/nextcloud-client', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('$lib/server/files/nextcloud-client')>()),
   createNextcloudClient: () => ({
     getFileId: mockGetFileId,
     getCollaboraEditorUrl: mockGetCollaboraEditorUrl
@@ -18,6 +19,7 @@ vi.mock('$lib/server/files/nextcloud-client', () => ({
 vi.mock('$env/dynamic/private', () => ({ env: {} }))
 
 import { load } from './+page.server'
+import { NextcloudResponseError } from '$lib/server/files/nextcloud-client'
 
 function makeEvent(path: string, origin: string) {
   const user = { id: 'u1', roles: [], groups: [] } as unknown as SessionUser
@@ -47,8 +49,15 @@ describe('files edit page load', () => {
   // A failed Nextcloud call used to be shown with the upstream text, which carries the
   // internal DAV path and the user's Nextcloud id. The page shows a plain German sentence.
   const UID = '3f0c9c1e-6a53-4f6e-9a3b-2f4a1c7d8e90'
+  // The shape the real client throws for a failed request: it carries a numeric `status`.
   const upstream = (status: number) =>
-    new Error(`Nextcloud PROPFIND /remote.php/dav/files/${UID}/Docs/Missing.odt → ${status}: <d:error>sabre</d:error>`)
+    new NextcloudResponseError({
+      method: 'PROPFIND',
+      path: `/remote.php/dav/files/${UID}/Docs/Missing.odt`,
+      status,
+      contentType: 'application/xml',
+      bodySnippet: '<d:error>sabre</d:error>'
+    })
 
   async function failure(): Promise<{ status: number; text: string }> {
     try {

@@ -1,10 +1,10 @@
-import { error, json } from '@sveltejs/kit'
+import { error, isHttpError, json } from '@sveltejs/kit'
 import type { RequestEvent, RequestHandler } from '@sveltejs/kit'
 import { createNextcloudClient } from '$lib/server/files/nextcloud-client'
 import { buildWebdavPath } from '$lib/server/files/webdav-path'
 import { isEditableFile } from '$lib/files/editable-types'
 import type { SessionUser } from '$lib/auth'
-import { throwBadGateway } from '$lib/server/files/upstream-failure'
+import { describeUpstreamFailure } from '$lib/server/files/upstream-failure'
 
 /**
  * WOPI token endpoint for collaborative document editing.
@@ -68,7 +68,11 @@ export const GET: RequestHandler = async (event) => {
     const body: EditTokenResponse = { token, tokenTtl, editorUrl: fullUrl.toString() }
     return json(body)
   } catch (err) {
-    if ((err as { status?: number }).status) throw err
-    throwBadGateway(err, '[files:upstream]', { op: 'edit-token', requestPath: paramPath })
+    if (isHttpError(err)) throw err
+    // A missing file is a 404 and a refused one a 403 (other users' documents answer exactly like
+    // missing ones for the isolation checks); any other upstream failure stays a 502. The caller
+    // gets a plain German sentence, the DAV path and the user id go to the server log only.
+    const failure = describeUpstreamFailure(err, '[files:upstream]', { op: 'edit-token', requestPath: paramPath })
+    throw error(failure.status, failure.message)
   }
 }

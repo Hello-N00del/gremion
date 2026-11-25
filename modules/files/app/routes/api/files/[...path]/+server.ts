@@ -1,4 +1,4 @@
-import { error, json } from '@sveltejs/kit'
+import { error, isHttpError, json } from '@sveltejs/kit'
 import type { RequestEvent, RequestHandler } from '@sveltejs/kit'
 import { resolveFilesBackendOr503 } from '$lib/server/files/backend/resolve'
 import { NextcloudResponseError } from '$lib/server/files/backend'
@@ -266,7 +266,7 @@ export const PATCH: RequestHandler = async (event) => {
     }
     return json({ success: true })
   } catch (err) {
-    if ((err as { status?: number }).status) throw err
+    if (isHttpError(err)) throw err
     throwBadGateway(err, '[files:upstream]', { op: 'PATCH', requestPath: paramPath })
   }
 }

@@ -24,7 +24,7 @@ const NEWSLETTER = { id: 1, title: 'T', subject: 'S', status: 'draft', odt_path:
 /** The leaf as it behaves: 400 for an id that is not a positive integer, 404 for an unknown one. */
 function leaf() {
   return vi.fn(async (url: string) => {
-    const m = /\/api\/v1\/newsletters\/([^/]+)(\/recipients)?$/.exec(String(url))
+    const m = /\/api\/v1\/newsletters\/([^/]+)(\/recipients)?$/.exec(url)
     const json = (status: number, body: unknown) =>
       new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
     if (!m) return json(404, { error: 'not found' })
@@ -103,18 +103,17 @@ describe('single-newsletter API routes answer 404 for an id that names nothing',
   })
 })
 
-describe('list routes refuse an id the leaf would refuse, as a client error', () => {
-  it.each(['0', '1abc', '-2'])('DELETE /api/newsletter/lists/%s is 4xx', async (id) => {
+// Decision: a malformed LIST id is a 400 "Invalid id" on every list route (the contract these
+// routes always had for a non-numeric id), while a malformed NEWSLETTER id is a 404. The list routes
+// are staff-only admin calls where the id comes from the list page, not from a shared link.
+describe('list routes answer a malformed id with 400, consistently', () => {
+  it.each(['0', '1abc', '-2'])('DELETE /api/newsletter/lists/%s is 400', async (id) => {
     const { DELETE } = await import('./lists/[id]/+server')
-    const s = await status(DELETE as Handler, id, 'DELETE')
-    expect(s).toBeGreaterThanOrEqual(400)
-    expect(s).toBeLessThan(500)
+    expect(await status(DELETE as Handler, id, 'DELETE')).toBe(400)
   })
-  it.each(['0', '1abc'])('GET /api/newsletter/lists/%s/members is 4xx', async (id) => {
+  it.each(['0', '1abc'])('GET /api/newsletter/lists/%s/members is 400', async (id) => {
     const { GET } = await import('./lists/[id]/members/+server')
-    const s = await status(GET as Handler, id)
-    expect(s).toBeGreaterThanOrEqual(400)
-    expect(s).toBeLessThan(500)
+    expect(await status(GET as Handler, id)).toBe(400)
   })
 })
 
