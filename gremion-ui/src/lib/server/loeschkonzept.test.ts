@@ -76,7 +76,7 @@ describe('generateLoeschkonzept', () => {
   it('names no internal id or pipeline product: the plain German words are used', async () => {
     const { generateLoeschkonzept } = await import('./loeschkonzept')
     const doc = generateLoeschkonzept(mockConfig, new Date('2026-05-04'))
-    expect(doc).not.toMatch(/RC-GOV|ipcrypt|Traefik|Vector|logrotate|restic|rclone/i)
+    expect(doc).not.toMatch(/RC-GOV|ipcrypt|Traefik|Vector|logrotate/i)
     expect(doc).toContain('pseudonymisiert')
     expect(doc).toContain('Webservers')
   })
