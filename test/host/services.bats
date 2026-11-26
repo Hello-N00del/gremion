@@ -177,6 +177,20 @@ case " $* " in
         echo 1; exit 0 ;;
       *"UPDATE provisioning_resources"*) bash "$GREMION_ROOT/ledger-sim.sh" reset; exit 0 ;;
       *"count(*) FILTER"*) bash "$GREMION_ROOT/ledger-sim.sh" poll; exit 0 ;;
+      *"UPDATE tenant SET nc_target"*)
+        # the customer'"'"'s own Nextcloud provider id, MERGED into nc_target (the keys it holds stay)
+        if [ -f "$GREMION_ROOT/nc-target-update-fails" ]; then exit 1; fi
+        printf "nc-target-update\n" >> "$ORDER"
+        nct="$GREMION_ROOT/nc-target.json"
+        if [ ! -f "$GREMION_ROOT/nc-target-not-stored" ]; then
+          [ -f "$nct" ] || echo "{}" > "$nct"
+          jq --argjson p "$V_pid" ". + {providerId: \$p}" "$nct" > "$nct.new" && mv "$nct.new" "$nct"
+        fi
+        echo 1; exit 0 ;;
+      *"nc_target->>"*)
+        printf "nc-target-read\n" >> "$ORDER"
+        jq -r ".providerId // empty" "$GREMION_ROOT/nc-target.json" 2>/dev/null
+        exit 0 ;;
       *"UPDATE tenant"*)
         if [ -f "$GREMION_ROOT/no-tenant-row" ]; then echo 0; exit 0; fi
         printf "psql-update\n" >> "$ORDER"
@@ -1309,4 +1323,149 @@ jwt_switch() {
     wire
     [ "$status" -eq 1 ]
     [[ "$output" == *"org.matrix.login.jwt"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# the customer's own user_oidc provider id (tenant row nc_target.providerId)
+# ---------------------------------------------------------------------------
+# One process-wide NEXTCLOUD_OIDC_PROVIDER_ID used to name the provider of EVERY customer's Nextcloud accounts, so a
+# secondary customer's members were created under the primary's provider. With the operator's switch
+# (NC_PROVIDER_PER_CUSTOMER=on in state.env) the secondary wire records the id it read back in the customer's own row
+# and reads it back; the app takes it from there. Without the switch (absent, empty or off) the wire does exactly what
+# it did before: nothing is recorded.
+
+# per_customer_provider <value> -- the switch in state.env, and the byte-identity baseline refreshed to include it
+per_customer_provider() {
+    local f=state
+    sed -i '/^NC_PROVIDER_PER_CUSTOMER=/d' "${GREMION_ROOT}/etc/env/${f}.env"
+    printf 'NC_PROVIDER_PER_CUSTOMER=%s\n' "$1" >>"${GREMION_ROOT}/etc/env/${f}.env"
+    cp "${GREMION_ROOT}/etc/env/${f}.env" "${GREMION_ROOT}/etc/env/${f}.env.before"
+}
+
+@test "wire, secondary host: the provider id read back is written into nc_target.providerId of the customer's row (as a psql variable, not inline) and read back, before the collection is created" {
+    secondary_customer
+    per_customer_provider on
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [ "$(jq -r '.providerId' "${GREMION_ROOT}/nc-target.json")" = 2 ] || { cat "${GREMION_ROOT}/nc-target.json"; return 1; }
+    grep -Eq '^docker exec -i c-pg psql .* -v slug=alpha-rat -v pid=2 ' "$SHIM_LOG" || { cat "$SHIM_LOG"; return 1; }
+    local r u g c
+    r="$(grep -n 'occ provider-read-secondary' "$ORDER" | head -1 | cut -d: -f1)"
+    u="$(grep -n 'nc-target-update' "$ORDER" | head -1 | cut -d: -f1)"
+    g="$(grep -n 'nc-target-read' "$ORDER" | head -1 | cut -d: -f1)"
+    c="$(grep -n 'occ create-calendar' "$ORDER" | head -1 | cut -d: -f1)"
+    [ -n "$r" ] && [ -n "$u" ] && [ -n "$g" ] && [ -n "$c" ] || { echo "missing step: r=${r} u=${u} g=${g} c=${c}"; return 1; }
+    [ "$r" -lt "$u" ] && [ "$u" -lt "$g" ] && [ "$g" -lt "$c" ] || { echo "order: r=${r} u=${u} g=${g} c=${c}"; return 1; }
+    [[ "$output" == *"nc_target.providerId"*"2"* ]] || { echo "$output"; return 1; }
+}
+
+@test "wire, secondary host: with the switch on the wire says plainly that the app does not yet address derived-uid accounts (group membership, files, erasure), so the switch is not for use yet" {
+    secondary_customer
+    per_customer_provider on
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"NOT YET SAFE"* ]] || { echo "$output"; return 1; }
+    [[ "$output" == *"derived"* && "$output" == *"erasure"* ]] || { echo "$output"; return 1; }
+}
+
+@test "wire, secondary host, switch off: the wire prints no such notice" {
+    secondary_customer
+    per_customer_provider off
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" != *"NOT YET SAFE"* ]] || { echo "$output"; return 1; }
+}
+
+@test "wire, secondary host: the provider id is MERGED into nc_target (the keys it holds stay) and a second run leaves one provider id" {
+    secondary_customer
+    per_customer_provider on
+    printf '{"url":"https://nc.example.org/cloud"}\n' > "${GREMION_ROOT}/nc-target.json"
+    wire
+    [ "$status" -eq 0 ] || { echo "first: status=$status $output"; return 1; }
+    wire
+    [ "$status" -eq 0 ] || { echo "second: status=$status $output"; return 1; }
+    [ "$(jq -c . "${GREMION_ROOT}/nc-target.json")" = '{"url":"https://nc.example.org/cloud","providerId":2}' ] || { cat "${GREMION_ROOT}/nc-target.json"; return 1; }
+    local sql
+    sql="$(cat "${GREMION_ROOT}/psql-sql.log")"
+    [[ "$sql" == *"nc_target = nc_target || jsonb_build_object('providerId'"* ]] || { echo "$sql"; return 1; }
+}
+
+@test "wire, secondary host: a provider id that does not read back from the row fails the wire (exit 1) naming it, before the collection is created" {
+    secondary_customer
+    per_customer_provider on
+    : > "${GREMION_ROOT}/nc-target-not-stored"
+    wire
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"nc_target.providerId"* ]] || { echo "$output"; return 1; }
+    assert_absent 'dav:create-calendar' "$SHIM_LOG" "the collection was created after the provider id failed to read back"
+}
+
+@test "wire, secondary host: a registry update that fails fails the wire (exit 1) before the collection is created" {
+    secondary_customer
+    per_customer_provider on
+    : > "${GREMION_ROOT}/nc-target-update-fails"
+    wire
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"nc_target"* ]] || { echo "$output"; return 1; }
+    assert_absent 'dav:create-calendar' "$SHIM_LOG" "the collection was created after the registry update failed"
+}
+
+@test "wire, PRIMARY customer: nothing is written to nc_target and the provider id is not read (the primary keeps NEXTCLOUD_OIDC_PROVIDER_ID)" {
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    assert_absent 'nc_target' "${GREMION_ROOT}/psql-sql.log" "the primary wire touched nc_target"
+    [ ! -e "${GREMION_ROOT}/nc-target.json" ]
+    assert_absent 'nc-target' "$ORDER" "the primary wire ran a provider id step"
+}
+
+@test "wire, secondary host, switch unset: nothing is recorded in the registry row and the provider id is not read (the wire is what it was before the switch existed)" {
+    secondary_customer
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"WIRE: ok ${SLUG}"* ]] || { echo "$output"; return 1; }
+    [ ! -e "${GREMION_ROOT}/nc-target.json" ]
+    local hit
+    hit="$(grep -c 'nc_target' "${GREMION_ROOT}/psql-sql.log" 2>/dev/null || true)"
+    [ "${hit:-0}" = 0 ] || { cat "${GREMION_ROOT}/psql-sql.log"; return 1; }
+    hit="$(grep -c 'nc-target' "$ORDER" || true)"
+    [ "${hit:-0}" = 0 ] || { cat "$ORDER"; return 1; }
+    [[ "$output" != *"nc_target.providerId"* ]] || { echo "$output"; return 1; }
+    env_files_untouched
+}
+
+@test "wire, secondary host, switch empty or off: nothing is recorded in the registry row either" {
+    secondary_customer
+    per_customer_provider off
+    wire
+    [ "$status" -eq 0 ] || { echo "off: status=$status $output"; return 1; }
+    [ ! -e "${GREMION_ROOT}/nc-target.json" ]
+    per_customer_provider ''
+    wire
+    [ "$status" -eq 0 ] || { echo "empty: status=$status $output"; return 1; }
+    [ ! -e "${GREMION_ROOT}/nc-target.json" ]
+    local hit
+    hit="$(grep -c 'nc-target' "$ORDER" || true)"
+    [ "${hit:-0}" = 0 ] || { cat "$ORDER"; return 1; }
+}
+
+@test "wire, secondary host: a switch value other than on or off is refused before anything is written, naming the key" {
+    secondary_customer
+    per_customer_provider maybe
+    wire
+    [ "$status" -ne 0 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"NC_PROVIDER_PER_CUSTOMER"* ]] || { echo "$output"; return 1; }
+    local hit
+    hit="$(grep -c 'user_oidc:provider\|dav:create' "$SHIM_LOG" || true)"
+    [ "${hit:-0}" = 0 ] || { cat "$SHIM_LOG"; return 1; }
+    env_files_untouched
+}
+
+@test "wire, PRIMARY customer: the switch on records nothing either (the primary keeps NEXTCLOUD_OIDC_PROVIDER_ID)" {
+    printf 'NC_PROVIDER_PER_CUSTOMER=on\n' >>"${GREMION_ROOT}/etc/env/state.env"
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [ ! -e "${GREMION_ROOT}/nc-target.json" ]
+    local hit
+    hit="$(grep -c 'nc_target' "${GREMION_ROOT}/psql-sql.log" 2>/dev/null || true)"
+    [ "${hit:-0}" = 0 ] || { cat "${GREMION_ROOT}/psql-sql.log"; return 1; }
 }

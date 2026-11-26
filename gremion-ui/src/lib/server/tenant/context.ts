@@ -31,6 +31,11 @@ export interface TenantServices {
   readonly livekitUrl?: string
   readonly livekitApiKeyRef?: string
   readonly livekitApiSecretRef?: string
+  /** The numeric user_oidc provider id this customer's Nextcloud accounts are created under, from the
+   *  registry row's nc_target.providerId (written by the secondary-host wire when the operator's
+   *  NC_PROVIDER_PER_CUSTOMER switch is on). ABSENT for the primary customer and wherever it was never
+   *  written: the files module then keeps NEXTCLOUD_OIDC_PROVIDER_ID. */
+  readonly ncProviderId?: number
   /** SP-2: per-tenant SMTP credential ref + optional host/port/from override.
    *  Sourced from the registry row's domain_profile.smtp. ABSENT on the default
    *  tenant ⇒ the mail seam falls back to config.smtp + auth-less (byte-identical

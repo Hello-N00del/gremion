@@ -301,6 +301,20 @@ check_synapse_jwt_login() {
     ok "Synapse login switch: ${v}"
 }
 
+# NC_PROVIDER_PER_CUSTOMER is an OPTIONAL key (a comment in the state template): on makes the wire of a customer on
+# a secondary host record that customer's own Nextcloud provider id in its registry row; absent, empty and off are
+# today's behaviour. Judged only when a file declares it with a value; anything but on and off fails. The finding
+# names the key, never the value.
+check_nc_provider_per_customer() {
+    local v="${NC_PROVIDER_PER_CUSTOMER-}"
+    [[ -n "$v" ]] || return 0
+    if [[ "$v" != on && "$v" != off ]]; then
+        fail "NC_PROVIDER_PER_CUSTOMER is refused: it is on or off (absent or empty means off)"
+        return 0
+    fi
+    ok "NC_PROVIDER_PER_CUSTOMER: ${v}"
+}
+
 main() {
     parse_args "$@"
     need_cmd grep sed
@@ -328,6 +342,7 @@ main() {
     check_secondary_tenant_hosts
     check_secondary_tenant_modules
     check_synapse_jwt_login
+    check_nc_provider_per_customer
     if [[ "$__gve_failures" -gt 0 ]]; then
         die "VALIDATE-ENV: ${__gve_failures} problem(s) in $(basename "$__gve_env_file")" "$GREMION_EXIT_ASSERT"
     fi

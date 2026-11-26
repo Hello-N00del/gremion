@@ -841,9 +841,15 @@
     },
     {
       "path": "modules/files/app/lib/server/files/register.server.ts",
-      "reason": "TASK-205a: NEXTCLOUD_OIDC_PROVIDER_ID through serviceEnv (the deleted default-tenant env reader); Karenz p2 t16: registers the files Karenz participant, its retains-nothing declaration and the files retained sink",
+      "reason": "TASK-205a: NEXTCLOUD_OIDC_PROVIDER_ID through serviceEnv (the deleted default-tenant env reader), now read by oidcProviderIdFor (the customer's own provider id from its registry row, else that env value); Karenz p2 t16: registers the files Karenz participant, its retains-nothing declaration and the files retained sink",
       "owner": "TASK-205",
-      "blob": "264d160be5ec9295b78b587dd13d1551a25702be"
+      "blob": "c41d5a3368d37964b89379e5a593819edf4c2df3"
+    },
+    {
+      "path": "modules/files/app/lib/server/files/oidc-provider.ts",
+      "reason": "the user_oidc provider id of a customer's Nextcloud accounts: the customer's own (registry row nc_target.providerId, via the tenant context) else NEXTCLOUD_OIDC_PROVIDER_ID; new kernel-side file with no counterpart at the tag",
+      "owner": "TASK-205",
+      "blob": "7a558767875855a01c5658d425d879e039ee32c4"
     },
     {
       "path": "modules/files/app/routes/api/files/upload-chunk/upload-chunk.test.ts",

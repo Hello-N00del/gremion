@@ -21,6 +21,7 @@
 import type { Sql } from '@gremion/db'
 import { readConfig } from '$lib/server/config'
 import { serviceEnv } from '$lib/server/env/service-env'
+import { oidcProviderIdFor } from './oidc-provider'
 import { listRoleHolders } from '$lib/server/governance/role-holders'
 import type { RetainedSink } from '$lib/server/module-karenz/retained/extractors'
 import type { TenantContext } from '$lib/server/tenant/context'
@@ -181,7 +182,7 @@ async function syncReaders(tenant: TenantContext, nc: NextcloudClient, readerGro
     console.warn(`[karenz/files] ${disabled.length} disabled role holder(s) of tenant ${tenant.id} are not readers of the retained group: ${disabled.join(', ')}`)
   }
   const current = new Set(await nc.listGroupMembers(readerGroup))
-  const providerId = Number(serviceEnv('NEXTCLOUD_OIDC_PROVIDER_ID') ?? '1')
+  const providerId = oidcProviderIdFor(tenant)
 
   let failed = 0
   const added: string[] = []

@@ -9,7 +9,7 @@ import {
   registerSetupHealthProbe,
   registerErasureHook,
 } from '$lib/server/modules/runtime-registry'
-import { serviceEnv } from '$lib/server/env/service-env'
+import { oidcProviderIdFor } from './oidc-provider'
 import { createNextcloudClient } from './nextcloud-client'
 import { createNextcloudSubsystem } from './provisioning/nextcloud-subsystem'
 import { protocolDocumentPort } from './protocol-documents'
@@ -20,13 +20,12 @@ import { filesKarenz } from './karenz'
 import { filesRetainedSink } from './retained-sink'
 
 // The Nextcloud provisioning adapter. The factory captures the files module's
-// own Nextcloud client + the user_oidc provider id; the governance orchestrator
-// passes the per-tenant KC-admin client at build time.
+// own Nextcloud client; the governance orchestrator passes the per-tenant KC-admin
+// client at build time, and the user_oidc provider id is the customer's own one
+// (its registry row, else NEXTCLOUD_OIDC_PROVIDER_ID: oidc-provider.ts). The factory
+// runs inside the customer's tenant scope.
 registerProvisioningSubsystem('nextcloud', (kc) =>
-  createNextcloudSubsystem(
-    { nc: createNextcloudClient(), kc },
-    Number(serviceEnv('NEXTCLOUD_OIDC_PROVIDER_ID') ?? '1'),
-  ),
+  createNextcloudSubsystem({ nc: createNextcloudClient(), kc }, oidcProviderIdFor()),
 )
 
 // A3a-2: the protocol document port (the Nextcloud draft/publish/PDF ops the

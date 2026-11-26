@@ -444,8 +444,11 @@ export class NextcloudClient {
 
   /** Pre-create (or update) a Nextcloud account managed by the user_oidc app
    *  so a committee member has a working account before their first SSO login.
-   *  `userId` is the raw Keycloak UUID — it matches the NC user id because the
-   *  user_oidc provider is configured with --unique-uid=0. Idempotent:
+   *  `userId` is the raw Keycloak UUID. It is the NC user id when the provider
+   *  named by `providerId` has --unique-uid=0 (the primary customer's provider,
+   *  the default of NEXTCLOUD_OIDC_PROVIDER_ID); under a provider with unique-uid
+   *  on, user_oidc derives the NC user id from the provider id and this id.
+   *  The callers address the account by the raw id. Idempotent:
    *  user_oidc's createUser is create-or-update. */
   async provisionOidcUser(data: {
     providerId: number
