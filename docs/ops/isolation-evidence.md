@@ -123,11 +123,81 @@ Honest labelling, because the proof kinds differ:
   before any write. It does not exercise Nextcloud's or Synapse's own
   authorisation.
 
-So the evidence supports enabling the modules for a **single-customer install**.
-It does not show that a second customer could be added to a running
-installation, and it must not be cited for that. A live probe with two real
-customers on the running stack is owed and replaces the `fake-upstream-app`
-proofs when it exists.
+So the recorded evidence supports enabling the modules for a **single-customer
+install**. It does not show that a second customer could be added to a running
+installation, and it must not be cited for that. Two things sit beside it for the
+second customer, and neither feeds the enable gate:
+
+- the messaging case file (`tenant-isolation.test.ts`) also runs two customers
+  on ONE shared homeserver in the namespaced identity (`MATRIX_IDENTITY`), still
+  against the recording fake Synapse: the same unit name and the same username in
+  both customers give two rooms and two accounts, a room found behind an alias is
+  adopted only with the customer's own marker, room administration derives the
+  same aliases provisioning gave, meeting rooms and Karenz are per customer, and a
+  token of one customer is refused in the other's scope;
+- `gremion-isolation-live`, the probe of the RUNNING stack below. It does not
+  replace the `fake-upstream-app` proofs and is not a gate input: it is a report
+  an operator reads, and a host run of it on the install that uses a second
+  customer is still owed. Nothing in this repository records one.
+
+## The live probe: two customers on the running stack
+
+```bash
+gremion-isolation-live <slugA> <slugB> [--unit NAME] [--user NAME]
+```
+
+Run on the host, after both customers are created and wired and the operator has
+made the fixture (an org unit `isoprobe` with its chat room and files folder, a
+member whose name starts with `isoprobe`, a file `isoprobe-<slug>.odt` in the
+folder, a poll and a calendar event titled `isoprobe-<slug>`; the header of
+`infra/host/bin/gremion-isolation-live` has the full list). It acts as that one
+fixture user in both realms, through the public edge and the in-network
+services, in both directions. It sets a password on the fixture user and creates
+a temporary direct-grant client per realm, and deletes the clients on every exit
+path; no secret is on an argv. It writes nothing into the other customer: a
+refused write cannot be told from a successful one without trying it, so writes
+are not attempted.
+
+Every denial needs a positive control on the customer's own resource first (a 2xx
+on its own room, folder, file, poll, event or token), else the section is FAIL.
+A refusal is the exact code named below; an error (5xx), a 401 or no answer is not
+a refusal.
+
+| Section | A PASS shows | It does not show |
+|---|---|---|
+| chat | the same unit name gives different room ids and the same username different Matrix user ids in the two customers (what the namespaced identity gives; the legacy identity would not); A's Matrix token reads A's room and is refused (403) on B's room messages and on a send into it | message delivery between members; Synapse's behaviour for rooms other than the fixture unit's |
+| files | each customer's unit folder has its own group-folder id (read with `occ` through the fixture user's groups, never by the mount name, which is the unit name in both) and is the only folder of that name in that user's groups; A's own folder lists and serves A's file; A's bearer on B's user root and the app API for B's file answer 403 or 404 | other units, groups the fixture user is not in, writes; the WebDAV refusal alone proves user-root isolation only, which Nextcloud gives whether or not a folder is shared |
+| office | the own editor URL is on the customer's own host; the editor URL for the other customer's file is refused (403 or 404, no URL); it passes only on a release that maps a missing document to 404 and a refused one to 403 (a 500 or 502 reads as FAIL) | save and close of the editor: they stay unproven until a person opens a document of each customer by hand on its own host |
+| calendar | own event 200; the other customer's event id on A's host 404 and not in A's listing | the CalDAV mirror in the shared Nextcloud |
+| polls | own poll 200; the other customer's poll id on A's host 404 and not in A's listing | Nextcloud's own authorisation: the scoping is the app's title marker |
+| call | a LiveKit token for the other customer's room is refused (403); for the own room it is minted and the room name starts with the customer's namespace | media paths, the TURN relay, anything past the token |
+| cross-host | A's token on B's host answers 401 (the same route on A's host answers 200) | any other credential type |
+
+**Verdicts.** Per section PASS, FAIL, NOT-READY or NOT-ENABLED. A FAIL is a
+finding and outranks the rest. NOT-READY means a fixture part or a token or host
+precondition is missing (for example the fixture user has no Nextcloud account
+under the id the probe looks it up by, which is the Keycloak subject; a secondary
+customer whose accounts carry derived ids is expected to read NOT-READY here, see
+"Nextcloud account addressing" in [pilot-services.md](pilot-services.md)).
+NOT-ENABLED means the section's module is off for a customer, a route takes no
+Bearer on this release, or the Matrix client API is not reachable through the edge.
+**NOT-ENABLED and NOT-READY are not a pass**: nothing was probed for that
+section, and the run exits 3, not 0. A pair of customers of which one has no chat
+reads NOT-ENABLED for chat and call by design. Exit codes: 0 every section PASS;
+1 any FAIL; 2 usage; 3 any NOT-ENABLED or NOT-READY, a stop before the verdict
+(`RESULT: ABORTED`), or an all-PASS run whose temporary client could not be
+confirmed deleted (`RESULT: CLEANUP-FAILED`: delete it by hand); 130 or 143 when
+stopped by a signal. Keep the output next to the host run.
+
+**Shims versus a host run.** `test/host/isolation-live.bats` runs the program
+against `test/host/fixtures/isolation-live/fake-stack.sh`, shell shims for
+`docker` and `curl` that play a two-customer stack from the URL, the token and
+switch files. It proves the program's own logic: each section's decision on
+scripted answers, the exit codes, the NOT-ENABLED and NOT-READY paths, the
+clean-up trap, that no secret reaches an argv. It proves nothing about Keycloak,
+Nextcloud, Synapse, LiveKit or the edge, and a green bats run is not isolation
+evidence. Only a run on the host reads the running system, and that run is
+owed.
 
 ## Running it on the host
 
