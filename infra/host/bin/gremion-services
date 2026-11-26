@@ -33,6 +33,13 @@ set -euo pipefail
 #      registration) and asserts the login flows list org.matrix.login.jwt: a
 #      failed realm key fetch boots Synapse without it, and /versions answers
 #      regardless;
+#      With SYNAPSE_JWT_LOGIN=off in state.env (optional; absent or empty = on, the steps above as they
+#      always were) the shared chat service has neither the JWT login nor the OIDC provider: the realm's
+#      synapse client secret is not needed and not copied (step 2 only makes sure the mount's host
+#      directory exists), step 3 writes no issuer and no fetch URL (it still appends the profiles), and
+#      step 5 reads the running matrix's SYNAPSE_JWT_LOGIN back and asserts the login flows are EXACTLY
+#      the set a homeserver without either login offers (m.login.application_service). A value other
+#      than on|off is refused (exit 2) before anything is written;
 #   6. registers Nextcloud's user_oidc provider (client `nextcloud`, bearer
 #      validation) with the secret handed in BY NAME (docker exec -e NAME: the
 #      value is not on the host's argv; it is on `occ`'s argv inside the
@@ -609,8 +616,13 @@ cmd_wire() {
     [[ -f "$PROFILES_FILE" ]] || die "module profile map not found: ${PROFILES_FILE}" "$GREMION_EXIT_USAGE"
 
     # -- facts and preconditions (nothing is written before every one holds) --
-    local host platform edge_ip edge_port bot_id
+    local host platform edge_ip edge_port bot_id jwt_login
     STACK="$(env_key "$STATE_ENV" STACK)"
+    # the shared chat service's own JWT and SSO login (state.env; absent or empty = on, as the wire always was)
+    jwt_login="$(env_key "$STATE_ENV" SYNAPSE_JWT_LOGIN)"
+    [[ -n "$jwt_login" ]] || jwt_login=on
+    [[ "$jwt_login" == on || "$jwt_login" == off ]] \
+        || die "SYNAPSE_JWT_LOGIN in ${STATE_ENV} must be on or off (empty or absent means on)" "$GREMION_EXIT_USAGE"
     host="$(env_key "$STATE_ENV" PILOT_TENANT_HOST)"
     platform="$(env_key "$STATE_ENV" PLATFORM_DOMAIN)"
     edge_ip="$(env_key "$STATE_ENV" EDGE_BIND_IP)"
@@ -658,8 +670,9 @@ cmd_wire() {
     [[ -n "$tsd" && "$tsd" == /* ]] || die "TENANT_SECRETS_DIR is not set (absolute) in ${APP_ENV}" "$GREMION_EXIT_USAGE"
     syn_file="${tsd}/tenant_${slug}_client_synapse"
     nc_file="${tsd}/tenant_${slug}_client_nextcloud"
-    # the synapse client secret is the shared chat service's: a secondary customer has none and needs none
-    if [[ "$secondary" != yes ]]; then
+    # the synapse client secret is the shared chat service's: a secondary customer has none and needs none, and
+    # neither does a wire under SYNAPSE_JWT_LOGIN=off (no OIDC provider is rendered)
+    if [[ "$secondary" != yes && "$jwt_login" == on ]]; then
         [[ -s "$syn_file" ]] || die "the realm's synapse client secret is absent: ${syn_file} (was the create request for ${slug} run by this release?)" "$GREMION_EXIT_USAGE"
     fi
     # the nextcloud client secret registers the customer's provider (the primary's or its own): checked before any write
@@ -688,15 +701,22 @@ cmd_wire() {
     # -- 2. the synapse client secret, 0600, where matrix mounts it --
     install -d -m 700 "${ROOT}/etc/secrets/synapse" || die "cannot create ${ROOT}/etc/secrets/synapse" "$GREMION_EXIT_ASSERT"
     keep_owner "$(stat -c '%u:%g' "${ROOT}/etc/secrets")" "${ROOT}/etc/secrets/synapse"
-    tr -d '\r\n' < "$syn_file" | atomic_write "${ROOT}/etc/secrets/synapse/oidc_client_secret" 600 \
-        || die "cannot write the synapse client secret file" "$GREMION_EXIT_ASSERT"
-    keep_owner "$(stat -c '%u:%g' "${ROOT}/etc/secrets")" "${ROOT}/etc/secrets/synapse/oidc_client_secret"
-    [[ -s "${ROOT}/etc/secrets/synapse/oidc_client_secret" ]] || die "the synapse client secret file is empty after the copy" "$GREMION_EXIT_ASSERT"
-    ok "etc/secrets/synapse/oidc_client_secret written (0600)"
+    if [[ "$jwt_login" == on ]]; then
+        tr -d '\r\n' < "$syn_file" | atomic_write "${ROOT}/etc/secrets/synapse/oidc_client_secret" 600 \
+            || die "cannot write the synapse client secret file" "$GREMION_EXIT_ASSERT"
+        keep_owner "$(stat -c '%u:%g' "${ROOT}/etc/secrets")" "${ROOT}/etc/secrets/synapse/oidc_client_secret"
+        [[ -s "${ROOT}/etc/secrets/synapse/oidc_client_secret" ]] || die "the synapse client secret file is empty after the copy" "$GREMION_EXIT_ASSERT"
+        ok "etc/secrets/synapse/oidc_client_secret written (0600)"
+    else
+        # no OIDC provider is rendered: no secret is copied; the (empty) directory stays, matrix mounts it
+        ok "SYNAPSE_JWT_LOGIN=off: no synapse client secret is copied (etc/secrets/synapse is the mount's host directory only)"
+    fi
 
     # -- 3. issuer, fetch URL, post-realm profiles --
-    set_env_key "$STATE_ENV" SYNAPSE_KEYCLOAK_ISSUER_URL "$issuer"
-    set_env_key "$STATE_ENV" SYNAPSE_KEYCLOAK_FETCH_URL "${GREMION_WIRE_FETCH_URL:-$issuer}"
+    if [[ "$jwt_login" == on ]]; then
+        set_env_key "$STATE_ENV" SYNAPSE_KEYCLOAK_ISSUER_URL "$issuer"
+        set_env_key "$STATE_ENV" SYNAPSE_KEYCLOAK_FETCH_URL "${GREMION_WIRE_FETCH_URL:-$issuer}"
+    fi
     local profiles p have
     profiles="$(env_key "$STATE_ENV" COMPOSE_PROFILES)"
     while IFS= read -r p; do
@@ -705,7 +725,11 @@ cmd_wire() {
         [[ "$have" == *",${p},"* ]] || profiles="${profiles},${p}"
     done < <(jq -r '[.modules[] | select(.pilot == true) | (.postRealm // [])[]] | unique | .[]' "$PROFILES_FILE")
     set_env_key "$STATE_ENV" COMPOSE_PROFILES "$profiles"
-    ok "state.env: issuer, fetch URL and COMPOSE_PROFILES=${profiles}"
+    if [[ "$jwt_login" == on ]]; then
+        ok "state.env: issuer, fetch URL and COMPOSE_PROFILES=${profiles}"
+    else
+        ok "state.env: COMPOSE_PROFILES=${profiles} (SYNAPSE_JWT_LOGIN=off: no issuer and no fetch URL are written)"
+    fi
 
     # -- 4. matrix in bootstrap mode, the bot --
     # From here until step 5 has recreated matrix, any exit (a die included) closes the
@@ -765,15 +789,32 @@ cmd_wire() {
     wait_healthy "$mx" matrix
     [[ "$(docker exec "$mx" printenv BOOTSTRAP_MODE 2>/dev/null | tr -d '[:space:]')" == 0 ]] \
         || die "matrix still runs in bootstrap mode (shared-secret registration is open)" "$GREMION_EXIT_ASSERT"
-    [[ "$(docker exec "$mx" printenv SYNAPSE_KEYCLOAK_ISSUER_URL 2>/dev/null | tr -d '[:space:]')" == "$issuer" ]] \
-        || die "matrix does not carry SYNAPSE_KEYCLOAK_ISSUER_URL=${issuer} (docker exec ${mx} printenv)" "$GREMION_EXIT_ASSERT"
-    [[ -n "$(docker exec "$mx" printenv SYNAPSE_OIDC_CLIENT_SECRET_FILE 2>/dev/null | tr -d '[:space:]')" ]] \
-        || die "matrix carries no SYNAPSE_OIDC_CLIENT_SECRET_FILE" "$GREMION_EXIT_ASSERT"
+    if [[ "$jwt_login" == on ]]; then
+        [[ "$(docker exec "$mx" printenv SYNAPSE_KEYCLOAK_ISSUER_URL 2>/dev/null | tr -d '[:space:]')" == "$issuer" ]] \
+            || die "matrix does not carry SYNAPSE_KEYCLOAK_ISSUER_URL=${issuer} (docker exec ${mx} printenv)" "$GREMION_EXIT_ASSERT"
+        [[ -n "$(docker exec "$mx" printenv SYNAPSE_OIDC_CLIENT_SECRET_FILE 2>/dev/null | tr -d '[:space:]')" ]] \
+            || die "matrix carries no SYNAPSE_OIDC_CLIENT_SECRET_FILE" "$GREMION_EXIT_ASSERT"
+    else
+        # the switch the running matrix carries is read back: the flows below are only meaningful for a recreate that took it
+        [[ "$(docker exec "$mx" printenv SYNAPSE_JWT_LOGIN 2>/dev/null | tr -d '[:space:]')" == off ]] \
+            || die "matrix does not carry SYNAPSE_JWT_LOGIN=off (docker exec ${mx} printenv): the running service was not recreated with the switch" "$GREMION_EXIT_ASSERT"
+    fi
     edge_curl "https://${platform}/_matrix/client/versions" >/dev/null \
         || die "GET /_matrix/client/versions through the edge failed (router, certificate or DNS of ${platform})" "$GREMION_EXIT_ASSERT"
-    edge_curl "https://${platform}/_matrix/client/v3/login" | jq -e '[.flows[]?.type] | index("org.matrix.login.jwt") != null' >/dev/null 2>&1 \
-        || die "GET /_matrix/client/v3/login does not list org.matrix.login.jwt: Synapse booted with jwt_config disabled because the realm key fetch failed (read: docker logs ${mx}; if the in-network fetch is refused under sslRequired=all, GREMION_WIRE_FETCH_URL names the URL to fetch from)" "$GREMION_EXIT_ASSERT"
-    ok "matrix: out of bootstrap mode, login flows list org.matrix.login.jwt"
+    if [[ "$jwt_login" == on ]]; then
+        edge_curl "https://${platform}/_matrix/client/v3/login" | jq -e '[.flows[]?.type] | index("org.matrix.login.jwt") != null' >/dev/null 2>&1 \
+            || die "GET /_matrix/client/v3/login does not list org.matrix.login.jwt: Synapse booted with jwt_config disabled because the realm key fetch failed (read: docker logs ${mx}; if the in-network fetch is refused under sslRequired=all, GREMION_WIRE_FETCH_URL names the URL to fetch from)" "$GREMION_EXIT_ASSERT"
+        ok "matrix: out of bootstrap mode, login flows list org.matrix.login.jwt"
+    else
+        # off: a homeserver without the JWT and SSO login (and with password login off, as the compose service runs it)
+        # lists the application-service flow and nothing else; the flow list is read back, never inferred
+        local flows want_flows='["m.login.application_service"]'
+        flows="$(edge_curl "https://${platform}/_matrix/client/v3/login" | jq -ce 'if (.flows | type) == "array" then [.flows[].type] | sort else error("no flows list") end' 2>/dev/null)" \
+            || die "GET /_matrix/client/v3/login through the edge did not answer a login-flows document (read: docker logs ${mx})" "$GREMION_EXIT_ASSERT"
+        [[ "$flows" == "$want_flows" ]] \
+            || die "GET /_matrix/client/v3/login lists ${flows}, but with SYNAPSE_JWT_LOGIN=off it must list exactly the expected set ${want_flows}: a JWT or SSO login flow means the homeserver still has a login block (read: docker logs ${mx}); a missing flow or an extra one means the homeserver is not the one this wire was written for" "$GREMION_EXIT_ASSERT"
+        ok "matrix: out of bootstrap mode, SYNAPSE_JWT_LOGIN=off, login flows are exactly ${flows} (no JWT, no SSO)"
+    fi
 
     # -- 6. Nextcloud: the provider, the apps, richdocuments --
     wait_healthy "$nc_c" nextcloud

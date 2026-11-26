@@ -39,9 +39,11 @@ RUN chmod 0644 /config/homeserver.yaml.tpl \
  && chmod 0755 /gremion-synapse-entrypoint.sh /render-homeserver.sh /synapse-healthcheck.sh /db-preflight.py /inject-jwt-key.py /bootstrap.sh
 
 # Healthy means login works (TRD-178): the JWT flow and the oidc-keycloak
-# provider are both offered. Replaces the upstream /health probe, which reads
-# healthy with jwt_config disabled. start-period: SYNAPSE_KC_MAX (30) key-fetch
-# attempts of ~7 s each, plus the measured first boot; compose repeats it.
+# provider are both offered. With SYNAPSE_JWT_LOGIN=off it is the inverse:
+# neither the JWT flow nor an SSO flow may be offered. Replaces the upstream
+# /health probe, which reads healthy with jwt_config disabled. start-period:
+# SYNAPSE_KC_MAX (30) key-fetch attempts of ~7 s each, plus the measured first
+# boot; compose repeats it.
 HEALTHCHECK --interval=15s --timeout=10s --start-period=240s --retries=3 CMD ["/synapse-healthcheck.sh"]
 
 ENTRYPOINT ["/gremion-synapse-entrypoint.sh"]

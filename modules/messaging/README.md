@@ -82,8 +82,11 @@ Synapse container (`docker-compose.yml`, service `matrix`): `SYNAPSE_SERVER_NAME
 `MATRIX_PUBLIC_URL` (both derived from `PLATFORM_DOMAIN`), `SYNAPSE_DB_*`,
 `SYNAPSE_KEYCLOAK_ISSUER_URL`, `SYNAPSE_KEYCLOAK_FETCH_URL`, `SYNAPSE_OIDC_CLIENT_SECRET`,
 `SYNAPSE_REGISTRATION_SHARED_SECRET` (only rendered in a bootstrap boot),
-`SYNAPSE_ADMIN_BOT_USER_ID`, `SYNAPSE_BOOTSTRAP_MODE`, `SYNAPSE_KC_MAX`. The render step
-refuses a blank issuer and anything but PostgreSQL.
+`SYNAPSE_ADMIN_BOT_USER_ID`, `SYNAPSE_BOOTSTRAP_MODE`, `SYNAPSE_KC_MAX`, `SYNAPSE_JWT_LOGIN`.
+The render step refuses a blank issuer and anything but PostgreSQL. `SYNAPSE_JWT_LOGIN` is
+`on` (default) or `off`: with `off` the homeserver renders neither the JWT login nor the OIDC
+provider, so no issuer is needed and the health check reads unhealthy while either login flow
+is offered.
 
 The module's PostgreSQL server is `messaging-postgres` and the homeserver is `matrix`, both
 under the compose profile `messaging` (`MESSAGING_PG_USER`, `MESSAGING_PG_PASSWORD`,

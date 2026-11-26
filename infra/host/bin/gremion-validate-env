@@ -47,6 +47,9 @@ set -euo pipefail
 #                                     SYNAPSE_JWT_LOGIN=off in state.env and MATRIX_IDENTITY=namespaced
 #                                     in app-blue.env and app-green.env (read from the directory
 #                                     of the judged file). Empty or absent: nothing is judged: exit 1.
+#   8. synapse login switch        -- SYNAPSE_JWT_LOGIN (optional; the chat service's JWT and SSO
+#                                     login switch), when a file declares it with a value: exactly
+#                                     on or off. Empty or absent: nothing is judged: exit 1.
 #
 # Alias equality is judged WITHIN one file. A pair split across files (e.g.
 # app-blue.env's AUTH_KEYCLOAK_SECRET against state.env's
@@ -285,6 +288,19 @@ check_secondary_tenant_modules() {
     ok "SECONDARY_TENANT_MODULES: ${#entries[@]} module(s) of the opt-in set, with SECONDARY_TENANT_HOSTS set"
 }
 
+# SYNAPSE_JWT_LOGIN is an OPTIONAL key (the chat service's JWT and SSO login switch; a comment in the state
+# template, so an older env file stays valid): judged only when a file declares it with a value, which must be
+# exactly on or off. Absent or empty = the default (on). The finding names the key, never the value.
+check_synapse_jwt_login() {
+    local v="${SYNAPSE_JWT_LOGIN-}"
+    [[ -n "$v" ]] || return 0
+    if [[ "$v" != on && "$v" != off ]]; then
+        fail "SYNAPSE_JWT_LOGIN is refused: it must be on or off (lower case); empty or absent means on"
+        return 0
+    fi
+    ok "Synapse login switch: ${v}"
+}
+
 main() {
     parse_args "$@"
     need_cmd grep sed
@@ -311,6 +327,7 @@ main() {
     check_board_app_password
     check_secondary_tenant_hosts
     check_secondary_tenant_modules
+    check_synapse_jwt_login
     if [[ "$__gve_failures" -gt 0 ]]; then
         die "VALIDATE-ENV: ${__gve_failures} problem(s) in $(basename "$__gve_env_file")" "$GREMION_EXIT_ASSERT"
     fi

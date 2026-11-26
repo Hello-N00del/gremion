@@ -776,7 +776,8 @@ services:
       SYNAPSE_DB_USER:              synapse
       SYNAPSE_DB_PASSWORD:          ${SYNAPSE_DB_PASSWORD}
       # Blank until the realm exists (TASK-028 contract); the shim refuses a
-      # blank issuer at boot. A blank fetch URL derives the in-network one.
+      # blank issuer at boot unless SYNAPSE_JWT_LOGIN=off (no issuer is rendered then).
+      # A blank fetch URL derives the in-network one.
       SYNAPSE_KEYCLOAK_ISSUER_URL:  ${SYNAPSE_KEYCLOAK_ISSUER_URL:-}
       SYNAPSE_KEYCLOAK_FETCH_URL:   ${SYNAPSE_KEYCLOAK_FETCH_URL:-}
       # Unused while the file below is named (the file wins, and a named unreadable file is a
@@ -792,6 +793,10 @@ services:
       SYNAPSE_ADMIN_BOT_USER_ID:    ${SYNAPSE_ADMIN_BOT_USER_ID:-@gremion-admin-bot:${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}}
       BOOTSTRAP_MODE:               ${SYNAPSE_BOOTSTRAP_MODE:-0}
       SYNAPSE_KC_MAX:               ${SYNAPSE_KC_MAX:-30}
+      # The login switch, on|off (state.env; default on, the render as before). off renders neither
+      # the JWT login nor the OIDC provider: no realm key fetch, and the probe reads UNHEALTHY while
+      # either login flow is offered. Anything else is refused by the image's own scripts.
+      SYNAPSE_JWT_LOGIN:            ${SYNAPSE_JWT_LOGIN:-on}
       # Every login reaches Synapse from the one app container address, so the render default
       # (burst 5, then one per ~5 min) locks the 6th user out of chat and video. The per-account
       # limit stays at the render default.

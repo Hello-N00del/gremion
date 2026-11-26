@@ -12,12 +12,23 @@
 # Anything else -- a missing arm, an unreachable listener, a body that is not
 # a login-flows document -- exits 1 and says which.
 #
+# With SYNAPSE_JWT_LOGIN=off (the container's own environment; default on) the
+# judgement is the inverse: the homeserver must offer NO org.matrix.login.jwt
+# flow and NO m.login.sso flow, so either one exits 1 and says which. An
+# unreachable listener and a body that is not a login-flows document still fail.
+# A switch value other than on|off exits 1 as well.
+#
 # SYNAPSE_PROBE_URL overrides the URL (the tests feed file:// bodies);
 # SYNAPSE_PROBE_MAX_TIME bounds the request (seconds, default 5).
 set -eu
 
 url="${SYNAPSE_PROBE_URL:-http://127.0.0.1:8008/_matrix/client/v3/login}"
 max_time="${SYNAPSE_PROBE_MAX_TIME:-5}"
+jwt_login="${SYNAPSE_JWT_LOGIN-on}"
+case "$jwt_login" in
+  on|off) ;;
+  *) echo "synapse-healthcheck: SYNAPSE_JWT_LOGIN must be 'on' or 'off'" >&2; exit 1 ;;
+esac
 
 if ! body="$(curl -sf --max-time "$max_time" "$url")"; then
   echo "synapse-healthcheck: GET $url failed" >&2
@@ -28,6 +39,7 @@ printf '%s' "$body" | python3 -c '
 import json
 import sys
 
+jwt_off = sys.argv[1] == "off"
 try:
     doc = json.load(sys.stdin)
 except ValueError:
@@ -46,11 +58,17 @@ idps = [
     if isinstance(p, dict)
 ]
 problems = []
-if "org.matrix.login.jwt" not in types:
-    problems.append("login flow org.matrix.login.jwt is not offered (jwt_config disabled?)")
-if "oidc-keycloak" not in idps:
-    problems.append("SSO identity provider oidc-keycloak is not offered")
+if jwt_off:
+    if "org.matrix.login.jwt" in types:
+        problems.append("login flow org.matrix.login.jwt is offered while SYNAPSE_JWT_LOGIN=off")
+    if "m.login.sso" in types:
+        problems.append("an m.login.sso flow is offered while SYNAPSE_JWT_LOGIN=off")
+else:
+    if "org.matrix.login.jwt" not in types:
+        problems.append("login flow org.matrix.login.jwt is not offered (jwt_config disabled?)")
+    if "oidc-keycloak" not in idps:
+        problems.append("SSO identity provider oidc-keycloak is not offered")
 for p in problems:
     print("synapse-healthcheck: " + p, file=sys.stderr)
 sys.exit(1 if problems else 0)
-'
+' "$jwt_login"

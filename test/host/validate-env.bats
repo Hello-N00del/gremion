@@ -745,3 +745,43 @@ secondary_fixture() {
     run grep -ciE 're-created' "${HOST_SRC}/templates/env/state.env.tmpl"
     [ "$output" -ge 1 ]
 }
+
+# SYNAPSE_JWT_LOGIN (optional, on|off): the chat service's JWT and SSO login switch. Judged in any file that
+# declares it with a value; absent or empty is today's behaviour (compose defaults an empty value to on).
+@test "SYNAPSE_JWT_LOGIN: absent and empty validate exactly as before; on and off validate and say so" {
+    render_filled
+    run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" != *"SYNAPSE_JWT_LOGIN"* ]] || { echo "$output"; return 1; }
+    printf 'SYNAPSE_JWT_LOGIN=\n' >> "${ENV_DIR}/state.env"
+    run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" != *"SYNAPSE_JWT_LOGIN"* ]] || { echo "$output"; return 1; }
+    local v
+    for v in on off; do
+        sed -i "s/^SYNAPSE_JWT_LOGIN=.*/SYNAPSE_JWT_LOGIN=${v}/" "${ENV_DIR}/state.env"
+        run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
+        [ "$status" -eq 0 ] || { echo "refused '${v}': ${output}"; return 1; }
+        [[ "$output" == *"Synapse login switch: ${v}"* ]] || { echo "no line for '${v}': ${output}"; return 1; }
+    done
+}
+
+@test "SYNAPSE_JWT_LOGIN: any value other than on or off fails the validation (exit 1) naming the key, without printing the value" {
+    render_filled
+    local bad
+    for bad in ON Off true false 1 0 maybe yes; do
+        printf 'SYNAPSE_JWT_LOGIN=%s\n' "$bad" >> "${ENV_DIR}/state.env"
+        run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
+        [ "$status" -eq 1 ] || { echo "accepted '${bad}': status=${status} ${output}"; return 1; }
+        [[ "$output" == *"SYNAPSE_JWT_LOGIN"* ]] || { echo "the key is not named for '${bad}': ${output}"; return 1; }
+        [[ "$output" != *"=${bad}"* && "$output" != *"'${bad}'"* ]] || { echo "the value was printed for '${bad}': ${output}"; return 1; }
+        sed -i '/^SYNAPSE_JWT_LOGIN=/d' "${ENV_DIR}/state.env"
+    done
+}
+
+@test "SYNAPSE_JWT_LOGIN is an optional key: the state template carries it only as a comment, so an existing state.env stays valid" {
+    run grep -cE '^SYNAPSE_JWT_LOGIN=' "${HOST_SRC}/templates/env/state.env.tmpl"
+    [ "$output" = 0 ]
+    run grep -cE '^# SYNAPSE_JWT_LOGIN=' "${HOST_SRC}/templates/env/state.env.tmpl"
+    [ "$output" = 1 ]
+}

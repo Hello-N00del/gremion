@@ -110,6 +110,9 @@ case " $* " in
     echo "{\"user_id\":\"@gremion-admin-bot:guard.example.org\"}"; exit 0 ;;
   *" exec "*"printenv SYNAPSE_KEYCLOAK_ISSUER_URL"*) echo "https://pilot.guard.example.org/auth/realms/'"$SLUG"'"; exit 0 ;;
   *" exec "*"printenv BOOTSTRAP_MODE"*)              echo 0; exit 0 ;;
+  *" exec "*"printenv SYNAPSE_JWT_LOGIN"*)
+    # the running matrix carries the switch the recreate handed it (a stale one is a switch file away)
+    if [ -f "$GREMION_ROOT/matrix-switch-stale" ]; then echo on; else echo off; fi; exit 0 ;;
   *" exec "*"printenv SYNAPSE_OIDC_CLIENT_SECRET_FILE"*) echo /run/secrets/synapse/oidc_client_secret; exit 0 ;;
   *" exec "*"printenv SYNAPSE_ADMIN_TOKEN"*)
     if [ -f "$GREMION_ROOT/ui-stale-token" ]; then echo placeholder-not-the-token; else printf "%s\n" "'"$TOKEN"'"; fi; exit 0 ;;
@@ -214,6 +217,17 @@ case "$url" in
     exit 0 ;;
   */_matrix/client/versions) echo "{\"versions\":[\"v1.5\"]}"; exit 0 ;;
   */_matrix/client/v3/login)
+    # state.env says off: the off render offers no JWT and no SSO login, only the application-service flow
+    # (read from Synapse 1.160 with password login off); the switch files make it offer more or less
+    if grep -q "^SYNAPSE_JWT_LOGIN=off$" "$GREMION_ROOT/etc/env/state.env"; then
+      if [ -f "$GREMION_ROOT/off-flows-jwt" ]; then echo "{\"flows\":[{\"type\":\"org.matrix.login.jwt\"},{\"type\":\"m.login.application_service\"}]}"
+      elif [ -f "$GREMION_ROOT/off-flows-sso" ]; then echo "{\"flows\":[{\"type\":\"m.login.sso\",\"identity_providers\":[{\"id\":\"oidc-keycloak\"}]},{\"type\":\"m.login.application_service\"}]}"
+      elif [ -f "$GREMION_ROOT/off-flows-password" ]; then echo "{\"flows\":[{\"type\":\"m.login.password\"},{\"type\":\"m.login.application_service\"}]}"
+      elif [ -f "$GREMION_ROOT/off-flows-empty" ]; then echo "{\"flows\":[]}"
+      elif [ -f "$GREMION_ROOT/off-flows-garbage" ]; then echo "not json"
+      else echo "{\"flows\":[{\"type\":\"m.login.application_service\"}]}"; fi
+      exit 0
+    fi
     if [ -f "$GREMION_ROOT/no-jwt" ]; then echo "{\"flows\":[{\"type\":\"m.login.sso\"}]}"; else echo "{\"flows\":[{\"type\":\"m.login.sso\"},{\"type\":\"org.matrix.login.jwt\"}]}"; fi
     exit 0 ;;
 esac
@@ -1192,4 +1206,107 @@ env_files_untouched() {
     [ "$status" -eq 2 ] || { echo "no nextcloud secret: status=$status $output"; return 1; }
     [[ "$output" == *"nextcloud client secret is absent"* ]] || { echo "$output"; return 1; }
     assert_absent 'user_oidc:provider|dav:|^docker compose ' "$SHIM_LOG" "something ran after a failed precondition"
+}
+
+# SYNAPSE_JWT_LOGIN (state.env; absent = on): the shared chat service's own JWT and SSO login. off: the wire copies no
+# synapse client secret and writes no issuer or fetch URL, and step 5 reads the login flows back and asserts they are
+# exactly the set a homeserver without either login offers. on or absent: the wire as it always was.
+jwt_switch() {
+    printf 'SYNAPSE_JWT_LOGIN=%s\n' "$1" >> "${GREMION_ROOT}/etc/env/state.env"
+}
+
+@test "wire, SYNAPSE_JWT_LOGIN=off: no synapse secret is copied, no issuer or fetch URL is written, the messaging profile is kept, and the off flow set is asserted" {
+    jwt_switch off
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"WIRE: ok ${SLUG}"* ]]
+    [ ! -e "${GREMION_ROOT}/etc/secrets/synapse/oidc_client_secret" ]
+    local st="${GREMION_ROOT}/etc/env/state.env"
+    [ -z "$(sed -n 's/^SYNAPSE_KEYCLOAK_ISSUER_URL=//p' "$st")" ]
+    [ -z "$(sed -n 's/^SYNAPSE_KEYCLOAK_FETCH_URL=//p' "$st")" ]
+    [ "$(sed -n 's/^COMPOSE_PROFILES=//p' "$st")" = "production,calendar,collabora,content,newsletter,nextcloud,video,messaging" ]
+    [[ "$output" == *"m.login.application_service"* ]] || { echo "the flow set is not reported: ${output}"; return 1; }
+    # the running matrix is asked for the switch, and the bot is still registered through the shared secret
+    grep -q '^docker exec c-matrix printenv SYNAPSE_JWT_LOGIN' "$SHIM_LOG"
+    grep -q '^bootstrap$' "$ORDER"
+}
+
+@test "wire, SYNAPSE_JWT_LOGIN=off: the mount's host directory exists without a secret in it (matrix refuses to start on a missing bind source)" {
+    jwt_switch off
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [ -d "${GREMION_ROOT}/etc/secrets/synapse" ]
+    [ -z "$(ls -A "${GREMION_ROOT}/etc/secrets/synapse")" ]
+}
+
+@test "wire, SYNAPSE_JWT_LOGIN=off: the realm's synapse client secret is no precondition" {
+    jwt_switch off
+    rm -f "${GREMION_ROOT}/tenant-secrets/tenant_${SLUG}_client_synapse"
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"WIRE: ok ${SLUG}"* ]]
+}
+
+@test "wire, SYNAPSE_JWT_LOGIN=off: a login list that offers JWT, SSO, a password or nothing at all fails the wire naming the flows it read" {
+    jwt_switch off
+    local f want
+    for f in jwt:org.matrix.login.jwt sso:m.login.sso password:m.login.password empty:expected; do
+        : > "${GREMION_ROOT}/off-flows-${f%%:*}"
+        wire
+        [ "$status" -eq 1 ] || { echo "${f%%:*}: status=$status $output"; return 1; }
+        want="${f#*:}"
+        [[ "$output" == *"$want"* ]] || { echo "${f%%:*}: the flows are not named: ${output}"; return 1; }
+        [[ "$output" == *"m.login.application_service"* ]] || { echo "${f%%:*}: the expected set is not named: ${output}"; return 1; }
+        rm -f "${GREMION_ROOT}/off-flows-${f%%:*}"
+    done
+}
+
+@test "wire, SYNAPSE_JWT_LOGIN=off: a login endpoint that does not answer a flows document fails the wire" {
+    jwt_switch off
+    : > "${GREMION_ROOT}/off-flows-garbage"
+    wire
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"login"* ]]
+}
+
+@test "wire, SYNAPSE_JWT_LOGIN=off: a matrix that does not carry the switch after the recreate fails the wire" {
+    jwt_switch off
+    : > "${GREMION_ROOT}/matrix-switch-stale"
+    wire
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"SYNAPSE_JWT_LOGIN"* ]]
+}
+
+@test "wire: a SYNAPSE_JWT_LOGIN other than on or off is refused (exit 2) before anything is written or started" {
+    local bad
+    for bad in ON maybe true 1; do
+        sed -i '/^SYNAPSE_JWT_LOGIN=/d' "${GREMION_ROOT}/etc/env/state.env"
+        jwt_switch "$bad"
+        : > "$SHIM_LOG"
+        wire
+        [ "$status" -eq 2 ] || { echo "'${bad}': status=$status $output"; return 1; }
+        [[ "$output" == *"SYNAPSE_JWT_LOGIN"* ]] || { echo "'${bad}': the key is not named: ${output}"; return 1; }
+        assert_absent '^docker compose |/bootstrap\.sh' "$SHIM_LOG" "something ran after a refused switch"
+    done
+    [ ! -e "${GREMION_ROOT}/etc/secrets/synapse" ]
+}
+
+@test "wire, SYNAPSE_JWT_LOGIN=on: the same as no switch at all -- the secret is copied, the issuer written, the JWT arm asserted, and the docker argv equals the golden" {
+    jwt_switch on
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    local st="${GREMION_ROOT}/etc/env/state.env"
+    [ "$(cat "${GREMION_ROOT}/etc/secrets/synapse/oidc_client_secret")" = "$SYN_SECRET" ]
+    [ "$(sed -n 's/^SYNAPSE_KEYCLOAK_ISSUER_URL=//p' "$st")" = "https://pilot.guard.example.org/auth/realms/${SLUG}" ]
+    local got="${GREMION_ROOT}/docker-argv.got"
+    grep '^docker ' "$SHIM_LOG" | sed "s#${GREMION_ROOT}#<ROOT>#g" > "$got"
+    diff "${HOST_TEST_DIR}/fixtures/services-wire/primary-wire-docker-argv.golden" "$got"
+}
+
+@test "wire, SYNAPSE_JWT_LOGIN=on: a login list without the JWT arm still fails the wire naming it" {
+    jwt_switch on
+    : > "${GREMION_ROOT}/no-jwt"
+    wire
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"org.matrix.login.jwt"* ]]
 }
