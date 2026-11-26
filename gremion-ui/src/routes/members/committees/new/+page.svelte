@@ -3,9 +3,16 @@
   import { enhance } from '$app/forms'
   import type { ActionData, PageData } from './$types'
   import { lang, t } from '$lib/i18n'
+  import { untrack } from 'svelte'
 
   let { data, form }: { data: PageData; form: ActionData } = $props()
-  let kind = $state<'council' | 'committee' | 'group'>('committee')
+  // The kinds are the customer's catalogue; the parent list follows the chosen kind's own allowedParentKinds,
+  // the rule the server applies on submit (validateCreatePlacement).
+  const kinds = $derived(data.kinds ?? [])
+  let kind = $state(untrack(() => (data.kinds ?? []).find((k) => k.key === 'committee')?.key ?? data.kinds?.[0]?.key ?? ''))
+  let parentId = $state('')
+  const kindDef = $derived(kinds.find((k) => k.key === kind))
+  const parentOptions = $derived((data.parents ?? []).filter((p) => kindDef?.allowedParentKinds.includes(p.kind)))
   // WCAG 3.1.2: the placeholders are catalogue text in the person's language, but what the person types is
   // their own text (a committee name, usually German), so each field is marked English only while it is
   // empty and shows its placeholder; a lang on a filled field would also switch the spell checker.
@@ -52,42 +59,62 @@
       ></textarea>
     </div>
 
-    <label class="block space-y-1">
-      <span class="text-xs font-medium">Art</span>
-      <select name="kind" bind:value={kind} class="w-full rounded-md border border-border-strong bg-paper px-3 py-2 text-sm">
-        <option value="committee">Gremium</option>
-        <option value="council">Rat</option>
-        <option value="group">Gruppe</option>
+    <div class="space-y-1">
+      <label for="kind" class="block text-xs font-medium">Art</label>
+      <select
+        id="kind"
+        name="kind"
+        bind:value={kind}
+        onchange={() => (parentId = '')}
+        class="w-full rounded-md border border-border-strong bg-paper px-3 py-2 text-sm"
+      >
+        {#each kinds as k (k.key)}
+          <option value={k.key}>{k.label}</option>
+        {/each}
       </select>
-    </label>
+    </div>
 
-    {#if kind !== 'council'}
-      <label class="block space-y-1">
-        <span class="text-xs font-medium">Übergeordnete Einheit (optional)</span>
-        <select name="parentId" class="w-full rounded-md border border-border-strong bg-paper px-3 py-2 text-sm">
-          <option value="">— keine —</option>
-          {#each data.parents as p (p.id)}
+    {#if kindDef && kindDef.allowedParentKinds.length > 0}
+      <div class="space-y-1">
+        <label for="parentId" class="block text-xs font-medium">
+          Übergeordnete Einheit{kindDef.canBeRoot ? ' (optional)' : ''}
+        </label>
+        <select
+          id="parentId"
+          name="parentId"
+          bind:value={parentId}
+          required={!kindDef.canBeRoot}
+          class="w-full rounded-md border border-border-strong bg-paper px-3 py-2 text-sm"
+        >
+          {#if kindDef.canBeRoot}
+            <option value="">— keine —</option>
+          {:else}
+            <option value="" disabled>— bitte wählen —</option>
+          {/if}
+          {#each parentOptions as p (p.id)}
             <option value={p.id}>{p.name}</option>
           {/each}
         </select>
-      </label>
+      </div>
     {/if}
 
     <label class="flex items-center gap-2 text-sm">
-      <input type="checkbox" name="wantsMatrixRoom" aria-label="Matrix-Raum anlegen" checked />
-      Matrix-Raum anlegen
+      <input type="checkbox" name="wantsMatrixRoom" aria-label="Chatraum anlegen" checked />
+      Chatraum anlegen
     </label>
     <label class="flex items-center gap-2 text-sm">
-      <input type="checkbox" name="wantsNextcloudFolder" aria-label="Nextcloud-Ordner anlegen" checked />
-      Nextcloud-Ordner anlegen
+      <input type="checkbox" name="wantsNextcloudFolder" aria-label="Dateiordner anlegen" checked />
+      Dateiordner anlegen
     </label>
 
     <div class="flex gap-3 pt-2">
       <button
         type="submit"
+        lang={$lang}
+        aria-label={$t('members.new.submit')}
         class="rounded-md bg-accent px-4 py-2 text-sm font-medium text-paper hover:bg-accent/90"
       >
-        <span lang={$lang}>{$t('members.new.submit')}</span>
+        {$t('members.new.submit')}
       </button>
     </div>
   </form>

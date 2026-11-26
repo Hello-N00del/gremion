@@ -14,9 +14,14 @@ export const load: PageServerLoad = async ({ locals }) => {
   const session = await locals.auth()
   const user = session?.user as SessionUser | undefined
   if (!user || !hasRole(user.roles, Role.CouncilAdmin)) throw redirect(303, '/members')
-  // Parent picker — councils and committees can be parents.
-  const units = await listOrgUnits()
-  return { parents: units.filter((u) => u.kind !== 'group').map((u) => ({ id: u.id, name: u.name })) }
+  // The kinds are the customer's own catalogue (org_unit_kind), in its sort order. Every unit goes to the
+  // form with its kind: which of them may be the parent of the chosen kind is the catalogue's
+  // allowedParentKinds, the rule validateCreatePlacement applies again when the form is submitted.
+  const [units, schema] = await Promise.all([listOrgUnits(), loadOrgSchema()])
+  const kinds = Object.values(schema.kinds)
+    .sort((a, b) => a.sortOrder - b.sortOrder)
+    .map((k) => ({ key: k.key, label: k.label, canBeRoot: k.canBeRoot, allowedParentKinds: [...k.allowedParentKinds] }))
+  return { kinds, parents: units.map((u) => ({ id: u.id, name: u.name, kind: u.kind })) }
 }
 
 export const actions: Actions = {
