@@ -681,3 +681,23 @@ registerHooks({
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+// ── the bats legs: the CD pipeline file has a leg of its own, and the shard legs keep their old length ──
+test('the bats shard legs keep a 75 minute limit and the CD pipeline leg, which holds the slow file alone, has 150', () => {
+  const { jobs } = parseWorkflow(CI)
+  assert.equal(jobs['verify-unit-bats-1']['timeout-minutes'], 75)
+  assert.equal(jobs['verify-unit-bats-2']['timeout-minutes'], 75)
+  assert.equal(jobs['verify-unit-bats-cd-pipeline']['timeout-minutes'], 150)
+})
+
+test('the CD pipeline bats leg is awaited by the verify gate', () => {
+  const needs = parseWorkflow(CI).jobs['verify-gate'].needs
+  assert.ok(needs.includes('verify-unit-bats-cd-pipeline'), 'verify-gate does not need verify-unit-bats-cd-pipeline')
+  const p = joined(plant('      - verify-unit-bats-cd-pipeline\n', ''))
+  assert.match(p, /verify-unit-bats-cd-pipeline uploads a record-\* artifact but verify-gate does not need it/)
+})
+
+test('a CI that stops running the CD pipeline bats part is reported by name', () => {
+  const p = joined(plant('verify.mjs --only unit:bats-cd-pipeline\n', 'verify.mjs --only unit:bats-2-of-2\n'))
+  assert.match(p, /required suite "unit" is not covered: no leg runs unit:bats-cd-pipeline/)
+})
