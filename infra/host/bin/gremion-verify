@@ -44,7 +44,10 @@ HTTP_TIMEOUT="${HTTP_TIMEOUT:-10}"
 CONTROL_CERT_WAIT_SECONDS="${CONTROL_CERT_WAIT_SECONDS:-90}"
 CONTROL_CERT_POLL_SECONDS="${CONTROL_CERT_POLL_SECONDS:-5}"
 REBOOT_SETTLE_SECONDS="${REBOOT_SETTLE_SECONDS:-30}"
-GREMION_LEAVES="${GREMION_LEAVES:-content finance files votes messages newsletter calendar board vault}"
+# The leaf services `--colour` resolves from inside the new colour's gremion-ui. Left empty (the
+# default) the list is derived from the running system (see colour_leaves); a value here is an
+# explicit list of leaf names and replaces that derivation.
+GREMION_LEAVES="${GREMION_LEAVES:-}"
 
 # ── P4 waivers (spec B §1.4/§G) — READ FROM THE SIGNED LEDGER ────────────────
 # Six go-live-gate items are waived until the pilot. They are NOT proofs this
@@ -1732,6 +1735,79 @@ write_report() {
         | atomic_write "$(gremion_root)/runtime/last-verify.json" 0644
 }
 
+# The leaf services of colour <c> that must resolve from inside its gremion-ui <ui>. An install
+# runs only some of the leaves of the catalogue (the rest are served in-process or are switched
+# off), so the list is read from the running system, never from a fixed catalogue:
+#   - every leaf the colour's gremion-ui is TOLD to call: a *_SERVICE_URL in its own env that
+#     names <leaf>-service-<c>, or a *_BACKEND=service (the leaf is the key's prefix);
+#   - every leaf service the colour's own compose project RUNS (a container of the project the
+#     gremion-ui itself belongs to, compose service <leaf>-service).
+# Each of them must resolve. A leaf the app is configured to call that does not resolve is a
+# FAILURE and names the env key: that is the defect this check exists for. A leaf that is neither
+# configured nor running is not asked for. An explicit GREMION_LEAVES replaces the derivation.
+colour_leaves() {   # <colour> <ui container>
+    local c="$1" ui="$2" line key leaf project id labels lproject lservice loneoff names
+    local -A why=()
+    local -a ids=()
+
+    if [[ -n "$GREMION_LEAVES" ]]; then
+        for leaf in $GREMION_LEAVES; do why["$leaf"]="GREMION_LEAVES"; done
+    else
+        while IFS= read -r line; do
+            line="${line%$'\r'}"
+            if [[ "$line" =~ ^([A-Z0-9_]+_SERVICE_URL)=http://([a-z0-9-]+)-service-${c}(:[0-9]+)?(/.*)?$ ]]; then
+                key="${BASH_REMATCH[1]}"; leaf="${BASH_REMATCH[2]}"
+                # the URL key is the better name for the failure, so it wins over a *_BACKEND line
+                # of the same leaf whichever comes first in the env
+                why["$leaf"]="named by ${key} in the app env"
+            elif [[ "$line" =~ ^([A-Z0-9_]+)_BACKEND=service$ ]]; then
+                key="${BASH_REMATCH[1]}_BACKEND"
+                leaf="$(printf '%s' "${BASH_REMATCH[1]}" | tr 'A-Z_' 'a-z-')"
+                [[ -n "${why[$leaf]:-}" ]] || why["$leaf"]="named by ${key}=service in the app env"
+            fi
+        done < <(docker exec "$ui" env 2>/dev/null)
+
+        labels="$(docker inspect --format '{{json .Config.Labels}}' "$ui" 2>/dev/null || true)"
+        project=""
+        if [[ -n "$labels" && "$labels" != "null" ]]; then
+            project="$(jq -r '."com.docker.compose.project" // ""' <<<"$labels" 2>/dev/null || true)"
+        fi
+        if [[ -n "$project" ]]; then
+            local ps_out
+            ids=()
+            if ! ps_out="$(docker ps -q 2>/dev/null)"; then
+                fail "${ui}: docker ps failed, so the leaf services running in project ${project} cannot be listed"
+            elif [[ -n "$ps_out" ]]; then
+                mapfile -t ids <<<"$ps_out"
+            fi
+            for id in "${ids[@]}"; do
+                labels="$(docker inspect --format '{{json .Config.Labels}}' "$id" 2>/dev/null || true)"
+                [[ -n "$labels" && "$labels" != "null" ]] || continue
+                lproject="$(jq -r '."com.docker.compose.project" // ""' <<<"$labels" 2>/dev/null || true)"
+                [[ "$lproject" == "$project" ]] || continue
+                loneoff="$(jq -r '."com.docker.compose.oneoff" // ""' <<<"$labels" 2>/dev/null || true)"
+                [[ "${loneoff,,}" != "true" ]] || continue
+                lservice="$(jq -r '."com.docker.compose.service" // ""' <<<"$labels" 2>/dev/null || true)"
+                if [[ "$lservice" =~ ^([a-z0-9-]+)-service$ ]]; then
+                    leaf="${BASH_REMATCH[1]}"
+                    [[ -n "${why[$leaf]:-}" ]] || why["$leaf"]="running in compose project ${project} as compose service ${lservice}"
+                fi
+            done
+        fi
+    fi
+
+    if (( ${#why[@]} == 0 )); then
+        info "colour ${c}: no leaf service is configured or running (no *_SERVICE_URL or *_BACKEND=service in the app env, no <leaf>-service container in its compose project): no leaf check"
+        return 0
+    fi
+    names="$(printf '%s\n' "${!why[@]}" | sort | tr '\n' ' ')"
+    info "colour ${c}: leaf services checked: ${names% }"
+    for leaf in $names; do
+        docker exec "$ui" getent hosts "${leaf}-service-${c}" >/dev/null 2>&1 \
+            || fail "${ui}: ${leaf}-service-${c} does not resolve (${why[$leaf]})"
+    done
+}
+
 # Everything here is read from INSIDE the new colour's own container: the env the
 # process actually has and the names its resolver actually answers. A compose file
 # saying the right thing is not evidence (§E).
@@ -1760,10 +1836,7 @@ check_colour() {
     docker exec "$ui" env 2>/dev/null | grep -qx "INTERNAL_BASE_URL=${want_url}" \
         || fail "${ui}: INTERNAL_BASE_URL is not ${want_url}"
 
-    for leaf in $GREMION_LEAVES; do
-        docker exec "$ui" getent hosts "${leaf}-service-${c}" >/dev/null 2>&1 \
-            || fail "${ui}: ${leaf}-service-${c} does not resolve"
-    done
+    colour_leaves "$c" "$ui"
 
     bad_urls="$(docker exec "$ui" env 2>/dev/null \
         | grep -E '_(SERVICE_URL|BASE_URL)=' | grep -F "$PLATFORM_DOMAIN" || true)"
