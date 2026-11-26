@@ -29,6 +29,7 @@ import {
   setProtocolStatus,
   nextGlobalNr,
   assignGlobalNrs,
+  updateActionItem,
 } from './protocol-db'
 
 describe('createProtocol', () => {
@@ -65,6 +66,37 @@ describe('createProtocol', () => {
     expect(result.id).toBe('proto-uuid')
     expect(result.status).toBe('draft')
     expect(mockSql).toHaveBeenCalledOnce()
+  })
+})
+
+describe('updateActionItem — clearing a field', () => {
+  beforeEach(() => mockSql.mockReset())
+
+  // The statement is one template: the strings say which column is set from which
+  // parameter, the values are what the database receives.
+  async function run(input: Parameters<typeof updateActionItem>[1]) {
+    mockSql.mockResolvedValueOnce([{ id: 'a1' }])
+    await updateActionItem('a1', input)
+    const [strings, ...values] = mockSql.mock.calls[0] as [TemplateStringsArray, ...unknown[]]
+    return { sqlText: strings.join('?'), values }
+  }
+
+  it('null empties the assignee and the due date (COALESCE alone would keep the old value)', async () => {
+    const { sqlText, values } = await run({ assigneeKeycloakId: null, dueDate: null })
+    expect(sqlText).toMatch(/assignee_keycloak_id\s*=\s*CASE WHEN \?/)
+    expect(sqlText).toMatch(/due_date\s*=\s*CASE WHEN \?/)
+    // [text, assigneeSent, assignee, dueDateSent, dueDate, completed, id]
+    expect(values.slice(1, 5)).toEqual([true, null, true, null])
+  })
+
+  it('a field that was not given stays as stored', async () => {
+    const { values } = await run({ text: 'Neu' })
+    expect(values.slice(1, 5)).toEqual([false, null, false, null])
+  })
+
+  it('a value is written as given', async () => {
+    const { values } = await run({ assigneeKeycloakId: 'u-1', dueDate: '2026-12-10' })
+    expect(values.slice(1, 5)).toEqual([true, 'u-1', true, '2026-12-10'])
   })
 })
 

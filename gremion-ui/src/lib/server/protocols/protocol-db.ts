@@ -635,18 +635,20 @@ export async function getActionItem(id: string): Promise<ProtocolActionItem | nu
   return rows[0] ?? null
 }
 
+// For the assignee and the due date `undefined` leaves the column as it is and `null` empties it
+// (COALESCE cannot tell the two apart, so those two columns are set through CASE).
 export async function updateActionItem(id: string, input: Partial<{
   text: string
-  assigneeKeycloakId: string
-  dueDate: string
+  assigneeKeycloakId: string | null
+  dueDate: string | null
   completed: boolean
 }>): Promise<ProtocolActionItem> {
   const sql = getDb()
   const rows = await sql<ProtocolActionItem[]>`
     UPDATE protocol_action_items SET
       text                 = COALESCE(${input.text ?? null}, text),
-      assignee_keycloak_id = COALESCE(${input.assigneeKeycloakId ?? null}, assignee_keycloak_id),
-      due_date             = COALESCE(${input.dueDate ?? null}, due_date),
+      assignee_keycloak_id = CASE WHEN ${input.assigneeKeycloakId !== undefined} THEN ${input.assigneeKeycloakId ?? null}::text ELSE assignee_keycloak_id END,
+      due_date             = CASE WHEN ${input.dueDate !== undefined} THEN ${input.dueDate ?? null}::date ELSE due_date END,
       completed            = COALESCE(${input.completed ?? null}, completed)
     WHERE id = ${id}
     RETURNING *

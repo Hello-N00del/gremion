@@ -177,6 +177,39 @@ describe('minutes editor — editing a task', () => {
     expect(screen.getByText(/10\.12\.2026/)).toBeTruthy()
   })
 
+  it('emptying the date and choosing Niemand sends null for both, so the server clears them', async () => {
+    // The real route keeps a field that was not sent and clears one that was sent as null.
+    fetchMock.mockImplementationOnce(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(init?.body as string)
+      expect(body.dueDate).toBeNull()
+      expect(body.assigneeKeycloakId).toBeNull()
+      return new Response(JSON.stringify({ actionItem: stored({ due_date: null, assignee_keycloak_id: null }) }), { status: 200 })
+    })
+    const item = stored({ assignee_keycloak_id: 'u-1' })
+    render(Page, { props: { data: { ...DATA, actionItems: [item] } } as never })
+    expect(screen.getByText(/10\.12\.2026/)).toBeTruthy()
+    await fireEvent.click(screen.getByText('✎'))
+    await fireEvent.input(screen.getByLabelText('Fällig bis'), { target: { value: '' } })
+    await fireEvent.change(screen.getByLabelText('Zuständig'), { target: { value: '' } })
+    await fireEvent.click(screen.getByText('Speichern'))
+
+    await waitFor(() => expect(calls('PATCH')).toHaveLength(1))
+    await waitFor(() => expect(screen.queryByText(/10\.12\.2026/)).toBeNull())
+  })
+
+  it('a task whose person has left the body keeps that person unless another is chosen', async () => {
+    const item = stored({ assignee_keycloak_id: 'u-gone' })
+    render(Page, { props: { data: { ...DATA, actionItems: [item] } } as never })
+    await fireEvent.click(screen.getByText('✎'))
+    const select = screen.getByLabelText('Zuständig') as HTMLSelectElement
+    expect(select.value).toBe('u-gone')
+    await fireEvent.input(screen.getByPlaceholderText('Aufgabe'), { target: { value: 'Anderer Titel' } })
+    await fireEvent.click(screen.getByText('Speichern'))
+
+    await waitFor(() => expect(calls('PATCH')).toHaveLength(1))
+    expect(bodyOf(calls('PATCH')[0]).assigneeKeycloakId).toBe('u-gone')
+  })
+
   it('opens a stored task with its date in the date field', async () => {
     render(Page, { props: { data: { ...DATA, actionItems: [stored()] } } as never })
     await fireEvent.click(screen.getByText('✎'))

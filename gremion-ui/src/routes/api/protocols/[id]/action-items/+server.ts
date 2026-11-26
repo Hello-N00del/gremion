@@ -27,6 +27,10 @@ export async function POST(event: RequestEvent) {
   if (assigneeKeycloakId && !(await isMemberOf(protocol.committee_id, assigneeKeycloakId))) {
     throw error(400, 'Die zuständige Person ist kein Mitglied des Gremiums.')
   }
-  const actionItem = await addActionItem(protocol.id, { text, assigneeKeycloakId, dueDate })
+  const actionItem = await addActionItem(protocol.id, {
+    text,
+    assigneeKeycloakId: assigneeKeycloakId ?? undefined,
+    dueDate: dueDate ?? undefined,
+  })
   return json({ actionItem }, { status: 201 })
 }

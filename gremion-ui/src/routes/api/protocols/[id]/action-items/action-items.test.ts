@@ -97,6 +97,46 @@ describe('PATCH /api/protocols/[id]/action-items/[itemId]', () => {
   it('refuses an edit once the protocol is published', async () => {
     mockGetProtocol.mockResolvedValue({ id: PID, committee_id: COMMITTEE, status: 'published' })
     await expect(patch({ text: 'x' })).rejects.toMatchObject({ status: 403 })
+    await expect(patch({ dueDate: '2026-12-10' })).rejects.toMatchObject({ status: 403 })
+    await expect(patch({ assigneeKeycloakId: null })).rejects.toMatchObject({ status: 403 })
     expect(mockUpdateActionItem).not.toHaveBeenCalled()
+  })
+
+  it('still lets a task be ticked off once the protocol is published', async () => {
+    mockGetProtocol.mockResolvedValue({ id: PID, committee_id: COMMITTEE, status: 'published' })
+    const res = await patch({ completed: true })
+    expect(res.status).toBe(200)
+    expect(mockUpdateActionItem).toHaveBeenCalledWith(IID, { text: undefined, dueDate: undefined, assigneeKeycloakId: undefined, completed: true })
+  })
+
+  it('an empty assignee or due date clears it, a field that was not sent stays untouched', async () => {
+    await patch({ text: 'A', assigneeKeycloakId: null, dueDate: null })
+    expect(mockUpdateActionItem).toHaveBeenLastCalledWith(IID, { text: 'A', assigneeKeycloakId: null, dueDate: null, completed: undefined })
+    await patch({ assigneeKeycloakId: '', dueDate: '' })
+    expect(mockUpdateActionItem).toHaveBeenLastCalledWith(IID, { text: undefined, assigneeKeycloakId: null, dueDate: null, completed: undefined })
+    await patch({ text: 'B' })
+    expect(mockUpdateActionItem).toHaveBeenLastCalledWith(IID, { text: 'B', assigneeKeycloakId: undefined, dueDate: undefined, completed: undefined })
+    expect(mockIsMemberOf).not.toHaveBeenCalled()
+  })
+
+  it('clearing needs no membership check', async () => {
+    mockIsMemberOf.mockResolvedValue(false)
+    const res = await patch({ assigneeKeycloakId: null })
+    expect(res.status).toBe(200)
+  })
+
+  it('refuses a new assignee who is not a member of the body', async () => {
+    mockGetActionItem.mockResolvedValue({ id: IID, protocol_id: PID, assignee_keycloak_id: 'u-1' })
+    mockIsMemberOf.mockResolvedValue(false)
+    await expect(patch({ assigneeKeycloakId: 'stranger' })).rejects.toMatchObject({ status: 400 })
+    expect(mockUpdateActionItem).not.toHaveBeenCalled()
+  })
+
+  it('an edit that keeps the stored assignee passes although that person has left the body', async () => {
+    mockGetActionItem.mockResolvedValue({ id: IID, protocol_id: PID, assignee_keycloak_id: 'u-gone' })
+    mockIsMemberOf.mockResolvedValue(false)
+    const res = await patch({ text: 'Neuer Titel', assigneeKeycloakId: 'u-gone' })
+    expect(res.status).toBe(200)
+    expect(mockUpdateActionItem).toHaveBeenCalledWith(IID, expect.objectContaining({ text: 'Neuer Titel', assigneeKeycloakId: 'u-gone' }))
   })
 })

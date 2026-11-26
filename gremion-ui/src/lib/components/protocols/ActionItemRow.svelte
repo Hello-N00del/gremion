@@ -103,6 +103,10 @@
           {#each members as m (m.user_id)}
             <option value={m.user_id}>{m.displayName}</option>
           {/each}
+          {#if item.assignee_keycloak_id && !assigneeName}
+            <!-- The stored person is no longer in the body: kept until another choice is made. -->
+            <option value={item.assignee_keycloak_id}>Bisher Zuständige (nicht mehr im Gremium)</option>
+          {/if}
         </select>
       </div>
     </div>

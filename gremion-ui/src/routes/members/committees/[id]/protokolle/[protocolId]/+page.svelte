@@ -226,12 +226,16 @@
     newActionItemError = null
   }
 
-  // The body a task is sent with: the route reads camelCase names; fields left empty stay unsent.
-  function actionItemBody(i: TaskInput) {
+  // The body a task is sent with: the route reads camelCase names. A new task leaves empty fields
+  // unsent; a stored one sends them as null, which is how the route is told to clear them
+  // (a field that is not sent stays as stored).
+  function actionItemBody(i: TaskInput, clearEmpty: boolean) {
+    const due = i.due_date || null
+    const assignee = i.assignee_keycloak_id || null
     return {
       text: i.text,
-      ...(i.due_date ? { dueDate: i.due_date } : {}),
-      ...(i.assignee_keycloak_id ? { assigneeKeycloakId: i.assignee_keycloak_id } : {}),
+      ...(due || clearEmpty ? { dueDate: due } : {}),
+      ...(assignee || clearEmpty ? { assigneeKeycloakId: assignee } : {}),
     }
   }
 
@@ -244,7 +248,7 @@
       const res = await fetch(`/api/protocols/${data.protocol.id}/action-items`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(actionItemBody(i)),
+        body: JSON.stringify(actionItemBody(i, false)),
       })
       if (res.ok) {
         actionItems = [...actionItems, (await res.json()).actionItem]
@@ -270,7 +274,7 @@
       const res = await fetch(`/api/protocols/${data.protocol.id}/action-items/${i.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(actionItemBody(i)),
+        body: JSON.stringify(actionItemBody(i, true)),
       })
       if (res.ok) {
         // Show what the server stored (title, date, assignee), not what the page held before.
