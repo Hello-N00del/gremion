@@ -199,38 +199,44 @@ wait_healthy() {
 # ACME staging directory) fails here, loudly.
 edge_curl() { edge_curl_with "$1" -fsS; }
 
-# edge_curl_with <url> <curl flags...> -- edge_curl's pinned request with the caller's flags in front of --max-time.
+# edge_curl_with <url> <curl flags...> -- edge_curl's pinned request; the caller's flags come after the defaults (a later --max-time wins).
 edge_curl_with() {
     local url="$1" host rest
     host="${url#https://}"; host="${host%%/*}"
     rest="${url#https://"${host}"}"
     # --resolve pins the PORT too, so a non-443 edge port has to be in the URL for the pin to apply
     [[ "$EDGE_HTTPS_PORT" == 443 ]] || url="https://${host}:${EDGE_HTTPS_PORT}${rest}"
-    curl "${@:2}" --max-time 20 --resolve "${host}:${EDGE_HTTPS_PORT}:${EDGE_BIND_IP}" "$url"
+    curl --max-time 20 --resolve "${host}:${EDGE_HTTPS_PORT}:${EDGE_BIND_IP}" "${@:2}" "$url"
 }
 
-# edge_read <url> <jq-filter> -- the edge read after matrix was recreated: retried every EDGE_POLL_S for up to
-# EDGE_WAIT_S seconds until the edge answers HTTP 2xx with a body the jq filter accepts (true for any body;
-# the login reads pass a filter that wants a flows list). The body is left in EDGE_BODY; on failure EDGE_LAST
-# holds what the last attempt got -- the HTTP status and the first 200 bytes of the body -- for the caller's message.
-# Not a command substitution on purpose: the caller reads the variables. A body that answered but says the wrong
-# thing is the caller's to judge, once; only the transport and the shape of the answer are retried here.
+# edge_read <url> <jq-filter> -- the edge read after matrix was recreated: retried every EDGE_POLL_S seconds until
+# EDGE_WAIT_S seconds of wall clock have passed (one attempt is capped at 10 s, so the budget holds against an edge that
+# hangs) and the edge answers HTTP 2xx with a body the jq filter accepts (the login reads pass a filter that wants a
+# flows list). The body is left in EDGE_BODY; on failure EDGE_LAST holds what the last attempt got -- the HTTP status
+# (000: no answer), curl's own error line if it printed one, and the first 200 bytes of the body -- for the caller's
+# message. Not a command substitution on purpose: the caller reads the variables. A body that answered but says the
+# wrong thing is the caller's to judge, once; only the transport and the shape of the answer are retried here.
 EDGE_BODY=""
 EDGE_LAST=""
 edge_read() {
-    local url="$1" filter="$2" t=0 out status body
+    local url="$1" filter="$2" start="$SECONDS" out status body errf cerr
+    errf="$(mktemp)" || die "cannot create a temp file for the edge read" "$GREMION_EXIT_ASSERT"
     while :; do
-        out="$(edge_curl_with "$url" -sS -w '|%{http_code}' 2>/dev/null)" || out="|000"
+        out="$(edge_curl_with "$url" -sS --max-time 10 -w '|%{http_code}' 2>"$errf")" || out="${out:-|000}"
         status="${out##*|}"
         body="${out%|*}"
         if [[ "$status" =~ ^2[0-9][0-9]$ ]] && jq -e "$filter" <<< "$body" >/dev/null 2>&1; then
             EDGE_BODY="$body"
+            rm -f "$errf"
             return 0
         fi
-        EDGE_LAST="HTTP ${status}, body starts: $(printf '%s' "${body:0:200}" | tr -c '[:print:]' ' ')"
-        (( t < EDGE_WAIT_S )) || return 1
+        cerr="$(head -c 200 "$errf" | tr -c '[:print:]' ' ')"
+        EDGE_LAST="HTTP ${status}${cerr:+, curl said: ${cerr}}, body starts: $(printf '%s' "${body:0:200}" | tr -c '[:print:]' ' ')"
+        if (( SECONDS - start >= EDGE_WAIT_S )); then
+            rm -f "$errf"
+            return 1
+        fi
         sleep "$EDGE_POLL_S"
-        t=$((t + EDGE_POLL_S))
     done
 }
 

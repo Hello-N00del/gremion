@@ -225,6 +225,7 @@ if [ -n "$fc" ] && [ -f "$fc" ]; then
     n="$(cat "$fc")"
     if [ "$n" = always ] || [ "$n" -gt 0 ]; then
         [ "$n" = always ] || echo $((n - 1)) > "$fc"
+        if [ -f "$GREMION_ROOT/edge-slow" ]; then sleep 2; fi
         if [ -f "$GREMION_ROOT/edge-fail-long-body" ]; then printf "%0500d" 0 | tr 0 x; else echo "<html>502 Bad Gateway</html>"; fi
         echo "curl: (22) The requested URL returned error: 502" >&2
         exit 22
@@ -1451,6 +1452,7 @@ per_customer_provider() {
 edge_reads() { grep -c -- " -w .*$1" "$SHIM_LOG" || true; }
 
 @test "wire: the versions read is retried while the edge answers an error, then the wire goes on" {
+    export GREMION_SERVICES_EDGE_WAIT_S=10
     echo 2 > "${GREMION_ROOT}/edge-fail-versions"
     wire
     [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
@@ -1459,6 +1461,7 @@ edge_reads() { grep -c -- " -w .*$1" "$SHIM_LOG" || true; }
 }
 
 @test "wire: the login-flow read is retried while the edge answers an error, jwt on and off, then the flows are judged" {
+    export GREMION_SERVICES_EDGE_WAIT_S=10
     echo 2 > "${GREMION_ROOT}/edge-fail-login"
     wire
     [ "$status" -eq 0 ] || { echo "on: status=$status $output"; return 1; }
@@ -1517,4 +1520,14 @@ edge_reads() { grep -c -- " -w .*$1" "$SHIM_LOG" || true; }
     after="$(sed -n '/force-recreate matrix/,$p' "${HOST_SRC}/bin/gremion-services")"
     [ -n "$after" ]
     ! grep -q 'edge_curl "https://\${platform}/_matrix' <<< "$after" || { echo "a single-shot matrix read remains after the recreate"; return 1; }
+}
+
+@test "wire: the budget of the edge reads is wall clock, so a slow edge is not retried once per second of budget" {
+    export GREMION_SERVICES_EDGE_WAIT_S=4
+    echo always > "${GREMION_ROOT}/edge-fail-versions"
+    : > "${GREMION_ROOT}/edge-slow"
+    wire
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [ "$(edge_reads _matrix/client/versions)" -le 3 ] || { cat "$SHIM_LOG"; return 1; }
+    [ "$(edge_reads _matrix/client/versions)" -ge 2 ] || { cat "$SHIM_LOG"; return 1; }
 }

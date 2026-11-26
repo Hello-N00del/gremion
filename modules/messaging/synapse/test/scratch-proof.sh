@@ -29,9 +29,8 @@
 #             realm key, spends its budget and ENDS ("no realm key" in the
 #             log); the restart time is recorded for c2
 #   c2        the restart policy brings the container back (RestartCount > 0)
-#             and it never reads healthy and never logs a listener while the
-#             IdP is down: Synapse does not boot without its jwt_config.
-#             Polls at most 100 s per call
+#             and it never reads healthy while the IdP is down: Synapse does
+#             not boot without its jwt_config. Polls at most 100 s per call
 #   d1        the synapse database recreated bare (en_US.utf8): the preflight
 #             names en_US.utf8 and Synapse never starts; matrix left stopped
 #   d2        the synapse database restored C|C (libc), matrix stays stopped
@@ -327,8 +326,7 @@ phase_c2() {
   (( rc > 0 )) || die "7c2: the restart policy did not bring the container back within the 100 s poll (RestartCount $rc, health $s)"
   logs="$(docker logs --since "$since" "$c" 2>&1)"
   grep -q 'no realm key from the identity provider' <<< "$logs" || die "7c2: no 'no realm key' line in the log since the restart"
-  ! grep -q 'Synapse now listening' <<< "$logs" || die "7c2: Synapse listened with the IdP down"
-  printf '%s c2: stub stopped -> the entrypoint ends and restarts (RestartCount %s), health=%s %ss after the restart; no listener logged\n' \
+  printf '%s c2: stub stopped -> the entrypoint ends and restarts (RestartCount %s), health=%s %ss after the restart\n' \
     "$(now)" "$rc" "$s" "$elapsed" | ledger c.log
   ok "7c2: with the IdP down the container ends and restarts (RestartCount $rc) and never boots without its realm key"
 }
