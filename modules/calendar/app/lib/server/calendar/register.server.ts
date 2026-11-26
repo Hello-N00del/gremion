@@ -114,6 +114,32 @@ registerDataProvider('calendar:upcoming-events', async (range) => {
   }
 })
 
+// The kernel command palette's event search. Events whose title contains the query, from a window of 90 days
+// back to 400 days ahead of today (listEvents has no title filter and the palette does not need history),
+// one row per series (its next occurrence), the nearest to today first: what is coming up soonest, then what
+// just was. The caller applied the calendar page's role gate and the customer's module switch. A failing
+// read is NOT turned into an empty answer here: the caller logs it and degrades the one kind.
+const SEARCH_WINDOW_BACK_MS = 90 * 86_400_000
+const SEARCH_WINDOW_AHEAD_MS = 400 * 86_400_000
+registerDataProvider('calendar:search-events', async ({ query, limit }) => {
+  const now = new Date()
+  const from = new Date(now.getTime() - SEARCH_WINDOW_BACK_MS)
+  const to = new Date(now.getTime() + SEARCH_WINDOW_AHEAD_MS)
+  const needle = foldForSearch(query)
+  const events = nextOccurrencePerId(expandRecurringEvents(await getCalendarBackend().listEvents({ from, to }), from, to), now)
+  const upcoming = events.filter((e) => e.startAt.getTime() >= now.getTime()).sort((a, b) => a.startAt.getTime() - b.startAt.getTime())
+  const past = events.filter((e) => e.startAt.getTime() < now.getTime()).sort((a, b) => b.startAt.getTime() - a.startAt.getTime())
+  return [...upcoming, ...past]
+    .filter((e) => foldForSearch(e.title).includes(needle))
+    .slice(0, limit)
+    .map((e) => ({ id: e.id, title: e.title, startAt: e.startAt, allDay: e.allDay }))
+})
+
+/** Case- and diacritic-folded text, for comparing a typed query with a title. */
+function foldForSearch(s: string): string {
+  return s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+}
+
 // The question before an org unit is deleted: does it still have calendar events? The kernel's committee
 // delete asks this first and refuses while the answer is yes. Unlike the provider above, a failure is NOT
 // degraded to an empty answer: the delete refuses on a failure instead of reading it as "no events".
