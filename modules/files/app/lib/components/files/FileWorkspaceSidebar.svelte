@@ -19,7 +19,7 @@
 </script>
 
 <aside class="ws-sidebar">
-  <div class="eyebrow ws-label">Workspaces</div>
+  <div class="eyebrow ws-label">Bereiche</div>
   <button
     type="button"
     class="tree-row"
@@ -44,7 +44,7 @@
 
   <div class="ws-divider" aria-hidden="true"></div>
 
-  <div class="eyebrow ws-label">Tags</div>
+  <div class="eyebrow ws-label">Schlagwörter</div>
   {#each TAGS as tag (tag)}
     <div class="tree-row tree-row-tag">
       <span class="tag-swatch" aria-hidden="true"></span>

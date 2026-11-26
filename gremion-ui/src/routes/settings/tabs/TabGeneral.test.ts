@@ -17,6 +17,14 @@ const winter = () => screen.getByLabelText('Wintersemester beginnt im') as HTMLS
 const summer = () => screen.getByLabelText('Sommersemester beginnt im') as HTMLSelectElement
 const save = () => fireEvent.click(screen.getByRole('button', { name: 'Speichern' }))
 
+describe('TabGeneral — wording', () => {
+  it('names the organisation block in German, not with the English word Branding', () => {
+    const { container } = render(TabGeneral, { props: { org: ORG, termMonths: null } })
+    expect(container.textContent).toContain('Name und Erscheinungsbild')
+    expect(container.textContent).not.toContain('Branding')
+  })
+})
+
 describe('TabGeneral — semester start months', () => {
   it('shows the stored months, and a save sends them with the name (the months are not dropped)', async () => {
     render(TabGeneral, { props: { org: ORG, termMonths: { winter: 10, summer: 4 } } })

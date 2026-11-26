@@ -120,9 +120,10 @@ test('a missing unit part makes unit fail, and the reason names the missing part
   const parts = unitParts()
   delete parts['unit:ports']
   delete parts['unit:bats-2-of-2']
+  delete parts['unit:bats-cd-pipeline']
   const out = combine([input('u.json', record(parts))], SHA)
   assert.equal(out.suites.unit.status, 'fail')
-  assert.match(out.suites.unit.reason, /missing part\(s\): ports, bats-2-of-2/)
+  assert.match(out.suites.unit.reason, /missing part\(s\): ports, bats-2-of-2, bats-cd-pipeline/)
   assert.equal(out.ok, false)
 })
 

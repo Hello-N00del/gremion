@@ -57,12 +57,19 @@ vi.mock('$env/dynamic/private', () => ({ env: ENV }))
 vi.mock('$lib/server/env/service-env', () => ({ serviceEnv: (name: string) => ENV[name] }))
 // The namespaced tokens below are unsigned stand-ins (`h.<claims>.s`): the verifier accepts exactly that
 // shape and hands back its claims. The real verifier's refusals are pinned in matrix-identity.verify.test.ts.
-vi.mock('$lib/server/jwt-verify', () => ({
-  verifyBearerJwt: async (token: string) => {
+vi.mock('$lib/server/jwt-verify', () => {
+  const claimsOf = (token: string): Record<string, unknown> | null => {
     const [, body, sig] = token.split('.')
     return sig === 's' && body ? (JSON.parse(Buffer.from(body, 'base64url').toString('utf-8')) as Record<string, unknown>) : null
-  },
-}))
+  }
+  return {
+    verifyBearerJwt: async (token: string) => claimsOf(token),
+    verifyBearerJwtResult: async (token: string) => {
+      const payload = claimsOf(token)
+      return payload ? { ok: true, payload } : { ok: false, reason: 'rejected' }
+    },
+  }
+})
 /** The Keycloak account of the erased subject, by tenant: `username` is what the hook derives the Matrix id from. */
 const KC = vi.hoisted(() => ({ username: 'alice' }))
 vi.mock('$lib/server/keycloak-admin', () => ({

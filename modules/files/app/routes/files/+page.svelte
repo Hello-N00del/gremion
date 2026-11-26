@@ -45,7 +45,6 @@
         können gleichzeitig schreiben; Änderungen werden versioniert.
       </div>
     </div>
-    <span class="view-restriction"><Icon name="external" size={12} /> Externes Modul</span>
   </div>
 
   <div class="files-body">
@@ -103,18 +102,9 @@
     border-radius: var(--r-md);
     padding: 20px 22px;
     display: grid;
-    grid-template-columns: 56px 1fr auto;
+    grid-template-columns: 56px 1fr;
     gap: 18px;
     align-items: center;
-  }
-  @media (max-width: 640px) {
-    .handoff-card {
-      grid-template-columns: 56px 1fr;
-    }
-    .handoff-card .view-restriction {
-      grid-column: 2;
-      justify-self: start;
-    }
   }
   .handoff-icon {
     width: 56px;
@@ -139,20 +129,5 @@
     margin-top: 4px;
     max-width: 520px;
     line-height: 1.5;
-  }
-  .view-restriction {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-family: var(--font-mono);
-    font-size: 10px;
-    letter-spacing: 0.06em;
-    color: var(--ink-muted);
-    padding: 4px 9px;
-    border-radius: 100px;
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    text-transform: uppercase;
-    white-space: nowrap;
   }
 </style>

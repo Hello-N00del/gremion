@@ -38,7 +38,8 @@ describe('TabRetention.svelte', () => {
     const help = container.querySelector('p')!.textContent ?? ''
     expect(help).toContain('fest vorgegeben')
     expect(help).toContain('Audit-Tabelle')
-    expect(help).toContain('RC-GOV-CHAIN')
+    expect(help).not.toMatch(/RC-|Traefik|Vector|ipcrypt/)
+    expect(help).toContain('verkettet')
     expect(help).toContain('keinem Zeitgeber')
     expect(help).not.toContain('täglich automatisch gelöscht')
     expect(help).not.toContain('Sicherheits-/Auditprotokolle')

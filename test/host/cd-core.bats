@@ -482,6 +482,28 @@ cd_stage_fail build commit 1; cd_state_get ".release.stage_status + \"/\" + .rel
     [ "$status" -eq 3 ]
 }
 
+@test "locks: cd_pid_holds_cd_lock says yes for the process that holds the lock, no for any other process" {
+    cd_need_flock
+    cd_bg 'cd_lock_take; echo ready; exec sleep 300'
+    run cd_lib 'cd_pid_holds_cd_lock "$1"' "$CD_BG_PID"
+    [ "$status" -eq 0 ]
+    # a live process that is not the holder (this shell)
+    run cd_lib 'cd_pid_holds_cd_lock "$1"' "$$"
+    [ "$status" -eq 1 ]
+    # a process that has ended
+    local gone
+    gone="$(bash -c 'echo $$')"
+    run cd_lib 'cd_pid_holds_cd_lock "$1"' "$gone"
+    [ "$status" -eq 1 ]
+}
+
+@test "locks: cd_pid_holds_cd_lock answers 2 (unknown) when it cannot tell, never a quiet no" {
+    run cd_lib 'cd_pid_holds_cd_lock "not-a-pid"'
+    [ "$status" -eq 2 ]
+    run cd_lib 'cd_pid_holds_cd_lock ""'
+    [ "$status" -eq 2 ]
+}
+
 @test "locks: cd_hostlock_take waits the given seconds, then returns 3" {
     cd_need_flock
     cd_bg 'cd_hostlock_take; echo ready; exec sleep 300'

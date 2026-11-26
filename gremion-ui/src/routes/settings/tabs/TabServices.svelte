@@ -58,7 +58,7 @@
       <h3 class="text-sm font-semibold text-ink">Öffentliches Portal</h3>
       <p class="text-xs text-ink-muted mt-0.5">
         Hostname des öffentlich erreichbaren StuRa-Portals.
-        <strong class="font-semibold text-ink">Einzige Quelle</strong> für die öffentliche Domain (#168).
+        <strong class="font-semibold text-ink">Einzige Quelle</strong> für die öffentliche Domain.
       </p>
     </div>
     <form

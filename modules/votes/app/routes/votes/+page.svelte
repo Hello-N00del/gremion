@@ -231,7 +231,7 @@
       {#if data.electionsEnabled}
         <span class="legend-item"><span class="kind-dot helios" aria-hidden="true"></span> Helios</span>
       {/if}
-      <span class="legend-item"><span class="kind-dot poll" aria-hidden="true"></span> Poll</span>
+      <span class="legend-item"><span class="kind-dot poll" aria-hidden="true"></span> Umfrage</span>
     </div>
   </div>
 
@@ -259,7 +259,7 @@
             {#if vote.kind === 'helios'}
               <span class="kind-badge helios"><Icon name="shield" size={11} /> HELIOS · E2E</span>
             {:else}
-              <span class="kind-badge poll"><Icon name="poll" size={11} /> POLL</span>
+              <span class="kind-badge poll"><Icon name="poll" size={11} /> UMFRAGE</span>
             {/if}
             <span
               class="pill"
@@ -350,7 +350,7 @@
             {#if s.kind === 'helios'}
               <span class="kind-badge helios lg"><Icon name="shield" size={13} /> HELIOS · E2E</span>
             {:else}
-              <span class="kind-badge poll lg"><Icon name="poll" size={13} /> POLL</span>
+              <span class="kind-badge poll lg"><Icon name="poll" size={13} /> UMFRAGE</span>
             {/if}
             <h2 class="display detail-title">{s.title}</h2>
             <div class="detail-meta mono">
@@ -525,7 +525,7 @@
         >
           <div class="dialog-choice-icon poll"><Icon name="poll" size={18} /></div>
           <div class="dialog-choice-text">
-            <div class="dialog-choice-title">Nextcloud-Poll</div>
+            <div class="dialog-choice-title">Nextcloud-Umfrage</div>
             <div class="dialog-choice-sub">Schnelle, nicht-anonyme Terminabstimmung oder Meinungsbild. Ergebnis live.</div>
           </div>
           <Icon name="arrow-right" size={14} />
@@ -534,9 +534,9 @@
       <div class="dialog-foot mono">
         <Icon name="info" size={12} />
         {#if data.electionsEnabled}
-          <span>Nur <b>Vorstand</b> und <b>Wahlausschuss</b> dürfen Helios-Wahlen starten. Polls kann jedes Mitglied erstellen.</span>
+          <span>Nur <b>Vorstand</b> und <b>Wahlausschuss</b> dürfen Helios-Wahlen starten. Umfragen kann jedes Mitglied erstellen.</span>
         {:else}
-          <span>Polls kann jedes Mitglied erstellen.</span>
+          <span>Umfragen kann jedes Mitglied erstellen.</span>
         {/if}
       </div>
     </div>

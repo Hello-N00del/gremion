@@ -65,7 +65,7 @@ export const OPERATOR_DECISION_DE = 'Betreiberentscheidung vom 30.09.2026'
  * nothing else about it: no deletion period, no timer.
  */
 export const AUDIT_LOG_RECORD_DE =
-  'Die Audit-Tabelle der Anwendung (hash-verkettet) ist ein Governance-Datensatz (RC-GOV-CHAIN): ' +
+  'Die Audit-Tabelle der Anwendung ist verkettet gespeichert und nachträglich nicht veränderbar: ' +
   'Sie wird von keinem Zeitgeber gelöscht, und die Anwendung darf Einträge nur anhängen, nicht ändern oder löschen.'
 
 /**
@@ -80,17 +80,17 @@ export const AUDIT_LOG_RECORD_DE =
 export const RETENTION_CAVEATS: Readonly<Record<RetentionField, string | null>> = {
   access_logs_days:
     'Konfigurationswert: Die Anwendung löscht nach diesem Wert derzeit nicht selbst. ' +
-    'Die Zugriffsprotokolle der Infrastruktur (Traefik/Vector) werden unabhängig davon ' +
+    'Die Zugriffsprotokolle des Webservers werden unabhängig davon ' +
     'durch Protokollrotation auf höchstens 30 Tage begrenzt.',
   app_logs_days:
     'Konfigurationswert: Die Anwendung löscht nach diesem Wert derzeit nicht selbst. ' +
     'Die Container-Protokolle der Anwendung sind nur in ihrer Größe begrenzt, nicht zeitlich.',
   security_logs_days:
     'Konfigurationswert: Die Anwendung löscht nach diesem Wert nicht selbst; er ist das Fenster des Protokollspeichers. ' +
-    'Die Audit-Tabelle der Anwendung ist davon ausgenommen (RC-GOV-CHAIN): Sie wird von keinem Zeitgeber gelöscht.',
+    'Die Audit-Tabelle der Anwendung (verkettet gespeichert, nachträglich nicht veränderbar) ist davon ausgenommen: Sie wird von keinem Zeitgeber gelöscht.',
   security_nopii_logs_days:
     'Konfigurationswert: Die Anwendung löscht nach diesem Wert derzeit nicht selbst. ' +
-    'Soweit solche Protokolle in der Infrastruktur (Traefik/Vector) anfallen, begrenzt deren ' +
+    'Soweit solche Protokolle auf dem Webserver anfallen, begrenzt deren ' +
     'Protokollrotation sie unabhängig davon auf höchstens 30 Tage.',
 }
 

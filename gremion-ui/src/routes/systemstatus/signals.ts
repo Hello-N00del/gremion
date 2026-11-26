@@ -48,7 +48,7 @@ const SHARED: readonly SystemService[] = [
     key: 'app',
     name: 'Anwendung',
     plane: 'shared',
-    tech: 'SvelteKit',
+    tech: 'Webanwendung',
     message: 'Diese Seite wurde von der Anwendung ausgeliefert.',
     status: 'ok',
   },

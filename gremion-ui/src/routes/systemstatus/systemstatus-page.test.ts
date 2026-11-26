@@ -37,6 +37,13 @@ describe('systemstatus page (E3)', () => {
     expect(text).toMatch(/4 \/ 4/)
   })
 
+  it('names the application by what it is, not by the framework it is built with', () => {
+    const { container } = render(Page, { props: { data: data(ALL_OK) } })
+    const text = container.textContent ?? ''
+    expect(text).toContain('Webanwendung')
+    expect(text).not.toContain('SvelteKit')
+  })
+
   it('names no component that does not exist in this deployment', () => {
     const { container } = render(Page, { props: { data: data(ALL_OK) } })
     const text = container.textContent ?? ''

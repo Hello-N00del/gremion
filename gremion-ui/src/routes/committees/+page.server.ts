@@ -3,6 +3,7 @@ import { buildOrgTree, type OrgTreeNode } from '$lib/server/governance/org-units
 import { deriveAbbr, deriveHue } from '$lib/governance/committee-color'
 import { getDataProvider } from '$lib/server/modules/runtime-registry'
 import { Role } from '$lib/auth/types'
+import { hasRole } from '$lib/auth'
 
 // Member-facing Gremien tree (WI-3). Replaces the flat 2-bucket committee
 // browser with the real org-unit hierarchy: Gremium → child_term → groups.
@@ -59,5 +60,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 
   const roles = locals.user?.roles ?? []
   const isAdmin = roles.includes(Role.CouncilAdmin) || roles.includes(Role.ITAdmin)
-  return { tree: tree.map(toDTO), isAdmin }
+  // The same check the create page (/members/committees/new) makes, so the link shows
+  // for exactly the roles that page lets in.
+  const canCreate = hasRole(roles, Role.CouncilAdmin)
+  return { tree: tree.map(toDTO), isAdmin, canCreate }
 }

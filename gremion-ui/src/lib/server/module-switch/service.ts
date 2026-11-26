@@ -262,7 +262,7 @@ export async function submitModuleSwitch(ctx: SwitchContext, input: SwitchInput,
   if (action === 'enable') {
     if (dpia !== undefined && dpia !== null) {
       if (!validDpia(dpia)) {
-        return fail(422, 'DPIA_INVALID', 'Die DPIA-Entscheidung braucht eine Ja/Nein-Angabe und einen Dokumentverweis (höchstens 500 Zeichen, keine Steuerzeichen, kein Bindestrich am Anfang).')
+        return fail(422, 'DPIA_INVALID', 'Die DSFA-Entscheidung braucht eine Ja/Nein-Angabe und einen Dokumentverweis (höchstens 500 Zeichen, keine Steuerzeichen, kein Bindestrich am Anfang).')
       }
       args = {
         ...args,
@@ -270,7 +270,7 @@ export async function submitModuleSwitch(ctx: SwitchContext, input: SwitchInput,
       }
     } else if (!stateRow.dpia_recorded && karenz?.state !== 'open') {
       // (an open Karenz is the restore of a module that was switched on before: its decision is on record)
-      return fail(422, 'DPIA_REQUIRED', 'Für dieses Modul liegt noch keine DPIA-Entscheidung vor. Bitte die Entscheidung mit Dokumentverweis angeben.')
+      return fail(422, 'DPIA_REQUIRED', 'Für dieses Modul liegt noch keine DSFA-Entscheidung vor. Bitte die Entscheidung mit Dokumentverweis angeben.')
     }
   }
 

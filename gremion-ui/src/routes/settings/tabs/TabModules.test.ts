@@ -78,8 +78,8 @@ describe('TabModules.svelte', () => {
     expect(await screen.findByText('Abstimmungen')).toBeTruthy()
     expect(screen.getByText('Kalender')).toBeTruthy()
     expect(screen.getAllByText('Eingeschaltet')).toHaveLength(2)
-    expect(screen.getByText('DPIA-Entscheidung hinterlegt')).toBeTruthy()
-    expect(screen.getByText('DPIA-Entscheidung fehlt noch')).toBeTruthy()
+    expect(screen.getByText('DSFA-Entscheidung hinterlegt')).toBeTruthy()
+    expect(screen.getByText('DSFA-Entscheidung fehlt noch')).toBeTruthy()
   })
 
   it('shows "nicht konfiguriert" for a 503 NOT_CONFIGURED, never an empty list', async () => {
@@ -107,7 +107,7 @@ describe('TabModules.svelte', () => {
     expect(calls.some((c) => c.method === 'POST')).toBe(false)
     const submit = screen.getByRole('button', { name: /Einschalten und Entscheidung festhalten/ }) as HTMLButtonElement
     expect(submit.disabled).toBe(true)
-    await fireEvent.change(screen.getByLabelText(/DPIA erforderlich/), { target: { value: 'no' } })
+    await fireEvent.change(screen.getByLabelText(/DSFA erforderlich/), { target: { value: 'no' } })
     await fireEvent.input(screen.getByLabelText(/Dokumentverweis/), { target: { value: 'TOM 4.2' } })
     expect(submit.disabled).toBe(false)
     await fireEvent.click(submit)
@@ -441,7 +441,7 @@ describe('TabModules.svelte', () => {
       for (const m of operator) {
         const li = document.querySelector(`[data-module="${m.moduleId}"]`) as HTMLElement
         expect(within(li).queryAllByRole('button')).toHaveLength(0)
-        expect(within(li).queryByText(/DPIA/)).toBeNull()
+        expect(within(li).queryByText(/DSFA/)).toBeNull()
       }
       // the switchable row keeps its switch as before
       const votes = document.querySelector('[data-module="votes"]') as HTMLElement

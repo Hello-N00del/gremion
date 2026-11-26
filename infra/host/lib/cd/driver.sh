@@ -2131,10 +2131,12 @@ cd_cmd_tick() {
         cd_alert "the cd lock could not be taken"
         cd_die 2 "the cd lock could not be taken"
     fi
-    _cd_drv_load
     # the watchdog expects the tick to rewrite the heartbeat on every run, an idle one too (a
-    # stage or a park replaces this beat with its own); the budget bounds an idle tick's poll
+    # stage or a park replaces this beat with its own); the budget bounds an idle tick's poll.
+    # It is the first thing done once the lock is held, before the state is read: the beat on
+    # disk until then is the previous run's, and the watchdog must find this run's.
     cd_heartbeat_start tick 600 || cd_err "driver: the heartbeat did not start"
+    _cd_drv_load
     case "$D_PHASE" in
         releasing | watching | rolling_back)
             ran=1

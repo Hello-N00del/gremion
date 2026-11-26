@@ -34,7 +34,7 @@ ${compliance.purpose_description || 'Betrieb einer selbst gehosteten Plattform f
 
 | Datenkategorie | Standardwert | Gesetzliche Grundlage |
 |---|---|---|
-| Zugriffsprotokolle (pseudonymisiert, ipcrypt-nd) | **${retention.access_logs_days} Tage** | Betreiber-Obergrenze 30 Tage für jede Protokollklasse (${OPERATOR_DECISION_DE}); Art. 5 Abs. 1 lit. e DSGVO${caveat('access_logs_days')} |
+| Zugriffsprotokolle (pseudonymisiert) | **${retention.access_logs_days} Tage** | Betreiber-Obergrenze 30 Tage für jede Protokollklasse (${OPERATOR_DECISION_DE}); Art. 5 Abs. 1 lit. e DSGVO${caveat('access_logs_days')} |
 | Anwendungs-/Fehlerprotokolle | **${retention.app_logs_days} Tage** | Betreiber-Obergrenze 30 Tage (${OPERATOR_DECISION_DE}); Art. 5 Abs. 1 lit. e, Art. 6 Abs. 1 lit. f DSGVO${caveat('app_logs_days')} |
 | Sicherheitsprotokolle (mit Personenbezug) | **${retention.security_logs_days} Tage** | Betreiber-Obergrenze 30 Tage (${OPERATOR_DECISION_DE}); Art. 5 Abs. 1 lit. e DSGVO${caveat('security_logs_days')} |
 | Sicherheitsprotokolle (ohne Personenbezug) | **${retention.security_nopii_logs_days} Tage** | Betreiber-Obergrenze 30 Tage (${OPERATOR_DECISION_DE})${caveat('security_nopii_logs_days')} |
@@ -44,10 +44,10 @@ ${compliance.purpose_description || 'Betrieb einer selbst gehosteten Plattform f
 
 ## 4. Technische Umsetzung der Löschung
 
-- **IP-Adressen** werden vor der Speicherung mittels ipcrypt-nd (AES-128, draft-denis-ipcrypt-13) pseudonymisiert. Rohe IP-Adressen werden nicht persistiert.
-- **Protokolldateien** der Infrastruktur (Traefik/Vector) werden durch Vector (Retention-Filter) und logrotate (Backstop) automatisch gelöscht, höchstens nach 30 Tagen. Die Fristen für Zugriffs-, Anwendungs- und Sicherheitsprotokolle werden nicht von der Anwendung durchgesetzt, sondern von der Konfiguration des Protokollspeichers (siehe Hinweise in der Tabelle). Die Audit-Tabelle der Anwendung (RC-GOV-CHAIN) wird von keinem Zeitgeber gelöscht; die Anwendung darf sie nur ergänzen. Die tägliche Löschung des Betriebs (Host-Job, nicht die Anwendung selbst) betrifft Läufe geplanter Aufgaben und technische Zwischendaten und protokolliert ihr Ergebnis je Lauf.
+- **IP-Adressen** werden vor der Speicherung verschlüsselt und damit pseudonymisiert (AES-128). Rohe IP-Adressen werden nicht persistiert.
+- **Protokolldateien** des Webservers werden durch die Protokollaufbereitung (Aufbewahrungsfilter) und die Protokollrotation (Absicherung) automatisch gelöscht, höchstens nach 30 Tagen. Die Fristen für Zugriffs-, Anwendungs- und Sicherheitsprotokolle werden nicht von der Anwendung durchgesetzt, sondern von der Konfiguration des Protokollspeichers (siehe Hinweise in der Tabelle). Die Audit-Tabelle der Anwendung wird von keinem Zeitgeber gelöscht; die Anwendung darf sie nur ergänzen. Die tägliche Löschung des Betriebs (Host-Job, nicht die Anwendung selbst) betrifft Läufe geplanter Aufgaben und technische Zwischendaten und protokolliert ihr Ergebnis je Lauf.
 - **Datenbankbackups** werden durch restic (lokales Repository, 30 Tage) und rclone (Remote-Speicher) mit automatischer Bereinigung verwaltet.
-- **Schlüsselrotation** für ipcrypt erfolgt täglich; historische Schlüssel werden nach Ablauf der Zugriffsprotokoll-Frist gelöscht.
+- **Schlüsselrotation** für die Pseudonymisierung der IP-Adressen erfolgt täglich; historische Schlüssel werden nach Ablauf der Zugriffsprotokoll-Frist gelöscht.
 
 ## 5. Änderungshistorie
 

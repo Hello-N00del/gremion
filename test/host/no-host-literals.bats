@@ -421,14 +421,16 @@ host_shell_files() {
 }
 
 # The unit tests used to run through `make test-unit` in a ci.yml job of their own. They now run
-# as verify's unit:bats-<i>-of-<n> shard parts (one verify-unit-bats-<i> leg each), so the one
-# home for the runner is the shards' shared glob list (BATS_PATTERNS), and the property to keep
-# is the same one: a new bats file is collected the day it lands (the shards partition the
-# glob; scripts/verify/unit-bats-shards.test.mjs). So (a) ci.yml runs the shards through
-# verify.mjs and lists no bats file itself, and (b) the shards' patterns are exactly the globs
+# as verify's unit:bats-<i>-of-<n> shard parts (one verify-unit-bats-<i> leg each) and the
+# unit:bats-cd-pipeline part (the slow end-to-end CD pipeline file, alone in its own leg), so the
+# one home for the runner is the parts' shared glob list (BATS_PATTERNS), and the property to keep
+# is the same one: a new bats file is collected the day it lands (the parts partition the
+# glob; scripts/verify/unit-bats-shards.test.mjs). So (a) ci.yml runs the parts through
+# verify.mjs and lists no bats file itself, and (b) the parts' patterns are exactly the globs
 # the Makefile's test-unit recipe hands bats.
-@test "ci.yml runs the bats suites through verify's unit:bats shard parts -- one home for the runner" {
+@test "ci.yml runs the bats suites through verify's unit:bats parts -- one home for the runner" {
   grep -qE 'run: node scripts/verify/verify\.mjs --only [^ ]*unit:bats-[0-9]+-of-[0-9]+' "$KERNEL_ROOT/.github/workflows/ci.yml"
+  grep -qE 'run: node scripts/verify/verify\.mjs --only [^ ]*unit:bats-cd-pipeline( |$)' "$KERNEL_ROOT/.github/workflows/ci.yml"
   run grep -qE '^[[:space:]]+bats test/setup\.bats' "$KERNEL_ROOT/.github/workflows/ci.yml"
   [ "$status" -ne 0 ]
   local part_globs make_globs
@@ -623,16 +625,17 @@ ci_job_block() {  # $1 = job id
 # test/host/deploy-workflow.bats guards the keyless release pipeline: it shellchecks cut-dist-tag.sh
 # and release-tag-check.sh and yamllints release-images.yml, and `skip`s when the tool is absent.
 # Both of its skip messages say "CI installs it" -- and a guard that skips is a guard that passes, so this pins the install in the
-# jobs that actually run the bats suites (every verify-unit-bats-<i> shard leg), not in the Lint
+# jobs that actually run the bats suites (every verify-unit-bats-<i> shard leg and the
+# verify-unit-bats-cd-pipeline leg), not in the Lint
 # job, which runs no bats. verify counts a bats skip as a failed part, so a missing tool is red there
 # too; this keeps the reason readable. The shell linter is installed in the same jobs by the pinned,
 # checksummed recipe the Lint job uses (the apt package is older than the local gate's).
-@test "every CI job that runs a bats shard installs what the host suites need to not skip" {
+@test "every CI job that runs a bats part installs what the host suites need to not skip" {
   local jobs job block n=0
   jobs="$(grep -oE '^  verify-[a-z0-9-]+:' "$KERNEL_ROOT/.github/workflows/ci.yml" | tr -d ' :')"
   for job in $jobs; do
     block="$(ci_job_block "$job")"
-    [[ "$block" =~ unit:bats-[0-9]+-of-[0-9]+ ]] || continue
+    [[ "$block" =~ unit:bats-([0-9]+-of-[0-9]+|cd-pipeline) ]] || continue
     n=$((n + 1))
     [[ "$block" == *"yamllint"* ]]           || { echo "$job lacks yamllint" >&2; false; }
     [[ "$block" == *"gettext-base"* ]]       || { echo "$job lacks gettext-base" >&2; false; }
@@ -640,8 +643,9 @@ ci_job_block() {  # $1 = job id
     [[ "$block" == *"shellcheck-v0.11.0"* ]] || { echo "$job lacks shellcheck" >&2; false; }
   done
   # vacuity: the scan found the shard legs (one per shard; scripts/verify/suites/unit.mjs#BATS_SHARDS)
+  # and the CD pipeline leg
   local shards
   shards="$(sed -n 's/^export const BATS_SHARDS = \([0-9][0-9]*\)$/\1/p' "$KERNEL_ROOT/scripts/verify/suites/unit.mjs" | tr -d '\r')"
   [ -n "$shards" ]
-  [ "$n" -eq "$shards" ]
+  [ "$n" -eq $((shards + 1)) ]
 }
