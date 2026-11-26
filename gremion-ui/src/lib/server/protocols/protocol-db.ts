@@ -246,6 +246,13 @@ export async function updateProtocol(id: string, input: {
   return rows[0]
 }
 
+/** True when a protocol names this poll as its approval poll (the poll must then not be deleted). */
+export async function protocolReferencesPoll(pollId: string): Promise<boolean> {
+  const sql = getDb()
+  const rows = await sql<{ id: string }[]>`SELECT id FROM protocols WHERE approval_poll_id = ${pollId} LIMIT 1`
+  return rows.length > 0
+}
+
 /**
  * Delete a protocol. The published-guard rides in the statement (same shape as
  * updateProtocol), so a publish committing right before the delete cannot lose

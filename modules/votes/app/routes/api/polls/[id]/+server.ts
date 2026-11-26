@@ -3,7 +3,8 @@ import { z } from 'zod'
 import type { RequestHandler } from './$types'
 import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
-import { createPollsClient } from '$lib/server/polls/polls-client'
+import { createPollsClient, NextcloudPollsClient } from '$lib/server/polls/polls-client'
+import { protocolReferencesPoll } from '$lib/server/protocols/protocol-db'
 import { pollAccessStatus } from '$lib/server/polls/tenant-scope'
 
 const voteSchema = z.object({
@@ -85,4 +86,56 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
     throw e
   }
   return json({ success: true, data: { voted: true } })
+}
+
+// Closing and deleting are for the people who create polls (council admins and above); the check is here,
+// on the server. Every poll is owned by the module's own Nextcloud account, so the write runs as that
+// account (an acting member could not change it), after the tenant check inside the client.
+async function managerOrRefusal(locals: App.Locals, rawId: string): Promise<{ id: number } | Response> {
+  const session = await locals.auth()
+  const user = session?.user as SessionUser | undefined
+  if (!user || !hasRole(user.roles, Role.CouncilAdmin)) {
+    return json({ success: false, error: 'Forbidden' }, { status: 403 })
+  }
+  const id = Number(rawId)
+  if (!Number.isInteger(id) || id < 1) {
+    return json({ success: false, error: 'Invalid poll id' }, { status: 400 })
+  }
+  return { id }
+}
+
+export const PATCH: RequestHandler = async ({ params, request, locals }) => {
+  const who = await managerOrRefusal(locals, params.id)
+  if (who instanceof Response) return who
+  const body = (await request.json().catch(() => null)) as { closed?: unknown } | null
+  if (body?.closed !== true) {
+    return json({ success: false, error: 'Only closing a poll is supported' }, { status: 400 })
+  }
+  try {
+    await NextcloudPollsClient.closePoll(who.id)
+  } catch (e) {
+    const status = pollAccessStatus(e)
+    if (status) return json({ success: false, error: 'Poll unavailable' }, { status })
+    throw e
+  }
+  return json({ success: true, data: { id: who.id, closed: true } })
+}
+
+export const DELETE: RequestHandler = async ({ params, locals }) => {
+  const who = await managerOrRefusal(locals, params.id)
+  if (who instanceof Response) return who
+  try {
+    // The tenant check first: another tenant's poll is a plain 404 and its protocol links are never looked at.
+    await NextcloudPollsClient.getPoll(who.id)
+    // A poll a protocol points at (its approval poll) stays: deleting it would leave the protocol with a dead link.
+    if (await protocolReferencesPoll(String(who.id))) {
+      return json({ success: false, error: 'Poll is referenced by a protocol' }, { status: 409 })
+    }
+    await NextcloudPollsClient.deletePoll(who.id)
+  } catch (e) {
+    const status = pollAccessStatus(e)
+    if (status) return json({ success: false, error: 'Poll unavailable' }, { status })
+    throw e
+  }
+  return json({ success: true, data: { id: who.id, deleted: true } })
 }

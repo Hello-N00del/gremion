@@ -266,6 +266,15 @@ export function createPollsClient(opts: { oidcBearer?: string; tenantId?: string
       return scoped ? withClosedFlag(scoped) : await this.getPoll(id)
     },
 
+    /** Close a running poll now: its deadline moves into the past, the same lock the module Karenz uses, so
+     *  the list, the poll page and the vote guard all read "closed". Ownership first (another tenant's poll
+     *  answers 404, nothing written). A poll that is closed already is returned as it is. */
+    async closePoll(id: number): Promise<NcPoll> {
+      const poll = await this.getPoll(id)
+      if (poll.status.expired) return poll
+      return this.setConfiguration(id, { expire: Math.floor(Date.now() / 1000) - 1 })
+    },
+
     /** Delete one poll of the calling tenant (Karenz day 30). Another tenant's poll answers 404. */
     async deletePoll(id: number): Promise<void> {
       await this.getPoll(id)

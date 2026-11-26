@@ -29,6 +29,7 @@ import {
   setProtocolStatus,
   nextGlobalNr,
   assignGlobalNrs,
+  protocolReferencesPoll,
 } from './protocol-db'
 
 describe('createProtocol', () => {
@@ -340,5 +341,20 @@ describe('atomic publish lock (#433, #454)', () => {
       expect(tx).toHaveBeenCalledOnce()
       expect(mockSql).not.toHaveBeenCalled()
     })
+  })
+})
+
+describe('protocolReferencesPoll', () => {
+  beforeEach(() => mockSql.mockReset())
+
+  it('is true when a protocol names the poll as its approval poll', async () => {
+    mockSql.mockResolvedValueOnce([{ id: 'p1' }])
+    await expect(protocolReferencesPoll('7')).resolves.toBe(true)
+    expect(mockSql.mock.calls[0]!.slice(1)).toEqual(['7'])
+  })
+
+  it('is false when no protocol does', async () => {
+    mockSql.mockResolvedValueOnce([])
+    await expect(protocolReferencesPoll('7')).resolves.toBe(false)
   })
 })
