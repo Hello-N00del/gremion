@@ -38,7 +38,7 @@ test('the panel opt-in list equals SECONDARY_TENANT_MODULES_SET of common.sh (on
   assert.ok(panel.length >= 3, `the panel list is found (${panel.join(' ')})`)
   assert.ok(host.length >= 3, `the host list is found (${host.join(' ')})`)
   assert.equal(new Set(panel).size, panel.length, 'the panel list has no repeat')
-  assert.deepEqual([...panel].sort(), [...host].sort(), 'the panel and the host name the same opt-in modules')
+  assert.deepEqual([...panel].sort((a, b) => a.localeCompare(b)), [...host].sort((a, b) => a.localeCompare(b)), 'the panel and the host name the same opt-in modules')
 })
 
 test('the list readers see what they should (a hand copy that drifts is told apart)', () => {
