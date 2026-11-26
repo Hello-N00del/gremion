@@ -4,6 +4,8 @@ import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth'
 import { getProtocol, addActionItem } from '$lib/server/protocols/protocol-db'
 import { requireUuidParams } from '$lib/server/protocols/route-ids'
+import { optionalAssignee, optionalDueDate, requireTaskText } from '$lib/server/protocols/action-item-input'
+import { isMemberOf } from '$lib/server/governance/org-units-db'
 
 function requireAdmin(event: RequestEvent): SessionUser {
   const user = event.locals.user as SessionUser | undefined
@@ -18,10 +20,13 @@ export async function POST(event: RequestEvent) {
   const protocol = await getProtocol(event.params.id!)
   if (!protocol || protocol.status === 'published') throw error(403, 'Nicht bearbeitbar')
   const body = await event.request.json()
-  const actionItem = await addActionItem(protocol.id, {
-    text: body.text ?? '',
-    assigneeKeycloakId: body.assigneeKeycloakId,
-    dueDate: body.dueDate,
-  })
+  // A task is stored only with a title; the page opens a form first and sends this once it is filled.
+  const text = requireTaskText(body.text)
+  const dueDate = optionalDueDate(body.dueDate)
+  const assigneeKeycloakId = optionalAssignee(body.assigneeKeycloakId)
+  if (assigneeKeycloakId && !(await isMemberOf(protocol.committee_id, assigneeKeycloakId))) {
+    throw error(400, 'Die zuständige Person ist kein Mitglied des Gremiums.')
+  }
+  const actionItem = await addActionItem(protocol.id, { text, assigneeKeycloakId, dueDate })
   return json({ actionItem }, { status: 201 })
 }
