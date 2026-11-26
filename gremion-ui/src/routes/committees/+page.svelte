@@ -12,6 +12,9 @@
   let { data }: { data: PageData } = $props()
   let selected = $state<TreeNodeDTO | null>(data.tree[0] ?? null)
   const totalMembers = $derived(data.tree.reduce((s, n) => s + n.rollupCount, 0))
+  // Every body the tree lists, at any depth: the header counts what the page shows, not only the top level.
+  const countNodes = (nodes: TreeNodeDTO[]): number => nodes.reduce((s, n) => s + 1 + countNodes(n.children), 0)
+  const totalBodies = $derived(countNodes(data.tree))
 
   // #289 (HANDOVER-v8 Part F): re-term the institution-specific nouns from the
   // active tenant's term-map (shipped on page.data.terms). StuRa tenant #1 has no
@@ -32,8 +35,11 @@
   <div>
     <div class="eyebrow">{navCommittees}</div>
     <h1 class="page-title">Organisation</h1>
-    <div class="page-sub">{data.tree.length} {data.tree.length === 1 ? gremiumSingular : gremienPlural} · {totalMembers} Mitglieder inkl. Untereinheiten</div>
+    <div class="page-sub">{totalBodies} {totalBodies === 1 ? gremiumSingular : gremienPlural} · {totalMembers} {totalMembers === 1 ? 'Mitglied' : 'Mitglieder'} inkl. Untereinheiten</div>
   </div>
+  {#if data.canCreate}
+    <a class="btn btn-primary" href="/members/committees/new">Gremium anlegen</a>
+  {/if}
 </div>
 
 {#if data.tree.length === 0}
