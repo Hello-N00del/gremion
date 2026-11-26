@@ -19,6 +19,7 @@ import { enqueueOutbox } from '../src/outbox.ts'
 import { runRelayPass } from '../src/relay.ts'
 import { InMemoryBroker, calendarSubject, STREAMS } from '@gremion/ports/broker'
 import { requireEphemeralTestPgUrl, assertSafeTestEnv } from './support/pg-test-guard.ts'
+import { fixtureId, provisionLifecycleDbs } from './support/scratch-pg.ts'
 
 // ── fail-closed guard ─────────────────────────────────────────────────────────
 const TEST_PG_URL = requireEphemeralTestPgUrl()
@@ -27,7 +28,7 @@ assertSafeTestEnv(TEST_PG_URL, TEST_DB_PREFIX)
 
 // ── test tenant ───────────────────────────────────────────────────────────────
 const RELAY_TENANT: TenantRef = {
-  id: 'dddddddd-dddd-dddd-dddd-dddddddddddd',
+  id: fixtureId('dddddddddddd'),
   slug: 'relaytest',
 }
 const TENANT_ID = RELAY_TENANT.id
@@ -39,7 +40,7 @@ let sql: Awaited<ReturnType<typeof storeFor>>
 async function dropTestDbs(pgSql: ReturnType<typeof postgres>): Promise<void> {
   const rows = await pgSql<{ datname: string }[]>`
     SELECT datname FROM pg_database
-    WHERE datname LIKE 'calendar_test_%'
+    WHERE datname LIKE 'calendar_test_%' OR datname ~ '^t_0192000000007000[0-9a-f]{16}__calendar$'
   `
   for (const { datname } of rows) {
     await pgSql.unsafe(
@@ -52,7 +53,8 @@ async function dropTestDbs(pgSql: ReturnType<typeof postgres>): Promise<void> {
 beforeAll(async () => {
   admin = postgres(TEST_PG_URL, { max: 1, prepare: false })
   await dropTestDbs(admin)
-  sql = await storeFor(RELAY_TENANT, { pgUrl: TEST_PG_URL, dbPrefix: TEST_DB_PREFIX })
+  await provisionLifecycleDbs(TEST_PG_URL, [RELAY_TENANT.id])
+  sql = await storeFor(RELAY_TENANT, { pgUrl: TEST_PG_URL, dbPrefix: TEST_DB_PREFIX, moduleUrl: TEST_PG_URL })
 })
 
 afterAll(async () => {

@@ -309,16 +309,34 @@ const CONNECTION_LOST: ReadonlySet<string> = new Set([
 ])
 
 /**
- * What a failure of a QUERY on a customer pool says about the tenant's database, for the route layer:
- * the database is gone (3D000: the module was just switched off) -> not provisioned; the connection was
- * lost under the query (a drop with FORCE, a restart) -> unavailable, retry. Anything else is not the
- * database's availability and returns null (the caller treats it as the fault it is).
+ * What a failure of a QUERY on a customer pool says about the tenant's database, for the route layer, or
+ * null when it says nothing about availability (the caller treats it as the fault it is):
+ *   - the database is gone (3D000: the module was just switched off) -> not provisioned;
+ *   - the connection was lost under the query (a drop with FORCE, a restart) or refused with 42501 (the
+ *     module Karenz revoked CONNECT while the pool still held connections): the tenant is probed the way
+ *     storeFor classifies it (SELECT 1, past the schema gate's cached verdict), so the very next request
+ *     after a switch-off is already "not provisioned" and not a 500. A 42501 on a database that still
+ *     answers the probe is a table privilege error, not availability: null.
  */
-export function classifyQueryFailure(err: unknown): TenantNotProvisionedError | TenantUnavailableError | null {
+export async function classifyQueryFailure(
+  tenantId: string,
+  err: unknown,
+): Promise<TenantNotProvisionedError | TenantUnavailableError | null> {
   const code = sqlstateOf(err)
+  if (code === undefined) return null
   if (code === '3D000') return new TenantNotProvisionedError()
-  if (code !== undefined && CONNECTION_LOST.has(code)) return new TenantUnavailableError('tenant_unavailable', RETRY_AFTER_SECONDS)
-  return null
+  const lost = CONNECTION_LOST.has(code)
+  if (!lost && code !== '42501') return null
+  const retry = new TenantUnavailableError('tenant_unavailable', RETRY_AFTER_SECONDS)
+  const dbs = _dbs
+  if (dbs === null || typeof tenantId !== 'string' || !isUuidV7(tenantId)) return lost ? retry : null
+  try {
+    const sql = await dbs.store.openTenantDb(tenantId, MODULE_ID)
+    await sql`SELECT 1`
+  } catch (probeErr) {
+    return isTenantDatabaseOff(probeErr) ? new TenantNotProvisionedError() : retry
+  }
+  return lost ? retry : null
 }
 
 /**
@@ -724,6 +742,11 @@ export async function listTenants(options: StoreForOptions = {}): Promise<Tenant
 }
 
 // ── test helpers ──────────────────────────────────────────────────────────────
+
+/** TEST-ONLY: the leaf's own control-DB pool (the catalogue lives there, and pg_database is global). */
+export function _controlPoolForTests(adminUrl: string, dbPrefix: string): Promise<Sql> {
+  return ensureControlDb(adminUrl, dbPrefix)
+}
 
 /**
  * Drain every pool, clear the state, and reset the control DB connection.

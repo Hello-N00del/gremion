@@ -29,6 +29,7 @@ import { storeFor, _resetTenantStoreForTests, type TenantRef } from '../src/tena
 import { createServer } from '../src/http/server.ts'
 import { buildApiRoutes } from '../src/http/routes.ts'
 import { requireEphemeralTestPgUrl, assertSafeTestEnv } from './support/pg-test-guard.ts'
+import { fixtureId, provisionLifecycleDbs } from './support/scratch-pg.ts'
 
 // -- fail-closed guard --------------------------------------------------------
 
@@ -38,8 +39,8 @@ assertSafeTestEnv(TEST_PG_URL, TEST_DB_PREFIX)
 
 // -- test tenants -------------------------------------------------------------
 
-const T1: TenantRef = { id: 'a1a1a1a1-a1a1-41a1-81a1-a1a1a1a1a1a1', slug: 'apitenant1' }
-const T2: TenantRef = { id: 'b2b2b2b2-b2b2-42b2-82b2-b2b2b2b2b2b2', slug: 'apitenant2' }
+const T1: TenantRef = { id: fixtureId('a1a1a1a1a1a1'), slug: 'apitenant1' }
+const T2: TenantRef = { id: fixtureId('b2b2b2b2b2b2'), slug: 'apitenant2' }
 
 const TEST_SECRET = 'test-api-secret-123'
 
@@ -115,7 +116,7 @@ let server: http.Server
 
 async function dropTestApiDbs(pgSql: ReturnType<typeof postgres>): Promise<void> {
   const rows = await pgSql<{ datname: string }[]>`
-    SELECT datname FROM pg_database WHERE datname LIKE 'calendar_test_apitenant%'
+    SELECT datname FROM pg_database WHERE datname LIKE 'calendar_test_apitenant%' OR datname ~ '^t_0192000000007000[0-9a-f]{16}__calendar$'
   `
   for (const { datname } of rows) {
     await pgSql.unsafe(
@@ -134,9 +135,10 @@ async function dropTestApiDbs(pgSql: ReturnType<typeof postgres>): Promise<void>
 beforeAll(async () => {
   admin = postgres(TEST_PG_URL, { max: 1, prepare: false })
   await dropTestApiDbs(admin)
+  await provisionLifecycleDbs(TEST_PG_URL, [T1.id, T2.id])
 
-  sql1 = await storeFor(T1, { pgUrl: TEST_PG_URL, dbPrefix: TEST_DB_PREFIX })
-  sql2 = await storeFor(T2, { pgUrl: TEST_PG_URL, dbPrefix: TEST_DB_PREFIX })
+  sql1 = await storeFor(T1, { pgUrl: TEST_PG_URL, dbPrefix: TEST_DB_PREFIX, moduleUrl: TEST_PG_URL })
+  sql2 = await storeFor(T2, { pgUrl: TEST_PG_URL, dbPrefix: TEST_DB_PREFIX, moduleUrl: TEST_PG_URL })
 
   const routes = buildApiRoutes(async (tenant) => {
     if (tenant.id === T1.id) return sql1

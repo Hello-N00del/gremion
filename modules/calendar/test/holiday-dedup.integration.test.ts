@@ -21,6 +21,7 @@ import { fileURLToPath } from 'node:url'
 import { storeFor, _resetTenantStoreForTests, type TenantRef } from '../src/tenant-store.ts'
 import { createEvent, findEventByExternalId, type CreateEventInput } from '../src/store/index.ts'
 import { requireEphemeralTestPgUrl, assertSafeTestEnv } from './support/pg-test-guard.ts'
+import { fixtureId, provisionLifecycleDbs } from './support/scratch-pg.ts'
 
 // ── fail-closed guard ─────────────────────────────────────────────────────────
 const TEST_PG_URL = requireEphemeralTestPgUrl()
@@ -48,7 +49,7 @@ let admin: ReturnType<typeof postgres>
 
 async function dropTestDbs(pgSql: ReturnType<typeof postgres>): Promise<void> {
   const rows = await pgSql<{ datname: string }[]>`
-    SELECT datname FROM pg_database WHERE datname LIKE 'calendar_test_%'
+    SELECT datname FROM pg_database WHERE datname LIKE 'calendar_test_%' OR datname ~ '^t_0192000000007000[0-9a-f]{16}__calendar$'
   `
   for (const { datname } of rows) {
     await pgSql.unsafe(
@@ -137,7 +138,7 @@ describe('migration 003 — partial-unique holiday dedup (raw apply)', () => {
 // ── 2. store createEvent — holiday idempotency (all migrations via storeFor) ─────
 
 describe('createEvent — holiday idempotency (store, all migrations incl. 003)', () => {
-  const TENANT: TenantRef = { id: 'ffffffff-ffff-ffff-ffff-ffffffffffff', slug: 'holidedup' }
+  const TENANT: TenantRef = { id: fixtureId('ffffffffffff'), slug: 'holidedup' }
   let sql: Awaited<ReturnType<typeof storeFor>>
 
   function holidayInput(externalId: string): CreateEventInput {
@@ -159,7 +160,8 @@ describe('createEvent — holiday idempotency (store, all migrations incl. 003)'
   }
 
   beforeAll(async () => {
-    sql = await storeFor(TENANT, { pgUrl: TEST_PG_URL, dbPrefix: TEST_DB_PREFIX })
+    await provisionLifecycleDbs(TEST_PG_URL, [TENANT.id])
+    sql = await storeFor(TENANT, { pgUrl: TEST_PG_URL, dbPrefix: TEST_DB_PREFIX, moduleUrl: TEST_PG_URL })
   })
 
   it('a second createEvent with the same (source, external_id) holiday is a NO-OP returning the existing row', async () => {

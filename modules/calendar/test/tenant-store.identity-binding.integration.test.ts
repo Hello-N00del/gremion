@@ -12,54 +12,66 @@
  * tenant's data; a slug the catalog held for another id failed with a bare
  * unique-violation after migrating that other tenant's database. Now:
  *  - a pair the catalog does not hold is refused (TENANT_IDENTITY_MISMATCH),
- *    warm and cold, before any database is created or catalog row written;
+ *    warm and cold, before a catalog row is written;
  *  - two first contacts racing for one slug under different ids leave exactly one
- *    winner; the loser is refused before it creates anything.
+ *    winner; the loser is refused before it claims anything.
+ *
+ * The customer databases are the lifecycle's t_<hex32>__calendar: this file provisions the three fixture
+ * tenants itself (the leaf never creates one) and proves the leaf makes no database of its own.
  *
  * No second driver connection: the catalog and pg_database are read through the
- * leaf's own control-DB pool (the same handle storeFor uses). Every database and
- * catalog row this file makes is named bind-*, and only those are ever dropped.
+ * leaf's own control-DB pool (the same handle storeFor uses). Every catalog row this
+ * file makes is named bind-*, and only fixture databases are ever dropped.
  */
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest'
 import {
   storeFor,
   listTenants,
-  _poolRegistryForTests,
+  _controlPoolForTests,
   _resetTenantStoreForTests,
   type TenantRef,
 } from '../src/tenant-store.ts'
 import { requireEphemeralTestPgUrl, assertSafeTestEnv } from './support/pg-test-guard.ts'
+import { FIXTURE_DB_PATTERN, fixtureDb, fixtureId, provisionLifecycleDbs } from './support/scratch-pg.ts'
 
 // ── fail-closed guard (mirrors #249 / assert-safe-test-db-url pattern) ────────
 const TEST_PG_URL = requireEphemeralTestPgUrl()
 const TEST_DB_PREFIX = 'calendar_test_'
 assertSafeTestEnv(TEST_PG_URL, TEST_DB_PREFIX)
 
-const OPTS = { pgUrl: TEST_PG_URL, dbPrefix: TEST_DB_PREFIX }
-const A: TenantRef = { id: 'a1000000-0000-4000-8000-0000000000a1', slug: 'bind-a' }
-const B: TenantRef = { id: 'b1000000-0000-4000-8000-0000000000b1', slug: 'bind-b' }
-const C: TenantRef = { id: 'c1000000-0000-4000-8000-0000000000c1', slug: 'bind-c' }
+const OPTS = { pgUrl: TEST_PG_URL, dbPrefix: TEST_DB_PREFIX, moduleUrl: TEST_PG_URL }
+const A: TenantRef = { id: fixtureId('0000000000a1'), slug: 'bind-a' }
+const B: TenantRef = { id: fixtureId('0000000000b1'), slug: 'bind-b' }
+const C: TenantRef = { id: fixtureId('0000000000c1'), slug: 'bind-c' }
 const MISMATCH = { code: 'TENANT_IDENTITY_MISMATCH' }
 
 /** The leaf's own control-DB pool: the catalog lives there, and pg_database is global. */
-const control = () => _poolRegistryForTests.ensureControl(TEST_PG_URL, TEST_DB_PREFIX)
+const control = () => _controlPoolForTests(TEST_PG_URL, TEST_DB_PREFIX)
 
-/** Drop every database and catalog row this file made (bind-*), nothing else. */
+/** The lifecycle databases this file provisions, and the only ones that may exist. */
+const PROVISIONED = [A, B, C].map((t) => fixtureDb(t.id)).sort()
+
+/** Drop every fixture database and catalog row this file made (bind-*), nothing else; then provision the three tenants. */
 async function wipe(): Promise<void> {
   await _resetTenantStoreForTests()
   const ctrl = await control()
   const rows = await ctrl<{ datname: string }[]>`
-    SELECT datname FROM pg_database WHERE starts_with(datname, ${TEST_DB_PREFIX + 'bind-'})
+    SELECT datname FROM pg_database WHERE datname ~ ${FIXTURE_DB_PATTERN}
   `
   for (const { datname } of rows) await ctrl.unsafe(`DROP DATABASE IF EXISTS "${datname}" WITH (FORCE)`)
   await ctrl`DELETE FROM tenant_catalog WHERE starts_with(slug, 'bind-')`
   await _resetTenantStoreForTests()
 }
 
+async function wipeAndProvision(): Promise<void> {
+  await wipe()
+  await provisionLifecycleDbs(TEST_PG_URL, [A.id, B.id, C.id])
+}
+
 async function databases(): Promise<string[]> {
   const ctrl = await control()
   const rows = await ctrl<{ datname: string }[]>`
-    SELECT datname FROM pg_database WHERE starts_with(datname, ${TEST_DB_PREFIX + 'bind-'}) ORDER BY datname
+    SELECT datname FROM pg_database WHERE datname ~ ${FIXTURE_DB_PATTERN} ORDER BY datname
   `
   return rows.map((r) => r.datname)
 }
@@ -73,12 +85,12 @@ async function catalog(): Promise<{ tenant_id: string; slug: string; db_name: st
   ]
 }
 
-beforeAll(wipe)
-beforeEach(wipe)
+beforeAll(wipeAndProvision, 60_000)
+beforeEach(wipeAndProvision, 60_000)
 afterAll(wipe)
 
 describe('storeFor binds (id, slug) to the catalog (audit #534)', () => {
-  it('a slug rename is refused on a cold miss: the tenant keeps its database and data, no empty database appears', async () => {
+  it('a slug rename is refused on a cold miss: the tenant keeps its database and data, and the leaf makes no database', async () => {
     const pool = await storeFor(A, OPTS)
     await pool`CREATE TABLE binding_marker (v text)`
     await pool`INSERT INTO binding_marker (v) VALUES ('kept')`
@@ -89,9 +101,9 @@ describe('storeFor binds (id, slug) to the catalog (audit #534)', () => {
     await expect(storeFor({ id: A.id, slug: 'bind-a-renamed' }, OPTS)).rejects.toMatchObject(MISMATCH)
 
     expect(await databases()).toEqual(dbsBefore)
-    expect(await databases()).not.toContain(TEST_DB_PREFIX + 'bind-a-renamed')
+    expect(await databases()).toEqual(PROVISIONED)
     expect(await catalog()).toEqual(catalogBefore)
-    expect(catalogBefore).toEqual([{ tenant_id: A.id, slug: A.slug, db_name: TEST_DB_PREFIX + A.slug }])
+    expect(catalogBefore).toEqual([{ tenant_id: A.id, slug: A.slug, db_name: fixtureDb(A.id) }])
 
     // the true pair is still served, with its data
     const again = await storeFor(A, OPTS)
@@ -127,6 +139,7 @@ describe('storeFor binds (id, slug) to the catalog (audit #534)', () => {
     await expect(storeFor({ id: A.id, slug: 'bind-unused' }, OPTS)).rejects.toMatchObject(MISMATCH)
     expect(await catalog()).toEqual(catalogBefore)
     expect(await databases()).toEqual(dbsBefore)
+    expect(dbsBefore).toEqual(PROVISIONED)
 
     // the true pairs are still served, cold
     await expect(storeFor(A, OPTS)).resolves.toBeDefined()
@@ -146,7 +159,7 @@ describe('storeFor binds (id, slug) to the catalog (audit #534)', () => {
     expect(await listTenants(OPTS)).toContainEqual({ id: A.id, slug: A.slug })
   })
 
-  it('two first contacts for ONE slug under different ids: exactly one wins, the other is refused, one database', async () => {
+  it('two first contacts for ONE slug under different ids: exactly one wins, the other is refused, no database is made', async () => {
     const results = await Promise.allSettled([
       storeFor({ id: A.id, slug: 'bind-race' }, OPTS),
       storeFor({ id: B.id, slug: 'bind-race' }, OPTS),
@@ -160,10 +173,10 @@ describe('storeFor binds (id, slug) to the catalog (audit #534)', () => {
     const rows = await catalog()
     expect(rows).toHaveLength(1)
     expect(rows[0]!.slug).toBe('bind-race')
-    expect(await databases()).toEqual([TEST_DB_PREFIX + 'bind-race'])
+    expect(await databases()).toEqual(PROVISIONED)
   })
 
-  it('two first contacts for ONE id under different slugs: exactly one catalog row and one database, the loser refused', async () => {
+  it('two first contacts for ONE id under different slugs: exactly one catalog row, the loser refused, no database is made', async () => {
     const slugs = ['bind-race-a', 'bind-race-b']
     const results = await Promise.allSettled(slugs.map((slug) => storeFor({ id: A.id, slug }, OPTS)))
     const won = results.flatMap((r, i) => (r.status === 'fulfilled' ? [i] : []))
@@ -173,15 +186,15 @@ describe('storeFor binds (id, slug) to the catalog (audit #534)', () => {
     expect(lost[0]!.reason).toMatchObject(MISMATCH)
 
     const winner = slugs[won[0]!]!
-    expect(await catalog()).toEqual([{ tenant_id: A.id, slug: winner, db_name: TEST_DB_PREFIX + winner }])
-    expect(await databases()).toEqual([TEST_DB_PREFIX + winner])
+    expect(await catalog()).toEqual([{ tenant_id: A.id, slug: winner, db_name: fixtureDb(A.id) }])
+    expect(await databases()).toEqual(PROVISIONED)
     // the winner's pair is the one served from now on, warm and cold
     await expect(storeFor({ id: A.id, slug: slugs[1 - won[0]!]! }, OPTS)).rejects.toMatchObject(MISMATCH)
     await _resetTenantStoreForTests()
     await expect(storeFor({ id: A.id, slug: winner }, OPTS)).resolves.toBeDefined()
   })
 
-  it('a burst of first contacts for one id under many slugs still leaves one row and one database', async () => {
+  it('a burst of first contacts for one id under many slugs still leaves one row and no new database', async () => {
     const slugs = Array.from({ length: 6 }, (_, i) => `bind-burst-${i}`)
     const results = await Promise.allSettled(slugs.map((slug) => storeFor({ id: C.id, slug }, OPTS)))
     expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1)
@@ -189,6 +202,6 @@ describe('storeFor binds (id, slug) to the catalog (audit #534)', () => {
     expect(refused).toHaveLength(slugs.length - 1)
     for (const r of refused) expect(r.reason).toMatchObject(MISMATCH)
     expect(await catalog()).toHaveLength(1)
-    expect(await databases()).toHaveLength(1)
+    expect(await databases()).toEqual(PROVISIONED)
   })
 })

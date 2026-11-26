@@ -19,7 +19,7 @@
  *     [--pg-url <url>] [--db-prefix <prefix>]
  *
  * Flags:
- *   --tenant <slug>      REQUIRED. The tenant slug → target DB calendar_<slug>.
+ *   --tenant <slug>      REQUIRED. The tenant slug (the catalogue binding).
  *   --tenant-id <uuid>   REQUIRED (tenant-by-UUID, #173). Catalog id; used to
  *                        key the pool + the tenant_catalog row. Also used to
  *                        derive the DEFAULT source DB name (t_<slug>) when
@@ -75,6 +75,7 @@ import { createHash } from 'node:crypto'
 import { pathToFileURL } from 'node:url'
 import path from 'node:path'
 import postgres from 'postgres'
+import { tenantModuleDbName } from '@gremion/tenant-store'
 import {
   storeFor,
   _resetTenantStoreForTests,
@@ -150,6 +151,12 @@ export interface BackfillOptions {
   verifyOnly?: boolean
   pgUrl?: string
   dbPrefix?: string
+  /**
+   * The module server as the leaf's customer pools reach it (the module's app role). Defaults to
+   * GREMION_CALENDAR_PG_URL. The target is the tenant's LIFECYCLE database t_<hex32>__calendar, which
+   * must already exist (enableModule makes it); this script never creates one.
+   */
+  moduleUrl?: string
   /** Sink for human-readable progress + the verify-gate lines (defaults to console.log). */
   log?: (msg: string) => void
 }
@@ -373,6 +380,8 @@ export async function runBackfill(opts: BackfillOptions): Promise<BackfillResult
   const log = opts.log ?? ((m: string) => console.log(m))
   const tenant = opts.tenant
   const tenantRef: TenantRef = { id: opts.tenantId ?? opts.tenant, slug: opts.tenant }
+  // The target is the tenant's lifecycle database: it needs the tenant's UUIDv7 (--tenant-id).
+  const targetDbName = tenantModuleDbName(tenantRef.id, 'calendar')
   const verifyOnly = opts.verifyOnly ?? false
   // Target connection URL — resolved the same way storeFor() will resolve it
   // (require-explicit-env, no localhost:5432 default — #394).
@@ -381,7 +390,6 @@ export async function runBackfill(opts: BackfillOptions): Promise<BackfillResult
   // to the same server as the target (backward-compatible single-URL usage).
   const sourcePgUrl = opts.sourcePgUrl ?? targetPgUrl
   const sourceDbName = opts.sourceDb ?? `t_${opts.tenant}`
-  const targetDbName = (opts.dbPrefix ?? 'calendar_') + tenant
 
   // Refuse a source==target misconfiguration BEFORE opening any connection or
   // copying a single row. Backfilling a database into itself is never valid —
@@ -399,8 +407,8 @@ export async function runBackfill(opts: BackfillOptions): Promise<BackfillResult
   // Source: a plain connection to the kernel's t_<slug> DB — read-only at the
   // SQL level (only SELECT statements are ever issued against it).
   const source = postgres(dbUrlFor(sourcePgUrl, sourceDbName), { max: 4, prepare: false })
-  // Target pool (creates the DB + applies leaf migrations on first contact).
-  const target = await storeFor(tenantRef, { pgUrl: opts.pgUrl, dbPrefix: opts.dbPrefix })
+  // Target pool: the tenant's lifecycle database, opened (never created or migrated) by the leaf's store.
+  const target = await storeFor(tenantRef, { pgUrl: opts.pgUrl, dbPrefix: opts.dbPrefix, moduleUrl: opts.moduleUrl })
 
   try {
     if (!verifyOnly) {
@@ -408,7 +416,7 @@ export async function runBackfill(opts: BackfillOptions): Promise<BackfillResult
       if (!(await targetIsEmpty(target))) {
         throw new Error(
           `[backfill] target for tenant=${tenant} is NON-EMPTY — refusing to backfill ` +
-            `(no delta mode). To re-run: drop calendar_<slug> + its catalog row, then re-run. ` +
+            `(no delta mode). To re-run: empty the lifecycle database of the tenant, then re-run. ` +
             `To check what is present without writing, re-run with --verify-only.`,
         )
       }
@@ -445,6 +453,7 @@ interface ParsedArgs {
   verifyOnly: boolean
   pgUrl?: string
   dbPrefix?: string
+  moduleUrl?: string
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -473,6 +482,9 @@ function parseArgs(argv: string[]): ParsedArgs {
       case '--db-prefix':
         out.dbPrefix = argv[++i]
         break
+      case '--module-url':
+        out.moduleUrl = argv[++i]
+        break
       default:
         throw new Error(`[backfill] unknown argument: ${a}`)
     }
@@ -482,7 +494,7 @@ function parseArgs(argv: string[]): ParsedArgs {
 
 const USAGE =
   'Usage: tsx scripts/backfill.ts --tenant <slug> --tenant-id <uuid> ' +
-  '[--source-pg-url <url>] [--source-db <name>] [--verify-only] [--pg-url <url>] [--db-prefix <prefix>]'
+  '[--source-pg-url <url>] [--source-db <name>] [--verify-only] [--pg-url <url>] [--db-prefix <prefix>] [--module-url <url>]'
 
 async function main(): Promise<void> {
   let args: ParsedArgs
@@ -528,6 +540,7 @@ async function main(): Promise<void> {
       verifyOnly: args.verifyOnly,
       pgUrl,
       dbPrefix: args.dbPrefix,
+      moduleUrl: args.moduleUrl,
       log: (m) => console.log(m),
     })
     await _resetTenantStoreForTests()

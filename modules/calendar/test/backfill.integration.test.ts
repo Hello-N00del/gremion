@@ -37,6 +37,7 @@ import {
 } from '../src/tenant-store.ts'
 import { runBackfill } from '../scripts/backfill.ts'
 import { requireEphemeralTestPgUrl, assertSafeTestEnv } from './support/pg-test-guard.ts'
+import { FIXTURE_DB_PATTERN, fixtureDb, fixtureId, provisionLifecycleDbs } from './support/scratch-pg.ts'
 
 // ── fail-closed guard (mirrors #249 / assert-safe-test-db-url pattern) ────────
 const TEST_PG_URL = requireEphemeralTestPgUrl()
@@ -44,7 +45,7 @@ const TEST_DB_PREFIX = 'calendar_test_'
 assertSafeTestEnv(TEST_PG_URL, TEST_DB_PREFIX)
 
 // ── test tenant ───────────────────────────────────────────────────────────────
-const TENANT: TenantRef = { id: 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', slug: 'calbackfill' }
+const TENANT: TenantRef = { id: fixtureId('eeeeeeeeeeee'), slug: 'calbackfill' }
 const SOURCE_DB = 't_test_calbackfill' // synthetic kernel-shaped source DB (not a real t_<slug> — throwaway)
 
 // A known UTC instant, WITH explicit offset (kernel Postgres timestamptz columns
@@ -57,7 +58,7 @@ let source: Sql
 
 async function dropTestDbs(pgSql: ReturnType<typeof postgres>): Promise<void> {
   const rows = await pgSql<{ datname: string }[]>`
-    SELECT datname FROM pg_database WHERE datname LIKE 'calendar_test_%' OR datname = ${SOURCE_DB}
+    SELECT datname FROM pg_database WHERE datname LIKE 'calendar_test_%' OR datname = ${SOURCE_DB} OR datname ~ ${FIXTURE_DB_PATTERN}
   `
   for (const { datname } of rows) {
     await pgSql.unsafe(
@@ -208,14 +209,16 @@ async function buildSyntheticSource(): Promise<Sql> {
   return sql
 }
 
-/** Fresh, EMPTY target DB for this tenant (drops + recreates via storeFor). */
+/** Fresh, EMPTY target DB for this tenant (the lifecycle database, dropped and provisioned again). */
 async function freshTarget(): Promise<Sql> {
   await _resetTenantStoreForTests()
   await dropTestDbs(admin)
   // Re-create the source (dropTestDbs above wipes it too — rebuild each time).
   source = await buildSyntheticSource()
-  // storeFor creates the DB + applies migrations and returns a pool.
-  return storeFor(TENANT, { pgUrl: TEST_PG_URL, dbPrefix: TEST_DB_PREFIX })
+  // The target is the tenant's lifecycle database (provisioned here the way enableModule does); storeFor
+  // only opens it.
+  await provisionLifecycleDbs(TEST_PG_URL, [TENANT.id])
+  return storeFor(TENANT, { pgUrl: TEST_PG_URL, dbPrefix: TEST_DB_PREFIX, moduleUrl: TEST_PG_URL })
 }
 
 beforeAll(async () => {
@@ -242,6 +245,7 @@ describe('backfill — happy path (fresh target)', () => {
       pgUrl: TEST_PG_URL,
       sourceDb: SOURCE_DB,
       dbPrefix: TEST_DB_PREFIX,
+      moduleUrl: TEST_PG_URL,
       verifyOnly: false,
       log: (m) => logs.push(m),
     })
@@ -264,6 +268,7 @@ describe('backfill — happy path (fresh target)', () => {
       pgUrl: TEST_PG_URL,
       sourceDb: SOURCE_DB,
       dbPrefix: TEST_DB_PREFIX,
+      moduleUrl: TEST_PG_URL,
       verifyOnly: false,
       log: (m) => logs.push(m),
     })
@@ -280,6 +285,7 @@ describe('backfill — happy path (fresh target)', () => {
       pgUrl: TEST_PG_URL,
       sourceDb: SOURCE_DB,
       dbPrefix: TEST_DB_PREFIX,
+      moduleUrl: TEST_PG_URL,
       verifyOnly: false,
       log: () => {},
     })
@@ -306,6 +312,7 @@ describe('backfill — happy path (fresh target)', () => {
       pgUrl: TEST_PG_URL,
       sourceDb: SOURCE_DB,
       dbPrefix: TEST_DB_PREFIX,
+      moduleUrl: TEST_PG_URL,
       verifyOnly: false,
       log: () => {},
     })
@@ -323,6 +330,7 @@ describe('backfill — happy path (fresh target)', () => {
       pgUrl: TEST_PG_URL,
       sourceDb: SOURCE_DB,
       dbPrefix: TEST_DB_PREFIX,
+      moduleUrl: TEST_PG_URL,
       verifyOnly: false,
       log: () => {},
     })
@@ -333,6 +341,7 @@ describe('backfill — happy path (fresh target)', () => {
         pgUrl: TEST_PG_URL,
         sourceDb: SOURCE_DB,
         dbPrefix: TEST_DB_PREFIX,
+        moduleUrl: TEST_PG_URL,
         verifyOnly: false,
         log: () => {},
       }),
@@ -352,6 +361,7 @@ describe('backfill — happy path (fresh target)', () => {
       sourceDb: SOURCE_DB,
       pgUrl: TEST_PG_URL,
       dbPrefix: TEST_DB_PREFIX,
+      moduleUrl: TEST_PG_URL,
       verifyOnly: false,
       log: () => {},
     })
@@ -364,10 +374,10 @@ describe('backfill — happy path (fresh target)', () => {
 
   it('refuses when source and target resolve to the SAME database (before any copy)', async () => {
     await freshTarget()
-    // Point the source at the TARGET's own leaf DB (calendar_test_<slug>) on the
+    // Point the source at the TARGET's own lifecycle DB (t_<hex32>__calendar) on the
     // same server → source and target resolve to the identical database → must
     // refuse BEFORE copying (a DB into itself is never a valid backfill).
-    const targetDbName = TEST_DB_PREFIX + TENANT.slug
+    const targetDbName = fixtureDb(TENANT.id)
     await expect(
       runBackfill({
         tenant: TENANT.slug,
@@ -376,6 +386,7 @@ describe('backfill — happy path (fresh target)', () => {
         sourceDb: targetDbName,
         pgUrl: TEST_PG_URL,
         dbPrefix: TEST_DB_PREFIX,
+        moduleUrl: TEST_PG_URL,
         verifyOnly: false,
         log: () => {},
       }),
@@ -389,6 +400,7 @@ describe('backfill — happy path (fresh target)', () => {
       pgUrl: TEST_PG_URL,
       sourceDb: SOURCE_DB,
       dbPrefix: TEST_DB_PREFIX,
+      moduleUrl: TEST_PG_URL,
       verifyOnly: false,
       log: () => {},
     })
@@ -399,6 +411,7 @@ describe('backfill — happy path (fresh target)', () => {
       pgUrl: TEST_PG_URL,
       sourceDb: SOURCE_DB,
       dbPrefix: TEST_DB_PREFIX,
+      moduleUrl: TEST_PG_URL,
       verifyOnly: true,
       log: (m) => logs.push(m),
     })
@@ -416,6 +429,7 @@ describe('backfill — verify gate catches a TAMPERED target', () => {
       pgUrl: TEST_PG_URL,
       sourceDb: SOURCE_DB,
       dbPrefix: TEST_DB_PREFIX,
+      moduleUrl: TEST_PG_URL,
       verifyOnly: false,
       log: () => {},
     })
@@ -429,6 +443,7 @@ describe('backfill — verify gate catches a TAMPERED target', () => {
         pgUrl: TEST_PG_URL,
         sourceDb: SOURCE_DB,
         dbPrefix: TEST_DB_PREFIX,
+        moduleUrl: TEST_PG_URL,
         verifyOnly: true,
         log: (m) => logs.push(m),
       }),
@@ -444,6 +459,7 @@ describe('backfill — verify gate catches a TAMPERED target', () => {
       pgUrl: TEST_PG_URL,
       sourceDb: SOURCE_DB,
       dbPrefix: TEST_DB_PREFIX,
+      moduleUrl: TEST_PG_URL,
       verifyOnly: false,
       log: () => {},
     })
@@ -455,6 +471,7 @@ describe('backfill — verify gate catches a TAMPERED target', () => {
         pgUrl: TEST_PG_URL,
         sourceDb: SOURCE_DB,
         dbPrefix: TEST_DB_PREFIX,
+        moduleUrl: TEST_PG_URL,
         verifyOnly: true,
         log: () => {},
       }),
@@ -484,6 +501,7 @@ describe('backfill — CLI exit codes (the operator-facing contract)', () => {
       pgUrl: TEST_PG_URL,
       sourceDb: SOURCE_DB,
       dbPrefix: TEST_DB_PREFIX,
+      moduleUrl: TEST_PG_URL,
       verifyOnly: false,
       log: () => {},
     })
@@ -495,6 +513,7 @@ describe('backfill — CLI exit codes (the operator-facing contract)', () => {
       '--pg-url', TEST_PG_URL,
       '--source-db', SOURCE_DB,
       '--db-prefix', TEST_DB_PREFIX,
+      '--module-url', TEST_PG_URL,
       '--verify-only',
     ])
     expect(r.status).toBe(0)
@@ -509,6 +528,7 @@ describe('backfill — CLI exit codes (the operator-facing contract)', () => {
       pgUrl: TEST_PG_URL,
       sourceDb: SOURCE_DB,
       dbPrefix: TEST_DB_PREFIX,
+      moduleUrl: TEST_PG_URL,
       verifyOnly: false,
       log: () => {},
     })
@@ -521,6 +541,7 @@ describe('backfill — CLI exit codes (the operator-facing contract)', () => {
       '--pg-url', TEST_PG_URL,
       '--source-db', SOURCE_DB,
       '--db-prefix', TEST_DB_PREFIX,
+      '--module-url', TEST_PG_URL,
       '--verify-only',
     ])
     expect(r.status).toBe(0)
@@ -535,6 +556,7 @@ describe('backfill — CLI exit codes (the operator-facing contract)', () => {
       pgUrl: TEST_PG_URL,
       sourceDb: SOURCE_DB,
       dbPrefix: TEST_DB_PREFIX,
+      moduleUrl: TEST_PG_URL,
       verifyOnly: false,
       log: () => {},
     })
@@ -547,6 +569,7 @@ describe('backfill — CLI exit codes (the operator-facing contract)', () => {
       '--pg-url', TEST_PG_URL,
       '--source-db', SOURCE_DB,
       '--db-prefix', TEST_DB_PREFIX,
+      '--module-url', TEST_PG_URL,
       '--verify-only',
     ])
     expect(r.status).toBe(1)
@@ -561,6 +584,7 @@ describe('backfill — CLI exit codes (the operator-facing contract)', () => {
       '--pg-url', TEST_PG_URL,
       '--source-db', SOURCE_DB,
       '--db-prefix', TEST_DB_PREFIX,
+      '--module-url', TEST_PG_URL,
       '--verify-only',
     ])
     expect(r.status).toBe(1)

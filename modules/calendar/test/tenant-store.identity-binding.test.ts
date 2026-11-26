@@ -244,7 +244,7 @@ describe('storeFor call sites and the catalog statements (source guard)', () => 
   })
 
   it('tenant-store.ts creates no database but the catalogue one, and runs no migration', () => {
-    const creates = [...store!.code.matchAll(/CREATE DATABASE[^\n]*/g)].map((m) => m[0])
+    const creates = [...store!.code.matchAll(/CREATE DATABASE[^\r\n]*/g)].map((m) => m[0])
     expect(creates).toEqual(['CREATE DATABASE "${dbName}"`)'])
     expect(store!.code).not.toMatch(/runMigrations|readdir|manifest\.json|ensureTenantDb/)
   })

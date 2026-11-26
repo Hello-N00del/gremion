@@ -53,6 +53,7 @@ import {
 import { drainCaldavForTenant, _resetTenantDrainWarnings } from '../src/caldav/tenant-drain.ts'
 import { createCalDavPusher } from '../src/caldav/pusher.ts'
 import { requireEphemeralTestPgUrl, assertSafeTestEnv } from './support/pg-test-guard.ts'
+import { fixtureId, provisionLifecycleDbs } from './support/scratch-pg.ts'
 
 // ── fail-closed guard (mirrors #249 / assert-safe-test-db-url pattern) ────────
 const TEST_PG_URL = requireEphemeralTestPgUrl()
@@ -61,11 +62,11 @@ assertSafeTestEnv(TEST_PG_URL, TEST_DB_PREFIX)
 
 // ── test tenants ──────────────────────────────────────────────────────────────
 const STORE_TENANT: TenantRef = {
-  id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+  id: fixtureId('aaaaaaaaaaaa'),
   slug: 'storetest',
 }
 const OTHER_TENANT: TenantRef = {
-  id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+  id: fixtureId('bbbbbbbbbbbb'),
   slug: 'othertest',
 }
 
@@ -77,7 +78,7 @@ let otherSql: Awaited<ReturnType<typeof storeFor>>
 async function dropTestDbs(pgSql: ReturnType<typeof postgres>): Promise<void> {
   const rows = await pgSql<{ datname: string }[]>`
     SELECT datname FROM pg_database
-    WHERE datname LIKE 'calendar_test_%'
+    WHERE datname LIKE 'calendar_test_%' OR datname ~ '^t_0192000000007000[0-9a-f]{16}__calendar$'
   `
   for (const { datname } of rows) {
     await pgSql.unsafe(
@@ -90,8 +91,9 @@ async function dropTestDbs(pgSql: ReturnType<typeof postgres>): Promise<void> {
 beforeAll(async () => {
   admin = postgres(TEST_PG_URL, { max: 1, prepare: false })
   await dropTestDbs(admin)
-  sql = await storeFor(STORE_TENANT, { pgUrl: TEST_PG_URL, dbPrefix: TEST_DB_PREFIX })
-  otherSql = await storeFor(OTHER_TENANT, { pgUrl: TEST_PG_URL, dbPrefix: TEST_DB_PREFIX })
+  await provisionLifecycleDbs(TEST_PG_URL, [STORE_TENANT.id, OTHER_TENANT.id])
+  sql = await storeFor(STORE_TENANT, { pgUrl: TEST_PG_URL, dbPrefix: TEST_DB_PREFIX, moduleUrl: TEST_PG_URL })
+  otherSql = await storeFor(OTHER_TENANT, { pgUrl: TEST_PG_URL, dbPrefix: TEST_DB_PREFIX, moduleUrl: TEST_PG_URL })
 })
 
 afterAll(async () => {

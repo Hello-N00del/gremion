@@ -108,9 +108,9 @@ function sendError(res: http.ServerResponse, status: number, error: string): voi
  * query that fails because the database went away under it (the module was just switched off: 3D000, or
  * a connection terminated by the drop) is the same state seen one step later.
  */
-function refusalOf(err: unknown): TenantNotProvisionedError | TenantUnavailableError | null {
+async function refusalOf(tenantId: string, err: unknown): Promise<TenantNotProvisionedError | TenantUnavailableError | null> {
   if (err instanceof TenantNotProvisionedError || err instanceof TenantUnavailableError) return err
-  return classifyQueryFailure(err)
+  return classifyQueryFailure(tenantId, err)
 }
 
 // ── body reader ───────────────────────────────────────────────────────────────
@@ -248,19 +248,19 @@ export function buildApiRoutes(storeFn: StoreFn): Route[] {
           // grammar): the caller's error. The body names nothing.
           console.warn(`[calendar:api] ${err.message}`)
           sendError(extended.res, 400, 'invalid_tenant_slug')
-        } else if (refusalOf(err) !== null) {
-          // The customer's calendar database is not there (the module is switched off), not current,
-          // or went away under the query: the customer's state, never a server fault. The body names nothing.
-          const refusal = refusalOf(err)!
+        } else {
+          // The customer's calendar database is not there (the module is switched off), not current, or
+          // went away under the query: the customer's state, never a server fault. The body names nothing.
+          const refusal = await refusalOf(extended.tenant.id, err)
           if (refusal instanceof TenantNotProvisionedError) {
             sendError(extended.res, 404, 'tenant_not_provisioned')
-          } else {
+          } else if (refusal !== null) {
             sendJson(extended.res, 503, { success: false, error: refusal.reason }, { 'retry-after': String(refusal.retryAfterSeconds) })
-          }
-        } else {
-          console.error('[calendar:api] unhandled route error', err)
-          if (!extended.res.headersSent) {
-            sendError(extended.res, 500, 'internal error')
+          } else {
+            console.error('[calendar:api] unhandled route error', err)
+            if (!extended.res.headersSent) {
+              sendError(extended.res, 500, 'internal error')
+            }
           }
         }
       }

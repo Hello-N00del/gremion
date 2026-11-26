@@ -13,13 +13,13 @@
  * well: B's id with A's slug, and A's id with B's slug, are refused rather than
  * served A's database.
  *
- * Every database and catalog row this file makes is named iso-*, and only those
- * are ever dropped.
+ * The two customer databases are the lifecycle's t_<hex32>__calendar, provisioned here (the leaf never
+ * creates one). Every catalog row this file makes is named iso-*, and only fixture databases are ever dropped.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import {
   storeFor,
-  _poolRegistryForTests,
+  _controlPoolForTests,
   _resetTenantStoreForTests,
   type TenantRef,
 } from '../src/tenant-store.ts'
@@ -32,27 +32,28 @@ import {
   type DbEvent,
 } from '../src/store/index.ts'
 import { requireEphemeralTestPgUrl, assertSafeTestEnv } from './support/pg-test-guard.ts'
+import { FIXTURE_DB_PATTERN, fixtureDb, fixtureId, provisionLifecycleDbs } from './support/scratch-pg.ts'
 
 const TEST_PG_URL = requireEphemeralTestPgUrl()
 const TEST_DB_PREFIX = 'calendar_test_'
 assertSafeTestEnv(TEST_PG_URL, TEST_DB_PREFIX)
 
-const OPTS = { pgUrl: TEST_PG_URL, dbPrefix: TEST_DB_PREFIX }
-const A: TenantRef = { id: 'a2000000-0000-4000-8000-0000000000a2', slug: 'iso-a' }
-const B: TenantRef = { id: 'b2000000-0000-4000-8000-0000000000b2', slug: 'iso-b' }
+const OPTS = { pgUrl: TEST_PG_URL, dbPrefix: TEST_DB_PREFIX, moduleUrl: TEST_PG_URL }
+const A: TenantRef = { id: fixtureId('0000000000a2'), slug: 'iso-a' }
+const B: TenantRef = { id: fixtureId('0000000000b2'), slug: 'iso-b' }
 const MISMATCH = { code: 'TENANT_IDENTITY_MISMATCH' }
 
 type Store = Awaited<ReturnType<typeof storeFor>>
 
 /** The leaf's own control-DB pool: the catalog lives there, and pg_database is global. */
-const control = () => _poolRegistryForTests.ensureControl(TEST_PG_URL, TEST_DB_PREFIX)
+const control = () => _controlPoolForTests(TEST_PG_URL, TEST_DB_PREFIX)
 
 /** Drop every database and catalog row this file made (iso-*), nothing else. */
 async function wipe(): Promise<void> {
   await _resetTenantStoreForTests()
   const ctrl = await control()
   const rows = await ctrl<{ datname: string }[]>`
-    SELECT datname FROM pg_database WHERE starts_with(datname, ${TEST_DB_PREFIX + 'iso-'})
+    SELECT datname FROM pg_database WHERE datname ~ ${FIXTURE_DB_PATTERN}
   `
   for (const { datname } of rows) await ctrl.unsafe(`DROP DATABASE IF EXISTS "${datname}" WITH (FORCE)`)
   await ctrl`DELETE FROM tenant_catalog WHERE starts_with(slug, 'iso-')`
@@ -91,6 +92,7 @@ const queueRows = async (sql: Store, eventId: string): Promise<number> => {
 
 beforeAll(async () => {
   await wipe()
+  await provisionLifecycleDbs(TEST_PG_URL, [A.id, B.id])
   sqlA = await storeFor(A, OPTS)
   sqlB = await storeFor(B, OPTS)
   aEvent1 = await createEvent(sqlA, event('canary-a-1', 'user-a'))
@@ -112,8 +114,8 @@ describe('calendar leaf: two-tenant isolation (TRD-060)', () => {
   it('each tenant is served from its own physical database', async () => {
     const [a] = await sqlA<{ db: string }[]>`SELECT current_database() AS db`
     const [b] = await sqlB<{ db: string }[]>`SELECT current_database() AS db`
-    expect(a!.db).toBe(TEST_DB_PREFIX + A.slug)
-    expect(b!.db).toBe(TEST_DB_PREFIX + B.slug)
+    expect(a!.db).toBe(fixtureDb(A.id))
+    expect(b!.db).toBe(fixtureDb(B.id))
     expect(a!.db).not.toBe(b!.db)
   })
 
