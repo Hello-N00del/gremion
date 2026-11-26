@@ -33,6 +33,11 @@ vi.mock('$lib/server/files/nextcloud-client', () => ({
   },
 }))
 
+const TENANT_ID = '0192f7a0-1b2c-7d3e-8f40-0123456789ab'
+vi.mock('$lib/server/tenant/context', () => ({
+  getTenant: () => ({ id: TENANT_ID, slug: 'kunde' }),
+}))
+
 vi.mock('$env/dynamic/private', () => ({
   env: { NEXTCLOUD_ADMIN_USER: 'admin', COLLABORA_URL: 'http://collabora:9980' }
 }))
@@ -40,26 +45,50 @@ vi.mock('$env/dynamic/private', () => ({
 import { protocolDocumentPort } from './protocol-documents'
 
 const PROTOCOL_ID = 'test-uuid'
-const DRAFT_PATH = '/protocols/drafts/test-uuid.odt'
-const DAV_DRAFTS = '/remote.php/dav/files/admin/protocols/drafts'
+// Minutes drafts live under the customer's own folder on the shared Nextcloud, like the content and
+// publishing drafts: protocols/<tenant uuid>/drafts/<id>.odt.
+const DRAFT_PATH = `/protocols/${TENANT_ID}/drafts/test-uuid.odt`
+const DAV_ROOT = '/remote.php/dav/files/admin/protocols'
+const DAV_TENANT = `${DAV_ROOT}/${TENANT_ID}`
+const DAV_DRAFTS = `${DAV_TENANT}/drafts`
 const DAV_DRAFT_FILE = `/remote.php/dav/files/admin${DRAFT_PATH}`
 
 describe('protocolDocumentPort.createDraftFile', () => {
   beforeEach(() => { mockMkcol.mockReset(); mockUpload.mockReset() })
 
-  it('creates the drafts directory and uploads a blank .odt', async () => {
+  it('creates the folder chain parent first and uploads a blank .odt into the customer folder', async () => {
     mockMkcol.mockResolvedValue(undefined)
     mockUpload.mockResolvedValue(undefined)
     const path = await protocolDocumentPort.createDraftFile(PROTOCOL_ID)
-    expect(mockMkcol).toHaveBeenCalledWith(DAV_DRAFTS, 'admin')
+    expect(mockMkcol.mock.calls.map((c) => c[0])).toEqual([DAV_ROOT, DAV_TENANT, DAV_DRAFTS])
+    expect(mockMkcol.mock.calls.every((c) => c[1] === 'admin')).toBe(true)
     expect(mockUpload).toHaveBeenCalledWith(DAV_DRAFT_FILE, 'admin', expect.any(Buffer), 'application/vnd.oasis.opendocument.text')
     expect(path).toBe(DRAFT_PATH)
   })
 
-  it('continues if mkcol throws (directory exists)', async () => {
-    mockMkcol.mockRejectedValue(new Error('already exists'))
+  it('continues when a folder already exists (405)', async () => {
+    mockMkcol.mockRejectedValue(Object.assign(new Error('exists'), { status: 405 }))
     mockUpload.mockResolvedValue(undefined)
     await expect(protocolDocumentPort.createDraftFile(PROTOCOL_ID)).resolves.toBe(DRAFT_PATH)
+    expect(mockMkcol).toHaveBeenCalledTimes(3)
+  })
+
+  it('does not hide a folder that could not be created: the draft is refused, nothing is uploaded', async () => {
+    mockMkcol.mockRejectedValue(Object.assign(new Error('conflict'), { status: 409 }))
+    await expect(protocolDocumentPort.createDraftFile(PROTOCOL_ID)).rejects.toMatchObject({ status: 409 })
+    expect(mockUpload).not.toHaveBeenCalled()
+  })
+
+  it('refuses to build a path from a tenant id that is not a UUID', async () => {
+    const ctx = await import('$lib/server/tenant/context')
+    const spy = vi.spyOn(ctx, 'getTenant').mockReturnValue({ id: '../other', slug: 'x' } as never)
+    try {
+      await expect(protocolDocumentPort.createDraftFile(PROTOCOL_ID)).rejects.toThrow(/UUID/)
+      expect(mockMkcol).not.toHaveBeenCalled()
+      expect(mockUpload).not.toHaveBeenCalled()
+    } finally {
+      spy.mockRestore()
+    }
   })
 })
 
@@ -87,7 +116,7 @@ describe('protocolDocumentPort.getDraftWopiToken', () => {
 describe('protocolDocumentPort.publishFile', () => {
   beforeEach(() => { mockMkcol.mockReset(); mockMove.mockReset() })
 
-  it('creates published dirs and moves .odt to published path', async () => {
+  it('creates the published folders parent first and moves .odt to the published path', async () => {
     mockMkcol.mockResolvedValue(undefined)
     mockMove.mockResolvedValue(undefined)
     const pubPath = await protocolDocumentPort.publishFile(PROTOCOL_ID, DRAFT_PATH)
@@ -97,6 +126,11 @@ describe('protocolDocumentPort.publishFile', () => {
       'admin'
     )
     expect(pubPath).toBe(`/protocols/published/${PROTOCOL_ID}`)
+    expect(mockMkcol.mock.calls.map((c) => c[0])).toEqual([
+      DAV_ROOT,
+      `${DAV_ROOT}/published`,
+      `${DAV_ROOT}/published/${PROTOCOL_ID}`,
+    ])
   })
 })
 

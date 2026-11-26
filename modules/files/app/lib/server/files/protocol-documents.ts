@@ -10,11 +10,12 @@
 // paths, same #235 upload contract, same #241 path validation). The Collabora
 // conversion helpers were split off into documents/collabora-convert.ts.
 import { serviceEnv } from '$lib/server/env/service-env'
+import { getTenant } from '$lib/server/tenant/context'
 import type { ProtocolDocumentPort } from '$lib/server/modules/runtime-registry'
 import { createNextcloudClient } from './nextcloud-client'
 import { validatePublishedPdfPath } from './webdav-path'
 
-const DRAFTS_BASE = '/protocols/drafts'
+const PROTOCOLS_ROOT = '/protocols'
 const PUBLISHED_BASE = '/protocols/published'
 
 function sysUser(): string {
@@ -25,11 +26,37 @@ function davPath(ncRelPath: string): string {
   return `/remote.php/dav/files/${sysUser()}${ncRelPath}`
 }
 
+const TENANT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** The customer's segment in the shared drafts space. A tenant id that is not a UUID is refused, never turned into a folder name. */
+function tenantSegment(): string {
+  const id = getTenant().id
+  if (!TENANT_ID_RE.test(id)) throw new Error('protocol draft: tenant id is not a UUID')
+  return id.toLowerCase()
+}
+
+/** MKCOL that tolerates "the collection already exists" (405) and nothing else: a folder that cannot be made is an error. */
+async function mkcolIfMissing(nc: ReturnType<typeof createNextcloudClient>, ncRelPath: string, user: string): Promise<void> {
+  try {
+    await nc.mkcol(davPath(ncRelPath), user)
+  } catch (err) {
+    if ((err as { status?: unknown } | null)?.status === 405) return
+    throw err
+  }
+}
+
+// Every customer's minutes drafts live under the ONE Nextcloud admin account, so the draft path carries the
+// customer: /protocols/<tenant uuid>/drafts/<id>.odt. WebDAV creates one level per MKCOL, so the chain is
+// made parent first; a draft stored under the older flat path keeps that stored path and stays readable.
 async function createDraftFile(protocolId: string): Promise<string> {
   const nc = createNextcloudClient()
   const user = sysUser()
-  const ncPath = `${DRAFTS_BASE}/${protocolId}.odt`
-  try { await nc.mkcol(davPath(DRAFTS_BASE), user) } catch (_e: unknown) { /* may already exist */ }
+  const tenantRoot = `${PROTOCOLS_ROOT}/${tenantSegment()}`
+  const draftsDir = `${tenantRoot}/drafts`
+  const ncPath = `${draftsDir}/${protocolId}.odt`
+  await mkcolIfMissing(nc, PROTOCOLS_ROOT, user)
+  await mkcolIfMissing(nc, tenantRoot, user)
+  await mkcolIfMissing(nc, draftsDir, user)
   await nc.upload(davPath(ncPath), user, Buffer.alloc(0), 'application/vnd.oasis.opendocument.text')
   return ncPath
 }
@@ -58,6 +85,7 @@ async function publishFile(protocolId: string, draftPath: string): Promise<strin
   const user = sysUser()
   const publishedDir = `${PUBLISHED_BASE}/${protocolId}`
   const publishedOdt = `${publishedDir}/protocol.odt`
+  try { await nc.mkcol(davPath(PROTOCOLS_ROOT), user) } catch (_e: unknown) { /* may already exist */ }
   try { await nc.mkcol(davPath(PUBLISHED_BASE), user) } catch (_e: unknown) { /* may already exist */ }
   try { await nc.mkcol(davPath(publishedDir), user) } catch (_e: unknown) { /* may already exist */ }
   await nc.move(davPath(draftPath), davPath(publishedOdt), user)
