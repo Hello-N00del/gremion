@@ -659,7 +659,7 @@ test('the hand-switch and nightly-window passages say what the code does', () =>
   assert.match(driver, /\[\[ "\$sha" =~ \^\[0-9a-f\]\{40\}\$ \]\] \|\| return 0\s*\n\s*_cd_drv_start_gate \|\| return 0\s*\n(?:\s*#[^\n]*\n)+\s*CD_DRV_ROLLED=0\s*\n\s*_cd_drv_select "\$sha" manual/, 'release-now no longer meets the start gate before it selects the release')
   assert.match(read('infra/host/lib/cd/core.sh'), /cd_request_next prints the oldest VALID request and moves it to processed\//, 'a request is no longer moved to processed/ when it is read')
   assert.ok(locks.includes(`\`CD_QUIET_WINDOWS\` (default \`${defaults.get('CD_QUIET_WINDOWS')}\``), 'the locks section does not state the default of CD_QUIET_WINDOWS')
-  for (const phrase of ['no release now: quiet_window', 'no release now: lock_busy', '`start_refused`', 'is consumed', 'run `gremion-cd release-now` again']) {
+  for (const phrase of ['no release now: quiet_window', 'no release now: lock_busy', '`start_refused`', 'is consumed', 'Run `gremion-cd release-now` again']) {
     assert.ok(locks.includes(phrase), `the locks section does not say: ${phrase}`)
   }
   assert.ok(!locks.includes('is neither refused nor a failure'), 'the locks section again says a release-now in the window is never refused')

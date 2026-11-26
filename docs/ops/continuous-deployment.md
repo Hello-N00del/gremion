@@ -415,23 +415,37 @@ timer list that cannot be read are still "unknown" and still a stop.
 
 **A worked example: the nightly window.** The unit of the purge timer is written as 02:30 UTC; on a
 host whose clock is UTC+1 (Central European winter time) `systemctl list-timers` shows it at 03:30,
-and the example reads it that way (summer time moves every clock time below by one hour; the guard
-reads the real next elapse and needs no such conversion). The guard widens a timer by its longest
-run, so a span of `CD_LOCK_SPAN_MAX_MIN` (default 180) minutes plus `CD_PURGE_MAX_MIN` (default 5)
-minutes, 185 in all, reaches the purge from 00:25 on, and the purge holds the host lock while it runs,
-up to about 03:35. With the purge at 03:30 and the default span the guard closes the window from about
-00:25 to 03:35. A host that keeps the nightly backup at its default (`BACKUP_ONCALENDAR` 02:00 host
-time, `CD_BACKUP_MAX_MIN` 90) has a wider window: 02:00 minus 270 minutes is 21:30, so it is closed
-from about 21:30 to 03:35 there; the purge alone is the case of a host with the backup timer switched
+and the example reads it that way. In summer time (UTC+2) the purge moves to 04:30 host time and its
+window to about 01:25 to 04:35. `BACKUP_ONCALENDAR` is host time without a UTC suffix and does not
+move. The guard reads the real next elapse and needs no such conversion. The guard widens a timer by
+its longest run, so a span of `CD_LOCK_SPAN_MAX_MIN` (default 180) minutes plus `CD_PURGE_MAX_MIN`
+(default 5) minutes, 185 in all, reaches the purge from 00:25 on, and the purge holds the host lock
+while it runs, up to about 03:35. With the purge at 03:30 and the default span the guard closes the
+window from about 00:25 to 03:35. A host that keeps the nightly backup at its default
+(`BACKUP_ONCALENDAR` 02:00 host time, `CD_BACKUP_MAX_MIN` 90) has a wider window: 02:00 minus 270
+minutes is 21:30, so it is closed from about 21:30 to 03:35 there (in summer closed from about 21:30
+to 04:35: only the purge moves); the purge alone is the case of a host with the backup timer switched
 off.
 
-A `release-now` in that window is neither refused nor a failure. The release runs `fetch`, `classify`,
-`retag`, `render` and `build`, and then waits at `snapshot`: the history says `snapshot_waiting` (why
-`timer_guard`), the tick prints "waiting: the lock span would overlap the backup or the purge" and
-ends, and the stage record stays as it was. The release goes on only with a tick after the window
-(from about 03:35 here). The CD timer does that every five minutes by itself. With the timers off,
-start one tick by hand as the deploy user once the window has passed: `gremion-cd tick`. A tick inside
-the window only waits again. To read when the window ends, read the next elapse of the timers:
+What a `release-now` does in that window depends on the hour at which it is given, because the timer
+guard is not the first door. In front of it stands the start gate of the tick (the list above). It
+refuses inside `CD_QUIET_WINDOWS` (default `01:45-03:15`, host time) and while a nightly job holds the
+host lock. The tick prints `no release now: quiet_window` (or `no release now: lock_busy`), the history
+says `start_refused`, and the request is consumed: nothing waits and no later tick carries it. Run
+`gremion-cd release-now` again once the gate is open. In the example the gate is closed from 01:45 to
+03:15 (quiet window) and from 03:30 to about 03:35 (the purge holds the lock); on a host with the
+default backup it is also closed from 02:00 until the backup ends.
+
+Only a `release-now` that the start gate lets through and that falls inside the window of the guard
+waits: in the example from 00:25 to 01:45 and from 03:15 to 03:30 (on a host with the default backup
+from 21:30 to 01:45, and again after the backup has ended). It is not a failure. The release runs
+`fetch`, `classify`, `retag`, `render` and `build`, and then waits at `snapshot`: the history says
+`snapshot_waiting` (why `timer_guard`), the tick prints "waiting: the lock span would overlap the backup
+or the purge" and ends, and the stage record stays as it was. A release that is already in flight does
+not meet the start gate again, so it goes on only with a tick after the window (from about 03:35
+here). The CD timer does that every five minutes by itself. With the timers off, start one tick by
+hand as the deploy user once the window has passed: `gremion-cd tick`. A tick inside the window only
+waits again. To read when the window ends, read the next elapse of the timers:
 `systemctl list-timers gremion-purge.timer gremion-backup.timer` (the `NEXT` column, in host time);
 the window ends at the elapse of the purge plus its run, about five minutes.
 
@@ -801,13 +815,18 @@ Adoption is done once, by hand, on the live host. Nothing is enabled until the l
    release beside it: the `retag` stage of the first release refuses a target colour whose project is
    running, with the line `cd-prepare: retag: the target colour project is running` on the standard
    error of the tick (the journal of `gremion-cd.service`). That ends the release at once: the hold is
-   `failure` with the reason `retag_failed`, and the mail is `stopped`. So stop the old colour before
-   the first release of CD. As the deploy user, check that `runtime/active-colour` names the colour
-   that serves (never stop that one), then stop the other colour's project with its own env file,
-   from the release tree it was started from (`releases/<sha12>`; the `previous` line of
-   `gremion-cd status` after adopt names it):
+   `failure` with the reason `retag_failed`, and the mail is `stopped`. The teardown of that release
+   takes the old colour down itself (a `compose down` of the target colour project, without `-v`), but
+   the release is lost and the hold needs `resume`. So stop the old colour before the first release of
+   CD. As the deploy user, check that `runtime/active-colour` names the colour that serves (never stop
+   that one). The other colour is the old one: the `IMAGE_TAG` line of `/opt/gremion/etc/env/app-<colour>.env`
+   names its release (`pilot-<sha12>`, the tree `releases/<sha12>`; the program is not installed yet at
+   this step, so there is no `gremion-cd status` to ask). Stop that colour's project with its own env
+   file, from the release tree it was started from, in a shell that exports none of the compose
+   variables (CD clears them before every compose call):
 
    ```
+   unset COMPOSE_PROJECT_NAME COMPOSE_FILE COMPOSE_PROFILES COMPOSE_PATH_SEPARATOR COMPOSE_ENV_FILES
    cd /opt/gremion/releases/<sha12 of the old colour>
    GREMION_ROOT=/opt/gremion docker compose --env-file /opt/gremion/etc/env/app-<colour>.env stop
    ```
@@ -815,7 +834,7 @@ Adoption is done once, by hand, on the live host. Nothing is enabled until the l
    The env file names the compose project and the compose files, so no other option is needed (CD
    itself passes the same file and lets no other project name, compose file or profile in). `stop` removes
    no image and writes no env file: its images and its tag stay, and the previous release remains
-   startable for a rollback (`gremion-cd status` shows `startable`). Then run the same command with
+   startable for a rollback (`gremion-cd status` shows `startable` once the program is installed). Then run the same command with
    `ps` in place of `stop`: it must list no running container.
 3. As root, run `bash /opt/gremion/current/infra/host/bootstrap.sh cd`. It installs, as real files, every
    host program of `bin/` that needs nothing but the installed libraries, `lib/common.sh` and `lib/cd/*.sh`
@@ -1030,13 +1049,16 @@ and the reason `retag_failed`. So stop the old colour after the hand switch and 
 release, as the deploy user, once `runtime/active-colour` names the other colour:
 
 ```
+unset COMPOSE_PROJECT_NAME COMPOSE_FILE COMPOSE_PROFILES COMPOSE_PATH_SEPARATOR COMPOSE_ENV_FILES
 cd /opt/gremion/releases/<sha12 of the old colour>
 GREMION_ROOT=/opt/gremion docker compose --env-file /opt/gremion/etc/env/app-<colour>.env stop
 ```
 
 The command touches that colour's project only: its images and its tag stay, so the previous release
-remains startable. When the refusal has already ended a release, stop the colour, then `adopt
---re-adopt` and `resume` as above.
+remains startable. When the refusal has already ended a release, there is nothing left to stop: the
+teardown of that release takes the old colour down itself (a `compose down` of the target colour
+project, which is the old colour; check with the same command and `ps`). What is left is the hold:
+`adopt --re-adopt` and `resume` as above.
 
 ## Proof
 
