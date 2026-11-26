@@ -125,6 +125,65 @@ describe('matrix subsystem', () => {
   })
 })
 
+// MATRIX_IDENTITY=namespaced: an account is created when missing and otherwise left as it is. The login
+// path never reactivates or renames an account (matrix-identity.mint.test.ts); provisioning must not
+// either, or an erased subject would come back with the next membership sync.
+describe('matrix subsystem with a namespaced identity', () => {
+  const identity = { slug: 'acme', tenantId: 'tid-acme' }
+  function nsDeps(deactivated: string[] = []) {
+    const d = deps()
+    const ensured: Array<[string, string | undefined]> = []
+    const synapse = {
+      ...d.synapse,
+      async ensureUser(localpart: string, displayName?: string) {
+        ensured.push([localpart, displayName])
+        d.log.push(`ensure:${localpart}`)
+        return deactivated.includes(localpart) ? ('deactivated' as const) : ('ok' as const)
+      },
+    }
+    return { ...d, synapse, ensured }
+  }
+  const build = (d: ReturnType<typeof nsDeps>) =>
+    createMatrixSubsystem({ matrix: d.matrix as never, synapse: d.synapse as never, kc: d.kc as never }, 'srv', identity)
+
+  it('addMember ensures the account instead of writing it, and joins it', async () => {
+    const d = nsDeps()
+    await build(d).addMember('!room:srv', 'uuid-9')
+    expect(d.ensured).toEqual([['acme.name-uuid-9', 'First Last']])
+    expect(d.synapse.created).toEqual([])
+    expect(d.log).toEqual(['ensure:acme.name-uuid-9', 'join:@acme.name-uuid-9:srv'])
+  })
+
+  it('addMember does not join a deactivated account, and does not fail', async () => {
+    const d = nsDeps(['acme.name-uuid-9'])
+    await expect(build(d).addMember('!room:srv', 'uuid-9')).resolves.toBeUndefined()
+    expect(d.synapse.joined).toEqual([])
+    expect(d.synapse.created).toEqual([])
+  })
+
+  it('reconcileMembers skips a deactivated account and still joins the others', async () => {
+    const d = nsDeps(['acme.name-uuid-1'])
+    await build(d).reconcileMembers('!room:srv', ['uuid-1', 'uuid-2', 'uuid-3'])
+    expect(d.synapse.joined).toEqual([['!room:srv', '@acme.name-uuid-2:srv'], ['!room:srv', '@acme.name-uuid-3:srv']])
+    expect(d.synapse.created).toEqual([])
+  })
+
+  it('a name that is only the username (an address) is not offered as display name', async () => {
+    const d = nsDeps()
+    d.kc.getUser = async (id: string) => ({ id, username: 'max@example.org', firstName: '', lastName: '' }) as never
+    await build(d).addMember('!room:srv', 'uuid-9')
+    expect(d.ensured).toEqual([['acme.max_40example.org', undefined]])
+  })
+
+  it('the legacy form (no identity) still writes the account with createUser and never asks ensureUser', async () => {
+    const d = nsDeps()
+    const legacy = createMatrixSubsystem({ matrix: d.matrix as never, synapse: d.synapse as never, kc: d.kc as never }, 'srv')
+    await legacy.addMember('!room:srv', 'uuid-9')
+    expect(d.synapse.created).toEqual(['name-uuid-9'])
+    expect(d.ensured).toEqual([])
+  })
+})
+
 describe('aliasLocalpart', () => {
   it('slugifies a simple name', () => {
     expect(aliasLocalpart('Vorstand')).toBe('stura-vorstand')
