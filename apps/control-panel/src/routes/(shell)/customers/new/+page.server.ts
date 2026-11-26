@@ -73,8 +73,12 @@ function secondaryHosts(): string[] {
   return out
 }
 
-/** The shared-service modules a secondary-host customer may have: a FIXED set, as the host-side create knows it. */
-const SECONDARY_OPT_IN = ['files', 'votes', 'messaging']
+/**
+ * The modules a secondary-host customer may have by opt-in: a FIXED set, as the host-side create knows it. It is a copy
+ * of SECONDARY_TENANT_MODULES_SET in infra/host/lib/common.sh; scripts/check-panel-optin-list.test.mjs pins the two to
+ * each other, so change both together.
+ */
+const SECONDARY_OPT_IN = ['files', 'votes', 'messaging', 'content', 'publishing']
 
 /**
  * The modules the install opts in for customers on a secondary host (SECONDARY_TENANT_MODULES, space-separated, passed

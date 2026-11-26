@@ -42,7 +42,7 @@ set -euo pipefail
 #   7. secondary tenant modules    -- SECONDARY_TENANT_MODULES (optional; the shared-service
 #                                     modules a secondary-host customer may have), when a file
 #                                     declares it with a value: space-separated ids of the fixed
-#                                     set (files votes messaging), none twice, and the key needs
+#                                     set (files votes messaging content publishing), none twice, and the key needs
 #                                     SECONDARY_TENANT_HOSTS; messaging also needs
 #                                     SYNAPSE_JWT_LOGIN=off in state.env and MATRIX_IDENTITY=namespaced
 #                                     in app-blue.env and app-green.env (read from the directory

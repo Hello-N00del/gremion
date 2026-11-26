@@ -446,9 +446,10 @@ by default (default deny: `SECONDARY_HOST_MODULES` in `infra/host/lib/common.sh`
 ### What a secondary customer gets per opted-in module
 
 `SECONDARY_TENANT_MODULES` is a space-separated list of catalogue ids from a
-**fixed set**: `files`, `votes`, `messaging`. An id outside the set is refused by
-`gremion-validate-env` and never allowed, whatever the key says; so is a
-duplicate. `publishing` and `content` are outside the set (see the table). The
+**fixed set**: `files`, `votes`, `messaging`, `content`, `publishing`. An id
+outside the set is refused by `gremion-validate-env` and never allowed, whatever
+the key says; so is a duplicate. `publishing` is the newsletter: the customer's
+switch and pin carry its manifest id `newsletter`. The
 list is read from `state.env` when a customer is created and when a module is
 enabled for it: the create leaves the listed modules out of the customer's
 switches and out of `pinned_off_modules`, and the module guard lets them through.
@@ -467,7 +468,7 @@ list. The create of the first customer never reads the list.
 | files | one group folder per org unit on the shared Nextcloud, with its own group `ou-<unit id>`; a folder is adopted on a retry only when it carries that unit's own group (the mount point alone proves nothing on a shared instance); the editor URL is built on the request's own host, which Nextcloud trusts and Collabora names; the retained-records folder and its groups are named per tenant | one Nextcloud, one Collabora, one `richdocuments` configuration; the Nextcloud accounts are the open point named in the operating limits |
 | votes | polls on the shared Nextcloud Polls: every poll is created by the install's one Nextcloud admin account and bound to the customer by a leading marker `[gt:<tenant id>]` in its title; every list and by-id read checks it, and another customer's poll answers 404; the poll pages and routes read and vote with the acting member's own bearer when the request has one (Karenz and retained copies use the admin account) | the Polls app and its database are shared; the binding is the app's marker, not a Nextcloud group |
 | messaging | its own Matrix accounts `<slug>.<escaped username>`, its own unit rooms (alias `#stura.<slug>.<unit>`), archive aliases (`#stura-archiv.<slug>.<unit>-<time>`) and meeting rooms (`#meeting.<slug>.<event>`); every room carries a tenant marker state event written by the admin bot, and a room found behind an alias is adopted only when that marker names the customer; video calls: the call frame's config names the requesting host's own token service, and the participants' names drop the customer prefix | one Synapse and one LiveKit; the alias directory is global; see the switch-over below, the three switches it needs, and the operating limits |
-| publishing, content | refused for a secondary host: the module id is not in the fixed set | the leaves now ask the kernel for the sending customer's own link base on every send (`/api/internal/newsletter/link-base`, `/api/internal/content/link-base`), but the set is fixed in `infra/host/lib/common.sh`: widening it is a code change, not a key. The refusal text of `gremion-validate-env` for `publishing` still gives the older reason (the mail links), and the content news editor still keeps its drafts in the shared Nextcloud and opens them in the shared Collabora |
+| content, publishing | the e-mail links (the unsubscribe link included) are built from the sending customer's own host: the leaves ask the kernel for it on every send (`/api/internal/content/link-base`, `/api/internal/newsletter/link-base`); the news drafts are keyed per customer on the shared Nextcloud. List `publishing` only once the release that keys the newsletter drafts per customer is live | one Nextcloud and one Collabora hold the drafts; the mail goes out through the install's relay, so the sender address and the EHLO name are the install's |
 
 `messaging` needs three switches before the list is accepted, and the validator
 names only the ones that are missing: `SYNAPSE_JWT_LOGIN=off` in `state.env` and
@@ -636,7 +637,7 @@ than it gives:
   does not PASS (a failed positive control reads FAIL, a missing account
   NOT-READY): read that as a finding about the setup. The votes code does not name
   Nextcloud accounts by id: it acts with the member's bearer or the admin account.
-- **Content and publishing** are not available to a secondary customer (table above).
+- **Content and publishing** are opt-in for a secondary customer (table above); without the opt-in they are created pinned off.
 
 ### Evidence for two customers
 

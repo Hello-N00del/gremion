@@ -175,10 +175,29 @@ describe('Neuer Mandant host field: the opted-in modules of a secondary host', (
     expect(text).not.toMatch(/Nicht verfügbar sind dort:[^.]*Videokonferenz/)
   })
 
-  it('every opt-in of the set: only content and newsletter remain unavailable', () => {
+  it('files, votes and messaging opted in: only content and newsletter remain unavailable', () => {
     const text = hostHints({ ...PRIMARY, secondaryModules: ['files', 'votes', 'messaging'] })
     expect(text).toContain('freigegeben: Chat, Videokonferenz, Dateien, Dokumentbearbeitung und Abstimmungen.')
     expect(text).toContain('Nicht verfügbar sind dort: Inhalte und Newsletter.')
+  })
+
+  it('content opted in: Inhalte move to the available side, Newsletter stays unavailable', () => {
+    const text = hostHints({ ...PRIMARY, secondaryModules: ['content'] })
+    expect(text).toContain('freigegeben: Inhalte.')
+    expect(text).toContain('Nicht verfügbar sind dort: Chat, Dateien, Dokumentbearbeitung, Videokonferenz, Abstimmungen und Newsletter.')
+  })
+
+  it('publishing opted in: Newsletter move to the available side, Inhalte stay unavailable', () => {
+    const text = hostHints({ ...PRIMARY, secondaryModules: ['publishing'] })
+    expect(text).toContain('freigegeben: Newsletter.')
+    expect(text).toContain('Nicht verfügbar sind dort: Chat, Dateien, Dokumentbearbeitung, Videokonferenz, Abstimmungen und Inhalte.')
+  })
+
+  it('every opt-in of the set: nothing is named as unavailable', () => {
+    const text = hostHints({ ...PRIMARY, secondaryModules: ['files', 'votes', 'messaging', 'content', 'publishing'] })
+    expect(text).toContain('freigegeben: Chat, Videokonferenz, Dateien, Dokumentbearbeitung, Abstimmungen, Inhalte und Newsletter.')
+    expect(text).not.toContain('Nicht verfügbar')
+    expect(text).toContain('Bereits angelegte Mandanten auf diesen Hosts behalten ihre bisherigen Sperren')
   })
 
   it('the opt-in is shown only next to secondary hosts and a known customer host', () => {

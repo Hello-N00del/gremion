@@ -213,7 +213,7 @@ export const POST: RequestHandler = async (event) => {
     // here would reopen the DNS-rebinding window the guard just closed.
     host: target.connectHost,
     port,
-    name: smtpEhloName(),
+    name: smtpEhloName(getTenant().primaryHost),
     secure: port === 465,
     auth,
     // The operator's relay secret only goes out on an upgraded connection: a

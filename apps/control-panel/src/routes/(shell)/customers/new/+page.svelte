@@ -19,15 +19,17 @@
     // video comes with chat: the one messages module owns /api/video as well as /api/messages
     ...(secondaryModules.includes('messaging') ? ['Chat', 'Videokonferenz'] : []),
     ...(secondaryModules.includes('files') ? ['Dateien', 'Dokumentbearbeitung'] : []),
-    ...(secondaryModules.includes('votes') ? ['Abstimmungen'] : [])
+    ...(secondaryModules.includes('votes') ? ['Abstimmungen'] : []),
+    ...(secondaryModules.includes('content') ? ['Inhalte'] : []),
+    ...(secondaryModules.includes('publishing') ? ['Newsletter'] : [])
   ])
   const secondaryLacks = $derived([
     ...(secondaryModules.includes('messaging') ? [] : ['Chat']),
     ...(secondaryModules.includes('files') ? [] : ['Dateien', 'Dokumentbearbeitung']),
     ...(secondaryModules.includes('messaging') ? [] : ['Videokonferenz']),
     ...(secondaryModules.includes('votes') ? [] : ['Abstimmungen']),
-    'Inhalte',
-    'Newsletter'
+    ...(secondaryModules.includes('content') ? [] : ['Inhalte']),
+    ...(secondaryModules.includes('publishing') ? [] : ['Newsletter'])
   ])
   const listDe = (xs: string[]): string => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} und ${xs[xs.length - 1]}`)
   // the semester start months: October and April unless a failed submit kept the operator's choice
@@ -66,7 +68,7 @@
       <input name="host" required autocomplete="off" placeholder="rat.musterstadt.de" value={String(values.host ?? data.expectedHost ?? '')} aria-invalid={errors.host ? 'true' : undefined} aria-describedby={data.expectedHost ? (secondaryHosts.length ? 'host-expected host-secondary' : 'host-expected') : undefined} />
       {#if data.expectedHost && secondaryHosts.length}
         <span id="host-expected" class="muted">Diese Installation ist für den Host <code>{data.expectedHost}</code> eingerichtet.</span>
-        <span id="host-secondary" class="muted">Zusätzlich erlaubt: {#each secondaryHosts as h, i}{#if i > 0}{', '}{/if}<code>{h}</code>{/each}; jeder andere Host wird beim Anlegen abgelehnt. {#if secondaryHas.length}Ein Mandant auf einem dieser zusätzlichen Hosts hat Anmeldung, Board und Kalender sowie, für diese Installation freigegeben: {listDe(secondaryHas)}. Nicht verfügbar sind dort: {listDe(secondaryLacks)}. Bereits angelegte Mandanten auf diesen Hosts behalten ihre bisherigen Sperren.{:else}Ein Mandant auf einem dieser zusätzlichen Hosts hat keinen Chat, keine Dateien, keine Dokumentbearbeitung und keine Videokonferenz; auch Abstimmungen, Inhalte und Newsletter sind dort nicht verfügbar.{/if}</span>
+        <span id="host-secondary" class="muted">Zusätzlich erlaubt: {#each secondaryHosts as h, i}{#if i > 0}{', '}{/if}<code>{h}</code>{/each}; jeder andere Host wird beim Anlegen abgelehnt. {#if secondaryHas.length}Ein Mandant auf einem dieser zusätzlichen Hosts hat Anmeldung, Board und Kalender sowie, für diese Installation freigegeben: {listDe(secondaryHas)}. {#if secondaryLacks.length}Nicht verfügbar sind dort: {listDe(secondaryLacks)}. {/if}Bereits angelegte Mandanten auf diesen Hosts behalten ihre bisherigen Sperren.{:else}Ein Mandant auf einem dieser zusätzlichen Hosts hat keinen Chat, keine Dateien, keine Dokumentbearbeitung und keine Videokonferenz; auch Abstimmungen, Inhalte und Newsletter sind dort nicht verfügbar.{/if}</span>
       {:else if data.expectedHost}<span id="host-expected" class="muted">Diese Installation ist für den Host <code>{data.expectedHost}</code> eingerichtet; jeder andere Host wird beim Anlegen abgelehnt.</span>{/if}
       {#if errors.host}<span class="err">{errors.host}</span>{/if}
     </label>

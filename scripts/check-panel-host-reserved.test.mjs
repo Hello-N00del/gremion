@@ -118,17 +118,17 @@ test('SCRIPTS: every module manifest is either allowed on a secondary host or cr
   assert.deepEqual(allowed.filter((id) => off.includes(id)), [], 'a module cannot be both allowed and off')
 })
 
-test('SCRIPTS: the opt-in set of a secondary host is fixed, maps onto real manifests that are created OFF by default, and keeps publishing out', () => {
+test('SCRIPTS: the opt-in set of a secondary host is fixed and maps onto real manifests that are created OFF by default (catalogue id publishing -> manifest id newsletter)', () => {
   const lib = read('infra/host/lib/common.sh')
   const listOf = (name) => (lib.match(new RegExp(`^${name}="([^"]*)"`, 'm'))?.[1] ?? '').split(/\s+/).filter(Boolean)
   const set = listOf('SECONDARY_TENANT_MODULES_SET')
   const allowed = listOf('SECONDARY_HOST_MODULES')
   const off = listOf('SECONDARY_HOST_MODULES_OFF')
-  assert.deepEqual([...set].sort(), ['files', 'messaging', 'votes'], 'the fixed opt-in set: files, votes, messaging (publishing and content stay out: their mail links name the primary host)')
+  assert.deepEqual([...set].sort(), ['content', 'files', 'messaging', 'publishing', 'votes'], 'the fixed opt-in set: files, votes, messaging, content, publishing')
   // the mapping of catalogue ids onto manifest ids, as the function spells it
   const fn = lib.match(/^secondary_optin_manifest_id\(\) \{[\s\S]*?^\}/m)?.[0] ?? ''
   const map = Object.fromEntries([...fn.matchAll(/^\s+([a-z]+)\)\s+printf '%s' ([a-z]+) ;;/gm)].map((m) => [m[1], m[2]]))
-  assert.deepEqual(map, { files: 'files', votes: 'votes', messaging: 'messages' }, 'the map is exactly files->files, votes->votes, messaging->messages')
+  assert.deepEqual(map, { files: 'files', votes: 'votes', messaging: 'messages', content: 'content', publishing: 'newsletter' }, 'the map is exactly files->files, votes->votes, messaging->messages, content->content, publishing->newsletter')
   const ids = manifestIds()
   for (const [cat, manifest] of Object.entries(map)) {
     assert.ok(set.includes(cat), `${cat} is in the set`)
@@ -136,10 +136,13 @@ test('SCRIPTS: the opt-in set of a secondary host is fixed, maps onto real manif
     assert.ok(off.includes(manifest), `${manifest} is created switched OFF by default (default deny)`)
     assert.ok(!allowed.includes(cat) && !allowed.includes(manifest), `${cat} is not allowed by default`)
   }
-  for (const out of ['newsletter', 'content', 'elections', 'vault']) {
+  for (const out of ['elections', 'vault']) {
     assert.ok(!Object.values(map).includes(out) && !set.includes(out), `${out} is not opt-in-able`)
   }
-  assert.ok(!set.includes('publishing'), 'publishing is not opt-in-able')
+  // the manifest id of the newsletter is not a catalogue id: the set is spelled in catalogue ids
+  assert.ok(!set.includes('newsletter'), 'newsletter is the manifest id; the opt-in id is publishing')
+  const optManifests = Object.values(map)
+  assert.equal(new Set(optManifests).size, optManifests.length, 'no manifest id is mapped twice')
 })
 
 test('SCRIPTS: the opt-in is read from state.env only: create.sh and the module guard share one loader, nothing reads it from the request or the compose files', () => {

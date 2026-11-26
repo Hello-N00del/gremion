@@ -21,6 +21,17 @@ describe('smtpEhloName', () => {
     expect(warn).not.toHaveBeenCalled()
   })
 
+  it('prefers the sending customer host over PUBLIC_BASE_URL, and ignores one that is not a host name', async () => {
+    process.env.PUBLIC_BASE_URL = 'https://app.example.test/'
+    const { smtpEhloName } = await import('./ehlo-name')
+    expect(smtpEhloName('rat.example.org')).toBe('rat.example.org')
+    expect(smtpEhloName('Rat.Example.ORG')).toBe('rat.example.org')
+    expect(smtpEhloName(null)).toBe('app.example.test')
+    expect(smtpEhloName('')).toBe('app.example.test')
+    expect(smtpEhloName('bad host EHLO x')).toBe('app.example.test')
+    expect(warn).not.toHaveBeenCalled()
+  })
+
   it('warns once, naming PUBLIC_BASE_URL but not its value, when it is unset or unparsable', async () => {
     delete process.env.PUBLIC_BASE_URL
     const { smtpEhloName } = await import('./ehlo-name')

@@ -859,6 +859,46 @@ chat_switches() {
     [ "$output" = '{"brand":{"product":"Ratsportal","org_short":"AR"},"modules":{"content":false,"elections":false,"messages":false,"newsletter":false,"vault":false},"pinned_off_modules":["content","elections","messages","newsletter","vault"]}' ] || { echo "$output"; return 1; }
 }
 
+@test "secondary opt-in: with content and publishing opted in the create enables both and writes NO content or newsletter pin or switch, while the others stay pinned" {
+    secondary_install rat.pilot.example 'rat.alpha.example'
+    secondary_optin 'content publishing'
+    verdict_enable calendar content publishing
+    queue create
+    run "$EXEC" --once
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; steps; return 1; }
+    create_ran || { steps; return 1; }
+    run sed -n 2p "${GREMION_ROOT}/config-seen"
+    [ "$output" = '{"brand":{"product":"Ratsportal","org_short":"AR"},"modules":{"elections":false,"files":false,"messages":false,"vault":false,"votes":false},"pinned_off_modules":["elections","files","messages","vault","votes"]}' ] || { echo "$output"; return 1; }
+    run steps
+    [[ "$output" == *"tc phase-b alpha-rat"* ]] || { echo "$output"; return 1; }
+}
+
+@test "secondary opt-in: content opted in frees content alone; publishing without its own opt-in stays refused before phase A, and the newsletter pin is kept" {
+    secondary_install rat.pilot.example 'rat.alpha.example'
+    secondary_optin 'content'
+    verdict_enable calendar content
+    queue create
+    run "$EXEC" --once
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; steps; return 1; }
+    run sed -n 2p "${GREMION_ROOT}/config-seen"
+    [ "$output" = '{"brand":{"product":"Ratsportal","org_short":"AR"},"modules":{"elections":false,"files":false,"messages":false,"newsletter":false,"vault":false,"votes":false},"pinned_off_modules":["elections","files","messages","newsletter","vault","votes"]}' ] || { echo "$output"; return 1; }
+    verdict_enable calendar publishing
+    : > "$ORDER"
+    queue create
+    run "$EXEC" --once
+    create_refused_before_phase_a || { echo "publishing was not refused"; return 1; }
+    grep -q "^error .*publishing.*secondary host" "${GREMION_ROOT}/events.log" || { cat "${GREMION_ROOT}/events.log"; return 1; }
+}
+
+@test "secondary opt-in: the refusal of a module outside the opt-in names the current opt-in set" {
+    secondary_install rat.pilot.example 'rat.alpha.example'
+    verdict_enable calendar content
+    queue create
+    run "$EXEC" --once
+    create_refused_before_phase_a
+    grep -q 'files, votes, messaging, content, publishing' "${GREMION_ROOT}/events.log" || { cat "${GREMION_ROOT}/events.log"; return 1; }
+}
+
 @test "secondary opt-in: a module that is not opted in stays refused before phase A, even when another one is (votes with only files opted in; messaging; publishing)" {
     secondary_install rat.pilot.example 'rat.alpha.example'
     secondary_optin 'files'
@@ -898,7 +938,7 @@ chat_switches() {
 
 @test "secondary opt-in: a malformed opt-in refuses a create on a secondary host outright, and never stops the primary host" {
     local bad
-    for bad in 'bogus' 'publishing' 'files files' 'files,votes'; do
+    for bad in 'bogus' 'newsletter' 'files files' 'files,votes'; do
         sed -i '/^PILOT_TENANT_HOST=/d; /^SECONDARY_TENANT_HOSTS=/d; /^SECONDARY_TENANT_MODULES=/d; /^PLATFORM_DOMAIN=/d' "${GREMION_ROOT}/etc/env/state.env"
         secondary_install rat.pilot.example 'rat.alpha.example'
         secondary_optin "$bad"

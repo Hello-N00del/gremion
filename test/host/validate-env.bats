@@ -684,11 +684,31 @@ secondary_fixture() {
     [[ "$output" == *"SECONDARY_TENANT_MODULES: 2 module(s)"* ]] || { echo "$output"; return 1; }
 }
 
-@test "SECONDARY_TENANT_MODULES: an unknown id, publishing and other ids not yet allowed, a duplicate, a comma list and upper case each fail the validation (exit 1) naming the key by position, without printing the value" {
+@test "SECONDARY_TENANT_MODULES: content and publishing validate alone and together, and with the full opt-in list (state and app files)" {
+    secondary_fixture
+    printf 'SECONDARY_TENANT_HOSTS=canary.example.org\n' >> "${ENV_DIR}/state.env"
+    printf 'SYNAPSE_JWT_LOGIN=off\n' >> "${ENV_DIR}/state.env"
+    printf 'MATRIX_IDENTITY=namespaced\n' >> "${ENV_DIR}/app-blue.env"
+    printf 'MATRIX_IDENTITY=namespaced\n' >> "${ENV_DIR}/app-green.env"
+    local ok
+    for ok in 'content' 'publishing' 'content publishing' 'files votes messaging content publishing'; do
+        sed -i '/^SECONDARY_TENANT_MODULES=/d' "${ENV_DIR}/state.env"
+        printf 'SECONDARY_TENANT_MODULES="%s"\n' "$ok" >> "${ENV_DIR}/state.env"
+        run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
+        [ "$status" -eq 0 ] || { echo "refused '${ok}': ${output}"; return 1; }
+        [[ "$output" == *"SECONDARY_TENANT_MODULES: "* && "$output" == *"module(s)"* ]] || { echo "$output"; return 1; }
+    done
+    printf 'SECONDARY_TENANT_HOSTS=canary.example.org\nSECONDARY_TENANT_MODULES="content publishing"\n' >> "${ENV_DIR}/app-blue.env"
+    run "$VALIDATE" --env-file "${ENV_DIR}/app-blue.env" --release "$RELEASE"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"SECONDARY_TENANT_MODULES: 2 module(s)"* ]] || { echo "$output"; return 1; }
+}
+
+@test "SECONDARY_TENANT_MODULES: an unknown id, the newsletter manifest id and other ids not yet allowed, a duplicate, a comma list and upper case each fail the validation (exit 1) naming the key by position, without printing the value" {
     secondary_fixture
     printf 'SECONDARY_TENANT_HOSTS=canary.example.org\n' >> "${ENV_DIR}/state.env"
     local bad
-    for bad in 'some-new-module' 'publishing' 'newsletter' 'content' 'messages' 'board' 'files files' 'files,votes' 'Files' 'files some-new-module'; do
+    for bad in 'some-new-module' 'newsletter' 'elections' 'vault' 'messages' 'board' 'files files' 'content content' 'files,votes' 'Files' 'files some-new-module'; do
         printf 'SECONDARY_TENANT_MODULES=%s\n' "$bad" >> "${ENV_DIR}/state.env"
         run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
         [ "$status" -eq 1 ] || { echo "accepted '${bad}': status=${status} ${output}"; return 1; }
