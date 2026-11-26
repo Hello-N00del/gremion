@@ -20,10 +20,13 @@
 #                        it on every run) -> `stalled`, once per distinct heartbeat; skipped
 #                        while the kill switch is present, because automation is then off on
 #                        purpose and the weekly reminder speaks instead.
-#   cd lock held:        "release stuck" = the beat is older than three minutes, OR now is
-#                        past stage start + 1.25 x budget + 120 s (the heartbeat stops itself
-#                        at the same limit, core.sh). A 60 minute build with a live beat is
-#                        not stuck; a hung stage whose beat stopped is.
+#   cd lock held:        "release stuck" = the beat of the HOLDER is older than three minutes, OR
+#                        now is past stage start + 1.25 x budget + 120 s (the heartbeat stops
+#                        itself at the same limit, core.sh). A 60 minute build with a live beat
+#                        is not stuck; a hung stage whose beat stopped is. A beat written by a
+#                        process that does not hold the lock is the previous run's (the
+#                        holder has taken the lock a moment ago): it is judged by the rule for
+#                        an unheld lock instead.
 #   an outbox file older than one hour (on any transport but a stated Stalwart) -> data/cd/ALERT
 #                        and a logger line (cd_alert): the mail path is dead, so no mail can say
 #                        so. The watchdog sends the queue first and judges the age of what is
@@ -126,7 +129,7 @@ _cd_wd_stalled() {
 
 # -- liveness (state-free) ---------------------------------------------------------------
 _cd_wd_liveness() {
-    local now="$1" held=0 hbrc=0 age limit detail="" key
+    local now="$1" held=0 hbrc=0 owner_rc=0 age limit detail="" key
     _cd_wd_lock_held && held=1
     _cd_wd_hb_read || hbrc=$?
     if (( held == 1 )); then
@@ -134,20 +137,31 @@ _cd_wd_liveness() {
             1) _cd_wd_stalled no_heartbeat no_heartbeat 86400 unknown "" ; return 0 ;;
             2) _cd_wd_stalled heartbeat_unreadable heartbeat_unreadable 86400 unknown "" ; return 0 ;;
         esac
-        age=$(( now - HB_EPOCH ))
-        (( age < 0 )) && age=0
-        limit=$(( HB_BUDGET + HB_BUDGET / 4 + 120 ))
-        if (( age > CD_WD_BEAT_STALE_S )); then
-            detail=release_stuck
-            key="stuck-${HB_START}-beat"
-        elif (( now > HB_START + limit )); then
-            detail=release_over_budget
-            key="stuck-${HB_START}-budget"
+        # Whose beat is it? A process that has just taken the lock has not written its own
+        # beat yet, so the file still holds the previous run's. Such a beat says nothing about
+        # the holder: it is neither "stale" nor "over budget" for a run that began a moment
+        # ago, and it falls to the rule for an unheld lock below (it must still be recent, so a
+        # holder that never beats is reported once the old beat is three intervals old). Only
+        # a beat written by the process that holds the lock is judged by the rules here; when
+        # the holder cannot be told (unknown), the beat is judged as it always was.
+        owner_rc=0
+        cd_pid_holds_cd_lock "$HB_PID" || owner_rc=$?
+        if (( owner_rc != 1 )); then
+            age=$(( now - HB_EPOCH ))
+            (( age < 0 )) && age=0
+            limit=$(( HB_BUDGET + HB_BUDGET / 4 + 120 ))
+            if (( age > CD_WD_BEAT_STALE_S )); then
+                detail=release_stuck
+                key="stuck-${HB_START}-beat"
+            elif (( now > HB_START + limit )); then
+                detail=release_over_budget
+                key="stuck-${HB_START}-budget"
+            fi
+            if [[ -n "$detail" ]]; then
+                _cd_wd_stalled "$detail" "$key" "" "$HB_PHASE" "$HB_STAGE" "$(( age / 60 ))"
+            fi
+            return 0
         fi
-        if [[ -n "$detail" ]]; then
-            _cd_wd_stalled "$detail" "$key" "" "$HB_PHASE" "$HB_STAGE" "$(( age / 60 ))"
-        fi
-        return 0
     fi
     # no lock holder: the tick is not running right now, so the heartbeat of its last run
     # must be recent. With the kill switch on and an idle program, automation is off on

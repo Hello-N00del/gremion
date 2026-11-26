@@ -712,6 +712,24 @@ cd_lock_take() {
     return 0
 }
 
+# cd_pid_holds_cd_lock PID -- whom a heartbeat belongs to. 0 when PID is a live process that
+# has the cd lock open on fd 8 (the descriptor cd_lock_take holds the flock on), 1 when it is
+# not: the process has ended, or it is some other process. 2 when that cannot be told (not a
+# pid, no /proc, a process of another user whose descriptors are not readable); the caller
+# then keeps its old judgement. The check reads /proc/PID/fd/8, not the flock: the flock is
+# taken by the `flock` child on the inherited descriptor, so the owner the kernel records
+# for it is that short-lived child and never the program. A holder has the file open from
+# before the flock until it lets go, so there is no gap between "holds the lock" and
+# "can be told from the previous run".
+cd_pid_holds_cd_lock() {
+    local pid="${1:-}" lock="${CD_RUN}/cd.lock"
+    [[ "$pid" =~ ^[0-9]{1,9}$ ]] || return 2
+    [[ -d /proc/self/fd && -e "$lock" ]] || return 2
+    [[ -d "/proc/${pid}" ]] || return 1
+    [[ -r "/proc/${pid}/fd" ]] || return 2
+    [[ -e "/proc/${pid}/fd/8" && "/proc/${pid}/fd/8" -ef "$lock" ]]
+}
+
 # cd_hostlock_take [WAIT_S] -- waits up to WAIT_S seconds (default: none). 0 held, 3 busy.
 # Exports GREMION_HOST_LOCK_HELD=1 while held, so a family program called by CD does not
 # try to take the lock again (a family program must not take it twice).
