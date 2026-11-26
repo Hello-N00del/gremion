@@ -571,18 +571,39 @@ EOF
     [ "$output" = "true" ]
 }
 
-prepare_green_colour() {
-    fake_container c4 gremion-ui-green "gremion-ui-green gremion-public-green" running healthy 0
+# One colour as an install runs it: the UI container, told to call the leaves
+# named in $@, and exactly those leaf services running in the colour's compose
+# project. The other leaves of the catalogue (finance, vault, files, votes,
+# messages, ...) are not part of this install, so nothing of theirs exists to
+# resolve. Called with no argument the colour has no leaf at all.
+fake_leaf() {   # <id> <leaf> <colour>
+    fake_container "$1" "${2}-service-${3}" "${2}-service-${3}" running healthy 0 "" \
+        "{\"com.docker.compose.project\":\"staging-app-${3}\",\"com.docker.compose.service\":\"${2}-service\"}"
+}
+
+green_colour_with_leaves() {   # <leaf>...
+    local leaf n=5 key
+    fake_container c4 gremion-ui-green "gremion-ui-green gremion-public-green" running healthy 0 "" \
+        '{"com.docker.compose.project":"staging-app-green","com.docker.compose.service":"gremion-ui"}'
     {
         printf 'INTERNAL_BASE_URL=http://gremion-ui-green:3000\n'
         printf 'KERNEL_BASE_URL=http://gremion-ui-green:3000\n'
-        printf 'CONTENT_SERVICE_URL=http://content-service-green:8080\n'
+        for leaf in "$@"; do
+            key="$(printf '%s' "$leaf" | tr '[:lower:]' '[:upper:]')"
+            printf '%s_BACKEND=service\n' "$key"
+            printf '%s_SERVICE_URL=http://%s-service-green:8080\n' "$key" "$leaf"
+        done
     } > "${FAKE_DOCKER}/gremion-ui-green.env"
-    local leaf
-    for leaf in content finance files votes messages newsletter calendar board vault; do
+    for leaf in "$@"; do
+        fake_leaf "c${n}" "$leaf" green
+        n=$(( n + 1 ))
         printf '%s-service-green\n' "$leaf" >> "${FAKE_DOCKER}/gremion-ui-green.hosts"
     done
     fake_http "http://127.0.0.1:8081/whoami" 200 "colour=green xfh=example.org"
+}
+
+prepare_green_colour() {
+    green_colour_with_leaves content calendar board
 }
 
 @test "--colour verifies the inactive colour end to end" {
@@ -600,13 +621,90 @@ prepare_green_colour() {
     [[ "$output" == *"INTERNAL_BASE_URL is not http://gremion-ui-green:3000"* ]]
 }
 
-@test "--colour fails when a leaf alias does not resolve to that colour" {
+@test "--colour checks the leaves the colour runs and calls, not a fixed list" {
     prepare_green_colour
-    grep -v '^finance-service-green$' "${FAKE_DOCKER}/gremion-ui-green.hosts" > "${FAKE_DOCKER}/h" || true
+    run "$VERIFY" --colour green --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"leaf services checked: board calendar content"* ]]
+}
+
+@test "--colour does not ask for leaves that are not part of the install" {
+    prepare_green_colour
+    run "$VERIFY" --colour green --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"all checks passed"* ]]
+    [[ "$output" != *"finance-service-green"* ]] || { echo "$output"; return 1; }
+    [[ "$output" != *"vault-service-green"* ]] || { echo "$output"; return 1; }
+}
+
+@test "--colour fails naming the env key when a leaf the app calls does not resolve" {
+    prepare_green_colour
+    grep -v '^calendar-service-green$' "${FAKE_DOCKER}/gremion-ui-green.hosts" > "${FAKE_DOCKER}/h" || true
     mv "${FAKE_DOCKER}/h" "${FAKE_DOCKER}/gremion-ui-green.hosts"
     run "$VERIFY" --colour green --hosts "$HOSTS"
     [ "$status" -eq 1 ]
+    [[ "$output" == *"calendar-service-green does not resolve"* ]]
+    [[ "$output" == *"CALENDAR_SERVICE_URL"* ]]
+}
+
+@test "--colour fails naming the env key when the app calls a leaf that is not in the project" {
+    prepare_green_colour
+    printf 'NEWSLETTER_SERVICE_URL=http://newsletter-service-green:8080\n' \
+        >> "${FAKE_DOCKER}/gremion-ui-green.env"
+    run "$VERIFY" --colour green --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"newsletter-service-green does not resolve"* ]]
+    [[ "$output" == *"NEWSLETTER_SERVICE_URL"* ]]
+}
+
+@test "--colour fails naming the backend key when a service backend has no leaf URL" {
+    prepare_green_colour
+    printf 'NEWSLETTER_BACKEND=service\n' >> "${FAKE_DOCKER}/gremion-ui-green.env"
+    run "$VERIFY" --colour green --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"newsletter-service-green does not resolve"* ]]
+    [[ "$output" == *"NEWSLETTER_BACKEND"* ]]
+}
+
+@test "--colour fails when a leaf running in the colour's project does not resolve" {
+    prepare_green_colour
+    fake_leaf c20 votes green
+    run "$VERIFY" --colour green --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"votes-service-green does not resolve"* ]]
+    [[ "$output" == *"compose service votes-service"* ]]
+}
+
+@test "--colour ignores a leaf container of the other colour's project" {
+    prepare_green_colour
+    fake_container c21 votes-service-blue votes-service-blue running healthy 0 "" \
+        '{"com.docker.compose.project":"staging-app-blue","com.docker.compose.service":"votes-service"}'
+    run "$VERIFY" --colour green --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+}
+
+@test "--colour honours an explicit GREMION_LEAVES instead of deriving the list" {
+    prepare_green_colour
+    export GREMION_LEAVES="content finance"
+    run "$VERIFY" --colour green --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
     [[ "$output" == *"finance-service-green does not resolve"* ]]
+    [[ "$output" == *"GREMION_LEAVES"* ]]
+}
+
+@test "--colour with an explicit GREMION_LEAVES that all resolve passes" {
+    prepare_green_colour
+    export GREMION_LEAVES="content"
+    run "$VERIFY" --colour green --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"leaf services checked: content"* ]]
+}
+
+@test "--colour with no leaf configured checks no leaf and says so" {
+    green_colour_with_leaves
+    run "$VERIFY" --colour green --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"no leaf service is configured or running"* ]]
 }
 
 @test "--colour fails when an internal URL names the public domain" {
