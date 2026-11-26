@@ -207,8 +207,10 @@ class MatrixClient {
     if (!verified.ok) {
       if (verified.reason === 'keys_unavailable') {
         // Not a forged token: the customer's key set could not be read. Chat is unavailable until it can; the
-        // cause (tenant id, jose error code; never the token) goes to the server log.
-        console.error(`[chat-identity] chat refused: key set of tenant ${tenant.id} unavailable (${verified.code})`)
+        // cause (tenant id, error code and the short reason the verifier hands back; never the token) goes to
+        // the server log.
+        const reason = verified.detail ? `: ${verified.detail}` : ''
+        console.error(`[chat-identity] chat refused: key set of tenant ${tenant.id} unavailable (${verified.code}${reason})`)
         throw error(503, CHAT_UNAVAILABLE)
       }
       throw error(403, 'Die Anmeldung konnte nicht bestätigt werden.')

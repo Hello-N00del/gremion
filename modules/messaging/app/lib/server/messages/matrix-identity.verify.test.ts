@@ -76,7 +76,10 @@ beforeEach(async () => {
       const raw = input instanceof Request ? input.url : String(input)
       if (raw === KEY_URL) {
         keyRequests++
-        if (keyEndpoint === 'unreachable') throw new TypeError('fetch failed')
+        // What undici throws for a refused connection: the reason is only in `cause.code`.
+        if (keyEndpoint === 'unreachable') {
+          throw new TypeError('fetch failed', { cause: Object.assign(new Error('connect ECONNREFUSED 10.0.0.9:8443'), { code: 'ECONNREFUSED' }) })
+        }
         if (keyEndpoint === 'down') return new Response('unavailable', { status: 500 })
         return Response.json({ keys: [ownJwk] })
       }
@@ -200,7 +203,7 @@ describe('an unreachable key set is told apart from a forged token', () => {
     keyEndpoint = 'unreachable'
     await expect(mint(await sign(own))).rejects.toMatchObject({ status: 503 })
     expect(adminCalls()).toEqual([])
-    expect(logged.some((l) => l.includes('tid-acme') && l.includes('TypeError'))).toBe(true)
+    expect(logged.some((l) => l.includes('tid-acme') && l.includes('TypeError') && l.includes('ECONNREFUSED'))).toBe(true)
   })
 
   test('with the key endpoint up again the same token is exchanged: an outage is not remembered', async () => {
