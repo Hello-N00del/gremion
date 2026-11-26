@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@gremion/ports": "workspace:*",
+    "@gremion/tenant-store": "workspace:*",
     "@nats-io/jetstream": "^3.4.0",
     "@nats-io/nats-core": "^3.4.0",
     "@nats-io/transport-node": "^3.4.0",
