@@ -25,6 +25,13 @@ export interface MemberOption {
   name: string
 }
 
+/** A stack as the card editor's "Verschieben nach" select lists it; `end` = the next free position at its foot. */
+export interface StackOption {
+  id: string
+  name: string
+  end: number
+}
+
 export interface StackView {
   id: string
   name: string

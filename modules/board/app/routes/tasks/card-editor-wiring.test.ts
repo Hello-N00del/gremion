@@ -17,6 +17,16 @@ describe('the tasks page opens a card for editing', () => {
     expect(page).toMatch(/<CardEditor[\s\S]*?boardId=\{deck\.board\.id\}/)
   })
 
+  it('hands the editor the board\'s stacks, with the free position at the foot of each, for the keyboard move', () => {
+    expect(page).toMatch(/<CardEditor[\s\S]*?stacks=\{editorStacks\}/)
+    const body = /const editorStacks = \$derived\(([\s\S]*?)\n {2}\)/.exec(page)?.[1]
+    expect(body).toBeDefined()
+    expect(body).toContain('deck?.stacks')
+    expect(body).toMatch(/sort_order \+ 1/)
+    // the card being edited does not count towards the foot of its own stack
+    expect(body).toMatch(/c\.id !== editing\?\.id/)
+  })
+
   it('reloads the board after a save, so the card is re-rendered from the server, and closes the editor', () => {
     const body = /async function onCardSaved\(\) \{([\s\S]*?)\n {2}\}/.exec(page)?.[1]
     expect(body).toBeDefined()

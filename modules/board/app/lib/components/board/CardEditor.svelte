@@ -1,21 +1,26 @@
 <script lang="ts">
   import Icon from '$lib/components/ui/Icon.svelte'
   import DateFieldDe from './DateFieldDe.svelte'
-  import type { CardView, MemberOption } from './types'
+  import type { CardView, MemberOption, StackOption } from './types'
 
   // Detail editor for one card: title, description, assignee (a member of the board's own
   // committee) and due date. It sends only what the member changed, through the existing PATCH on
   // the cards route; the server applies the same gate as a move and re-checks the assignee.
+  // The same dialog moves the card to another stack (the keyboard alternative to dragging) and
+  // deletes it, after a confirmation; both go through the same gate as an edit.
   let {
     boardId,
     card,
     members,
+    stacks = [],
     onclose,
     onsaved,
   }: {
     boardId: string
     card: CardView
     members: readonly MemberOption[]
+    /** The board's stacks in order; `end` is the next free position at the foot of the stack (the card itself not counted). */
+    stacks?: readonly StackOption[]
     onclose: () => void
     onsaved: () => void
   } = $props()
@@ -24,7 +29,8 @@
 
   // The page mounts one editor per card (keyed), so seeding from the props once is right.
   /* svelte-ignore state_referenced_locally */
-  const initial = {
+  let initial = {
+    stackId: card.stack_id,
     title: card.title,
     description: card.description ?? '',
     // Someone who left the committee is still the assignee, but is no picker entry: this value
@@ -32,6 +38,8 @@
     assignee: card.assignee_id ?? (card.assignee_name ? KEEP : ''),
     dueDate: card.due_date ?? '',
   }
+  // The assignee who left the committee stays listed for as long as the editor is open.
+  const leftCommittee = initial.assignee === KEEP
   let title = $state(initial.title)
   let description = $state(initial.description)
   let assignee = $state(initial.assignee)
@@ -40,6 +48,40 @@
   let dueInvalid = $state(false)
   let busy = $state(false)
   let error = $state<string | null>(null)
+  let stackId = $state(initial.stackId)
+  let confirmingDelete = $state(false)
+  // Something was written already (an edit whose move then failed): closing must reload the board.
+  let dirty = false
+
+  function close() {
+    if (dirty) onsaved()
+    else onclose()
+  }
+
+  const errorOf = async (res: Response): Promise<string | null> =>
+    res.status === 400 ? ((await res.json().catch(() => null)) as { message?: string } | null)?.message ?? null : null
+
+  async function remove() {
+    error = null
+    busy = true
+    try {
+      const res = await fetch(`/api/board/${boardId}/cards?cardId=${encodeURIComponent(card.id)}`, { method: 'DELETE' })
+      // A card that is gone already is as good as deleted.
+      if (res.ok || res.status === 404) {
+        onsaved()
+        return
+      }
+      error =
+        res.status === 403
+          ? 'Die Karte kann nicht gelöscht werden. Bitte lade die Seite neu.'
+          : 'Die Karte konnte nicht gelöscht werden. Bitte versuche es noch einmal.'
+    } catch {
+      error = 'Die Karte konnte nicht gelöscht werden. Bitte prüfe die Verbindung und versuche es noch einmal.'
+    } finally {
+      busy = false
+      confirmingDelete = false
+    }
+  }
 
   async function save() {
     error = null
@@ -58,27 +100,47 @@
     if (assignee !== initial.assignee) body.assigneeKeycloakId = assignee === '' ? null : assignee
     // the date field shows German order and binds the ISO day (YYYY-MM-DD), '' for an empty field
     if (dueDate !== initial.dueDate) body.dueDate = dueDate === '' ? null : dueDate
-    if (Object.keys(body).length === 1) {
-      onclose()
+    const moved = stackId !== initial.stackId
+    if (Object.keys(body).length === 1 && !moved) {
+      close()
       return
     }
     busy = true
     try {
-      const res = await fetch(`/api/board/${boardId}/cards`, {
-        method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-      })
-      if (res.ok) {
-        onsaved()
-        return
+      // The route reads a body that names a stack as a move, so an edit and a move are two requests.
+      if (Object.keys(body).length > 1) {
+        const res = await fetch(`/api/board/${boardId}/cards`, {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        })
+        if (!res.ok) {
+          error =
+            (await errorOf(res)) ??
+            (res.status === 403 || res.status === 404
+              ? 'Die Karte kann nicht mehr bearbeitet werden. Bitte lade die Seite neu.'
+              : 'Die Karte konnte nicht gespeichert werden. Bitte versuche es noch einmal.')
+          return
+        }
+        // What was saved is the new baseline: a retry of a failed move must not send it again.
+        dirty = true
+        initial = { ...initial, title: cleanTitle, description, assignee, dueDate }
       }
-      const reason = res.status === 400 ? ((await res.json().catch(() => null)) as { message?: string } | null)?.message : null
-      error =
-        reason ??
-        (res.status === 403 || res.status === 404
-          ? 'Die Karte kann nicht mehr bearbeitet werden. Bitte lade die Seite neu.'
-          : 'Die Karte konnte nicht gespeichert werden. Bitte versuche es noch einmal.')
+      if (moved) {
+        const end = stacks.find((s) => s.id === stackId)?.end ?? 0
+        const res = await fetch(`/api/board/${boardId}/cards`, {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ cardId: card.id, stackId, order: end }),
+        })
+        if (!res.ok) {
+          error = dirty
+            ? 'Die Änderungen sind gespeichert, aber die Karte konnte nicht verschoben werden. Bitte versuche es noch einmal.'
+            : 'Die Karte konnte nicht verschoben werden. Bitte versuche es noch einmal.'
+          return
+        }
+      }
+      onsaved()
     } catch {
       error = 'Die Karte konnte nicht gespeichert werden. Bitte prüfe die Verbindung und versuche es noch einmal.'
     } finally {
@@ -97,7 +159,7 @@
   const FOCUSABLE = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href]'
   function keepFocusInside(e: KeyboardEvent) {
     if (e.key === 'Escape') {
-      onclose()
+      close()
       return
     }
     if (e.key !== 'Tab') return
@@ -117,7 +179,7 @@
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-<div class="dialog-backdrop" onclick={(e) => e.target === e.currentTarget && onclose()}>
+<div class="dialog-backdrop" onclick={(e) => e.target === e.currentTarget && close()}>
   <div
     class="dialog"
     role="dialog"
@@ -131,7 +193,7 @@
         <div class="eyebrow">Aufgabe</div>
         <h3 id="card-editor-title">Karte bearbeiten</h3>
       </div>
-      <button type="button" class="dlg-close" onclick={onclose} aria-label="Schließen"><Icon name="x" size={16} /></button>
+      <button type="button" class="dlg-close" onclick={close} aria-label="Schließen"><Icon name="x" size={16} /></button>
     </div>
 
     <form
@@ -154,7 +216,7 @@
           <span class="lbl">Zuständig</span>
           <select bind:value={assignee}>
             <option value="">Niemand</option>
-            {#if initial.assignee === KEEP}
+            {#if leftCommittee}
               <option value={KEEP}>{card.assignee_name} (nicht mehr im Gremium)</option>
             {/if}
             {#each members as m (m.id)}
@@ -168,10 +230,31 @@
           <DateFieldDe id="card-editor-due" label="Fälligkeit" bind:value={dueDate} bind:invalid={dueInvalid} />
         </div>
       </div>
+      {#if stacks.length > 1}
+        <label class="field">
+          <span class="lbl">Verschieben nach</span>
+          <select bind:value={stackId}>
+            {#each stacks as s (s.id)}
+              <option value={s.id}>{s.name}</option>
+            {/each}
+          </select>
+        </label>
+      {/if}
+      <div class="danger">
+        {#if confirmingDelete}
+          <p class="danger-note">Die Karte wird endgültig gelöscht. Das lässt sich nicht rückgängig machen.</p>
+          <div class="actions">
+            <button type="button" class="btn btn-sm btn-danger" disabled={busy} onclick={remove}>Endgültig löschen</button>
+            <button type="button" class="btn btn-ghost btn-sm" onclick={() => (confirmingDelete = false)}>Nicht löschen</button>
+          </div>
+        {:else}
+          <button type="button" class="btn btn-ghost btn-sm" disabled={busy} onclick={() => (confirmingDelete = true)}>Karte löschen</button>
+        {/if}
+      </div>
       {#if error}<p class="err" role="alert">{error}</p>{/if}
       <div class="actions">
         <button type="submit" class="btn btn-primary btn-sm" disabled={busy}>{busy ? 'Speichern …' : 'Speichern'}</button>
-        <button type="button" class="btn btn-ghost btn-sm" onclick={onclose}>Abbrechen</button>
+        <button type="button" class="btn btn-ghost btn-sm" onclick={close}>Abbrechen</button>
       </div>
     </form>
   </div>
@@ -258,6 +341,20 @@
   .actions {
     display: flex;
     gap: 8px;
+  }
+  .danger {
+    border-top: 1px solid var(--border);
+    padding-top: 12px;
+  }
+  .danger-note {
+    margin: 0 0 8px;
+    font-size: 13px;
+    color: var(--ink-muted);
+  }
+  .btn-danger {
+    color: #fff;
+    background: var(--rust);
+    border-color: var(--rust);
   }
   .err {
     color: var(--rust);

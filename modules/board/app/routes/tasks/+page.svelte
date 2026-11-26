@@ -31,6 +31,19 @@
   // The card open in the detail editor (null = closed).
   let editing = $state<CardView | null>(null)
 
+  // The stacks as the editor's "Verschieben nach" select offers them: `end` is the next free
+  // position at the foot of each stack, the card being edited not counted.
+  const editorStacks = $derived(
+    (deck?.stacks ?? []).map((s) => ({
+      id: s.id,
+      name: s.name,
+      end: (deck?.cards ?? []).reduce(
+        (end, c) => (c.stack_id === s.id && c.id !== editing?.id ? Math.max(end, c.sort_order + 1) : end),
+        0,
+      ),
+    })),
+  )
+
   const selectedBoardId = $derived(data.deck?.board.id ?? null)
 
   // Terminal "done" stacks (status === stack) — excluded from overdue / open
@@ -210,6 +223,7 @@
       boardId={deck.board.id}
       card={editing}
       members={data.members}
+      stacks={editorStacks}
       onclose={() => (editing = null)}
       onsaved={onCardSaved}
     />
