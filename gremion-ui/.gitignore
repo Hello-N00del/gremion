@@ -36,6 +36,7 @@ src/lib/i18n/paraglide/
 /src/lib/server/calendar/
 /src/lib/components/calendar/
 /src/lib/stores/calendar.ts
+/src/lib/stores/date-param.*
 /src/lib/modules/manifests/calendar.*
 /src/lib/server/seed/seed-calendar.ts
 /src/lib/server/events/calendar-audit-consumer.*
