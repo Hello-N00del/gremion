@@ -126,19 +126,24 @@ Honest labelling, because the proof kinds differ:
 So the recorded evidence supports enabling the modules for a **single-customer
 install**. It does not show that a second customer could be added to a running
 installation, and it must not be cited for that. Two things sit beside it for the
-second customer, and neither feeds the enable gate:
+second customer:
 
 - the messaging case file (`tenant-isolation.test.ts`) also runs two customers
   on ONE shared homeserver in the namespaced identity (`MATRIX_IDENTITY`), still
-  against the recording fake Synapse: the same unit name and the same username in
-  both customers give two rooms and two accounts, a room found behind an alias is
-  adopted only with the customer's own marker, room administration derives the
-  same aliases provisioning gave, meeting rooms and Karenz are per customer, and a
-  token of one customer is refused in the other's scope;
-- `gremion-isolation-live`, the probe of the RUNNING stack below. It does not
-  replace the `fake-upstream-app` proofs and is not a gate input: it is a report
-  an operator reads, and a host run of it on the install that uses a second
-  customer is still owed. Nothing in this repository records one.
+  against the recording fake Synapse. These cases are part of the recorded
+  messaging case and feed the enable gate: the producer runs the whole file with no
+  name filter, the cases carry no skip, and `passed == collected` covers them. They
+  show app-layer behaviour against the fake, not Synapse's own authorisation. The
+  same unit name and the same username in both customers give two rooms and two
+  accounts, a room found behind an alias is adopted only with the customer's own
+  marker, room administration derives the same aliases provisioning gave, meeting
+  rooms and Karenz are per customer, and a token of one customer is refused in the
+  other's scope;
+- `gremion-isolation-live`, the probe of the RUNNING stack below. It is the only
+  one of the two outside the gate: it does not replace the `fake-upstream-app`
+  proofs and is not a gate input. It is a report an operator reads, and a host run
+  of it on the install that uses a second customer is still owed. Nothing in this
+  repository records one.
 
 ## The live probe: two customers on the running stack
 
@@ -154,7 +159,8 @@ folder, a poll and a calendar event titled `isoprobe-<slug>`; the header of
 fixture user in both realms, through the public edge and the in-network
 services, in both directions. It sets a password on the fixture user and creates
 a temporary direct-grant client per realm, and deletes the clients on every exit
-path; no secret is on an argv. It writes nothing into the other customer: a
+path it can run on (normal end, error, INT, TERM); after a SIGKILL nothing runs, so
+any `isoprobe-*` client left behind must be deleted by hand; no secret is on an argv. It writes nothing into the other customer: a
 refused write cannot be told from a successful one without trying it, so writes
 are not attempted.
 
