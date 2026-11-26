@@ -24,9 +24,9 @@ set -euo pipefail
 # an interrupted folder):
 #   1. renames the mount point to "<current mount point> (<key>)"; the name members are shown is the
 #      unit's, the app strips the key again;
-#   2. creates the group "ou-<key>-<unit id>", copies the members of the old group into it (only the
-#      unit's own roster when the old group is shared by several folders), and grants it on the folder
-#      with the permission bits of the old group;
+#   2. creates the group "ou-<key>-<unit id>", copies the members of the old group into it (only those on
+#      the unit's roster when more than one folder carries the old group, or the unit id occurs in more
+#      than one customer), and grants it on the folder with the permission bits of the old group;
 #   3. points the ledger and the Karenz binding at "<folder id>:<new group>" in ONE transaction;
 #   4. takes the old group off the folder and deletes it, unless another folder still uses it.
 # The folder id never changes, so nothing is moved or copied in Nextcloud: the files stay where they are.
@@ -35,8 +35,8 @@ set -euo pipefail
 #
 # BACKUP. --apply is refused without --backed-up: take `gremion-backup` first (it holds the kernel
 # databases and the Nextcloud data), then pass the flag. Before the first change this program also writes
-# the state it is about to change (folder list, the members of every old group, the ledger refs) to
-# <root>/runtime/files-namespace/<UTC time>.json, mode 0600: the way back for the Nextcloud side.
+# the group folder list as it is (id, mount point, groups with their permission bits) to
+# <root>/runtime/files-namespace/<UTC time>.json, mode 0600: a record of the old names and groups.
 # --apply writes an access record (oac.access_record) per customer BEFORE it touches that customer, and
 # takes runtime/hostd.lock so no deploy, switch or request runs beside it.
 #
@@ -124,8 +124,9 @@ nc_api() {
     local method="$1" path="$2" body="${3:-}"
     local -a data=()
     [[ -z "$body" ]] || data=(--data "$body")
-    docker exec "$NC" sh -c 'exec curl -sS --max-time 60 -u "$NEXTCLOUD_ADMIN_USER:$NEXTCLOUD_ADMIN_PASSWORD" -H "OCS-APIRequest: true" -H "Accept: application/json" "$@"' \
-        sh -X "$method" ${data[@]+"${data[@]}"} "http://localhost${path}"
+    # Host: nextcloud, the trusted domain the container's own healthcheck uses (http://127.0.0.1 inside it)
+    docker exec "$NC" sh -c 'exec curl -sS --max-time 60 -u "$NEXTCLOUD_ADMIN_USER:$NEXTCLOUD_ADMIN_PASSWORD" -H "Host: nextcloud" -H "OCS-APIRequest: true" -H "Accept: application/json" "$@"' \
+        sh -X "$method" ${data[@]+"${data[@]}"} "http://127.0.0.1${path}"
 }
 
 # ocs_ok <json> [extra status code ...] -- the answer is an OCS envelope with status 100 or 200 (or one of
@@ -299,8 +300,8 @@ process_ref() {
 }
 
 # copy_members <kernel db> <unit> <old group> <new group> <folders sharing the old group> -- the members of the
-# old group into the new one. A shared old group (two customers' folders carried it) holds people of other
-# customers: then only this unit's roster is copied, and the rest stay where they are. Read back afterwards.
+# old group into the new one. When the old group is carried by several folders or the unit id occurs in
+# several customers, only the members on this unit's roster are copied. Read back afterwards.
 copy_members() {
     local kdb="$1" unit="$2" old="$3" new="$4" shared="$5" uid roster="" missing=0 listed
     local -a want=()
@@ -338,8 +339,8 @@ begin_backup() {
 }
 
 # What pass 1 learned about each customer (keyed by slug), and how many customers a unit id appears in.
-# A unit id that two customers share (a seeded unit has the same id everywhere) means the legacy group
-# "ou-<unit id>" holds people of both: the group is then split by roster, whichever customer is moved first.
+# When a unit id occurs in more than one customer, the old group "ou-<unit id>" is copied by each unit's
+# roster, whichever customer is moved first.
 declare -A T_ID=() T_KEY=() T_DB=() T_REFS=() T_KARENZ=() T_ERR=()
 declare -A UNIT_TENANTS=()
 TENANT_SLUGS=()

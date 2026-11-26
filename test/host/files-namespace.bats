@@ -292,7 +292,7 @@ group_gone() {
     [[ "$output" == *"PLAN beta unit ${UB1} folder 14"* ]]
 }
 
-@test "a group shared by two customers' folders (a seeded unit) is split by roster and deleted only after the last one" {
+@test "a group carried by two customers' folders is copied by roster and deleted only after the last one" {
     SEED='aaaaaaaa-0000-0000-0000-000000000002'
     jq --arg g "ou-${SEED}" '. + [{"id": 20, "mount_point": "Vorstand (Demo)", "groups": {($g): 31}}]' "$FAKE/folders.json" > "$FAKE/f.tmp" && mv "$FAKE/f.tmp" "$FAKE/folders.json"
     jq --arg g "ou-${SEED}" '. + [{"id": 21, "mount_point": "Gremium (Demo)", "groups": {($g): 31}}]' "$FAKE/folders.json" > "$FAKE/f.tmp" && mv "$FAKE/f.tmp" "$FAKE/folders.json"

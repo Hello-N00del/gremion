@@ -55,7 +55,7 @@ nc() {
             *) url="$1"; shift ;;
         esac
     done
-    local path="${url#http://localhost}" bare="${url#http://localhost}"
+    local path="${url#http://127.0.0.1}" bare="${url#http://127.0.0.1}"
     bare="${bare%%\?*}"
     [[ "$method" == GET ]] || printf '%s %s %s\n' "$method" "$bare" "$body" >> "$FAKE/nc-changes.log"
     local id gid uid val

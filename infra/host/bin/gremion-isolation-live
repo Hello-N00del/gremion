@@ -174,6 +174,10 @@ NC_URL="${GREMION_ISOLATION_NC_URL:-http://nextcloud}"
 NO_BEARER=",${GREMION_ISOLATION_NO_BEARER:-},"
 ADMIN_CLIENT="gremion-admin"
 UNIT="isoprobe"
+# MP[x]: the mount point of the unit folder as customer x's probe user reaches it. A folder made since the
+# customer namespace is "<UNIT> (<key>)", one made before it "<UNIT>": resolve_mounts reads which, by the groups
+# of the probe user (never by name alone); until then, and when it cannot tell, it is the unit name.
+MP=("$UNIT" "$UNIT")
 PROBE_USER="isoprobe"
 USER_RE='^isoprobe[a-z0-9._-]{0,30}$'
 UNIT_RE='^[A-Za-z0-9][A-Za-z0-9._-]{0,59}$'
@@ -299,6 +303,29 @@ http_edge() {
 }
 
 nc_occ() { docker exec -u www-data "$NC" php occ "$@"; }
+
+# enc_seg <text> -- one path segment, percent-encoded (a mount point may hold a space and parentheses).
+enc_seg() { jq -rn --arg v "$1" '$v | @uri'; }
+
+# resolve_mounts -- MP[x] for both customers: the mount point of the ONE folder named UNIT (or "UNIT (<key>)")
+# that the probe user's groups carry. Silent: sec_files reports the folder identity itself. A customer it
+# cannot resolve keeps the unit name.
+resolve_mounts() {
+    local x folders gj ug mp
+    MP=("$UNIT" "$UNIT")
+    folders="$(nc_occ groupfolders:list --output=json 2>/dev/null)" || return 0
+    jq -e 'type == "array"' <<< "$folders" >/dev/null 2>&1 || return 0
+    for x in 0 1; do
+        gj="$(nc_occ user:info "${SUB[$x]}" --output=json 2>/dev/null)" || continue
+        ug="$(jq -c '.groups // []' <<< "$gj" 2>/dev/null)" || continue
+        mp="$(jq -r --arg u "$UNIT" --argjson ug "$ug" '
+            def gids: (.groups // {}) | if type == "object" then keys elif type == "array" then map(if type == "object" then (.gid // .group_id // .id // empty) else (.) end) else [] end;
+            [.[] | select(((.mount_point // "" | ltrimstr("/")) as $m | $m == $u or ($m | startswith($u + " ("))))
+                 | select((gids) as $g | (($g - ($g - $ug)) | length) > 0)
+                 | (.mount_point | ltrimstr("/"))] | unique | if length == 1 then .[0] else empty end' <<< "$folders" 2>/dev/null)" || continue
+        if [[ -n "$mp" ]]; then MP[x]="$mp"; fi
+    done
+}
 
 jwt_payload() {   # <token> -> the claims as JSON
     local p pad
@@ -544,9 +571,10 @@ sec_files() {
     sec_begin files
     FILE_FIXTURE=(3 3)   # 3: not established (the section's own control failed: office probes anyway)
     if no_bearer files; then s_ne "the files route takes no Bearer on this release"; FILE_FIXTURE=(2 2); sec_end; return 0; fi
+    resolve_mounts
     for x in 0 1; do
         y=$((1 - x))
-        api_get "$x" "/api/files/${UNIT}"
+        api_get "$x" "/api/files/$(enc_seg "${MP[$x]:-$UNIT}")"
         if own_ok "${SLUG[$x]}: own unit folder listing"; then
             if jq -e --arg n "isoprobe-${SLUG[$x]}.odt" 'any(.files[]?; ((.name // .path // "") | endswith($n)))' <<< "$R_BODY" >/dev/null 2>&1; then
                 FILE_FIXTURE[x]=1; rdy[x]=1
@@ -564,21 +592,21 @@ sec_files() {
     for x in 0 1; do
         y=$((1 - x))
         (( rdy[x] == 1 )) || continue
-        api_get "$x" "/api/files/${UNIT}/isoprobe-${SLUG[$x]}.odt"
+        api_get "$x" "/api/files/$(enc_seg "${MP[$x]:-$UNIT}")/isoprobe-${SLUG[$x]}.odt"
         own_ok "${SLUG[$x]}: own file" || continue
         # WebDAV with the bearer on the own user root, then on the other customer's
         cfg_reset; cfg_bearer "${TOK[$x]}"
-        http_net PROPFIND "${NC_URL}/remote.php/dav/files/${SUB[$x]}/${UNIT}/" -H 'Depth: 1'
+        http_net PROPFIND "${NC_URL}/remote.php/dav/files/${SUB[$x]}/$(enc_seg "${MP[$x]:-$UNIT}")/" -H 'Depth: 1'
         case "$R_CODE" in
             200|207) ;;
             *) s_fail "${SLUG[$x]}: own folder over WebDAV answered ${R_CODE}, not 207 (positive control failed)"; continue ;;
         esac
         cfg_reset; cfg_bearer "${TOK[$x]}"
-        http_net PROPFIND "${NC_URL}/remote.php/dav/files/${SUB[$y]}/${UNIT}/" -H 'Depth: 1'
+        http_net PROPFIND "${NC_URL}/remote.php/dav/files/${SUB[$y]}/$(enc_seg "${MP[$y]:-$UNIT}")/" -H 'Depth: 1'
         if expect_code "$(dir_label "$x"): ${SLUG[$y]}'s user root over WebDAV with ${SLUG[$x]}'s bearer" 403 404; then
             s_ok "$(dir_label "$x"): the other customer's user root over WebDAV ${R_CODE}"
         fi
-        api_get "$x" "/api/files/${UNIT}/isoprobe-${SLUG[$y]}.odt"
+        api_get "$x" "/api/files/$(enc_seg "${MP[$x]:-$UNIT}")/isoprobe-${SLUG[$y]}.odt"
         if expect_code "$(dir_label "$x"): ${SLUG[$y]}'s file through the app API on ${SLUG[$x]}'s host" 403 404; then
             s_ok "$(dir_label "$x"): the other customer's file through the app API ${R_CODE}"
         fi
@@ -595,7 +623,7 @@ sec_files() {
         fi
         ids="$(jq -c --arg u "$UNIT" --argjson ug "${ug[$x]}" '
             def gids: (.groups // {}) | if type == "object" then keys elif type == "array" then map(if type == "object" then (.gid // .group_id // .id // empty) else (.) end) else [] end;
-            [.[] | select((.mount_point // "" | ltrimstr("/")) == $u)
+            [.[] | select(((.mount_point // "" | ltrimstr("/")) as $m | $m == $u or ($m | startswith($u + " ("))))
                  | select((gids) as $g | (($g - ($g - $ug)) | length) > 0)
                  | .id] | unique' <<< "$folders" 2>/dev/null || echo '[]')"
         n="$(jq 'length' <<< "$ids")"
@@ -625,7 +653,7 @@ sec_office() {
             0) s_nr "${SLUG[$x]}: the fixture file isoprobe-${SLUG[$x]}.odt is not readable (see files)"; continue ;;
             2) s_ne "${SLUG[$x]}: the files route is not usable for this customer (module off, or no Bearer on this release)"; continue ;;
         esac
-        api_get "$x" "/api/files/edit-token/${UNIT}/isoprobe-${SLUG[$x]}.odt"
+        api_get "$x" "/api/files/edit-token/$(enc_seg "${MP[$x]:-$UNIT}")/isoprobe-${SLUG[$x]}.odt"
         own_ok "${SLUG[$x]}: own editor URL" || continue
         # a body that is no JSON (a proxy page) leaves the origin empty, which FAILS below: never a stop
         origin="$(jq -r '.editorUrl // ""' <<< "$R_BODY" 2>/dev/null | sed -E 's#^(https?://[^/]+).*#\1#' || true)"
@@ -634,7 +662,7 @@ sec_office() {
             s_fail "${SLUG[$x]}: the own editor URL's origin is '${origin}', not ${want}"
             continue
         fi
-        api_get "$x" "/api/files/edit-token/${UNIT}/isoprobe-${SLUG[$y]}.odt"
+        api_get "$x" "/api/files/edit-token/$(enc_seg "${MP[$x]:-$UNIT}")/isoprobe-${SLUG[$y]}.odt"
         if [[ "$R_CODE" == 5?? ]]; then
             # a 500 or 502 for a file the own root lacks: the route does not map Nextcloud's 404 and 403 yet
             s_fail "$(dir_label "$x"): the editor URL for ${SLUG[$y]}'s file answered ${R_CODE}: this release lacks the error mapping of the edit-token route (a missing document must answer 404, a refused one 403), so the denial cannot be shown; the section PASSes only on a release that ships it"

@@ -440,6 +440,17 @@ all_sections_pass() {
     assert_recorded docker 'user:info sub-beta-fox'
 }
 
+@test "files: a folder made since the customer namespace (mount point '<unit> (<key>)') is reached by that mount point and PASSes; the office section follows" {
+    sw_on namespaced
+    probe "$A" "$B"
+    [ "$status" -eq 0 ]
+    section_is files PASS
+    section_is office PASS
+    # the paths asked for carry the percent-encoded mount point (a space and a key) of the caller's own customer
+    assert_recorded curl "https://alpha.example.org/api/files/isoprobe%20"
+    assert_recorded curl "https://beta.example.org/api/files/edit-token/isoprobe%20"
+}
+
 @test "files: both customers resolving to ONE folder id FAILS (the folder is shared)" {
     sw_on shared-folder
     probe "$A" "$B"

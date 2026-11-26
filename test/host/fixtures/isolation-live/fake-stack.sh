@@ -19,6 +19,12 @@ HA="${FAKE_HOST_A:-alpha.example.org}"
 HB="${FAKE_HOST_B:-beta.example.org}"
 
 sw() { [[ -f "$D/sw/$1" ]]; }
+# The mount point of a customer's unit folder: the plain unit name, or with the sw/namespaced switch what a folder
+# made since the customer namespace is called, "<unit> (<key>)" with a key of that customer.
+mount_of() {
+    if sw namespaced; then printf '%s (key%s)' "$UNIT" "$(printf '%s' "$1" | cksum | cut -d' ' -f1)"; else printf '%s' "$UNIT"; fi
+}
+mount_enc() { jq -rn --arg v "$(mount_of "$1")" '$v | @uri'; }
 other() { if [[ "$1" == "$A" ]]; then printf '%s' "$B"; else printf '%s' "$A"; fi; }
 realm_of_host() {
     case "$1" in
@@ -224,16 +230,16 @@ route_customer() { # host method path bearer data
             elif sw polls-open; then reply 200 '{"success":true,"data":{}}'
             elif sw polls-500; then reply 500 '{}'
             else reply 404 '{"success":false,"error":"Poll unavailable"}'; fi ;;
-        "GET /api/files/${UNIT}")
-            fl="{\"path\":\"${UNIT}/isoprobe-${s}.odt\",\"name\":\"isoprobe-${s}.odt\",\"is_dir\":false}"
-            if sw shared-folder; then fl+=",{\"path\":\"${UNIT}/isoprobe-${o}.odt\",\"name\":\"isoprobe-${o}.odt\",\"is_dir\":false}"; fi
+        "GET /api/files/$(mount_enc "$s")")
+            fl="{\"path\":\"$(mount_of "$s")/isoprobe-${s}.odt\",\"name\":\"isoprobe-${s}.odt\",\"is_dir\":false}"
+            if sw shared-folder; then fl+=",{\"path\":\"$(mount_of "$s")/isoprobe-${o}.odt\",\"name\":\"isoprobe-${o}.odt\",\"is_dir\":false}"; fi
             if sw no-file; then fl=""; fi
             reply 200 "{\"success\":true,\"files\":[${fl}]}" ;;
-        "GET /api/files/${UNIT}/"*)
-            fn="${path#"/api/files/${UNIT}/"}"
+        "GET /api/files/$(mount_enc "$s")/"*)
+            fn="${path#"/api/files/$(mount_enc "$s")/"}"
             if [[ "$fn" == "isoprobe-${s}.odt" ]] || sw shared-folder || sw files-open; then reply 200 'odt'; else reply 404 '{}'; fi ;;
-        "GET /api/files/edit-token/${UNIT}/"*)
-            ef="${path#"/api/files/edit-token/${UNIT}/"}"; eh="$host"
+        "GET /api/files/edit-token/$(mount_enc "$s")/"*)
+            ef="${path#"/api/files/edit-token/$(mount_enc "$s")/"}"; eh="$host"
             if sw editor-origin-wrong; then eh="$(host_of_realm "$o")"; fi
             if [[ "$ef" == "isoprobe-${s}.odt" ]] && sw editor-html; then
                 # editor-html: a proxy page answers the own file with 200 and a body that is not JSON
@@ -306,9 +312,9 @@ fake_occ() { # args after `php occ`
             if sw groupfolders-garbled; then printf '[1,"x",null]'; return 0; fi
             # shared-folder: the app leaks too; shared-folder-id: ONLY the folder list holds one folder for both
             if sw shared-folder || sw shared-folder-id; then
-                printf '[{"id":11,"mount_point":"%s","groups":{"ou-%s":{"permissions":31},"ou-%s":{"permissions":31}},"quota":-3,"size":0,"acl":false}]' "$UNIT" "$A" "$B"
+                printf '[{"id":11,"mount_point":"%s","groups":{"ou-%s":{"permissions":31},"ou-%s":{"permissions":31}},"quota":-3,"size":0,"acl":false}]' "$(mount_of "$A")" "$A" "$B"
             else
-                printf '[{"id":11,"mount_point":"%s","groups":{"ou-%s":{"permissions":31}},"quota":-3,"size":0,"acl":false},{"id":12,"mount_point":"%s","groups":{"ou-%s":{"permissions":31}},"quota":-3,"size":0,"acl":false}]' "$UNIT" "$A" "$UNIT" "$B"
+                printf '[{"id":11,"mount_point":"%s","groups":{"ou-%s":{"permissions":31}},"quota":-3,"size":0,"acl":false},{"id":12,"mount_point":"%s","groups":{"ou-%s":{"permissions":31}},"quota":-3,"size":0,"acl":false}]' "$(mount_of "$A")" "$A" "$(mount_of "$B")" "$B"
             fi ;;
         user:info)
             sub="$2"; realm="${2#sub-}"

@@ -800,7 +800,7 @@ for (const shape of ['array', 'object'] as const) {
       expect(fake.groupsOf(folderIdOf(a.externalId))).toEqual([`ou-${KEY_A}-${UNIT_A}`])
     })
 
-    it('two customers whose units carry the SAME id (a seeded unit) never share a group or a folder', async () => {
+    it('two customers whose units carry the SAME id never share a group or a folder', async () => {
       const fake = new FakeGroupFolders(shape)
       const a = await subsystemOn(fake, KEY_A).ensureResource(orgUnit(UNIT_A, 'Vorstand'), ctx, null)
       const b = await subsystemOn(fake, KEY_B).ensureResource(orgUnit(UNIT_A, 'Vorstand'), ctx, null)

@@ -643,7 +643,7 @@ than it gives:
 A group folder made before the namespace is named by its unit alone (`Vorstand`) and sits in
 the group `ou-<unit id>`. The app keeps working on such a folder (it goes by the folder id in
 the ledger), but a second customer with a unit of that name cannot get a folder until the first
-customer's is moved, and a unit id that two customers share (a seeded unit) would share its group.
+customer's is moved.
 `infra/host/bin/gremion-files-namespace` moves them, once, for every customer:
 
 ```
@@ -661,7 +661,7 @@ permission bits, repoints the ledger and the Karenz binding in one statement, th
 off the folder and deletes it (kept while another folder still carries it). The folder id never
 changes: no file is moved. A folder it cannot move without guessing (not on Nextcloud, not carrying the
 recorded group, the target name taken, another customer's key on it) is printed as `PROBLEM` and left
-alone, and the exit code is 1. A group shared by two customers' folders is split by each unit's roster.
+alone, and the exit code is 1. A group that more than one folder carries, or a unit id that occurs in more than one customer, is copied by the unit's roster only.
 
 - It is idempotent: a second run prints `already in the namespace` for every folder and changes
   nothing, and an interrupted folder is finished by the next run.

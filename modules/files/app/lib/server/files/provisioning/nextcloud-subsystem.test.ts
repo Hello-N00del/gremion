@@ -342,7 +342,7 @@ describe('nextcloud subsystem', () => {
       expect(unit.name).toBe('Vorstand') // the unit keeps its plain name; only the Nextcloud mount point carries the key
     })
 
-    it('two customers whose units share one id (a seeded unit) still get separate groups and folders', async () => {
+    it('two customers whose units carry the same id still get separate groups and folders', async () => {
       const nc = fakeNc()
       const a = await subsystem(nc, fakeKc(), 1, 'ka').ensureResource(unit, ctx, null)
       const b = await subsystem(nc, fakeKc(), 1, 'kb').ensureResource(unit, ctx, null)

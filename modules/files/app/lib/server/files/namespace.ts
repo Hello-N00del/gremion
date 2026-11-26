@@ -3,7 +3,7 @@
 //
 // One Nextcloud serves every customer of an install, and its group folder mount points and group ids
 // are instance-wide. A unit named "Vorstand" in two customers must therefore not mean the same mount
-// point, and a unit id (a seeded unit has the same id in every customer) must not mean the same group.
+// point, and a unit id must not mean the same group.
 // Each customer gets a short stable key, derived from its tenant id, and every name the module creates
 // carries it:
 //
