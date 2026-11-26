@@ -371,17 +371,19 @@ Read from the code that acts on them, not from a plan.
 | `MATRIX_IDENTITY` | both `app-<colour>.env` | `legacy` (absent counts as legacy) | the chat code of `gremion-ui` on every call; the validator, for the messaging opt-in | `gremion-ui` of that colour: the active one when `wire` step 7 or a deploy recreates it, the other when it is next switched to |
 | `NC_PROVIDER_PER_CUSTOMER` | `state.env` | `off` | `gremion-services wire`, secondary branch, step 6a | nothing; read when a secondary customer is wired. NOT YET SAFE: see the operating limits below |
 
-`gremion-validate-env` accepts only the documented values of each (`on` or `off`;
-`legacy` or `namespaced`; a space-separated list of the fixed opt-in ids) and
-refuses `SECONDARY_TENANT_MODULES` without `SECONDARY_TENANT_HOSTS`. An unknown
-`MATRIX_IDENTITY` is not read as `legacy`: chat refuses with the German 503, so a
-typo can never fall back to the shared-username identity.
+`gremion-validate-env` accepts only `on` or `off` for `SYNAPSE_JWT_LOGIN` and
+`NC_PROVIDER_PER_CUSTOMER`, judges `SECONDARY_TENANT_MODULES` (a space-separated
+list of the fixed opt-in ids, refused without `SECONDARY_TENANT_HOSTS`), and reads
+`MATRIX_IDENTITY` only for the messaging opt-in. The app judges `MATRIX_IDENTITY`
+itself: an unknown value is not read as `legacy`, chat refuses with the German
+503, so a typo can never fall back to the shared-username identity.
 
 ### A secondary customer host
 
 `PILOT_TENANT_HOST` stays the first customer's host. These stay bound to it: the
 video relay's name (`turn.<PILOT_TENANT_HOST>`), the Element Call config file the
-install renders, the leaves' boot-time public base URL, `COLLABORA_PUBLIC_URL`
+install renders, the leaves' `PUBLIC_BASE_URL` setting (the links of a mail no
+longer use it), `COLLABORA_PUBLIC_URL`
 as Nextcloud's installer reads it, the first customer's Nextcloud login provider
 `Keycloak`, and the Synapse issuer while `SYNAPSE_JWT_LOGIN` is `on`. What the
 code makes per request host is described per module below.
