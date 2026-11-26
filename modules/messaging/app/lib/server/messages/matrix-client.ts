@@ -2,6 +2,7 @@ import { env } from '$env/dynamic/private'
 import { error } from '@sveltejs/kit'
 import { currentTenantId, getTenant } from '$lib/server/tenant/context'
 import { assertIssMatch } from '$lib/server/tenant/iss-match'
+import { verifyBearerJwt } from '$lib/server/jwt-verify'
 import { serviceEnv } from '$lib/server/env/service-env'
 import { resolveSecret } from '$lib/server/tenant/secrets'
 import { isShowableName } from '$lib/components/messaging/sender-label'
@@ -176,23 +177,31 @@ class MatrixClient {
 
   // MATRIX_IDENTITY=namespaced: Matrix token of a customer's member, minted by the app.
   //
-  //   1. whose token is it: the JWT's issuer must be THIS request's customer (the signature was
-  //      verified by the hooks or by Auth.js; this is the check that it was verified for this customer),
-  //      and it must carry the username the account is named after;
+  //   1. whose token is it: the JWT must name THIS request's customer as its issuer, must not be
+  //      expired, and must verify (signature, issuer, audience) against that customer's key set. The
+  //      claims are only read from the verified payload, so the exchange does not depend on the caller
+  //      having verified the token, whatever route it came through. It must carry the username the
+  //      account is named after;
   //   2. may chat run at all (chat-identity-guard.ts);
   //   3. the account `<slug>.<escaped username>` is created if missing (never reactivated, never
   //      renamed), then the Synapse admin API issues a login for it that the homeserver itself ends at
   //      now + MATRIX_TOKEN_TTL_MS (valid_until_ms).
   //
   // That endpoint takes no device_id and the token belongs to no device (device-less), so there is NO
-  // device continuity and `deviceId` is ignored. The check of step 1 runs before the cache is read, so a cached token
-  // is never handed to a token of another customer.
+  // device continuity and `deviceId` is ignored. The checks of step 1 run before the cache is read, so a
+  // cached token is never handed to an expired token or to a token of another customer.
   private async mintNamespacedToken(keycloakJwt: string): Promise<string> {
     const tenant = getTenant()
-    const payload = decodeJwtPayload(keycloakJwt)
-    if (!assertIssMatch({ tokenIss: typeof payload.iss === 'string' ? payload.iss : undefined, tenantIssuer: tenant.issuer })) {
+    const claimed = decodeJwtPayload(keycloakJwt)
+    if (!assertIssMatch({ tokenIss: typeof claimed.iss === 'string' ? claimed.iss : undefined, tenantIssuer: tenant.issuer })) {
       throw error(403, 'Die Anmeldung gehört nicht zu diesem Mandanten.')
     }
+    const claimedExp = typeof claimed.exp === 'number' ? claimed.exp * 1000 : 0
+    if (claimedExp > 0 && Date.now() >= claimedExp) {
+      throw new Error('Keycloak JWT is expired — session refresh required')
+    }
+    const payload = await verifyBearerJwt(keycloakJwt, tenant)
+    if (!payload) throw error(403, 'Die Anmeldung konnte nicht bestätigt werden.')
     const username = typeof payload.preferred_username === 'string' ? payload.preferred_username : ''
     if (username === '') throw error(403, 'Der Anmeldung fehlt der Benutzername für den Chat.')
     const localpart = matrixLocalpart(tenant.slug, username)
@@ -204,11 +213,6 @@ class MatrixClient {
     if (cached && Date.now() < cached.expiresAt) return cached.matrixToken
     const inflight = matrixTokenInflight.get(cacheKey)
     if (inflight) return inflight
-
-    const keycloakExp = typeof payload.exp === 'number' ? payload.exp * 1000 : 0
-    if (keycloakExp > 0 && Date.now() >= keycloakExp) {
-      throw new Error('Keycloak JWT is expired — session refresh required')
-    }
 
     const displayName = typeof payload.name === 'string' && isShowableName(payload.name) ? payload.name.trim() : undefined
     const admin = getSynapseAdmin()

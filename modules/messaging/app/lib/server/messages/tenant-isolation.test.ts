@@ -55,6 +55,14 @@ const ENV = vi.hoisted(
 )
 vi.mock('$env/dynamic/private', () => ({ env: ENV }))
 vi.mock('$lib/server/env/service-env', () => ({ serviceEnv: (name: string) => ENV[name] }))
+// The namespaced tokens below are unsigned stand-ins (`h.<claims>.s`): the verifier accepts exactly that
+// shape and hands back its claims. The real verifier's refusals are pinned in matrix-identity.verify.test.ts.
+vi.mock('$lib/server/jwt-verify', () => ({
+  verifyBearerJwt: async (token: string) => {
+    const [, body, sig] = token.split('.')
+    return sig === 's' && body ? (JSON.parse(Buffer.from(body, 'base64url').toString('utf-8')) as Record<string, unknown>) : null
+  },
+}))
 /** The Keycloak account of the erased subject, by tenant: `username` is what the hook derives the Matrix id from. */
 const KC = vi.hoisted(() => ({ username: 'alice' }))
 vi.mock('$lib/server/keycloak-admin', () => ({
@@ -869,6 +877,23 @@ describe('namespaced chat identity: two customers on one shared homeserver', () 
     expect(res).toEqual({ status: 'erased', counts: { matrix_accounts: 1 } })
     expect(sharedSynapse.users.get('@beta.alice:synapse.test')).toMatchObject({ deactivated: true, erased: true })
     expect(sharedSynapse.users.get('@acme.alice:synapse.test')).toMatchObject({ deactivated: false, erased: false })
+  })
+
+  it('a membership sync does not bring an erased account back, and leaves the display name of the others alone', async () => {
+    const b = (await subsystem(NS_B).ensureResource(unit, CTX, null)).externalId!
+    await subsystem(NS_B).addMember(b, 'kc-alice')
+    await subsystem(NS_B).addMember(b, 'kc-carol')
+    sharedSynapse.users.get('@beta.carol:synapse.test')!.displayname = 'Name chosen by Carol'
+    KC.username = 'alice'
+    await as(NS_B, () => messagingErasureHook.erase({ tenantId: 'tid-b', subjectId: 'kc-alice', db: null } as never))
+    expect(sharedSynapse.users.get('@beta.alice:synapse.test')).toMatchObject({ deactivated: true, erased: true })
+
+    await subsystem(NS_B).reconcileMembers(b, ['kc-alice', 'kc-carol'])
+    await subsystem(NS_B).addMember(b, 'kc-alice')
+
+    expect(sharedSynapse.users.get('@beta.alice:synapse.test')).toMatchObject({ deactivated: true, erased: true })
+    expect(sharedSynapse.users.get('@beta.carol:synapse.test')).toMatchObject({ deactivated: false, displayname: 'Name chosen by Carol' })
+    expect(sharedSynapse.rooms.get(b)!.members.has('@beta.carol:synapse.test')).toBe(true)
   })
 
   describe("a room found by alias is adopted only when it is this customer's", () => {

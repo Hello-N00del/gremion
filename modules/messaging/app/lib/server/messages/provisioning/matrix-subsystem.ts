@@ -6,6 +6,7 @@
 import type { KeycloakAdminClient } from '../../keycloak-admin'
 import type { OrgUnit } from '../../governance/org-units-db'
 import type { ProvisioningSubsystem } from '../../governance/provisioning/types'
+import { isShowableName } from '$lib/components/messaging/sender-label'
 import { matrixLocalpart, unitAliasLocalpart, unitNameSlug } from '../matrix-namespace'
 
 interface MatrixDeps {
@@ -17,6 +18,8 @@ interface MatrixDeps {
   }
   synapse: {
     createUser(localpart: string, displayName: string): Promise<void>
+    /** Namespaced identity only: creates a missing account, touches an existing one not at all. */
+    ensureUser?(localpart: string, displayName?: string): Promise<'ok' | 'deactivated'>
     forceJoinRoom(roomId: string, userId: string): Promise<void>
     kickFromRoom(roomId: string, userId: string, reason?: string): Promise<void>
     deleteRoom(roomId: string): Promise<void>
@@ -76,6 +79,26 @@ export function createMatrixSubsystem(deps: MatrixDeps, serverName: string, iden
     return { localpart, displayName, matrixId: `@${localpart}:${serverName}` }
   }
 
+  /**
+   * Make sure the member's account exists and may be joined. Legacy: createUser's idempotent write, as
+   * it always was. Namespaced: ensureUser, which creates a missing account and leaves an existing one
+   * as it is, exactly like the login does: a deactivated (erased) account is not reactivated and keeps
+   * the display name it has. Returns false for an account that must not be joined.
+   */
+  async function ensureMember(info: MatrixUserInfo): Promise<boolean> {
+    if (!identity) {
+      await deps.synapse.createUser(info.localpart, info.displayName)
+      return true
+    }
+    if (!deps.synapse.ensureUser) throw new Error('the Synapse admin client cannot ensure an account without writing it')
+    const shown = isShowableName(info.displayName) ? info.displayName : undefined
+    if ((await deps.synapse.ensureUser(info.localpart, shown)) === 'deactivated') {
+      console.warn('[matrix-provisioning] a deactivated chat account is not brought back by a membership sync')
+      return false
+    }
+    return true
+  }
+
   return {
     name: 'matrix',
 
@@ -107,9 +130,9 @@ export function createMatrixSubsystem(deps: MatrixDeps, serverName: string, iden
     },
 
     async addMember(externalId: string, userKeycloakId: string) {
-      const { localpart, displayName, matrixId } = await resolveUser(userKeycloakId)
-      await deps.synapse.createUser(localpart, displayName)
-      await deps.synapse.forceJoinRoom(externalId, matrixId)
+      const info = await resolveUser(userKeycloakId)
+      if (!(await ensureMember(info))) return
+      await deps.synapse.forceJoinRoom(externalId, info.matrixId)
     },
 
     async removeMember(externalId: string, userKeycloakId: string) {
@@ -128,9 +151,9 @@ export function createMatrixSubsystem(deps: MatrixDeps, serverName: string, iden
 
     async reconcileMembers(externalId: string, desiredUserIds: readonly string[]) {
       for (const id of desiredUserIds) {
-        const { localpart, displayName, matrixId } = await resolveUser(id)
-        await deps.synapse.createUser(localpart, displayName)
-        await deps.synapse.forceJoinRoom(externalId, matrixId)
+        const info = await resolveUser(id)
+        if (!(await ensureMember(info))) continue
+        await deps.synapse.forceJoinRoom(externalId, info.matrixId)
       }
     }
   }

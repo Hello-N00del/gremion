@@ -40,16 +40,32 @@ const CONFIG_PATHS: ReadonlySet<string> = new Set(['config.json', 'room/config.j
  * a value that is not a bare host: null, and the caller answers 503. It never
  * falls back to the host the file was rendered for.
  */
-function livekitServiceUrlForRequest(): string | null {
-  const host = getTenantOrNull()?.primaryHost
-  if (!host) return null
+function livekitServiceUrlForRequest(): { url: string } | { refusal: 'no_tenant' | 'no_primary_host' | 'host_not_bare' } {
+  const tenant = getTenantOrNull()
+  if (!tenant) return { refusal: 'no_tenant' }
+  const host = tenant.primaryHost
+  if (!host) return { refusal: 'no_primary_host' }
   try {
     const parsed = new URL(`https://${host}`)
-    if (parsed.host !== host.toLowerCase() || parsed.pathname !== '/' || parsed.search || parsed.hash) return null
+    if (parsed.host !== host.toLowerCase() || parsed.pathname !== '/' || parsed.search || parsed.hash) return { refusal: 'host_not_bare' }
   } catch {
-    return null
+    return { refusal: 'host_not_bare' }
   }
-  return `https://${host.toLowerCase()}/livekit/jwt`
+  return { url: `https://${host.toLowerCase()}/livekit/jwt` }
+}
+
+/**
+ * One structured line for a refused config path: which check said no, for which customer, for which
+ * request. The reason is a fixed word; the upstream body and the host value are never logged.
+ */
+function logConfigRefusal(reason: string, correlationId: string | undefined): void {
+  const tenant = getTenantOrNull()
+  console.warn('[element-call] config.json refused', {
+    reason,
+    tenantId: tenant?.id ?? null,
+    tenantSlug: tenant?.slug ?? null,
+    correlationId: correlationId ?? null,
+  })
 }
 
 /**
@@ -57,16 +73,18 @@ function livekitServiceUrlForRequest(): string | null {
  * already right is returned byte-for-byte (a single-customer install changes
  * nothing); one that cannot be read is refused rather than served unrewritten.
  */
-async function respondWithHostConfig(res: Response, livekitServiceUrl: string): Promise<Response> {
+async function respondWithHostConfig(res: Response, livekitServiceUrl: string, correlationId: string | undefined): Promise<Response> {
   const headers = { 'content-type': 'application/json', 'cache-control': 'no-store' }
   const text = await res.text()
   let parsed: unknown
   try {
     parsed = JSON.parse(text)
   } catch {
+    logConfigRefusal('config_not_json', correlationId)
     return new Response('element-call config unreadable', { status: 502 })
   }
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    logConfigRefusal('config_not_object', correlationId)
     return new Response('element-call config unreadable', { status: 502 })
   }
   const config = parsed as { livekit?: unknown }
@@ -81,8 +99,10 @@ async function respondWithHostConfig(res: Response, livekitServiceUrl: string): 
   })
 }
 
-export const GET: RequestHandler = async ({ params, url }) => {
+export const GET: RequestHandler = async ({ params, url, locals }) => {
   const path = params.path ?? ''
+  // Only read for the log line of a refusal; set by the leading hook, absent when this handler runs bare.
+  const correlationId = (locals as { correlationId?: string } | undefined)?.correlationId
 
   if (!isSafeProxyPath(path)) {
     return new Response('invalid path', { status: 400 })
@@ -91,8 +111,12 @@ export const GET: RequestHandler = async ({ params, url }) => {
   // Resolved before the upstream is contacted: no host to name, nothing to serve.
   let livekitServiceUrl: string | null = null
   if (CONFIG_PATHS.has(path)) {
-    livekitServiceUrl = livekitServiceUrlForRequest()
-    if (!livekitServiceUrl) return new Response('video is not available on this host', { status: 503 })
+    const resolved = livekitServiceUrlForRequest()
+    if ('refusal' in resolved) {
+      logConfigRefusal(resolved.refusal, correlationId)
+      return new Response('video is not available on this host', { status: 503 })
+    }
+    livekitServiceUrl = resolved.url
   }
 
   // Build upstream URL, strip any /element-call prefix and re-attach query params.
@@ -179,7 +203,7 @@ export const GET: RequestHandler = async ({ params, url }) => {
 
   // A successful config.json is rewritten per host. Any other status (a 404 from
   // an upstream without the file) takes the ordinary path below, unchanged.
-  if (livekitServiceUrl && res.status === 200) return respondWithHostConfig(res, livekitServiceUrl)
+  if (livekitServiceUrl && res.status === 200) return respondWithHostConfig(res, livekitServiceUrl, correlationId)
 
   const ct = res.headers.get('content-type') ?? ''
 
