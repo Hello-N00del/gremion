@@ -1773,9 +1773,12 @@ colour_leaves() {   # <colour> <ui container>
             project="$(jq -r '."com.docker.compose.project" // ""' <<<"$labels" 2>/dev/null || true)"
         fi
         if [[ -n "$project" ]]; then
-            if ! ids=($(docker ps -q 2>/dev/null)); then
+            local ps_out
+            ids=()
+            if ! ps_out="$(docker ps -q 2>/dev/null)"; then
                 fail "${ui}: docker ps failed, so the leaf services running in project ${project} cannot be listed"
-                ids=()
+            elif [[ -n "$ps_out" ]]; then
+                mapfile -t ids <<<"$ps_out"
             fi
             for id in "${ids[@]}"; do
                 labels="$(docker inspect --format '{{json .Config.Labels}}' "$id" 2>/dev/null || true)"
