@@ -199,10 +199,14 @@
     }
   }
 
+  // A task as the entry form hands it over: the stored fields, without the ones only the server sets.
+  type TaskInput = Pick<ProtocolActionItem, 'text' | 'completed'> &
+    Partial<Pick<ProtocolActionItem, 'id' | 'due_date' | 'assignee_keycloak_id'>>
+
   // "+ Aufgabe hinzufügen" only opens an entry form (an unsaved row, no id).
   // Nothing is stored until the admin saves it with its title; Abbrechen discards
   // it, so no empty task is ever left behind.
-  let newActionItem = $state<ProtocolActionItem | null>(null)
+  let newActionItem = $state<TaskInput | null>(null)
   let newActionItemError = $state<string | null>(null)
   // True while the create request is on its way: it cannot be repeated (two POSTs would store
   // two identical tasks) nor cancelled (it is stored regardless of what the form shows).
@@ -213,7 +217,7 @@
 
   function addActionItem() {
     newActionItemError = null
-    newActionItem = { text: '', completed: false } as ProtocolActionItem
+    newActionItem = { text: '', completed: false }
   }
 
   function cancelNewActionItem() {
@@ -223,7 +227,7 @@
   }
 
   // The body a task is sent with: the route reads camelCase names; fields left empty stay unsent.
-  function actionItemBody(i: ProtocolActionItem) {
+  function actionItemBody(i: TaskInput) {
     return {
       text: i.text,
       ...(i.due_date ? { dueDate: i.due_date } : {}),
@@ -231,7 +235,7 @@
     }
   }
 
-  async function createActionItem(i: ProtocolActionItem): Promise<boolean> {
+  async function createActionItem(i: TaskInput): Promise<boolean> {
     if (creatingActionItem) return false
     creatingActionItem = true
     newActionItemError = null
@@ -259,7 +263,7 @@
 
   let actionItemError = $state<string | null>(null)
 
-  async function saveActionItem(i: ProtocolActionItem): Promise<boolean> {
+  async function saveActionItem(i: TaskInput): Promise<boolean> {
     actionItemError = null
     const failed = 'Aufgabe konnte nicht gespeichert werden.'
     try {
