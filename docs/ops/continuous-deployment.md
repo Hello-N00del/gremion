@@ -854,7 +854,7 @@ Adoption is done once, by hand, on the live host. Nothing is enabled until the l
    `ps` in place of `stop`: it must list no running container.
 3. As root, run `bash /opt/gremion/current/infra/host/bootstrap.sh cd`. It installs, as real files, every
    host program of `bin/` that needs nothing but the installed libraries, `lib/common.sh` and `lib/cd/*.sh`
-   (the apply script is root-owned). `gremion-isolation`, `gremion-isolation-live`, `gremion-services` and `gremion-tenant` are not
+   (the apply script is root-owned). `gremion-files-namespace`, `gremion-isolation`, `gremion-isolation-live`, `gremion-services` and `gremion-tenant` are not
    installed as copies: they source the release's own customer libraries, so `bin/` gets a launcher for each
    that runs the program of the current release (`/opt/gremion/current/infra/host/bin/<program>`), and a copy
    an earlier hand install left in `bin/` is replaced by it. The libraries a hand install put beside such a

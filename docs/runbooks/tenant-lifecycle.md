@@ -463,7 +463,7 @@ step 3 above drops, and the member list is in the realm, which step 5 deletes.
 Write down, for the customer only:
 
 - the ledger's `matrix` rows (`external_id` = the Matrix room id) and `nextcloud`
-  rows (`external_id` = `<folderId>:<groupId>`, the group being `ou-<unit id>`),
+  rows (`external_id` = `<folderId>:<groupId>`, the group being `ou-<key>-<unit id>`, or `ou-<unit id>` on a folder not yet moved by `gremion-files-namespace`),
   from `provisioning_resources` in the customer's kernel database;
 - the realm's members: Keycloak id, username and e-mail;
 - the tenant id (the retained-records folder is `Aufbewahrung-<tenant id>`, its
@@ -483,15 +483,16 @@ the header read from curl's stdin config, never on an argv.
 
 - Group folders: for each ledger folder id and for the retained folder, confirm
   with `occ groupfolders:list --output=json` that the folder carries the
-  customer's own group (`ou-<unit id>` or the retained groups) and no other
+  customer's own group (`ou-<key>-<unit id>`, the older `ou-<unit id>`, or the retained groups) and no other
   customer's, then delete it. The app does this itself per unit with the group
   folders REST route (`DELETE /index.php/apps/groupfolders/folders/<id>`), then
   deletes the group; the matching `occ` verbs and the folders' trash bin are not
   used anywhere in this repository: read `occ list groupfolders` and `occ list
   group` on the installed version and confirm the verb before using it. A folder
   is identified by its id and groups, never by its mount name, which is the unit
-  name and can exist in another customer.
-- Groups: `ou-<unit id>` for each unit, `gremion-retained-<tenant id>` and its `-w`
+  name plus the customer's key (before `gremion-files-namespace` moved it, the
+  unit name alone, which can exist in another customer).
+- Groups: `ou-<key>-<unit id>` (or the older `ou-<unit id>`) for each unit, `gremion-retained-<tenant id>` and its `-w`
   group.
 - Accounts: the members' Nextcloud accounts. The first customer's accounts carry
   the raw Keycloak id; accounts of a customer under its own provider carry an id

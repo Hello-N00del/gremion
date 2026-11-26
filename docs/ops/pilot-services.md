@@ -464,7 +464,7 @@ list. The create of the first customer never reads the list.
 |---|---|---|
 | board (core) | its own board, in its own kernel or board database as its location flag says (`t_<hex32>__board` once the board lives in the board module's database) | nothing shared |
 | calendar (core) | its own calendar leaf database; the CalDAV mirror goes to the customer's own collection (`gremion-<slug>`) of the leaf's shared Nextcloud account, created by `wire` step 6b | the Nextcloud account that owns the collections is the one install-wide account |
-| files | one group folder per org unit on the shared Nextcloud, with its own group `ou-<unit id>`; a folder is adopted on a retry only when it carries that unit's own group (the mount point alone proves nothing on a shared instance); the editor URL is built on the request's own host, which Nextcloud trusts and Collabora names; the retained-records folder and its groups are named per tenant | one Nextcloud, one Collabora, one `richdocuments` configuration; the Nextcloud accounts are the open point named in the operating limits |
+| files | one group folder per org unit on the shared Nextcloud, named `<unit name> (<key>)` and with its own group `ou-<key>-<unit id>`, where `<key>` is the customer's namespace key (the first 10 hex digits of sha256 of its tenant id; `gremion-files-namespace --key-of <tenant id>` prints it), so two customers can each have a unit of the same name; members are shown the plain unit name, and the Files page finds a folder by the folder id of the provisioning ledger, never by name; a folder is adopted on a retry only when it carries that unit's own group (the mount point alone proves nothing on a shared instance); folders made before the namespace keep their plain name and group until [the move](#moving-existing-group-folders-into-the-customer-namespace); the editor URL is built on the request's own host, which Nextcloud trusts and Collabora names; the retained-records folder and its groups are named per tenant | one Nextcloud, one Collabora, one `richdocuments` configuration; the Nextcloud accounts are the open point named in the operating limits |
 | votes | polls on the shared Nextcloud Polls: every poll is created by the install's one Nextcloud admin account and bound to the customer by a leading marker `[gt:<tenant id>]` in its title; every list and by-id read checks it, and another customer's poll answers 404; the poll pages and routes read and vote with the acting member's own bearer when the request has one (Karenz and retained copies use the admin account) | the Polls app and its database are shared; the binding is the app's marker, not a Nextcloud group |
 | messaging | its own Matrix accounts `<slug>.<escaped username>`, its own unit rooms (alias `#stura.<slug>.<unit>`), archive aliases (`#stura-archiv.<slug>.<unit>-<time>`) and meeting rooms (`#meeting.<slug>.<event>`); every room carries a tenant marker state event written by the admin bot, and a room found behind an alias is adopted only when that marker names the customer; video calls: the call frame's config names the requesting host's own token service, and the participants' names drop the customer prefix | one Synapse and one LiveKit; the alias directory is global; see the switch-over below, the three switches it needs, and the operating limits |
 | publishing, content | refused for a secondary host: the module id is not in the fixed set | the leaves now ask the kernel for the sending customer's own link base on every send (`/api/internal/newsletter/link-base`, `/api/internal/content/link-base`), but the set is fixed in `infra/host/lib/common.sh`: widening it is a code change, not a key. The refusal text of `gremion-validate-env` for `publishing` still gives the older reason (the mail links), and the content news editor still keeps its drafts in the shared Nextcloud and opens them in the shared Collabora |
@@ -638,6 +638,42 @@ than it gives:
   Nextcloud accounts by id: it acts with the member's bearer or the admin account.
 - **Content and publishing** are not available to a secondary customer (table above).
 
+### Moving existing group folders into the customer namespace
+
+A group folder made before the namespace is named by its unit alone (`Vorstand`) and sits in
+the group `ou-<unit id>`. The app keeps working on such a folder (it goes by the folder id in
+the ledger), but a second customer with a unit of that name cannot get a folder until the first
+customer's is moved, and a unit id that two customers share (a seeded unit) would share its group.
+`infra/host/bin/gremion-files-namespace` moves them, once, for every customer:
+
+```
+gremion-files-namespace                      # dry run: lists every move, changes nothing
+gremion-files-namespace --slug <slug>        # the same for one customer
+gremion-backup                               # first
+gremion-files-namespace --apply --backed-up --reason "<why, 10 to 500 characters>" [--slug <slug>]
+```
+
+It reads the customers from the control registry, each customer's ledger (and the folder bindings a
+module switch-off keeps) from its kernel database, and Nextcloud's folder and group lists through the
+Nextcloud container's own admin credentials. Per folder it renames the mount point to
+`<mount point> (<key>)`, creates the group `ou-<key>-<unit id>` with the old group's members and
+permission bits, repoints the ledger and the Karenz binding in one statement, then takes the old group
+off the folder and deletes it (kept while another folder still carries it). The folder id never
+changes: no file is moved. A folder it cannot move without guessing (not on Nextcloud, not carrying the
+recorded group, the target name taken, another customer's key on it) is printed as `PROBLEM` and left
+alone, and the exit code is 1. A group shared by two customers' folders is split by each unit's roster.
+
+- It is idempotent: a second run prints `already in the namespace` for every folder and changes
+  nothing, and an interrupted folder is finished by the next run.
+- `--apply` needs `--backed-up` (take `gremion-backup` first: the kernel databases and the Nextcloud
+  data are what a way back needs) and `--reason`. It takes `runtime/hostd.lock`, writes an access record
+  per customer before it touches that customer, and writes the state it is about to change to
+  `<root>/runtime/files-namespace/<time>.json` (mode 0600) before the first change.
+- Run the dry run first and read it. After `--apply`, open `/files` as a member of each customer: the
+  units are listed by their plain name, and a document opens.
+- Until it has run, the app is unchanged for the folders that exist; only a folder made from now on
+  carries the key.
+
 ### Evidence for two customers
 
 What exists: the recorded cross-customer cases at the app layer against recording
@@ -726,3 +762,8 @@ accepts the login and signs the From domain), and the Settings page's mail step
 shows the relay as configured without a hand edit. On an install with a second
 customer: the items under "Evidence for two customers", and, after a chat
 switch-over, the login flows read back from the running `matrix`.
+
+After the deploy that first carries the namespace: the dry run of `gremion-files-namespace` read on the
+running install, then its `--apply`, and `/files` opened as a member of each customer (plain unit names, a
+document opened). The group folders and OCS calls it makes (the `mountpoint` route, removing a group from a
+folder) are proven only against a stand-in until that run.
