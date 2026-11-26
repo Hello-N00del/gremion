@@ -25,7 +25,9 @@ export const load: PageServerLoad = async ({ params, locals }) => {
     // Top bar: the id segment shows the poll title instead of the bare number, and the
     // section segment reads like the list it came from. A blank title never falls back to the id.
     const title = poll.configuration?.title?.trim() || 'Umfrage'
-    return { poll, crumbOverrides: { polls: 'Abstimmungen', [params.id]: title } }
+    // Closing and deleting are for the people who create polls; the API checks it again on every request.
+    const canManage = hasRole(user.roles, Role.CouncilAdmin)
+    return { poll, canManage, crumbOverrides: { polls: 'Abstimmungen', [params.id]: title } }
   } catch (err) {
     // The Polls client throws `Nextcloud Polls <path> → <status>` on a non-2xx
     // response. Map a not-found poll (deleted, or an id that never existed) to a

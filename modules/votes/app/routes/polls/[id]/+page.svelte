@@ -5,6 +5,7 @@
   import Pill from '$lib/components/pills/Pill.svelte'
   import { Button } from '$lib/components/ui/button'
   import { voteCount } from '$lib/components/polls/count'
+  import { goto, invalidateAll } from '$app/navigation'
 
   let { data }: { data: PageData } = $props()
 
@@ -16,7 +17,46 @@
   let choiceMsg = $state('')
 
   let poll = $derived(data.poll)
+  let canManage = $derived(data.canManage === true)
+  // Which of the two management actions waits for its confirmation, and the one that is running.
+  let confirming = $state<'close' | 'delete' | null>(null)
+  let managing = $state(false)
+  let manageMsg = $state('')
   let isLocked = $derived(poll.status.expired || poll.currentUserStatus.isLocked || voted)
+
+  async function manage(action: 'close' | 'delete') {
+    managing = true
+    manageMsg = ''
+    try {
+      const res =
+        action === 'close'
+          ? await fetch(`/api/polls/${poll.id}`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ closed: true }),
+            })
+          : await fetch(`/api/polls/${poll.id}`, { method: 'DELETE' })
+      if (res.ok) {
+        confirming = null
+        if (action === 'delete') await goto('/votes', { invalidateAll: true })
+        else await invalidateAll()
+        return
+      }
+      const what = action === 'close' ? 'beendet' : 'gelöscht'
+      manageMsg =
+        action === 'delete' && res.status === 409
+          ? 'Die Umfrage gehört zu einem Protokoll und kann nicht gelöscht werden.'
+          : res.status === 403
+            ? `Dafür fehlt die Berechtigung. Die Umfrage wurde nicht ${what}.`
+            : res.status === 404
+              ? `Die Umfrage gibt es nicht mehr. Bitte lade die Seite neu.`
+              : `Die Umfrage wurde nicht ${what}. Bitte erneut versuchen.`
+    } catch {
+      manageMsg = `Verbindungsfehler. Die Umfrage wurde nicht ${action === 'close' ? 'beendet' : 'gelöscht'}.`
+    } finally {
+      managing = false
+    }
+  }
 
   async function submitVote() {
     if (isLocked) return
@@ -133,6 +173,34 @@
         <p class="text-sm text-center text-ink-muted">Diese Umfrage ist abgelaufen.</p>
       {:else if voted}
         <p class="text-sm text-center text-ink-muted">Du hast bereits abgestimmt.</p>
+      {/if}
+
+      {#if canManage}
+        <div data-testid="poll-manage" style="border-top: 1px solid var(--border); padding-top: 1rem; display: flex; flex-direction: column; gap: 0.75rem">
+          {#if manageMsg}
+            <Alert variant="destructive">{manageMsg}</Alert>
+          {/if}
+          {#if confirming === 'close'}
+            <p class="text-sm text-ink-muted">Die Umfrage wird beendet. Danach werden keine Stimmen mehr abgegeben, die Ergebnisse bleiben sichtbar.</p>
+            <div style="display: flex; gap: 0.5rem; flex-wrap: wrap">
+              <Button size="sm" disabled={managing} onclick={() => manage('close')}>Jetzt beenden</Button>
+              <Button size="sm" variant="outline" onclick={() => (confirming = null)}>Abbrechen</Button>
+            </div>
+          {:else if confirming === 'delete'}
+            <p class="text-sm text-ink-muted">Die Umfrage wird mit allen Stimmen endgültig gelöscht. Das lässt sich nicht rückgängig machen.</p>
+            <div style="display: flex; gap: 0.5rem; flex-wrap: wrap">
+              <Button size="sm" variant="destructive" disabled={managing} onclick={() => manage('delete')}>Endgültig löschen</Button>
+              <Button size="sm" variant="outline" onclick={() => (confirming = null)}>Abbrechen</Button>
+            </div>
+          {:else}
+            <div style="display: flex; gap: 0.5rem; flex-wrap: wrap">
+              {#if !poll.status.expired}
+                <Button size="sm" variant="outline" onclick={() => (confirming = 'close')}>Umfrage beenden</Button>
+              {/if}
+              <Button size="sm" variant="outline" onclick={() => (confirming = 'delete')}>Umfrage löschen</Button>
+            </div>
+          {/if}
+        </div>
       {/if}
     </div>
   </div>
