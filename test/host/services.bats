@@ -1382,11 +1382,16 @@ per_customer_provider() {
     wire
     [ "$status" -eq 0 ] || { echo "off: status=$status $output"; return 1; }
     [ ! -e "${GREMION_ROOT}/nc-target.json" ]
+    local hit
+    hit="$(grep -c 'nc_target' "${GREMION_ROOT}/psql-sql.log" 2>/dev/null || true)"
+    [ "${hit:-0}" = 0 ] || { echo "off: the registry row was written"; cat "${GREMION_ROOT}/psql-sql.log"; return 1; }
+    : >"${GREMION_ROOT}/psql-sql.log"
     per_customer_provider ''
     wire
     [ "$status" -eq 0 ] || { echo "empty: status=$status $output"; return 1; }
     [ ! -e "${GREMION_ROOT}/nc-target.json" ]
-    local hit
+    hit="$(grep -c 'nc_target' "${GREMION_ROOT}/psql-sql.log" 2>/dev/null || true)"
+    [ "${hit:-0}" = 0 ] || { echo "empty: the registry row was written"; cat "${GREMION_ROOT}/psql-sql.log"; return 1; }
     hit="$(grep -c 'nc-target' "$ORDER" || true)"
     [ "${hit:-0}" = 0 ] || { cat "$ORDER"; return 1; }
 }
