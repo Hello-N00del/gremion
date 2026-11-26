@@ -4,7 +4,7 @@
     | { kind: 'page'; label: string; href: string; icon?: string; hint?: string; lang?: string }
     | { kind: 'action'; label: string; href: string; icon?: string; hint?: string; lang?: string }
     // Server search hits (/api/search): minutes, calendar events, units and people.
-    | { kind: 'result'; group: ResultGroup; id: string; label: string; href: string; icon?: string; hint?: string }
+    | { kind: 'result'; group: ResultGroup; id: string; label: string; href: string; icon?: string; hint?: string; lang?: string }
 
   export type ResultGroup = 'minutes' | 'events' | 'units' | 'people'
   /** One hit as /api/search answers it. */
