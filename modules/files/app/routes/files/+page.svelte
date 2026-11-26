@@ -12,12 +12,12 @@
 
   let workspaces = $derived(data.workspaces ?? [])
 
-  // Active workspace drives the FileBrowser rootPath. '' = the Nextcloud root
+  // Active workspace (a folder's path) drives the FileBrowser rootPath. '' = the Nextcloud root
   // ("Alle Dateien"). Selecting a committee scopes into its provisioned folder,
-  // which Nextcloud exposes under the committee name. Tags are presentational
+  // which Nextcloud exposes under its mount point (not the plain unit name). Tags are presentational
   // filters (Nextcloud systemtags have no WebDAV-path equivalent here) so they
   // don't change the path — they remain a forward-looking affordance.
-  // initialWorkspace (#157) is the loader-resolved label for a `?ou=` deep-link
+  // initialWorkspace (#157) is the loader-resolved folder path for a `?ou=` deep-link
   // from the Gremien detail panel; absent a deep-link it is '' ("Alle Dateien").
   let activeWorkspace = $state(data.initialWorkspace ?? '')
 </script>
@@ -54,7 +54,7 @@
       onSelect={(id) => (activeWorkspace = id)}
     />
     <div class="files-browser">
-      <FileBrowser rootPath={activeWorkspace} {readonly} />
+      <FileBrowser rootPath={activeWorkspace} {readonly} mountSuffix={data.mountSuffix ?? ''} />
     </div>
   </div>
 </div>

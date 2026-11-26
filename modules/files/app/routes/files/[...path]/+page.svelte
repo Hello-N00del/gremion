@@ -15,5 +15,5 @@
 
 <div class="space-y-4">
   <h1 class="text-2xl font-bold">Dateien</h1>
-  <FileBrowser rootPath={currentPath} {readonly} />
+  <FileBrowser rootPath={currentPath} {readonly} mountSuffix={data.mountSuffix ?? ''} />
 </div>

@@ -40,14 +40,26 @@ const NC_ENV: Record<string, string> = {
   NEXTCLOUD_ADMIN_PASSWORD: 'admin-pw',
 }
 vi.mock('$lib/server/env/service-env', () => ({ serviceEnv: (name: string) => NC_ENV[name] }))
+// the Files page loader reads the customer's units and its provisioning ledger: one customer's, from a table here
+const db = vi.hoisted(() => ({
+  units: [] as Array<{ id: string; name: string; wants_nextcloud_folder: boolean }>,
+  ledger: new Map<string, string>(),
+}))
+vi.mock('$lib/server/governance/org-units-db', () => ({ listOrgUnits: async () => db.units }))
+vi.mock('$lib/server/governance/provisioning/ledger', () => ({
+  getResource: async (unitId: string) => (db.ledger.has(unitId) ? { external_id: db.ledger.get(unitId) } : null),
+}))
 
 import { GET as listOrDownload, PUT, DELETE, PATCH } from '../../../routes/api/files/[...path]/+server'
 import { POST as uploadChunk } from '../../../routes/api/files/upload-chunk/+server'
 import { GET as editToken } from '../../../routes/api/files/edit-token/[...path]/+server'
 import { load as editPage } from '../../../routes/files/edit/[...path]/+page.server'
+import { load as filesPage } from '../../../routes/files/+page.server'
+import { runWithTenant, type TenantContext } from '$lib/server/tenant/context'
 import { getFilesBackend } from './backend'
 import { createNextcloudClient } from './nextcloud-client'
 import { createNextcloudSubsystem } from './provisioning/nextcloud-subsystem'
+import { tenantKey } from './namespace'
 import type { OrgUnit } from '$lib/server/governance/org-units-db'
 
 // ---- the two customers' users ------------------------------------------------
@@ -264,6 +276,7 @@ const R = {
   chunk: 'POST /api/files/upload-chunk',
   edit: 'GET /api/files/edit-token/[...path]',
   editPage: 'LOAD /files/edit/[...path]',
+  filesPage: 'LOAD /files',
 } as const
 
 // ---- request builders ---------------------------------------------------------
@@ -833,6 +846,50 @@ for (const shape of ['array', 'object'] as const) {
     })
   })
 }
+
+// The Files page opens a unit's folder by the folder id its ledger stores. The Nextcloud list it reads spans
+// every customer, so a unit's NAME must never lead it to a folder that belongs to another customer.
+describe('LOAD /files: the folder a workspace opens is the unit\'s own, found by id and never by name', () => {
+  const tenant = (id: string) => ({ id, slug: id }) as unknown as TenantContext
+  const load = (as: string) => runWithTenant(tenant(as), () => (filesPage as unknown as (e: unknown) => Promise<{ workspaces: Array<{ id: string; label: string; rootPath: string }> }>)({
+    locals: { auth: async () => ({ user: A }) },
+    url: new URL('http://localhost/files'),
+  }))
+  const KEY_OF_A = tenantKey('tenant-a')
+
+  beforeEach(() => {
+    db.units = [{ id: UNIT_A, name: 'Vorstand', wants_nextcloud_folder: true }]
+    db.ledger.clear()
+  })
+
+  it('a unit whose ledger names its folder opens that folder: A reads its own mount point, B keeps its plain-named one', async () => {
+    controlled.add(R.filesPage)
+    const fake = new FakeGroupFolders('array')
+    const own = fake.seed(`Vorstand (${KEY_OF_A})`, [`ou-${KEY_OF_A}-${UNIT_A}`])
+    fake.seed('Vorstand', [`ou-${UNIT_B}`]) // another customer's folder, from before the namespace, same name
+    db.ledger.set(UNIT_A, `${own}:ou-${KEY_OF_A}-${UNIT_A}`)
+    subsystemOn(fake)
+    const out = await load('tenant-a')
+    expect(out.workspaces).toEqual([expect.objectContaining({ id: UNIT_A, label: 'Vorstand', rootPath: `Vorstand (${KEY_OF_A})` })])
+  })
+
+  it("a read by name of A's unit never resolves B's folder, even when B's is the only folder with that plain name", attack(R.filesPage, async () => {
+    const fake = new FakeGroupFolders('array')
+    fake.seed('Vorstand', [`ou-${UNIT_B}`]) // B's folder; A's unit has no ledger row yet
+    subsystemOn(fake)
+    const out = await load('tenant-a')
+    expect(out.workspaces.map((w) => w.rootPath)).toEqual([`Vorstand (${KEY_OF_A})`]) // A's own (namespaced) name, not B's folder
+  }))
+
+  it("a unit whose recorded folder is gone is not sent to another customer's folder of the same name", attack(R.filesPage, async () => {
+    const fake = new FakeGroupFolders('object')
+    fake.seed('Vorstand', [`ou-${UNIT_B}`])
+    db.ledger.set(UNIT_A, '99:ou-gone')
+    subsystemOn(fake)
+    const out = await load('tenant-a')
+    expect(out.workspaces.map((w) => w.rootPath)).toEqual([`Vorstand (${KEY_OF_A})`])
+  }))
+})
 
 describe("getCollaboraEditorUrl: the editor URL names the request's own host", () => {
   const A_HOST = 'https://a.example.org'

@@ -10,7 +10,7 @@
   interface Props {
     workspaces: FileWorkspace[]
     active: string
-    onSelect: (id: string) => void
+    onSelect: (rootPath: string) => void
   }
 
   let { workspaces, active, onSelect }: Props = $props()
@@ -33,8 +33,8 @@
     <button
       type="button"
       class="tree-row"
-      class:sel={active === ws.label}
-      onclick={() => onSelect(ws.label)}
+      class:sel={active === ws.rootPath}
+      onclick={() => onSelect(ws.rootPath)}
       title={ws.label}
     >
       <span class="ws-dot" style="--c-hue: {ws.hue};" aria-hidden="true"></span>

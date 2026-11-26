@@ -10,14 +10,17 @@
   import { editorTabHref } from '$lib/files/editor-close'
   import { isUploadTooLarge } from '$lib/files/upload-limit'
   import { folderNameProblem, type FolderNameProblem } from '$lib/files/folder-name'
+  import { stripMountSuffix } from '$lib/files/mount-label'
   import { lang, t } from '$lib/i18n'
 
   interface Props {
     rootPath: string
     readonly: boolean
+    /** The customer's key at the end of a group folder's mount point (" (<key>)"): members are shown the plain unit name. */
+    mountSuffix?: string
   }
 
-  let { rootPath, readonly }: Props = $props()
+  let { rootPath, readonly, mountSuffix = '' }: Props = $props()
 
   let entries = $state<DavEntry[]>([])
   let loading = $state(false)
@@ -86,9 +89,11 @@
           : (json.error ?? `HTTP ${res.status}`)
         return
       }
+      // At the root the folders are the group folders, named by their mount point: shown by the plain unit name.
+      const atRoot = rootPath.replace(/^\/+|\/+$/g, '') === ''
       entries = (json.files as Array<{path: string; name: string; is_dir: boolean; etag: string; size: number; last_modified: string}>).map((f) => ({
         href: f.path,
-        displayName: f.name,
+        displayName: atRoot && f.is_dir ? stripMountSuffix(f.name, mountSuffix) : f.name,
         isCollection: f.is_dir,
         etag: f.etag || null,
         contentLength: f.size,
@@ -117,8 +122,10 @@
     const crumbs: { label: string; path: string }[] = [{ label: $t('nav.files'), path: '' }]
     let accumulated = ''
     for (const p of parts) {
+      // the first segment is a group folder's mount point: shown by the plain unit name, navigated by its real path
+      const label = accumulated === '' ? stripMountSuffix(p, mountSuffix) : p
       accumulated = accumulated ? accumulated + '/' + p : p
-      crumbs.push({ label: p, path: accumulated })
+      crumbs.push({ label, path: accumulated })
     }
     return crumbs
   }
