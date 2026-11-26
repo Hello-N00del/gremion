@@ -601,6 +601,57 @@ test('every source path the document cites exists and defines its function, and 
   assert.ok(!/\bboard\b/i.test(read('gremion-ui/scripts/tenant-provision.ts')), 'tenant-provision.ts has a board verb now: replace the gap in the document by the procedure')
 })
 
+test('the hand-switch and nightly-window passages say what the code does', () => {
+  const text = docText()
+  const defaults = defaultsOfProgram()
+  // (1) the retag stage refuses while the old colour still runs: the document quotes the refusal as the program prints it
+  const driver = read('infra/host/lib/cd/driver.sh')
+  const prepare = read('infra/host/lib/cd/prepare.sh')
+  const refusal = (/_cd_prep_err "(retag: the target colour project is running)"/.exec(prepare) ?? [])[1]
+  assert.ok(refusal, 'prepare.sh no longer refuses a retag while the target colour project runs')
+  assert.match(prepare, /_cd_prep_err\(\) \{ printf 'cd-prepare: %s\\n' "\$\*" >&2; \}/, 'the prefix of the refusal line changed')
+  assert.match(read('infra/host/lib/cd/docker.sh'), /printf '%s\/etc\/env\/%s\.env\\n' "\$\(_cd_docker_root\)" "\$proj"/, 'the env file of a colour is no longer etc/env/app-<colour>.env')
+  const refusalLine = `cd-prepare: ${refusal}`
+  const adoption = flat(section(text, 'Adoption'))
+  const afterHand = flat(subsection(section(text, 'Hand procedures'), 'After any hand intervention'))
+  const stop = 'docker compose --env-file /opt/gremion/etc/env/app-<colour>.env stop'
+  for (const [where, body] of [['the adoption steps', adoption], ['the hand intervention procedure', afterHand]]) {
+    assert.ok(body.includes(refusalLine), `${where} do not quote the refusal "${refusalLine}"`)
+    assert.ok(body.includes(stop), `${where} do not show how the old colour is stopped (${stop})`)
+    assert.ok(body.includes('its images and its tag stay'), `${where} do not say that the images and the tag of the stopped colour stay`)
+  }
+  assert.ok(adoption.includes('before the first release of CD'), 'the adoption steps do not say the old colour is stopped before the first release')
+  assert.match(driver, /_cd_drv_st_retag\(\) \{ cd_prepare_retag /, 'the retag stage is no longer cd_prepare_retag')
+  assert.match(driver, /host\) _cd_drv_abort host "/, 'a refused retag is no longer a host failure')
+  assert.match(read('infra/host/lib/cd/driver.sh'), /host\)\s*\n\s*cd_hold_set failure /, 'a host failure no longer sets the hold failure')
+  // (2) the worked example of the nightly window is computed from the defaults and the purge timer
+  const span = Number(defaults.get('CD_LOCK_SPAN_MAX_MIN'))
+  const purgeMax = Number(defaults.get('CD_PURGE_MAX_MIN'))
+  const timer = read('infra/host/templates/systemd/gremion-purge.timer')
+  const at = /^OnCalendar=\*-\*-\* (\d\d):(\d\d):00 UTC$/m.exec(timer)
+  assert.ok(at, 'the purge timer is no longer a daily OnCalendar in UTC')
+  const hhmm = (min) => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`
+  const purgeLocal = Number(at[1]) * 60 + Number(at[2]) + 60 // a host on UTC+1 reads the unit one hour later
+  const opens = hhmm(purgeLocal - span - purgeMax)
+  const closes = hhmm(purgeLocal + purgeMax)
+  assert.equal(`${opens} ${closes}`, '00:25 03:35', 'the defaults no longer give the window the example states')
+  const locks = flat(section(text, 'Locks, the timer guard and the reboot case'))
+  assert.ok(locks.includes(`purge timer is written as ${at[1]}:${at[2]} UTC`), 'the locks section does not name the purge time of the unit')
+  assert.ok(locks.includes(`closes the window from about ${opens} to ${closes}`), `the locks section does not state the window ${opens} to ${closes}`)
+  // the backup timer widens the window the same way: its default time and longest run, read from the code
+  const backupAt = /^BACKUP_ONCALENDAR="\$\{BACKUP_ONCALENDAR:-\*-\*-\* (\d\d):(\d\d):00\}"$/m.exec(read('infra/host/bootstrap.sh'))
+  assert.ok(backupAt, 'bootstrap.sh no longer has a default backup time')
+  const backupMax = Number(defaults.get('CD_BACKUP_MAX_MIN'))
+  const backupOpens = hhmm((Number(backupAt[1]) * 60 + Number(backupAt[2]) - span - backupMax + 1440) % 1440)
+  assert.equal(backupOpens, '21:30', 'the defaults no longer give the backup window the example states')
+  assert.ok(locks.includes(`BACKUP_ONCALENDAR\` ${backupAt[1]}:${backupAt[2]}`) && locks.includes(`is ${backupOpens}, so it is closed from about ${backupOpens} to ${closes}`), 'the locks section does not state the window of the default backup time')
+  for (const phrase of ['snapshot_waiting', 'gremion-cd tick', 'systemctl list-timers gremion-purge.timer gremion-backup.timer', 'NEXT']) {
+    assert.ok(locks.includes(phrase), `the locks section does not say: ${phrase}`)
+  }
+  assert.match(driver, /cd_hist snapshot_waiting why=timer_guard/, 'the timer guard no longer records snapshot_waiting')
+  assert.match(read('infra/host/lib/cd/data.sh'), /next <= now \+ \(span \+ max\) \* 60/, 'the guard no longer widens a timer by the span plus its longest run')
+})
+
 test('the pointers lead to the document and the old "in progress" row is gone', () => {
   const tooling = read('docs/ops/host-tooling.md')
   const row = tooling.split('\n').find((l) => l.startsWith('| `gremion-cd'))
@@ -624,5 +675,5 @@ test('this file is collected by unit:node (a count assertion over the same glob 
   assert.ok(collected.includes('scripts/cd/cd-guards.test.mjs'), 'the sibling guard file is no longer collected')
   assert.ok(collected.length >= 20, `only ${collected.length} node test files collected: the glob emptied`)
   const declared = (readFileSync(path.join(ROOT, self), 'utf8').match(/^[ \t]*test(?:\.(?:skip|only|todo))?\(/gm) ?? []).length
-  assert.equal(declared, 18, `this file declares ${declared} tests, not the 18 that the count in this assertion knows`)
+  assert.equal(declared, 19, `this file declares ${declared} tests, not the 19 that the count in this assertion knows`)
 })

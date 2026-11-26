@@ -413,6 +413,28 @@ and `selftest` reports `timers` as ok with the same note. An enabled or active t
 readable next elapse, a next elapse in the past, a unit file that does not exist (or is masked) and a
 timer list that cannot be read are still "unknown" and still a stop.
 
+**A worked example: the nightly window.** The unit of the purge timer is written as 02:30 UTC; on a
+host whose clock is UTC+1 (Central European winter time) `systemctl list-timers` shows it at 03:30,
+and the example reads it that way (summer time moves every clock time below by one hour; the guard
+reads the real next elapse and needs no such conversion). The guard widens a timer by its longest
+run, so a span of `CD_LOCK_SPAN_MAX_MIN` (default 180) minutes plus `CD_PURGE_MAX_MIN` (default 5)
+minutes, 185 in all, reaches the purge from 00:25 on, and the purge holds the host lock while it runs,
+up to about 03:35. With the purge at 03:30 and the default span the guard closes the window from about
+00:25 to 03:35. A host that keeps the nightly backup at its default (`BACKUP_ONCALENDAR` 02:00 host
+time, `CD_BACKUP_MAX_MIN` 90) has a wider window: 02:00 minus 270 minutes is 21:30, so it is closed
+from about 21:30 to 03:35 there; the purge alone is the case of a host with the backup timer switched
+off.
+
+A `release-now` in that window is neither refused nor a failure. The release runs `fetch`, `classify`,
+`retag`, `render` and `build`, and then waits at `snapshot`: the history says `snapshot_waiting` (why
+`timer_guard`), the tick prints "waiting: the lock span would overlap the backup or the purge" and
+ends, and the stage record stays as it was. The release goes on only with a tick after the window
+(from about 03:35 here). The CD timer does that every five minutes by itself. With the timers off,
+start one tick by hand as the deploy user once the window has passed: `gremion-cd tick`. A tick inside
+the window only waits again. To read when the window ends, read the next elapse of the timers:
+`systemctl list-timers gremion-purge.timer gremion-backup.timer` (the `NEXT` column, in host time);
+the window ends at the elapse of the purge plus its run, about five minutes.
+
 **The Karenz exception.** The hourly Karenz run (minute 17) cannot be avoided by a span of this
 length and is not guarded. It exits 3 if it meets the held lock and runs again an hour later.
 
@@ -774,6 +796,27 @@ Adoption is done once, by hand, on the live host. Nothing is enabled until the l
    named at the top does not do it: the runbook upgrade (`gremion-deploy`) takes a `dist-v` tag and makes
    `releases/<tag>`, while adopt reads a `pilot-<sha12>` tag and `releases/<sha12>`, so a host upgraded
    that way is refused by step 5.
+
+   The host's own switch leaves the old colour running, as the way back, and CD cannot start a
+   release beside it: the `retag` stage of the first release refuses a target colour whose project is
+   running, with the line `cd-prepare: retag: the target colour project is running` on the standard
+   error of the tick (the journal of `gremion-cd.service`). That ends the release at once: the hold is
+   `failure` with the reason `retag_failed`, and the mail is `stopped`. So stop the old colour before
+   the first release of CD. As the deploy user, check that `runtime/active-colour` names the colour
+   that serves (never stop that one), then stop the other colour's project with its own env file,
+   from the release tree it was started from (`releases/<sha12>`; the `previous` line of
+   `gremion-cd status` after adopt names it):
+
+   ```
+   cd /opt/gremion/releases/<sha12 of the old colour>
+   GREMION_ROOT=/opt/gremion docker compose --env-file /opt/gremion/etc/env/app-<colour>.env stop
+   ```
+
+   The env file names the compose project and the compose files, so no other option is needed (CD
+   itself passes the same file and lets no other project name, compose file or profile in). `stop` removes
+   no image and writes no env file: its images and its tag stay, and the previous release remains
+   startable for a rollback (`gremion-cd status` shows `startable`). Then run the same command with
+   `ps` in place of `stop`: it must list no running container.
 3. As root, run `bash /opt/gremion/current/infra/host/bootstrap.sh cd`. It installs, as real files, every
    host program of `bin/` that needs nothing but the installed libraries, `lib/common.sh` and `lib/cd/*.sh`
    (the apply script is root-owned). `gremion-isolation`, `gremion-isolation-live`, `gremion-services` and `gremion-tenant` are not
@@ -979,6 +1022,21 @@ Anything done by hand to the colours, the tags, `current`, the host programs or 
 `state.json` stale. `gremion-cd adopt --re-adopt --reason TEXT` is the way back to a true state. It
 refuses while a release is in flight (exit 3), and it clears nothing but `live`, `previous` and the
 manifest. Run it before `resume` when the hold's cause was fixed by hand.
+
+A hand blue/green switch (the host's own upgrade procedure, not a CD release) leaves the old colour
+running. CD's `retag` stage refuses the next release while it runs, with the line
+`cd-prepare: retag: the target colour project is running`; the release ends with the hold `failure`
+and the reason `retag_failed`. So stop the old colour after the hand switch and before the next
+release, as the deploy user, once `runtime/active-colour` names the other colour:
+
+```
+cd /opt/gremion/releases/<sha12 of the old colour>
+GREMION_ROOT=/opt/gremion docker compose --env-file /opt/gremion/etc/env/app-<colour>.env stop
+```
+
+The command touches that colour's project only: its images and its tag stay, so the previous release
+remains startable. When the refusal has already ended a release, stop the colour, then `adopt
+--re-adopt` and `resume` as above.
 
 ## Proof
 
