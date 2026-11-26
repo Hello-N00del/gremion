@@ -52,6 +52,8 @@ vi.mock('$lib/server/mail/tenant-mail', () => ({
 
 // Secret for all tests
 const TEST_SECRET = 'test-secret-value-abc123'
+// A newsletter draft stored before drafts were keyed by customer (flat folder).
+const LEGACY_PATH = '/remote.php/dav/files/admin/_newsletters/nl-1700000000000.odt'
 
 // ── Helper: build a minimal Request ─────────────────────────────────────────
 
@@ -73,7 +75,7 @@ function makeEvent(body: unknown, secret: string | null) {
   return {
     request: makeRequest(body, secret),
     locals: {
-      tenant: { id: 'tid-default', slug: 'default' },
+      tenant: { id: '0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b', slug: 'default' },
     },
   }
 }
@@ -101,12 +103,12 @@ beforeEach(() => {
 
 describe('POST /api/internal/newsletter/render', () => {
   it('RED→GREEN: returns 403 when x-internal-auth header is missing', async () => {
-    const res = await renderModule.POST(makeEvent({ odtPath: '/files/nl.odt' }, null) as never)
+    const res = await renderModule.POST(makeEvent({ odtPath: LEGACY_PATH }, null) as never)
     expect(res.status).toBe(403)
   })
 
   it('RED→GREEN: returns 403 when secret is wrong', async () => {
-    const res = await renderModule.POST(makeEvent({ odtPath: '/files/nl.odt' }, 'wrong-secret') as never)
+    const res = await renderModule.POST(makeEvent({ odtPath: LEGACY_PATH }, 'wrong-secret') as never)
     expect(res.status).toBe(403)
   })
 
@@ -125,20 +127,20 @@ describe('POST /api/internal/newsletter/render', () => {
     mockDownload.mockResolvedValue({ arrayBuffer: async () => fakeBuffer })
     mockConvertOdtToHtml.mockResolvedValue('<h1>Newsletter</h1>')
 
-    const res = await renderModule.POST(makeEvent({ odtPath: '/files/nl.odt' }, TEST_SECRET) as never)
+    const res = await renderModule.POST(makeEvent({ odtPath: LEGACY_PATH }, TEST_SECRET) as never)
     expect(res.status).toBe(200)
     const json = await res.json() as { html: string }
     expect(json.html).toBe('<h1>Newsletter</h1>')
 
     // NC download was called with the correct path
-    expect(mockDownload).toHaveBeenCalledWith('/files/nl.odt', 'admin')
+    expect(mockDownload).toHaveBeenCalledWith(LEGACY_PATH, 'admin')
     // convertOdtToHtml was called with the buffer
     expect(mockConvertOdtToHtml).toHaveBeenCalledWith(fakeBuffer)
   })
 
   it('RED→GREEN: returns 500 when NC download fails', async () => {
     mockDownload.mockRejectedValue(new Error('NC down'))
-    const res = await renderModule.POST(makeEvent({ odtPath: '/files/nl.odt' }, TEST_SECRET) as never)
+    const res = await renderModule.POST(makeEvent({ odtPath: LEGACY_PATH }, TEST_SECRET) as never)
     expect(res.status).toBe(500)
   })
 
@@ -146,7 +148,7 @@ describe('POST /api/internal/newsletter/render', () => {
     const fakeBuffer = new ArrayBuffer(4)
     mockDownload.mockResolvedValue({ arrayBuffer: async () => fakeBuffer })
     mockConvertOdtToHtml.mockRejectedValue(new Error('Collabora down'))
-    const res = await renderModule.POST(makeEvent({ odtPath: '/files/nl.odt' }, TEST_SECRET) as never)
+    const res = await renderModule.POST(makeEvent({ odtPath: LEGACY_PATH }, TEST_SECRET) as never)
     expect(res.status).toBe(500)
   })
 })

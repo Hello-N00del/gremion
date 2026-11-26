@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // #232 — the newsletter ODT preview page renders Collabora-converted HTML via
@@ -100,5 +100,40 @@ describe('newsletter preview loader — #232 {@html} sanitization', () => {
     mockConvertOdtToHtml.mockResolvedValue(safe)
     const data = await loadPreview()
     expect(data.html).toBe(safe)
+  })
+})
+
+// The ODT lives in the Nextcloud admin space. The user that space is read as comes
+// from the deployment's service endpoint settings (same as the write path and the
+// preview API route), never a literal.
+describe('newsletter preview loader — admin space user', () => {
+  const saved = process.env.NEXTCLOUD_ADMIN_USER
+  beforeEach(() => {
+    mockHasRole.mockReset().mockReturnValue(true)
+    mockResolveBackend.mockReset()
+    mockGetNewsletter.mockReset()
+    mockCreateNextcloudClient.mockReset()
+    mockDownload.mockReset()
+    mockConvertOdtToHtml.mockReset().mockResolvedValue('<p>ok</p>')
+    mockGetNewsletter.mockResolvedValue({ id: 7, odt_path: '/newsletters/7.odt' })
+    mockResolveBackend.mockReturnValue({ getNewsletter: mockGetNewsletter })
+    mockDownload.mockResolvedValue(new Response('odt'))
+    mockCreateNextcloudClient.mockReturnValue({ download: mockDownload })
+  })
+  afterEach(() => {
+    if (saved === undefined) delete process.env.NEXTCLOUD_ADMIN_USER
+    else process.env.NEXTCLOUD_ADMIN_USER = saved
+  })
+
+  it('reads the ODT as the configured Nextcloud admin user', async () => {
+    process.env.NEXTCLOUD_ADMIN_USER = 'ncadmin'
+    await loadPreview()
+    expect(mockDownload).toHaveBeenCalledWith('/newsletters/7.odt', 'ncadmin')
+  })
+
+  it('falls back to admin only when the setting is absent', async () => {
+    delete process.env.NEXTCLOUD_ADMIN_USER
+    await loadPreview()
+    expect(mockDownload).toHaveBeenCalledWith('/newsletters/7.odt', 'admin')
   })
 })

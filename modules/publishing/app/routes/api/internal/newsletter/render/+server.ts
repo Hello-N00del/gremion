@@ -15,12 +15,14 @@ import type { RequestHandler } from './$types'
 import { constantTimeEqual } from '$lib/server/internal-fetch'
 import { createNextcloudClient } from '$lib/server/files/nextcloud-client'
 import { convertOdtToHtml } from '$lib/server/newsletter/collabora-convert'
+import { serviceEnv } from '$lib/server/env/service-env'
+import { isRenderableNewsletterPath } from '$lib/server/newsletter/draft-path'
 
 const RenderBody = z.object({
   odtPath: z.string().min(1),
 })
 
-export const POST: RequestHandler = async ({ request }) => {
+export const POST: RequestHandler = async ({ request, locals }) => {
   // ── 1. Guard: validate shared internal secret ─────────────────────────────
   const secret = request.headers.get('x-internal-auth')
   const expected = process.env.INTERNAL_NEWSLETTER_SECRET
@@ -56,10 +58,19 @@ export const POST: RequestHandler = async ({ request }) => {
 
   const { odtPath } = parsed.data
 
-  // ── 3. Fetch ODT from Nextcloud + convert via Collabora ───────────────────
+  // ── 3. Allow-list: only this customer's draft folder (or a legacy flat draft) ──
+  // The download runs as the Nextcloud admin on the shared space, so the leaf's
+  // say-so is not enough: the path must be one of the two places a newsletter
+  // draft of THIS tenant can live. Everything else is refused.
+  const adminUser = serviceEnv('NEXTCLOUD_ADMIN_USER') ?? 'admin'
+  if (!isRenderableNewsletterPath(odtPath, adminUser, locals.tenant.id)) {
+    return json({ success: false, error: 'Forbidden' }, { status: 403 })
+  }
+
+  // ── 4. Fetch ODT from Nextcloud + convert via Collabora ───────────────────
   try {
     const nc = createNextcloudClient()
-    const res = await nc.download(odtPath, 'admin')
+    const res = await nc.download(odtPath, adminUser)
     const odtBuffer = await res.arrayBuffer()
     const html = await convertOdtToHtml(odtBuffer)
     return json({ html })

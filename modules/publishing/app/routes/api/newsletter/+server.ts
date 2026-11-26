@@ -5,6 +5,8 @@ import { resolveNewsletterBackendOr503 } from '$lib/server/newsletter/backend/re
 import { createNextcloudClient } from '$lib/server/files/nextcloud-client'
 import { createEmptyOdt } from '$lib/server/newsletter/collabora-convert'
 import { serviceEnv } from '$lib/server/env/service-env'
+import { mkcolIfMissing, newsletterDraftRoot, newsletterTenantFolder } from '$lib/server/newsletter/draft-path'
+import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 
 const createSchema = z.object({
@@ -45,21 +47,25 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   // and the admin-side editor read path agree on the owning WebDAV space.
   const adminUser = serviceEnv('NEXTCLOUD_ADMIN_USER') ?? 'admin'
 
-  const folderPath = `/remote.php/dav/files/${adminUser}/_newsletters`
+  // The shared admin space holds every customer's drafts, so the draft goes into
+  // the customer's own folder under a random name (no title, no clock).
+  let tenantFolder: string
   try {
-    await nc.mkcol(folderPath, adminUser)
-  } catch {
-    // Folder already exists — ignore MKCOL 405
+    tenantFolder = newsletterTenantFolder(adminUser, locals.tenant.id)
+  } catch (err) {
+    console.error('[api/newsletter] refusing to create a draft:', err)
+    return json({ success: false, error: 'Newsletter konnte nicht angelegt werden.' }, { status: 500 })
   }
-
+  const odtPath = `${tenantFolder}/${randomUUID()}.odt`
   const odtBuffer = await createEmptyOdt()
-  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 60)
-  const filename = `${slug}-${Date.now()}.odt`
-  const odtPath = `${folderPath}/${filename}`
+
   // #208: the ODT upload is a hard dependency on Nextcloud. If it is down the
   // raw throw surfaces as an opaque 500; wrap it so a Nextcloud outage yields a
   // structured 502 the client can show instead.
   try {
+    // Both levels, shared folder first; "already exists" (405) is fine.
+    await mkcolIfMissing(nc, newsletterDraftRoot(adminUser), adminUser)
+    await mkcolIfMissing(nc, tenantFolder, adminUser)
     await nc.upload(odtPath, adminUser, odtBuffer, 'application/vnd.oasis.opendocument.text')
   } catch (uploadErr) {
     console.error('[api/newsletter] Nextcloud ODT upload failed:', uploadErr)
