@@ -152,7 +152,9 @@ describe('nextcloud subsystem', () => {
       const { row, ctx } = ledgerRow()
       nc.failGrants = 3
       const sub = subsystem(nc)
-      for (let i = 0; i < 3; i++) await expect(sub.ensureResource(unit, ctx, row.externalId)).rejects.toThrow()
+      await expect(sub.ensureResource(unit, ctx, row.externalId)).rejects.toThrow('add group refused')
+      await expect(sub.ensureResource(unit, ctx, row.externalId)).rejects.toThrow('add group refused')
+      await expect(sub.ensureResource(unit, ctx, row.externalId)).rejects.toThrow('add group refused')
       const r = await sub.ensureResource(unit, ctx, row.externalId)
       expect(nc.folders).toHaveLength(1)
       expect(r.externalId).toBe('77:ou-abc')
@@ -173,7 +175,7 @@ describe('nextcloud subsystem', () => {
       const nc = fakeNc([])
       const { row, ctx } = ledgerRow()
       row.externalId = '41:ou-abc'
-      await expect(subsystem(nc).ensureResource(unit, ctx, row.externalId)).rejects.toThrow()
+      await expect(subsystem(nc).ensureResource(unit, ctx, row.externalId)).rejects.toThrow('cannot be verified')
       expect(nc.folders).toHaveLength(0)
       expect(row.externalId).toBe('41:ou-abc')
     })
