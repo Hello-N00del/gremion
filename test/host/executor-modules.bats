@@ -597,6 +597,44 @@ optin() { printf 'SECONDARY_TENANT_MODULES=%s\n' "$1" >> "${GREMION_ROOT}/etc/en
     done
 }
 
+@test "secondary opt-in: content and publishing pass the guard only when opted in, each for itself alone, and the newsletter manifest id never does" {
+    secondary_state
+    registered rat.alpha.example
+    local m
+    for m in content publishing; do
+        : > "$ORDER"
+        module_args "$m"
+        drive handle_enable_module
+        [ "$status" -ne 0 ] || { echo "${m} was enabled without the opt-in: ${output}"; return 1; }
+        if enable_ran; then echo "the container verb ran for ${m}"; return 1; fi
+    done
+    optin content
+    : > "$ORDER"
+    module_args content
+    drive handle_enable_module
+    [ "$status" -eq 0 ] || { echo "content refused with the opt-in: ${output}"; return 1; }
+    enable_ran || { echo "the container verb did not run for content"; return 1; }
+    for m in publishing newsletter; do
+        : > "$ORDER"
+        module_args "$m"
+        drive handle_enable_module
+        [ "$status" -ne 0 ] || { echo "${m} was enabled with only content opted in"; return 1; }
+        if enable_ran; then echo "the container verb ran for ${m}"; return 1; fi
+    done
+    sed -i '/^SECONDARY_TENANT_MODULES=/d' "${GREMION_ROOT}/etc/env/state.env"
+    optin 'content publishing'
+    : > "$ORDER"
+    module_args publishing
+    drive handle_enable_module
+    [ "$status" -eq 0 ] || { echo "publishing refused with the opt-in: ${output}"; return 1; }
+    enable_ran || { echo "the container verb did not run for publishing"; return 1; }
+    : > "$ORDER"
+    module_args newsletter
+    drive handle_enable_module
+    [ "$status" -ne 0 ] || { echo "newsletter was enabled through the opt-in"; return 1; }
+    if enable_ran; then echo "the container verb ran for newsletter"; return 1; fi
+}
+
 @test "secondary opt-in: votes opted in passes for votes alone" {
     secondary_state
     registered rat.alpha.example

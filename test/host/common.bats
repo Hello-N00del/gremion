@@ -730,6 +730,18 @@ CASES
         SECONDARY_TENANT_MODULES='files votes' run_with 'secondary_host_module_allowed "$1"' "$m"
         [ "$status" -eq 1 ] || { echo "allowed beyond the opt-in: '${m}'"; return 1; }
     done
+    # content and publishing are ids of the opt-in set: allowed when listed, and only the listed one
+    SECONDARY_TENANT_MODULES='content' run_with 'secondary_host_module_allowed "$1"' content
+    [ "$status" -eq 0 ] || { echo "content refused with the opt-in"; return 1; }
+    SECONDARY_TENANT_MODULES='content' run_with 'secondary_host_module_allowed "$1"' publishing
+    [ "$status" -eq 1 ] || { echo "publishing allowed with only content opted in"; return 1; }
+    SECONDARY_TENANT_MODULES='publishing' run_with 'secondary_host_module_allowed "$1"' publishing
+    [ "$status" -eq 0 ] || { echo "publishing refused with the opt-in"; return 1; }
+    SECONDARY_TENANT_MODULES='publishing' run_with 'secondary_host_module_allowed "$1"' content
+    [ "$status" -eq 1 ] || { echo "content allowed with only publishing opted in"; return 1; }
+    # the manifest id of publishing (newsletter) is not a catalogue id: it is never allowed through the key
+    SECONDARY_TENANT_MODULES='content publishing' run_with 'secondary_host_module_allowed "$1"' newsletter
+    [ "$status" -eq 1 ] || { echo "newsletter allowed through the key"; return 1; }
     # a single id opts in that id only
     SECONDARY_TENANT_MODULES='votes' run_with 'secondary_host_module_allowed "$1"' files
     [ "$status" -eq 1 ]
@@ -737,23 +749,27 @@ CASES
     [ "$status" -eq 0 ]
 }
 
-@test "secondary_host_module_allowed: an id outside the fixed opt-in set is never allowed, whatever the key says (publishing stays out: its mail links name the primary host)" {
+@test "secondary_host_module_allowed: an id outside the fixed opt-in set is never allowed, whatever the key says" {
     local m
-    for m in publishing newsletter content elections finance vault handover some-new-module 'files,votes' 'FILES'; do
+    for m in newsletter elections finance vault handover some-new-module 'files,votes' 'FILES'; do
         SECONDARY_TENANT_MODULES="${m} files" run_with 'secondary_host_module_allowed "$1"' "$m"
         [ "$status" -eq 1 ] || { echo "allowed through the key: '${m}'"; return 1; }
     done
 }
 
-@test "secondary_optin_manifest_id maps catalogue ids to manifest ids as the two secondary lists do: files, votes, messaging->messages, nothing else" {
+@test "secondary_optin_manifest_id maps catalogue ids to manifest ids as the two secondary lists do: files, votes, messaging->messages, content, publishing->newsletter, nothing else" {
     run_with 'secondary_optin_manifest_id files'
     [ "$status" -eq 0 ]; [ "$output" = files ]
     run_with 'secondary_optin_manifest_id votes'
     [ "$status" -eq 0 ]; [ "$output" = votes ]
     run_with 'secondary_optin_manifest_id messaging'
     [ "$status" -eq 0 ]; [ "$output" = messages ]
+    run_with 'secondary_optin_manifest_id content'
+    [ "$status" -eq 0 ]; [ "$output" = content ]
+    run_with 'secondary_optin_manifest_id publishing'
+    [ "$status" -eq 0 ]; [ "$output" = newsletter ]
     local m
-    for m in messages publishing newsletter content board calendar '' unknown; do
+    for m in messages newsletter board calendar elections vault finance '' unknown; do
         run_with 'secondary_optin_manifest_id "$1"' "$m"
         [ "$status" -eq 1 ] || { echo "mapped: '${m}'"; return 1; }
     done
@@ -767,15 +783,27 @@ CASES
     run_with 'secondary_tenant_modules_problem "votes" "canary.example.org" "" "" ""'
     [ "$status" -eq 0 ]
     local bad
-    for bad in 'some-new-module' 'newsletter' 'content' 'elections' 'messages' 'FILES' 'files,votes' 'files votes files' ; do
+    for bad in 'some-new-module' 'newsletter' 'elections' 'messages' 'FILES' 'files,votes' 'files votes files' ; do
         run_with 'secondary_tenant_modules_problem "$1" "canary.example.org" "off" "namespaced" "namespaced"' "$bad"
         [ "$status" -eq 1 ] || { echo "accepted '${bad}'"; return 1; }
         [[ "$output" == *"entry "* ]] || { echo "no position for '${bad}': ${output}"; return 1; }
     done
     run_with 'secondary_tenant_modules_problem "files votes files" "canary.example.org" "" "" ""'
     [[ "$output" == *"entry 3"* && "$output" == *"duplicate of entry 1"* ]] || { echo "$output"; return 1; }
+    # content and publishing are ids of the opt-in set: they need no switch beyond SECONDARY_TENANT_HOSTS
+    run_with 'secondary_tenant_modules_problem "content publishing" "canary.example.org" "" "" ""'
+    [ "$status" -eq 0 ]; [ -z "$output" ] || { echo "$output"; return 1; }
+    run_with 'secondary_tenant_modules_problem "files votes content publishing" "canary.example.org" "" "" ""'
+    [ "$status" -eq 0 ]
     run_with 'secondary_tenant_modules_problem "publishing" "canary.example.org" "" "" ""'
-    [[ "$output" == *"entry 1"* && "$output" == *"publishing"* && "$output" == *"mail"* ]] || { echo "$output"; return 1; }
+    [ "$status" -eq 0 ]
+    # a duplicate is still named by position, and the newsletter manifest id is not a catalogue id
+    run_with 'secondary_tenant_modules_problem "content publishing content" "canary.example.org" "" "" ""'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"entry 3"* && "$output" == *"duplicate of entry 1"* ]] || { echo "$output"; return 1; }
+    run_with 'secondary_tenant_modules_problem "content newsletter" "canary.example.org" "" "" ""'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"entry 2"* ]] || { echo "$output"; return 1; }
 }
 
 @test "secondary_tenant_modules_problem: the key without SECONDARY_TENANT_HOSTS is refused" {
@@ -850,5 +878,13 @@ CASES
     SECONDARY_TENANT_MODULES='votes files' run_with 'secondary_host_modules_pinned_off | tr "\n" " "'
     [ "$output" = 'content elections messages newsletter vault ' ] || { echo "[$output]"; return 1; }
     SECONDARY_TENANT_MODULES='messaging' run_with 'secondary_host_modules_pinned_off | tr "\n" " "'
-    [ "$output" = 'content elections files newsletter vault votes ' ] || { echo "[$output]"; return 1; }
+    [ "$output" = 'content elections files newsletter vault votes ' ] || { echo "[$output]"; return 1; }    # content opts in content, publishing opts in the manifest id newsletter
+    SECONDARY_TENANT_MODULES='content' run_with 'secondary_host_modules_pinned_off | tr "\n" " "'
+    [ "$output" = 'elections files messages newsletter vault votes ' ] || { echo "[$output]"; return 1; }
+    SECONDARY_TENANT_MODULES='publishing' run_with 'secondary_host_modules_pinned_off | tr "\n" " "'
+    [ "$output" = 'content elections files messages vault votes ' ] || { echo "[$output]"; return 1; }
+    SECONDARY_TENANT_MODULES='content publishing' run_with 'secondary_host_modules_pinned_off | tr "\n" " "'
+    [ "$output" = 'elections files messages vault votes ' ] || { echo "[$output]"; return 1; }
+    SECONDARY_TENANT_MODULES='files votes messaging content publishing' run_with 'secondary_host_modules_pinned_off | tr "\n" " "'
+    [ "$output" = 'elections vault ' ] || { echo "[$output]"; return 1; }
 }
