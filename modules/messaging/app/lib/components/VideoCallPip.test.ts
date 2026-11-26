@@ -11,6 +11,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, waitFor } from '@testing-library/svelte'
 import { startRoomCall, endCall } from '$lib/stores/call-store.svelte'
 import VideoCallPip from './VideoCallPip.svelte'
+// The very module the component imports, resolved to the mock below: what the component can read from the
+// process env. The test that follows pins it, so a mock that stops reaching the component cannot go unseen.
+import { env as publicEnv } from '$env/dynamic/public'
 
 vi.mock('$env/dynamic/public', () => ({
   env: { PUBLIC_ELEMENT_CALL_URL: 'https://a.example.org/element-call', PUBLIC_BASE_URL: 'https://a.example.org' },
@@ -59,6 +62,10 @@ function fromWidget(origin: string, action: string, source: Window | null) {
 describe('VideoCallPip on a secondary customer host', () => {
   it('the page itself is on host B and the process env names host A', () => {
     expect(window.location.origin).toBe('https://b.example.org')
+    // The component's import of the process env is this mock; without it the frame tests below would
+    // pass for any env, host A or none.
+    expect(publicEnv.PUBLIC_ELEMENT_CALL_URL).toBe('https://a.example.org/element-call')
+    expect(publicEnv.PUBLIC_BASE_URL).toBe('https://a.example.org')
   })
 
   it('points the iframe at this host\'s Element Call, not at the process env host', async () => {

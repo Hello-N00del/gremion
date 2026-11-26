@@ -9,6 +9,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, waitFor } from '@testing-library/svelte'
 import { startRoomCall, endCall } from '$lib/stores/call-store.svelte'
 import VideoCallPip from './VideoCallPip.svelte'
+// The very module the component imports, resolved to the mock below (see the test that pins it).
+import { env as publicEnv } from '$env/dynamic/public'
 
 vi.mock('$env/dynamic/public', () => ({
   env: { PUBLIC_ELEMENT_CALL_URL: 'https://a.example.org/element-call', PUBLIC_BASE_URL: 'https://a.example.org' },
@@ -45,6 +47,12 @@ async function mountCall() {
 }
 
 describe('VideoCallPip on the primary host', () => {
+  it('the page and the process env name the same host (the mock is what the component imports)', () => {
+    expect(window.location.origin).toBe('https://a.example.org')
+    expect(publicEnv.PUBLIC_ELEMENT_CALL_URL).toBe('https://a.example.org/element-call')
+    expect(publicEnv.PUBLIC_BASE_URL).toBe('https://a.example.org')
+  })
+
   it('builds the same iframe URL the process env gave before', async () => {
     const iframe = await mountCall()
     const src = new URL(iframe.getAttribute('src') ?? '')
