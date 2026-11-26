@@ -16,110 +16,15 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const h = vi.hoisted(() => ({
-  catalog: [] as { tenant_id: string; slug: string; db_name: string }[],
-  databases: new Set<string>(),
-  /** CREATE DATABASE and every catalogue write, in order. */
-  writes: [] as string[],
-  /** Every url handed to the `postgres` driver factory. */
-  opened: [] as string[],
-  /** What the package store was asked for: [tenantId, moduleId]. */
-  storeOpens: [] as [string, string][],
-  /** The resolveTarget the leaf handed to createTenantStore. */
-  resolveTarget: null as null | ((tenantId: string, moduleId: string) => { url: string } | Promise<{ url: string }>),
-  /** What the schema gate answers. */
-  verdict: { ok: true } as
-    | { ok: true }
-    | { ok: false; reason: 'unavailable' | 'behind' | 'diverged'; retryAfterSeconds: number },
-  /** What `SELECT 1` on the tenant pool does (the classification probe). */
-  probeError: null as null | { code: string },
-  closed: 0,
-  evicted: [] as [string, string][],
-}))
-
-vi.mock('postgres', () => {
-  const run = (text: string, params: readonly unknown[]): unknown[] => {
-    if (/SELECT count\(\*\) AS count FROM pg_database/i.test(text)) {
-      return [{ count: h.databases.has(String(params[0])) ? '1' : '0' }]
-    }
-    const create = /^\s*CREATE DATABASE "([^"]+)"/i.exec(text)
-    if (create) {
-      h.databases.add(create[1]!)
-      h.writes.push(`CREATE DATABASE ${create[1]}`)
-      return []
-    }
-    if (/SELECT tenant_id::text AS tenant_id, slug FROM tenant_catalog WHERE tenant_id = \$1 OR slug = \$2/i.test(text)) {
-      return h.catalog
-        .filter((r) => r.tenant_id === params[0] || r.slug === params[1])
-        .map(({ tenant_id, slug }) => ({ tenant_id, slug }))
-    }
-    if (/INSERT INTO tenant_catalog/i.test(text)) {
-      h.writes.push(text.replace(/\s+/g, ' ').trim())
-      const [id, slug, dbName] = params as [string, string, string]
-      if (!h.catalog.some((r) => r.tenant_id === id || r.slug === slug)) h.catalog.push({ tenant_id: id, slug, db_name: dbName })
-      return []
-    }
-    return []
-  }
-  const factory = (url: string) => {
-    h.opened.push(url)
-    const guarded = (text: string, params: readonly unknown[]): Promise<unknown[]> => {
-      try {
-        return Promise.resolve(run(text, params))
-      } catch (err) {
-        return Promise.reject(err)
-      }
-    }
-    const sql = ((strings: TemplateStringsArray | string, ...vals: unknown[]) => {
-      const text = typeof strings === 'string' ? strings : strings.join(' ? ')
-      return guarded(text, vals)
-    }) as unknown as Record<string, unknown> & ((...a: unknown[]) => Promise<unknown[]>)
-    sql.unsafe = (text: string, params?: unknown[]) => guarded(text, params ?? [])
-    sql.end = () => Promise.resolve()
-    sql.begin = async (fn: (tx: unknown) => Promise<unknown>) => fn(sql)
-    return sql
-  }
-  return { default: factory }
-})
-
-vi.mock('@gremion/tenant-store', async (importOriginal) => {
-  const real = await importOriginal<typeof import('@gremion/tenant-store')>()
-  return {
-    ...real,
-    createTenantStore: (options: { resolveTarget: typeof h.resolveTarget }) => {
-      h.resolveTarget = options.resolveTarget
-      return {
-        // The pool a tenant gets: a tagged-template stand-in that answers the probe SELECT 1.
-        async openTenantDb(tenantId: string, moduleId: string) {
-          h.storeOpens.push([tenantId, moduleId])
-          const sql = (async (): Promise<unknown[]> => {
-            if (h.probeError) throw Object.assign(new Error('probe'), h.probeError)
-            return [{ '?column?': 1 }]
-          }) as unknown as Record<string, unknown>
-          sql.end = () => Promise.resolve()
-          return sql
-        },
-        evictTenantDb(tenantId: string, moduleId: string) {
-          h.evicted.push([tenantId, moduleId])
-          return true
-        },
-        size: () => 0,
-        async close() {
-          h.closed++
-        },
-      }
-    },
-    schemaGate: () => ({
-      check: async () => h.verdict,
-      guard: async () => true,
-    }),
-  }
-})
+vi.mock('postgres', async () => ({ default: (await import('./support/fake-lifecycle-store.ts')).fakePostgres }))
+vi.mock('@gremion/tenant-store', async (importOriginal) =>
+  (await import('./support/fake-lifecycle-store.ts')).fakeTenantStorePackage(await importOriginal<object>()),
+)
+import { fake as h, resetFake } from './support/fake-lifecycle-store.ts'
 
 const {
   storeFor,
   closeAllPools,
-  evictTenantPools,
   TenantNotProvisionedError,
   TenantUnavailableError,
   _resetTenantStoreForTests,
@@ -138,16 +43,7 @@ const DB_A = tenantModuleDbName(A.id, 'calendar')
 
 beforeEach(async () => {
   await _resetTenantStoreForTests()
-  h.catalog.length = 0
-  h.databases.clear()
-  h.writes.length = 0
-  h.opened.length = 0
-  h.storeOpens.length = 0
-  h.evicted.length = 0
-  h.resolveTarget = null
-  h.verdict = { ok: true }
-  h.probeError = null
-  h.closed = 0
+  resetFake()
 })
 
 describe('NAME: the database is the lifecycle name, from the id alone', () => {
@@ -275,19 +171,13 @@ describe('DDL: the leaf never creates or migrates a customer database', () => {
   })
 })
 
-describe('shutdown and teardown go through the package store', () => {
+describe('shutdown goes through the package store', () => {
   it('closeAllPools closes the package store and counts the catalogue pool', async () => {
     await storeFor(A, OPTS)
     const counts = await closeAllPools()
-    expect(h.closed).toBe(1)
+    expect(h.storeClosed).toBe(1)
     expect(counts.control).toBe(1)
     await expect(storeFor(A, OPTS)).rejects.toMatchObject({ code: 'SHUTTING_DOWN' })
   })
 
-  it('evictTenantPools retires the (tenant, calendar) pool of that tenant', async () => {
-    await storeFor(A, OPTS)
-    const n = await evictTenantPools({ id: A.id })
-    expect(n).toBe(1)
-    expect(h.evicted).toEqual([[A.id, 'calendar']])
-  })
 })

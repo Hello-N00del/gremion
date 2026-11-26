@@ -27,11 +27,12 @@ import { makeLogTracer, noopTracer, type TracerPort } from '@gremion/ports/trace
 import { STREAMS } from '@gremion/ports/broker'
 import { runMigrateOnlyCli } from './migrate-only.js'
 
-// CD leaf step (`node dist/index.js --migrate-only`): migrate every catalogued customer database and
-// exit. Nothing below runs in this mode (the process exits here, and top-level await holds the rest of
-// the module back): no HTTP server, no scheduler, no NATS client, no outbox relay.
+// CD leaf step (`node dist/index.js --migrate-only`): answers the host's counts contract and exits; the
+// module step migrates the customer databases (see migrate-only.ts). Nothing below runs in this mode (the
+// process exits here, and top-level await holds the rest of the module back): no HTTP server, no
+// scheduler, no NATS client, no outbox relay.
 if (process.argv.slice(2).includes('--migrate-only')) {
-  process.exit(await runMigrateOnlyCli({ openStore: storeFor }))
+  process.exit(await runMigrateOnlyCli())
 }
 
 const PORT = Number.parseInt(process.env.PORT ?? '8080', 10)

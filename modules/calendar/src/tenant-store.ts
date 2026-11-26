@@ -1,41 +1,59 @@
-// services/calendar/src/tenant-store.ts
+// modules/calendar/src/tenant-store.ts
 //
-// D-P1-2 (calendar variant): tenant→storage seam for the calendar leaf service.
+// Tenant→storage seam of the calendar leaf service.
+//
+// Where a customer's calendar lives. The module lifecycle (@gremion/tenant-store, lifecycle) owns one
+// database per (customer, module): t_<tenant uuid as 32 hex>__calendar. enableModule creates and migrates
+// it and grants the module's app role m_calendar_app its DML, disableModule exports it and blocks or drops
+// it, the purge removes it. This leaf only OPENS that database, as m_calendar_app, through the package
+// store (openTenantDb) behind its schema gate. It never creates, migrates or drops one, and it never
+// reaches one with the module server's admin login: a block of the app role is then a block of the leaf.
+// Customers were stored in calendar_<slug> databases before; scripts/move-to-lifecycle-db.mjs copies those
+// into the lifecycle database (docs/ops/pilot-services.md).
 //
 // Responsibilities:
-//  1. Control DB (`calendar_control`): holds `tenant_catalog` (tenant_id,
-//     slug, db_name, created_at). Created once on first use.
-//  2. Per-tenant DB ensure: on first contact for a tenant, CREATE DATABASE
-//     `calendar_<slug>` (if not exists) + bind its catalog row (id, slug).
-//  3. Leaf migration runner: manifest-hash pattern (mirrors
-//     gremion-ui/scripts/build-migration-manifest.mjs / G-012). Reads
-//     migrations/*.sql, verifies SHA-256 against migrations/manifest.json,
-//     runs each pending migration IN ORDER (idempotent — all migrations use
-//     CREATE … IF NOT EXISTS / DO $$ … IF NOT EXISTS).
-//  4. Per-tenant pool map: bounded true-LRU registry keyed by tenant id.
-//     Fire-and-forget drain on evict (mirrors db/pool-registry.ts semantics).
+//  1. Customer pool: storeFor(tenant) -> the pool of t_<hex32>__calendar, or a typed refusal:
+//       TenantNotProvisionedError  the database is gone (3D000) or blocked (42501, the module Karenz
+//                                  revoked CONNECT from the app role): the module is switched off;
+//       TenantUnavailableError     the schema is not current (the lifecycle migrates, the leaf never
+//                                  does) or the server cannot be reached right now.
+//  2. Control DB (`calendar_control`, created on first use with the admin url CALENDAR_PG_URL): holds
+//     `tenant_catalog` (tenant_id, slug, db_name, created_at). It binds each tenant id to ONE slug and
+//     lists the tenants the background loops (CalDAV drain, outbox relay) walk. It holds no calendar data.
+//  3. Identity binding: the (id, slug) pair of every request must be the one the catalogue binds.
 //
-// The public API is intentionally narrow: callers (future route handlers +
-// the CalDAV sync ticker) call `storeFor(tenant)` and get back a ready
-// postgres-js Sql instance bound to that tenant's DB.
+// The public API is intentionally narrow: callers (route handlers, the CalDAV ticker, the outbox relay)
+// call `storeFor(tenant)` and get back a ready postgres-js Sql instance bound to that tenant's database.
 
-import { createHash } from 'node:crypto'
-import { readdir, readFile } from 'node:fs/promises'
-import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import path from 'node:path'
 import postgres from 'postgres'
+import {
+  createTenantStore,
+  envResolveTarget,
+  isUuidV7,
+  moduleUrlVariable,
+  schemaGate,
+  tenantModuleDbName,
+  type SchemaGate,
+  type TenantStore,
+} from '@gremion/tenant-store'
+
+/** The module id of this leaf: the lifecycle names its databases t_<hex32>__calendar. */
+export const MODULE_ID = 'calendar'
 
 /**
- * Resolve the runtime Postgres URL, failing closed. In production CALENDAR_PG_URL
- * is set; we deliberately DO NOT fall back to localhost:5432 — on the staging host
- * that port is the LIVE kernel Postgres (#394 require-explicit-env posture). Fires
- * only when neither an explicit pgUrl nor the env var is set (a misconfiguration).
+ * Resolve the runtime Postgres URL, failing closed. In production CALENDAR_PG_URL (the module server's
+ * admin login, used for the catalogue database only) and GREMION_CALENDAR_PG_URL (the module's app role,
+ * used for every customer database) are set; we deliberately DO NOT fall back to localhost:5432 — on the
+ * staging host that port is the LIVE kernel Postgres (#394 require-explicit-env posture). Fires only when
+ * neither an explicit url nor the env var is set (a misconfiguration).
  */
 export function requireRuntimePgUrl(explicit: string | undefined, envName: string): string {
   const url = explicit ?? process.env[envName]
   if (!url) {
     throw new Error(
-      `[calendar] no Postgres URL configured — set ${envName} (or pass options.pgUrl). ` +
+      `[calendar] no Postgres URL configured — set ${envName} (or pass the url as an option). ` +
         'Refusing to default to localhost:5432 (the LIVE kernel Postgres on the staging host).',
     )
   }
@@ -52,19 +70,22 @@ export interface TenantRef {
 
 /** Options for storeFor (mostly to allow test overrides). */
 export interface StoreForOptions {
-  /** Admin PG URL (connects to the Postgres instance for CREATE DATABASE). */
+  /**
+   * Admin PG URL of the module server. Used ONLY for the catalogue database `<dbPrefix>control`
+   * (created on first use); never for a customer database.
+   */
   pgUrl?: string
   /**
-   * DB name prefix. Production = `calendar_`; tests override to
-   * `calendar_test_` so all test DBs are easily identified and never collide
-   * with a production DB name.
+   * Name prefix of the catalogue database. Production = `calendar_`; tests override to
+   * `calendar_test_` so all test databases are easily identified and never collide with a production
+   * name. It takes no part in a customer database name.
    */
   dbPrefix?: string
   /**
-   * Test-only: override the manifest content so we can inject a bad hash to
-   * test the mismatch-abort path without touching disk.
+   * The module server as customer pools reach it, logged in as the module's app role
+   * (GREMION_CALENDAR_PG_URL). The database name in its path is replaced per customer.
    */
-  _overrideManifest?: Record<string, string>
+  moduleUrl?: string
 }
 
 /** A postgres-js Sql instance (the pool type). */
@@ -74,8 +95,8 @@ export type Sql = ReturnType<typeof postgres>
  * Thrown by every pool-opening path once closeAllPools() has run.
  *
  * closeAllPools() is the SIGTERM drain. Without a latch, a request already in
- * flight when the signal landed re-enters storeFor(), finds the registry empty,
- * and opens a brand-new pool BEHIND the drain that just closed everything -
+ * flight when the signal landed re-enters storeFor(), finds nothing open, and
+ * opens a brand-new pool BEHIND the drain that just closed everything -
  * a pool nothing will ever close, on a process that exits seconds later. The
  * request cannot be served either way; failing it loudly is the difference
  * between a 503 in the access log and a silent connection leak.
@@ -94,44 +115,44 @@ export class ShuttingDownError extends Error {
 
 /**
  * The (tenant id, slug) pair of a request disagrees with the one the catalog
- * binds: on a warm pool (the registry entry keeps the catalog slug) or on a cold
+ * binds: on a warm tenant (the store remembers the catalog slug) or on a cold
  * miss (a catalog row for the id with another slug, or for the slug with another
- * id). Nothing is created, nothing is upserted and no pool is handed out; the
- * HTTP layer answers 409 tenant_identity_mismatch.
+ * id). Nothing is upserted and no pool is handed out; the HTTP layer answers 409
+ * tenant_identity_mismatch.
  *
- * The database name is derived from the slug alone, so a store that follows a
- * changed slug silently hands the tenant a new, empty database and orphans the
- * old one. A slug rename is an operator procedure (rename the database, update
- * the catalog row, restart the leaf), never a side effect of a request. Same
- * contract as the board store's R29-BOARD-STORE-S B2c; audit #534.
+ * The slug names the customer's CalDAV collection and its catalogue row, so a
+ * store that follows a changed slug would push one customer's events into another
+ * collection. A slug rename is an operator procedure (update the catalog row,
+ * restart the leaf), never a side effect of a request. Same contract as the
+ * board store's R29-BOARD-STORE-S B2c; audit #534.
  */
 export class TenantIdentityMismatchError extends Error {
   readonly code = 'TENANT_IDENTITY_MISMATCH'
   constructor(tenant: TenantRef, bound: TenantRef) {
     super(
       `[tenant-store] tenant identity mismatch: request (${tenant.id}, ${tenant.slug}) vs ` +
-        `catalogued (${bound.id}, ${bound.slug}) - refusing (no database created, nothing upserted)`,
+        `catalogued (${bound.id}, ${bound.slug}) - refusing (nothing upserted)`,
     )
     this.name = 'TenantIdentityMismatchError'
   }
 }
 
 /**
- * The tenant id is not a canonical lowercase uuid (Postgres' own rendering). The
- * catalog comparison is on tenant_id::text and the id keys the pool registry, so
- * any other spelling is refused before a catalog row, a database or a pool is
- * touched. The HTTP layer answers 400 invalid_tenant_id; the message and the
- * response name nothing the caller sent (follow-up to audit #534).
+ * The tenant id is not a canonical lowercase UUIDv7 (the kernel's tenant ids; the form the lifecycle
+ * database name t_<hex32>__calendar is built from). The id keys the catalogue and the database name, so any
+ * other spelling is refused before a catalog row, a database name or a pool is touched. The HTTP layer
+ * answers 400 invalid_tenant_id; the message and the response name nothing the caller sent (follow-up to
+ * audit #534).
  */
 export class InvalidTenantIdError extends Error {
   readonly code = 'TENANT_ID_INVALID'
   constructor() {
-    super('[tenant-store] tenant id is not a canonical lowercase uuid - refusing (no database created, nothing upserted)')
+    super('[tenant-store] tenant id is not a canonical lowercase UUIDv7 - refusing (nothing upserted)')
     this.name = 'InvalidTenantIdError'
   }
 }
 
-/** A slug storeFor refuses to build a database name from (grammar, or reserved). */
+/** A slug storeFor refuses to bind (grammar, or reserved). */
 export class InvalidTenantSlugError extends Error {
   readonly code = 'INVALID_TENANT_SLUG'
   constructor(message: string) {
@@ -140,544 +161,53 @@ export class InvalidTenantSlugError extends Error {
   }
 }
 
+/**
+ * The customer's calendar database does not exist or is blocked: the module is switched off for this
+ * customer (disableModule dropped it, or the module Karenz revoked CONNECT from the app role), or it was
+ * never enabled. The HTTP layer answers 404 tenant_not_provisioned. Nothing is created in its place.
+ */
+export class TenantNotProvisionedError extends Error {
+  readonly code = 'TENANT_NOT_PROVISIONED'
+  constructor() {
+    super('[tenant-store] the calendar database of this tenant does not exist or is blocked - not provisioned')
+    this.name = 'TenantNotProvisionedError'
+  }
+}
+
+/**
+ * The customer's calendar database cannot be used right now: its schema is behind or diverged from this
+ * release's migrations (the lifecycle migrates, the leaf never does), or the server could not be
+ * reached. The HTTP layer answers 503 with Retry-After.
+ */
+export class TenantUnavailableError extends Error {
+  readonly code = 'TENANT_UNAVAILABLE'
+  constructor(
+    readonly reason: 'tenant_unavailable' | 'schema_not_current',
+    readonly retryAfterSeconds: number,
+  ) {
+    super(`[tenant-store] the calendar database of this tenant cannot be used right now (${reason})`)
+    this.name = 'TenantUnavailableError'
+  }
+}
+
 /** Latched by closeAllPools(); cleared only by the test reset helpers. */
 let _closing = false
 
 // ── constants ─────────────────────────────────────────────────────────────────
 
-const MIGRATIONS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'migrations')
-const MANIFEST_FILE = path.join(MIGRATIONS_DIR, 'manifest.json')
-
-/** Max live tenant pools in the registry. */
-const POOL_REGISTRY_MAX = 16
-
 /**
- * #256-4 parity with the kernel registry
- * (gremion-ui/src/lib/server/db/pool-registry.ts): how long a CAPACITY-evicted
- * pool keeps serving in-flight queries before it is drained. A burst of other
- * tenants can push out a pool whose owner still has queries on the wire; ending
- * that pool synchronously tears those sockets down mid-flight, and postgres-js
- * surfaces it as a generic connection error with nothing tying it back to an
- * eviction. Defer instead. Explicit resets still drain immediately — nothing is
- * in flight there.
+ * The module's migrations directory — resolved HERE, at src/ DEPTH 1, on purpose: esbuild bundles the
+ * leaf into a SINGLE depth-1 file (dist/index.js), so one '..' resolves to <leaf>/migrations from the
+ * source tree AND to /app/migrations from the bundle (the Dockerfile copies migrations → /app/migrations).
+ * The schema gate reads its manifest.json from here.
  */
-const EVICTED_POOL_DRAIN_GRACE_MS = 30_000
+export const MIGRATIONS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'migrations')
 
-/**
- * Cap on pools awaiting a deferred drain. Without it the deferral silently
- * removes POOL_REGISTRY_MAX as a bound on LIVE pools: a burst rotating N>MAX
- * tenants inside one grace window holds MAX live + (N-MAX) pending, and the
- * excess is largest exactly when the connection budget is tightest. Past this
- * cap the OLDEST pending drain is performed immediately, so simultaneously-open
- * pools never exceed POOL_REGISTRY_MAX + PENDING_DRAIN_MAX.
- *
- * A SMALL CONSTANT, not POOL_REGISTRY_MAX. Setting it to POOL_REGISTRY_MAX made
- * the ceiling 16 live + 16 pending = 32 pools (x4 connections each) - precisely
- * the 2x doubling this bound exists to prevent. 4 keeps the worst case at
- * 16 + 4 = 20 pools while still absorbing the ordinary case (a handful of
- * evictions inside one 30s window).
- */
-const PENDING_DRAIN_MAX = 4
+/** Customer pools kept open at once by the package store (the least recently used one is retired). */
+const MAX_TENANT_POOLS = 64
 
-/**
- * Per-victim throttle window for the capacity-eviction warn. Once the live
- * fleet exceeds POOL_REGISTRY_MAX every cold request evicts, so an unthrottled
- * warn fires per REQUEST rather than per incident - and a log that fires
- * thousands of times an hour is as silent as no log at all.
- */
-const EVICTION_WARN_THROTTLE_MS = 60_000
-
-// ── pool registry (true LRU, bounded, deferred drain on capacity evict) ──
-//
-// We implement a simple bounded Map that evicts the LEAST RECENTLY USED entry
-// when the limit is reached. Recency is a monotonic stamp refreshed on every
-// get AND set, scanned linearly on evict (fine for N≤16 tenants per process
-// instance) — no doubly-linked-list needed. Mirrors pool-registry.ts semantics:
-// on capacity eviction the drain is DEFERRED by a grace period, the pending
-// set is BOUNDED at PENDING_DRAIN_MAX, and a failed end() is LOGGED by
-// endEvictedPool rather than swallowed by a bare .catch(() => {}).
-
-interface PoolEntry {
-  sql: Sql
-  /**
-   * The catalog slug this tenant id is bound to. The hot path compares it with
-   * the request's slug before handing the pool out, so the identity binding
-   * holds on a warm cache too, not only on a miss.
-   */
-  slug: string
-  /** Monotonic recency stamp — bumped on every get AND every set (true LRU). */
-  lastUsedOrder: number
-}
-
-let _nextOrder = 0
-const _poolMap = new Map<string, PoolEntry>()
-
-function getEntry(tenantId: string): PoolEntry | undefined {
-  const entry = _poolMap.get(tenantId)
-  if (entry === undefined) return undefined
-  // A read IS a use. Without this bump the registry degrades to FIFO and
-  // evicts the HOTTEST tenant (inserted first, touched on every request) the
-  // moment POOL_REGISTRY_MAX is reached.
-  entry.lastUsedOrder = _nextOrder++
-  return entry
-}
-
-function getPool(tenantId: string): Sql | undefined {
-  return getEntry(tenantId)?.sql
-}
-
-/**
- * A pool evicted on capacity but not yet drained. The `Sql` handle is stored
- * ALONGSIDE its timer: a structure holding only the timer can CANCEL a drain
- * but can never PERFORM it, and the evicted entry is already out of
- * `_poolMap` - so cancelling would orphan the pool with nothing left holding a
- * reference to end() it.
- */
-interface PendingDrain {
-  /**
-   * Insertion id. The map used to be keyed on the TIMER HANDLE, whose identity
-   * and even its type depend on the environment (Node returns a Timeout object,
-   * fake timers a number). An explicit monotonic id makes deletion exact and
-   * insertion order total, independent of what setTimeout happens to return.
-   */
-  id: number
-  timer: ReturnType<typeof setTimeout>
-  tenantId: string
-  /** The catalog slug the pool was bound under (teardown matches on it). */
-  slug: string
-  sql: Sql
-}
-
-/**
- * Pools evicted on capacity and awaiting their deferred drain, OLDEST FIRST
- * (Map preserves insertion order - the bound below drains from the front).
- */
-const _pendingDrains = new Map<number, PendingDrain>()
-/** Monotonic insertion counter for _pendingDrains keys. */
-let _nextDrainId = 0
-
-/**
- * The installed drain-on-exit hook, or null. Held by reference (rather than
- * behind a boolean) so reset() can REMOVE it: a listener that only ever
- * accumulates makes process.listenerCount('beforeExit') useless as an
- * assertion, which is exactly why the round-3 hook test could not fail.
- */
-let _drainOnExitHook: (() => void) | null = null
-
-/**
- * The deferred drain timer is `unref`'d - it must not hold the process open for
- * the whole grace window - so a process exiting INSIDE that window would
- * abandon the evicted pool's sockets to a TCP reset instead of a clean
- * terminate. `beforeExit` fires exactly when the loop has emptied and still
- * permits async work: that is the shutdown path for those pools.
- */
-function installDrainOnExit(): void {
-  if (_drainOnExitHook !== null) return
-  const hook = (): void => {
-    _drainOnExitHook = null
-    void drainPendingNow()
-  }
-  _drainOnExitHook = hook
-  process.once('beforeExit', hook)
-}
-
-/** Remove the drain-on-exit hook (reset path). Idempotent. */
-function uninstallDrainOnExit(): void {
-  if (_drainOnExitHook === null) return
-  process.removeListener('beforeExit', _drainOnExitHook)
-  _drainOnExitHook = null
-}
-
-/**
- * End one evicted pool, LOGGING a failure instead of swallowing it: a
- * persistently failing end() leaks the connections that pool held, and a bare
- * `.catch(() => {})` leaves zero signal until Postgres refuses new connections.
- */
-function endEvictedPool(tenantId: string, sql: Sql): Promise<boolean> {
-  return sql.end().then(
-    () => true,
-    (err: unknown) => {
-      console.warn(
-        `[tenant-store] evicted pool drain FAILED for tenant ${tenantId}: ${String(err)} - ` +
-          `its connections are leaked; repeated failures exhaust the Postgres connection budget`,
-      )
-      return false
-    },
-  )
-}
-
-/**
- * Drain a capacity-evicted pool after EVICTED_POOL_DRAIN_GRACE_MS, keeping the
- * handle so every other path can still end it.
- *
- * BOUNDED: deferring would otherwise remove POOL_REGISTRY_MAX as a bound on
- * LIVE pools. Past PENDING_DRAIN_MAX the oldest pending drain is performed
- * immediately, so simultaneously-open pools never exceed
- * POOL_REGISTRY_MAX + PENDING_DRAIN_MAX.
- */
-function deferDrain(tenantId: string, sql: Sql, slug: string): void {
-  const id = _nextDrainId++
-  const timer = setTimeout(() => {
-    _pendingDrains.delete(id)
-    // The throttle entry is DELIBERATELY left in place. Round 4 deleted it
-    // here, which cut the effective warn window from EVICTION_WARN_THROTTLE_MS
-    // (60s) to EVICTED_POOL_DRAIN_GRACE_MS (30s) — the map is bounded by
-    // prune-on-insert in warnEviction(), not by a deletion that also destroys
-    // the suppression it exists to provide.
-    void endEvictedPool(tenantId, sql)
-  }, EVICTED_POOL_DRAIN_GRACE_MS)
-  // Node returns a Timeout (unref keeps shutdown clean); fake timers return a
-  // number - hence the defensive optional call.
-  ;(timer as unknown as { unref?: () => void }).unref?.()
-  _pendingDrains.set(id, { id, timer, tenantId, slug, sql })
-  installDrainOnExit()
-  enforcePendingDrainBound()
-}
-
-/**
- * THE one place the pending-drain bound is enforced. Called SYNCHRONOUSLY by
- * deferDrain immediately after the insert, so no caller can ever observe
- * _pendingDrains above PENDING_DRAIN_MAX and there is exactly ONE code path
- * that can grow the set.
- *
- * Round 3 inlined this loop in deferDrain and the finance suite still saw 21
- * pending drains against a cap of 16 in 2 of 6 full-suite runs. Pulling it into
- * a named function next to the single insertion point removes the possibility
- * of a second, uncapped eviction path being added later without the bound; the
- * guard test now asserts the invariant after EVERY insertion rather than once
- * at the end, so a future escape names the insert that caused it.
- */
-function enforcePendingDrainBound(): void {
-  while (_pendingDrains.size > PENDING_DRAIN_MAX) {
-    const oldest: PendingDrain | undefined = _pendingDrains.values().next().value
-    if (oldest === undefined) break
-    clearTimeout(oldest.timer)
-    _pendingDrains.delete(oldest.id)
-    // NOT silent, but THROTTLED: this fires on the same per-request path the
-    // eviction warn is throttled on, so an unthrottled copy of it reintroduces
-    // exactly the flood the eviction throttle exists to stop. Round 4 also
-    // deleted the victim's throttle entry here, which meant the ONE path that
-    // fires per request had no suppression at all.
-    warnOverflow(oldest.tenantId)
-    void endEvictedPool(oldest.tenantId, oldest.sql)
-  }
-}
-
-/**
- * End EVERY pool awaiting a deferred drain, here and now. This is what the
- * explicit-reset and shutdown paths call: cancelling the timers WITHOUT ending
- * their pools leaks the connections outright, because after eviction nothing
- * else holds the handle.
- */
-async function drainPendingNow(): Promise<{ ended: number; failed: number }> {
-  const pending = [..._pendingDrains.values()]
-  _pendingDrains.clear()
-  for (const entry of pending) clearTimeout(entry.timer)
-  const results = await Promise.all(
-    pending.map((entry) => endEvictedPool(entry.tenantId, entry.sql)),
-  )
-  return { ended: results.length, failed: results.filter((ok) => !ok).length }
-}
-
-/**
- * PUBLIC shutdown seam: end EVERY pool this process holds - the ones awaiting a
- * deferred drain AND the up-to-POOL_REGISTRY_MAX pools still LIVE in the
- * registry.
- *
- * Supersedes the old drainEvictedPools()-only seam (removed — unused, no
- * caller left after closeAllPools() was wired into every leaf's shutdown
- * handler; see the note on that call below).
- *
- * drainEvictedPools() alone left the larger half of the hole open: SIGTERM tore
- * down as many as POOL_REGISTRY_MAX x pool-size live connections by TCP reset
- * while carefully draining the handful that happened to be evicted in the last
- * grace window. This is what the leaf's shutdown handler awaits.
- */
-export interface PoolDrainCounts {
-  /** Live per-tenant pools ended. */
-  readonly live: number
-  /** Capacity-evicted pools still inside their grace window. */
-  readonly evicted: number
-  /** The control-DB pool: 1 once the leaf has booted, 0 before. */
-  readonly control: number
-  /** Pools whose end() REJECTED — every one of these is a leaked connection. */
-  readonly failed: number
-}
-
-export async function closeAllPools(): Promise<PoolDrainCounts> {
-  // Set FIRST: an in-flight request that lands mid-drain would otherwise open a
-  // fresh pool behind the drain that just closed everything, and nothing would
-  // ever close that one — the process exits seconds later.
-  _closing = true
-
-  const live = [..._poolMap.entries()]
-  _poolMap.clear()
-
-  // The CONTROL pool is not in _poolMap and is never evicted, so a drain that
-  // walks only the registry misses the one pool a running leaf is guaranteed to
-  // hold. Detach it before ending it so the guard above cannot hand it out.
-  const control = _controlSql
-  _controlSql = null
-  _controlInitialized = false
-  _controlInitPromise = null
-
-  const [pending, liveResults, controlOk] = await Promise.all([
-    drainPendingNow(),
-    Promise.all(live.map(([tenantId, entry]) => endEvictedPool(tenantId, entry.sql))),
-    control === null ? Promise.resolve(null) : endEvictedPool('<control>', control),
-  ])
-
-  const counts: PoolDrainCounts = {
-    live: liveResults.length,
-    evicted: pending.ended,
-    control: control === null ? 0 : 1,
-    failed:
-      liveResults.filter((ok) => !ok).length + pending.failed + (controlOk === false ? 1 : 0),
-  }
-  // REAL counts, not a bare "drained": a rejected end() used to be swallowed
-  // into a resolved promise and the shutdown logged success over the top of
-  // leaked connections.
-  console.log(
-    `[tenant-store] closeAllPools: live=${counts.live} evicted=${counts.evicted} ` +
-      `control=${counts.control} failed=${counts.failed}`,
-  )
-  return counts
-}
-
-/**
- * Last capacity-eviction warn per VICTIM tenant (throttle state).
- *
- * THE KEY IS THE VICTIM, deliberately. The warn names the victim, and what has
- * to be suppressed is the same tenant being evicted again on every cold request
- * once the live fleet exceeds POOL_REGISTRY_MAX. Keying on the evicting CAUSE
- * (the incoming tenant) would suppress along the wrong axis: one hot newcomer
- * would silence the warns for every tenant it displaced. A single global
- * once-per-window key would do the same to the whole fleet.
- *
- * BOUNDED: the entry is removed when that victim's pool is actually drained -
- * on the deferred timer, on the forced overflow drain, and on drainPendingNow -
- * so the map is bounded by the pending set instead of gaining one entry per
- * tenant-ever-evicted for the lifetime of the process.
- */
-const _lastEvictionWarnAt = new Map<string, number>()
-/** Monotonic eviction counter - carried in the warn so suppression is visible. */
-let _evictionCount = 0
-
-/**
- * Last pending-drain-overflow warn (null = never). GLOBAL, not per victim: the
- * message is about the process-wide PENDING_DRAIN_MAX cap, and the victim it
- * names is whichever pool happened to be oldest.
- */
-let _lastOverflowWarnAt: number | null = null
-/** Monotonic overflow counter - carried in the warn so suppression is visible. */
-let _overflowCount = 0
-
-/**
- * Warn on a forced overflow drain, at most once per throttle window.
- *
- * Ending a pool BEFORE its grace period elapsed is the exact harm the grace
- * period exists to avoid, so it must not be silent - but this fires on the same
- * per-request path warnEviction() is throttled on, so an unthrottled copy is
- * the same flood wearing a different message.
- */
-function warnOverflow(tenantId: string): void {
-  _overflowCount += 1
-  const now = Date.now()
-  if (_lastOverflowWarnAt !== null && now - _lastOverflowWarnAt < EVICTION_WARN_THROTTLE_MS) return
-  _lastOverflowWarnAt = now
-  console.warn(
-    '[tenant-store] pending-drain overflow #' +
-      _overflowCount +
-      ': tenant ' +
-      tenantId +
-      ' pool ended BEFORE its ' +
-      EVICTED_POOL_DRAIN_GRACE_MS +
-      'ms grace period because PENDING_DRAIN_MAX=' +
-      PENDING_DRAIN_MAX +
-      ' was exceeded. Its in-flight queries fail with a generic connection error; ' +
-      'the tenant fan-out on this instance exceeds what POOL_REGISTRY_MAX=' +
-      POOL_REGISTRY_MAX +
-      ' was sized for. Further overflows are suppressed for ' +
-      EVICTION_WARN_THROTTLE_MS +
-      'ms; the counter keeps rising.',
-  )
-}
-
-/** Warn on a capacity eviction, at most once per victim per throttle window. */
-function warnEviction(tenantId: string): void {
-  _evictionCount += 1
-  const now = Date.now()
-  const last = _lastEvictionWarnAt.get(tenantId)
-  if (last !== undefined && now - last < EVICTION_WARN_THROTTLE_MS) return
-  // PRUNE-ON-INSERT is what bounds this map. Round 4 bounded it by deleting a
-  // victim's entry when its pool drained, which also ended the suppression
-  // window early - 30s instead of 60s on the deferred path, and immediately on
-  // the overflow path. Dropping entries that have OUTLIVED their window keeps
-  // the map bounded by the window without shortening it for anyone.
-  for (const [victim, at] of _lastEvictionWarnAt) {
-    if (now - at >= EVICTION_WARN_THROTTLE_MS) _lastEvictionWarnAt.delete(victim)
-  }
-  _lastEvictionWarnAt.set(tenantId, now)
-  console.warn(
-    `[tenant-store] capacity eviction #${_evictionCount}: tenant ${tenantId}'s pool pushed out ` +
-      `past POOL_REGISTRY_MAX=${POOL_REGISTRY_MAX} live pools - drain deferred by ` +
-      `${EVICTED_POOL_DRAIN_GRACE_MS}ms so in-flight queries can finish. Further evictions of ` +
-      `this tenant are suppressed for ${EVICTION_WARN_THROTTLE_MS}ms; the counter keeps rising.`,
-  )
-}
-
-function setPool(tenantId: string, sql: Sql, slug: string): void {
-  if (_poolMap.size >= POOL_REGISTRY_MAX && !_poolMap.has(tenantId)) {
-    // Evict the LEAST RECENTLY USED entry (smallest lastUsedOrder).
-    let lruKey: string | undefined
-    let lruOrder = Infinity
-    for (const [k, v] of _poolMap) {
-      if (v.lastUsedOrder < lruOrder) {
-        lruOrder = v.lastUsedOrder
-        lruKey = k
-      }
-    }
-    if (lruKey !== undefined) {
-      const evicted = _poolMap.get(lruKey)!
-      _poolMap.delete(lruKey)
-      // Log LOUDLY (kernel parity): a recurring capacity eviction means
-      // POOL_REGISTRY_MAX is too low for the live fleet, and a SILENT one is
-      // undiagnosable from the victim tenant's side — it just sees connection
-      // errors. Name the tenant so the log identifies the victim.
-      warnEviction(lruKey)
-      deferDrain(lruKey, evicted.sql, evicted.slug)
-    }
-  }
-  const existing = _poolMap.get(tenantId)
-  if (existing !== undefined && existing.sql !== sql) {
-    // storeFor() has no in-flight dedupe, so two concurrent calls for the SAME
-    // tenant both open a pool. The loser used to be dropped from the map with
-    // nothing left holding a reference to end() it - no warn, no pending drain,
-    // no counter; the sockets survived until idle_timeout. Route it through the
-    // same deferred drain a capacity victim gets: it may have queries in flight.
-    console.warn(
-      '[tenant-store] pool for tenant ' +
-        tenantId +
-        ' was REPLACED while one was already registered (concurrent storeFor); the ' +
-        'displaced pool is drained after ' +
-        EVICTED_POOL_DRAIN_GRACE_MS +
-        'ms instead of being orphaned',
-    )
-    deferDrain(tenantId, existing.sql, existing.slug)
-  }
-  _poolMap.set(tenantId, { sql, slug, lastUsedOrder: _nextOrder++ })
-}
-
-/**
- * Teardown seam (the admin DELETE routes): end and remove every pool this
- * process holds for a tenant whose database or catalog row is being removed -
- * the live registry entry AND any capacity-evicted pool still inside its drain
- * grace window. Both keep connections open, an open connection blocks DROP
- * DATABASE, and a pool left behind would keep serving (or re-creating) a tenant
- * that no longer exists. Matches on the tenant id and/or the catalog slug.
- * Resolves to how many pools were ended.
- */
-export async function evictTenantPools(match: { id?: string; slug?: string }): Promise<number> {
-  const hit = (id: string, slug: string): boolean =>
-    (match.id !== undefined && id === match.id) || (match.slug !== undefined && slug === match.slug)
-  const ending: Promise<boolean>[] = []
-  for (const [id, entry] of _poolMap) {
-    if (!hit(id, entry.slug)) continue
-    _poolMap.delete(id)
-    ending.push(endEvictedPool(id, entry.sql))
-  }
-  for (const pending of _pendingDrains.values()) {
-    if (!hit(pending.tenantId, pending.slug)) continue
-    clearTimeout(pending.timer)
-    _pendingDrains.delete(pending.id)
-    ending.push(endEvictedPool(pending.tenantId, pending.sql))
-  }
-  await Promise.all(ending)
-  return ending.length
-}
-
-/**
- * Test-only handle on the bounded pool registry. Lets
- * test/tenant-store.pool-registry.test.ts assert eviction ORDER on registry
- * MEMBERSHIP without opening POOL_REGISTRY_MAX+1 real Postgres pools.
- */
-export const _poolRegistryForTests = {
-  MAX: POOL_REGISTRY_MAX,
-  DRAIN_GRACE_MS: EVICTED_POOL_DRAIN_GRACE_MS,
-  PENDING_MAX: PENDING_DRAIN_MAX,
-  WARN_THROTTLE_MS: EVICTION_WARN_THROTTLE_MS,
-  get: (tenantId: string): Sql | undefined => getPool(tenantId),
-  set: (tenantId: string, sql: Sql, slug = 'registry-test'): void => setPool(tenantId, sql, slug),
-  /** The catalog slug a live entry is bound to (undefined when absent). */
-  slug: (tenantId: string): string | undefined => _poolMap.get(tenantId)?.slug,
-  keys: (): string[] => [..._poolMap.keys()],
-  /**
-   * Recency stamp of a live entry (undefined when absent). Lets the LRU test
-   * assert the getPool BUMP directly instead of inferring it from an eviction
-   * outcome — a direct assertion no ordering accident can satisfy.
-   */
-  order: (tenantId: string): number | undefined => _poolMap.get(tenantId)?.lastUsedOrder,
-  /** How many evicted pools are still waiting on a deferred drain. */
-  pending: (): number => _pendingDrains.size,
-  /**
-   * Victim tenants currently recorded in the eviction-warn throttle map. Lets
-   * the guard test prove an entry SURVIVES its victim's drain (the throttle
-   * window is 60s; the drain lands at 30s) and is pruned only once it expires.
-   */
-  warnedVictims: (): string[] => [..._lastEvictionWarnAt.keys()],
-  /**
-   * The shutdown path: end every pending evicted pool NOW (what the
-   * `beforeExit` hook runs when the process leaves inside the grace window).
-   */
-  drainPending: async (): Promise<void> => {
-    await drainPendingNow()
-  },
-  /**
-   * PG-free reset of every piece of registry state: entries, recency counter,
-   * eviction-warn throttle, pending deferred drains AND the beforeExit hook.
-   * The pending drains are ENDED, not merely cancelled - see drainPendingNow().
-   * "Synchronous" is true of INVOCATION only: the end() calls start here and
-   * settle on a later microtask, which is why the rejection is caught rather
-   * than left to surface as an unhandled rejection in a later test.
-   * Tests call this per test so none can inherit another's state or timers.
-   */
-  reset: (): void => {
-    void drainPendingNow().catch(() => {})
-    uninstallDrainOnExit()
-    _poolMap.clear()
-    _nextOrder = 0
-    _nextDrainId = 0
-    _lastEvictionWarnAt.clear()
-    _evictionCount = 0
-    _lastOverflowWarnAt = null
-    _overflowCount = 0
-    // A test that ran closeAllPools() latched the shutdown flag; leaving it set
-    // would make every later storeFor() in the file reject for a reason that
-    // has nothing to do with the test asserting it.
-    _closing = false
-    _controlSql = null
-    _controlInitialized = false
-    _controlInitPromise = null
-  },
-  /** Is the store latched shut by closeAllPools()? */
-  closing: (): boolean => _closing,
-  /**
-   * Install a stand-in control-DB pool. The control pool is opened by
-   * ensureControlDb() against a real Postgres, so proving closeAllPools() ends
-   * it needs a seam - otherwise the one pool a running leaf always holds is the
-   * one no PG-free test can cover.
-   */
-  setControl: (sql: Sql | null): void => {
-    _controlSql = sql
-    _controlInitialized = sql !== null
-    _controlInitPromise = null
-  },
-  /** Does the store still hold a control pool? */
-  hasControl: (): boolean => _controlSql !== null,
-  /** Direct handle on the control-DB initializer (for the shutdown guard). */
-  ensureControl: (adminUrl: string, dbPrefix: string): Promise<Sql> =>
-    ensureControlDb(adminUrl, dbPrefix),
-}
+/** Retry-After of a 503 (the schema gate's default). */
+const RETRY_AFTER_SECONDS = 30
 
 // ── slug validation ───────────────────────────────────────────────────────────
 
@@ -690,9 +220,8 @@ export const _poolRegistryForTests = {
 const SLUG_PATTERN = /^[a-z0-9]([a-z0-9-]{0,28}[a-z0-9])?$/
 
 /**
- * Validate the tenant slug before it is interpolated into any DB identifier.
- * Throws with a clear message on any mismatch so callers never reach CREATE DATABASE
- * with a malformed slug.
+ * Validate the tenant slug before it is bound in the catalogue or used to name a CalDAV collection.
+ * Throws with a clear message on any mismatch.
  */
 function assertValidSlug(slug: string): void {
   if (slug.length === 0 || slug.length > 30 || !SLUG_PATTERN.test(slug)) {
@@ -700,11 +229,11 @@ function assertValidSlug(slug: string): void {
       `[tenant-store] invalid tenant slug "${slug}": ` +
         `slug must be 1–30 lowercase alphanumeric characters (a-z, 0-9, hyphen), ` +
         `must not start or end with a hyphen. ` +
-        `Refusing to build a database name from this value.`,
+        `Refusing to bind this value.`,
     )
   }
-  // <prefix>control is the catalog database. A tenant with the slug `control`
-  // would be handed the catalog as its own database (board's B2b).
+  // <prefix>control is the catalog database. A tenant with the slug `control` would
+  // be confused with it (board's B2b); the kernel does not issue it either.
   if (RESERVED_SLUGS.has(slug)) {
     throw new InvalidTenantSlugError(
       `[tenant-store] invalid tenant slug "${slug}": reserved (<prefix>${slug} is the catalog database).`,
@@ -712,32 +241,106 @@ function assertValidSlug(slug: string): void {
   }
 }
 
-/** Slugs whose <prefix><slug> is not a tenant database. */
+/** Slugs that name the catalogue database, never a tenant. */
 export const RESERVED_SLUGS: ReadonlySet<string> = new Set(['control'])
 
-/** Databases every cluster has, whatever the admin url names: never a tenant's. */
-const CLUSTER_DATABASES: ReadonlySet<string> = new Set(['postgres', 'template0', 'template1'])
+// ── customer databases: the package store behind the schema gate ──────────────
 
-/**
- * storeFor never hands out a pool on the maintenance database named by the admin
- * url (its own path), nor on postgres or a template database (board's B2d). With
- * an empty prefix a slug such as `postgres` would otherwise name one of them.
- */
-function assertNotMaintenanceDb(adminUrl: string, dbName: string): void {
-  const maintenance = decodeURIComponent(new URL(adminUrl).pathname.slice(1))
-  if (dbName === maintenance || CLUSTER_DATABASES.has(dbName)) {
-    throw new Error(
-      `[tenant-store] refusing to serve the maintenance database "${dbName}" of the admin url as a tenant database`,
-    )
-  }
+interface TenantDbs {
+  /** What the pools were built for: a changed module url builds new ones. */
+  readonly moduleUrl: string
+  readonly store: TenantStore
+  readonly gate: SchemaGate
+}
+
+let _dbs: TenantDbs | null = null
+
+/** The slug each tenant id is bound to in THIS process (the warm half of the identity binding). */
+const _boundSlug = new Map<string, string>()
+
+function tenantDbs(options: StoreForOptions): TenantDbs {
+  const moduleUrl = requireRuntimePgUrl(options.moduleUrl, moduleUrlVariable(MODULE_ID))
+  if (_dbs !== null && _dbs.moduleUrl === moduleUrl) return _dbs
+  // A new module url (tests only): the pools of the old one are drained in the background.
+  const old = _dbs
+  if (old !== null) void old.store.close().catch(() => {})
+  const store = createTenantStore({
+    resolveTarget: envResolveTarget({ [moduleUrlVariable(MODULE_ID)]: moduleUrl }),
+    maxPools: MAX_TENANT_POOLS,
+  })
+  const gate = schemaGate({ dir: MIGRATIONS_DIR, openDb: (tenantId) => store.openTenantDb(tenantId, MODULE_ID) })
+  _dbs = { moduleUrl, store, gate }
+  return _dbs
+}
+
+function sqlstateOf(err: unknown): string | undefined {
+  if (typeof err !== 'object' || err === null) return undefined
+  const code = (err as { code?: unknown }).code
+  return typeof code === 'string' ? code : undefined
 }
 
 /**
- * A tenant id as Postgres renders a uuid (canonical, lowercase). The catalog
- * comparison is on tenant_id::text, so this is the store's own floor: any other
- * spelling is refused before a catalog row or a database is touched.
+ * The SQLSTATEs of a tenant database that cannot be connected to because the module is off: it is gone
+ * (3D000, dropped) or blocked (42501, the module Karenz revoked CONNECT from the app role). Only
+ * meaningful for a failure of the CONNECTION (or of `SELECT 1`), never for a query that needs a table
+ * privilege.
  */
-const TENANT_ID_TEXT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+export function isTenantDatabaseOff(err: unknown): boolean {
+  const code = sqlstateOf(err)
+  return code === '3D000' || code === '42501'
+}
+
+/**
+ * Errors that mean "the connection went away under the query", not "the query was wrong": the server
+ * terminated the backend (57P01 admin shutdown — what DROP DATABASE ... WITH (FORCE) does to a disabled
+ * tenant's pool —, 57P02 crash shutdown, 57P03 cannot connect now) or postgres-js lost the socket.
+ */
+const CONNECTION_LOST: ReadonlySet<string> = new Set([
+  '57P01',
+  '57P02',
+  '57P03',
+  'CONNECTION_CLOSED',
+  'CONNECTION_ENDED',
+  'CONNECTION_DESTROYED',
+  'CONNECT_TIMEOUT',
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'EPIPE',
+])
+
+/**
+ * What a failure of a QUERY on a customer pool says about the tenant's database, for the route layer:
+ * the database is gone (3D000: the module was just switched off) -> not provisioned; the connection was
+ * lost under the query (a drop with FORCE, a restart) -> unavailable, retry. Anything else is not the
+ * database's availability and returns null (the caller treats it as the fault it is).
+ */
+export function classifyQueryFailure(err: unknown): TenantNotProvisionedError | TenantUnavailableError | null {
+  const code = sqlstateOf(err)
+  if (code === '3D000') return new TenantNotProvisionedError()
+  if (code !== undefined && CONNECTION_LOST.has(code)) return new TenantUnavailableError('tenant_unavailable', RETRY_AFTER_SECONDS)
+  return null
+}
+
+/**
+ * The tenant's pool, or why it cannot be had. Fail closed, nothing created:
+ *   gate ok                              -> the tenant's pool
+ *   gate behind | diverged               -> TenantUnavailableError schema_not_current (the leaf never migrates)
+ *   gate unavailable -> classify, with SELECT 1 on the tenant pool:
+ *     3D000 (no database) | 42501 at connect (blocked) -> TenantNotProvisionedError
+ *     anything else                                      -> TenantUnavailableError tenant_unavailable
+ */
+async function openLifecycleDb(dbs: TenantDbs, tenantId: string): Promise<Sql> {
+  const verdict = await dbs.gate.check(tenantId)
+  if (verdict.ok) return (await dbs.store.openTenantDb(tenantId, MODULE_ID)) as Sql
+  if (verdict.reason !== 'unavailable') throw new TenantUnavailableError('schema_not_current', verdict.retryAfterSeconds)
+  try {
+    const sql = await dbs.store.openTenantDb(tenantId, MODULE_ID)
+    await sql`SELECT 1`
+  } catch (err) {
+    if (isTenantDatabaseOff(err)) throw new TenantNotProvisionedError()
+  }
+  throw new TenantUnavailableError('tenant_unavailable', verdict.retryAfterSeconds)
+}
 
 // ── control DB state ──────────────────────────────────────────────────────────
 
@@ -745,25 +348,6 @@ let _controlSql: Sql | null = null
 let _controlInitialized = false
 /** In-flight init Promise so concurrent first callers await the same work. */
 let _controlInitPromise: Promise<Sql> | null = null
-
-// ── migration manifest cache ──────────────────────────────────────────────────
-
-let _manifestCache: Record<string, string> | null = null
-
-async function loadManifest(override?: Record<string, string>): Promise<Record<string, string>> {
-  if (override !== undefined) return override
-  if (_manifestCache !== null) return _manifestCache
-  let raw: string
-  try {
-    raw = await readFile(MANIFEST_FILE, 'utf-8')
-  } catch (err) {
-    throw new Error(
-      `[tenant-store] failed to read migration manifest at ${MANIFEST_FILE}: ${String(err)}`,
-    )
-  }
-  _manifestCache = JSON.parse(raw) as Record<string, string>
-  return _manifestCache
-}
 
 // ── internal helpers ──────────────────────────────────────────────────────────
 
@@ -774,63 +358,32 @@ function dbUrlFor(adminUrl: string, dbName: string): string {
   return u.toString()
 }
 
-/** Hash a Buffer with SHA-256 and return the lowercase hex string. */
-function sha256hex(buf: Buffer): string {
-  return createHash('sha256').update(buf).digest('hex')
+function firstContactKey(tenant: TenantRef, pgUrl: string, dbPrefix: string, moduleUrl: string): string {
+  return JSON.stringify([tenant.id, tenant.slug, pgUrl, dbPrefix, moduleUrl])
 }
 
-// ── first contact: serialise creation and migration ───────────────────────────
+// ── the catalogue database: serialise its creation ────────────────────────────
 //
-// First contact of a customer creates its database and runs the leaf migrations. Two requests (or
-// two processes: an old and a new colour, two replicas) that meet a customer the leaf has never
-// seen must not both run CREATE DATABASE: the loser dies with 23505 on pg_database_datname_index
-// (or 42P04) and its caller used to get a 500. Three layers, each covering what the one before
-// cannot see:
+// The catalogue database is created on first use. Two processes (an old and a new colour, two replicas)
+// that meet it missing must not both run CREATE DATABASE: the loser dies with 23505 on
+// pg_database_datname_index (or 42P04) and its caller used to get a 500. Three layers, each covering what
+// the one before cannot see:
 //   1. in this process, concurrent first requests for one customer share ONE flight (_firstContact);
 //   2. across processes, CREATE DATABASE runs under a session advisory lock held on the maintenance
-//      database, and the migrations run under one held on the customer database. The lock names
-//      differ from the one --migrate-only holds (migrate-only.ts), which calls storeFor() while it
-//      holds its own lock: sharing the name would deadlock the CD step against itself;
+//      database, and the catalogue table under a transaction lock held on the catalogue database;
 //   3. a duplicate-database error that still arrives (a creator that takes no lock: an older
 //      colour) means the database exists, which is what the caller wanted: it is not a failure.
 
 /** Hashed to a bigint in SQL (hashtextextended). One lock for every CREATE DATABASE on the server:
  *  concurrent creations of DIFFERENT databases also fight over the template (55006). */
 const CREATE_DB_LOCK = 'gremion.leaf.create-database'
-/** The lock the first-contact migrations (and the catalog table) of one database run under. */
+/** The lock the catalogue table creation runs under. */
 const FIRST_CONTACT_LOCK = 'gremion.leaf.first-contact'
 /** Bound of every wait for those locks (lock_timeout): a stuck holder ends the wait with 55P03. */
 const FIRST_CONTACT_LOCK_TIMEOUT_MS = 30_000
 /** Pause between the retries of a CREATE DATABASE that found the template busy. */
 const TEMPLATE_BUSY_RETRY_MS = 250
 const TEMPLATE_BUSY_MAX_ATTEMPTS = 4
-
-/**
- * Run `fn` while holding a session advisory lock on a database of its own connection. The lock goes
- * with the connection, so a failing `fn` can never leave it held. `url` names the database the lock
- * lives in (advisory locks are per database): processes serialise only when they use the same one.
- */
-async function withAdvisoryLock<T>(url: string, lockName: string, fn: (conn: Sql) => Promise<T>): Promise<T> {
-  const conn = postgres(url, {
-    max: 1,
-    prepare: false,
-    connect_timeout: 10,
-    onnotice: () => {},
-    connection: { lock_timeout: FIRST_CONTACT_LOCK_TIMEOUT_MS },
-  })
-  try {
-    await conn`SELECT pg_advisory_lock(hashtextextended(${lockName}, 0))`
-    return await fn(conn)
-  } finally {
-    await conn.end({ timeout: 5 }).catch(() => {})
-  }
-}
-
-function sqlstateOf(err: unknown): string | undefined {
-  if (typeof err !== 'object' || err === null) return undefined
-  const code = (err as { code?: unknown }).code
-  return typeof code === 'string' ? code : undefined
-}
 
 /** CREATE DATABASE lost a race to another creator of the same name. */
 function isDuplicateDatabase(err: unknown): boolean {
@@ -848,7 +401,7 @@ function isTemplateBusy(err: unknown): boolean {
 
 /**
  * Make sure database `dbName` exists. Safe to call concurrently, from this process and from others:
- * exactly one caller creates it, the rest find it there.
+ * exactly one caller creates it, the rest find it there. Only the catalogue database is made here.
  */
 async function createDatabaseIfMissing(adminUrl: string, dbName: string): Promise<void> {
   const admin = postgres(adminUrl, {
@@ -865,8 +418,8 @@ async function createDatabaseIfMissing(adminUrl: string, dbName: string): Promis
     return Number(rows[0].count) > 0
   }
   try {
-    // The ordinary case, every pool re-open after an eviction: the database is there. No lock, so
-    // nothing here ever queues behind somebody else's slow CREATE DATABASE.
+    // The ordinary case: the database is there. No lock, so nothing here ever queues behind
+    // somebody else's slow CREATE DATABASE.
     if (await exists()) return
     // Missing: create it under the server-wide lock (held on this connection, released with it) and
     // look again, because the holder before us may just have created it.
@@ -890,57 +443,13 @@ async function createDatabaseIfMissing(adminUrl: string, dbName: string): Promis
   }
 }
 
-/** Two sessions creating the same object (CREATE ... IF NOT EXISTS is not atomic across sessions). */
-const MIGRATION_RACE_CODES: ReadonlySet<string> = new Set([
-  '42710', // duplicate_object
-  '42P07', // duplicate_table
-  '40P01', // deadlock_detected
-  '40001', // serialization_failure
-])
-const MIGRATION_MAX_ATTEMPTS = 3
-const MIGRATION_RETRY_MS = 200
-
-function isMigrationRace(err: unknown): boolean {
-  const code = sqlstateOf(err)
-  if (code === undefined) return false
-  if (MIGRATION_RACE_CODES.has(code)) return true
-  // Two sessions replacing one function: the loser fails with this internal-error code and no other.
-  if (code === 'XX000') return err instanceof Error && err.message.includes('tuple concurrently updated')
-  // A unique violation of a pg_ catalogue index is two sessions creating one object; of a user table, a defect.
-  if (code === '23505') {
-    const constraint = (err as { constraint_name?: unknown }).constraint_name
-    return typeof constraint === 'string' && constraint.startsWith('pg_')
-  }
-  return false
-}
-
-/**
- * The first-contact lock serialises the processes that take it; a creator that takes none (an older
- * colour still serving) can still collide with a migration file. The files are idempotent, so a
- * collision with a catalogue race is retried a bounded number of times; every other error is final.
- */
-async function migrateWithRetry(run: () => Promise<void>): Promise<void> {
-  for (let attempt = 1; ; attempt++) {
-    try {
-      return await run()
-    } catch (err) {
-      if (!isMigrationRace(err) || attempt >= MIGRATION_MAX_ATTEMPTS) throw err
-      await new Promise((resolve) => setTimeout(resolve, MIGRATION_RETRY_MS * attempt))
-    }
-  }
-}
-
 /**
  * First contacts in flight, keyed by everything that decides the outcome (customer id and slug, the
- * server, the prefix, a test manifest). Concurrent callers with the same key await the same promise,
- * so the work and the pool it registers exist once; a caller with another slug for the same id gets
- * its own flight and meets the catalog binding (TenantIdentityMismatchError), not a borrowed pool.
+ * server, the prefix, the module url). Concurrent callers with the same key await the same promise,
+ * so the work exists once; a caller with another slug for the same id gets its own flight and meets
+ * the catalog binding (TenantIdentityMismatchError), not a borrowed pool.
  */
 const _firstContact = new Map<string, Promise<Sql>>()
-
-function firstContactKey(tenant: TenantRef, pgUrl: string, dbPrefix: string, manifest?: Record<string, string>): string {
-  return JSON.stringify([tenant.id, tenant.slug, pgUrl, dbPrefix, manifest ?? null])
-}
 
 /**
  * Ensure the control DB (`calendar_control` / `calendar_test_control`)
@@ -1011,7 +520,7 @@ async function ensureControlDb(adminUrl: string, dbPrefix: string): Promise<Sql>
   // carries this same seam — down on 2026-07-28: one lost boot race against its
   // Postgres (PostgresError 57P03, "the database system is starting up") was
   // replayed to every subsequent request for ~13 hours while /healthz still
-  // answered ok. See services/finance/test/tenant-store.init-retry.test.ts.
+  // answered ok. See test/tenant-store.init-retry.test.ts.
   _controlInitPromise = attempt
   attempt.catch(() => {
     if (_controlInitPromise === attempt) _controlInitPromise = null
@@ -1038,9 +547,8 @@ async function assertCatalogBinding(ctrl: Sql, tenant: TenantRef): Promise<numbe
 }
 
 /**
- * Bind (id, slug) in the catalog BEFORE any database is created. Replaces the
- * blind upsert, which followed a changed slug and so rebound a renamed tenant to
- * a new, empty database.
+ * Bind (id, slug) in the catalog. Replaces the blind upsert, which followed a changed slug and so
+ * rebound a renamed tenant.
  *   - a row for the id with another slug, or for the slug with another id:
  *     TenantIdentityMismatchError, nothing written;
  *   - no row: INSERT … ON CONFLICT DO NOTHING (a concurrent claim of the same
@@ -1060,181 +568,135 @@ async function claimCatalog(ctrl: Sql, tenant: TenantRef, dbName: string): Promi
   }
 }
 
-/**
- * Ensure a per-tenant DB exists, creating it via the admin connection if absent.
- */
-async function ensureTenantDb(adminUrl: string, dbName: string): Promise<void> {
-  await createDatabaseIfMissing(adminUrl, dbName)
-}
-
-/**
- * Run the leaf migrations against a per-tenant DB.
- *
- * Manifest-hash pattern (G-012): for each *.sql file in migration order,
- * compute SHA-256 of the on-disk bytes and compare to manifest.json. If any
- * hash mismatches, throw BEFORE running any SQL — fail-closed. This prevents
- * a stale or tampered migration from being silently applied.
- *
- * Migrations use CREATE … IF NOT EXISTS / DO $$ … IF NOT EXISTS guards so
- * running them against a DB that already has the tables is a safe no-op.
- *
- * Unlike the newsletter leaf, this leaf's 001_init.sql wraps its DDL in an
- * explicit top-level BEGIN; / COMMIT; (squashed from gremion-ui's
- * 003_calendar_schema.sql). postgres-js refuses to run a raw BEGIN over a
- * pooled (max > 1) connection (UNSAFE_TRANSACTION — "Only use sql.begin,
- * sql.reserved or max: 1"), so migrations run over their own short-lived
- * max:1 connection to the same tenant DB rather than the shared pool passed
- * in for regular queries.
- */
-async function runMigrations(
-  tenantUrl: string,
-  overrideManifest?: Record<string, string>,
-): Promise<void> {
-  // 1. Load manifest.
-  const manifest = await loadManifest(overrideManifest)
-
-  // 2. Read migration files in sorted order.
-  let entries: string[]
-  try {
-    entries = (await readdir(MIGRATIONS_DIR)).filter((f) => f.endsWith('.sql')).sort()
-  } catch (err) {
-    throw new Error(`[tenant-store] failed to read migrations dir: ${String(err)}`)
-  }
-
-  // 3. Verify hashes BEFORE running anything (fail-closed).
-  for (const file of entries) {
-    const expected = manifest[file]
-    if (expected === undefined) {
-      throw new Error(
-        `[tenant-store] migration file "${file}" has no entry in manifest.json — ` +
-          `run scripts/build-migration-manifest.mjs to regenerate the manifest.`,
-      )
-    }
-    const buf = await readFile(path.join(MIGRATIONS_DIR, file))
-    const actual = sha256hex(buf)
-    if (actual !== expected) {
-      throw new Error(
-        `[tenant-store] manifest hash mismatch for ${file} — ` +
-          `manifest says ${expected}, on-disk hash is ${actual}. ` +
-          `Migration aborted (fail-closed). ` +
-          `If you edited a migration file, run scripts/build-migration-manifest.mjs.`,
-      )
-    }
-  }
-
-  // 4. Run each migration in order over a dedicated max:1 connection. The DDL
-  //    uses IF NOT EXISTS guards so re-running on an existing DB with the
-  //    tables already present is a safe no-op.
-  const migrator = postgres(tenantUrl, { max: 1, prepare: false })
-  try {
-    for (const file of entries) {
-      const sqlText = await readFile(path.join(MIGRATIONS_DIR, file), 'utf-8')
-      await migrator.unsafe(sqlText)
-    }
-  } finally {
-    await migrator.end().catch(() => {})
-  }
-}
-
 // ── public API ────────────────────────────────────────────────────────────────
 
 /**
- * Return a ready postgres-js Sql instance for the given tenant, creating the
- * database and running migrations if this is the first contact.
+ * Return a ready postgres-js Sql instance for the given tenant: the pool of its lifecycle database
+ * t_<hex32>__calendar, as the module's app role. Nothing is created or migrated here; a database that
+ * is missing, blocked or not current is a typed refusal (TenantNotProvisionedError, TenantUnavailableError).
  *
- * Identity guarantee: calling storeFor() twice with the same tenant.id returns
- * the SAME Sql instance (until the registry is reset or the pool is evicted
- * at the POOL_REGISTRY_MAX boundary).
- *
- * Identity BINDING: on every call the (id, slug) pair must be the one the
- * catalog holds — checked on the warm path against the registry entry's slug and
- * on a cold miss against the catalog — else TenantIdentityMismatchError, with no
- * database created and nothing upserted. The database name is derived from the
- * slug alone, so a pair the catalog does not bind must never reach it.
+ * Identity BINDING: on every call the (id, slug) pair must be the one the catalog holds — checked on the
+ * warm path against the slug this process bound, and on a cold miss against the catalog — else
+ * TenantIdentityMismatchError, with nothing upserted. A tenant whose database is refused is not entered
+ * in the catalogue.
  *
  * @param tenant   Minimal tenant identity (id + slug).
  * @param options  Runtime config. In production the defaults (env vars) apply;
- *                 in tests, pass pgUrl / dbPrefix / _overrideManifest.
+ *                 in tests, pass pgUrl / dbPrefix / moduleUrl.
  */
 export async function storeFor(tenant: TenantRef, options: StoreForOptions = {}): Promise<Sql> {
-  // Checked BEFORE the cache lookup: after closeAllPools() the registry is empty, so
-  // every call would otherwise fall through to opening a fresh pool behind the drain.
+  // Checked BEFORE anything is opened: after closeAllPools() every call would otherwise open a fresh
+  // pool behind the drain.
   if (_closing) throw new ShuttingDownError(`storeFor(${tenant.slug})`)
 
-  // 1. Check the in-process pool cache first (hot path — DB already set up).
-  //    The entry keeps the catalog slug: a warm hit is refused unless the
-  //    request's slug is the bound one — without this the binding would be
-  //    checked on a cold cache only.
-  const existing = getEntry(tenant.id)
-  if (existing) {
-    if (existing.slug !== tenant.slug) {
-      throw new TenantIdentityMismatchError(tenant, { id: tenant.id, slug: existing.slug })
-    }
-    return existing.sql
+  // The id is the storage key (t_<hex32>__calendar) and the catalogue key: refuse any other spelling
+  // before a catalog row, a database name or a pool is touched.
+  if (typeof tenant.id !== 'string' || !isUuidV7(tenant.id)) throw new InvalidTenantIdError()
+
+  // Validate slug before it is bound or handed to a CalDAV collection name.
+  assertValidSlug(tenant.slug)
+
+  // Warm: the slug this process bound for the id must be the request's. Without this the binding would
+  // be checked on a cold start only.
+  const bound = _boundSlug.get(tenant.id)
+  if (bound !== undefined) {
+    if (bound !== tenant.slug) throw new TenantIdentityMismatchError(tenant, { id: tenant.id, slug: bound })
+    return openLifecycleDb(tenantDbs(options), tenant.id)
   }
 
   const pgUrl = requireRuntimePgUrl(options.pgUrl, 'CALENDAR_PG_URL')
   const dbPrefix = options.dbPrefix ?? 'calendar_'
+  const dbs = tenantDbs(options)
 
-  // The catalog comparison is on tenant_id::text (canonical lowercase): refuse
-  // any other spelling before a catalog row or a database is touched.
-  if (!TENANT_ID_TEXT.test(tenant.id)) throw new InvalidTenantIdError()
-
-  // Validate slug BEFORE building any DB identifier (F2 — prevents identifier injection).
-  assertValidSlug(tenant.slug)
-
-  const dbName = dbPrefix + tenant.slug
-  assertNotMaintenanceDb(pgUrl, dbName)
-
-  // Concurrent first requests for one customer (and the other processes, below) must not each
-  // create the database: one flight per (customer, server), everyone else awaits it.
-  const key = firstContactKey(tenant, pgUrl, dbPrefix, options._overrideManifest)
+  // Concurrent first requests for one customer (and the other processes) share one flight.
+  const key = firstContactKey(tenant, pgUrl, dbPrefix, dbs.moduleUrl)
   const running = _firstContact.get(key)
   if (running !== undefined) return running
-  const flight: Promise<Sql> = openFirstContact(tenant, pgUrl, dbPrefix, dbName, options).finally(() => {
+  const flight: Promise<Sql> = openFirstContact(tenant, pgUrl, dbPrefix, dbs).finally(() => {
     if (_firstContact.get(key) === flight) _firstContact.delete(key)
   })
   _firstContact.set(key, flight)
   return flight
 }
 
-/** The cold path of storeFor: bind the catalog, create the database, migrate, register the pool. */
-async function openFirstContact(
-  tenant: TenantRef,
-  pgUrl: string,
-  dbPrefix: string,
-  dbName: string,
-  options: StoreForOptions,
-): Promise<Sql> {
-  // 2. Ensure the control DB + tenant_catalog table (idempotent).
+/** The cold path of storeFor: check the binding, open the lifecycle database, then claim the catalogue row. */
+async function openFirstContact(tenant: TenantRef, pgUrl: string, dbPrefix: string, dbs: TenantDbs): Promise<Sql> {
+  // 1. Ensure the control DB + tenant_catalog table (idempotent).
   const ctrl = await ensureControlDb(pgUrl, dbPrefix)
 
-  // 3. Bind (id, slug) in the catalog BEFORE any database is created.
-  await claimCatalog(ctrl, tenant, dbName)
+  // 2. A pair the catalogue does not bind is refused before the customer database is touched.
+  await assertCatalogBinding(ctrl, tenant)
 
-  // 4. Ensure the per-tenant DB exists.
-  await ensureTenantDb(pgUrl, dbName)
+  // 3. Open the customer's lifecycle database. A refusal leaves the catalogue untouched.
+  const sql = await openLifecycleDb(dbs, tenant.id)
 
-  // 5. Open a pool to the tenant DB.
-  const tenantUrl = dbUrlFor(pgUrl, dbName)
-  const sql = postgres(tenantUrl, { max: 4, prepare: true, idle_timeout: 20, connect_timeout: 10 })
+  // 4. Bind (id, slug) in the catalogue (insert-if-absent), naming the lifecycle database.
+  await claimCatalog(ctrl, tenant, tenantModuleDbName(tenant.id, MODULE_ID))
 
-  // 6. Run migrations (verifies hashes; idempotent DDL) over their own
-  //    dedicated connection. If hash verification fails, close the pool
-  //    before rethrowing — no half-open pool left behind.
-  try {
-    await withAdvisoryLock(tenantUrl, FIRST_CONTACT_LOCK, () =>
-      migrateWithRetry(() => runMigrations(tenantUrl, options._overrideManifest)),
-    )
-  } catch (err) {
-    await sql.end().catch(() => {})
-    throw err
-  }
-
-  // 7. Register the pool with its bound slug (evicts LRU slot if at capacity).
-  setPool(tenant.id, sql, tenant.slug)
-
+  _boundSlug.set(tenant.id, tenant.slug)
   return sql
+}
+
+// ── shutdown ──────────────────────────────────────────────────────────────────
+
+export interface PoolDrainCounts {
+  /** Customer pools ended. */
+  readonly live: number
+  /** Retained for the log line's shape: the package store owns eviction, nothing is pending here. */
+  readonly evicted: number
+  /** The control-DB pool: 1 once the leaf has booted, 0 before. */
+  readonly control: number
+  /** Pools whose end() REJECTED — every one of these is a leaked connection. */
+  readonly failed: number
+}
+
+/**
+ * PUBLIC shutdown seam: end EVERY pool this process holds, the customer pools (through the package
+ * store) and the control-DB pool. This is what the leaf's shutdown handler awaits.
+ */
+export async function closeAllPools(): Promise<PoolDrainCounts> {
+  // Set FIRST: an in-flight request that lands mid-drain would otherwise open a
+  // fresh pool behind the drain that just closed everything, and nothing would
+  // ever close that one — the process exits seconds later.
+  _closing = true
+
+  const dbs = _dbs
+  _dbs = null
+  _boundSlug.clear()
+  const live = dbs?.store.size() ?? 0
+
+  // The CONTROL pool is never evicted, so a drain that walks only the customer pools misses the one pool
+  // a running leaf is guaranteed to hold. Detach it before ending it so nothing can hand it out.
+  const control = _controlSql
+  _controlSql = null
+  _controlInitialized = false
+  _controlInitPromise = null
+
+  let failed = 0
+  await Promise.all([
+    dbs === null
+      ? Promise.resolve()
+      : dbs.store.close().catch((err: unknown) => {
+          failed++
+          console.error('[tenant-store] closing the customer pools failed:', err instanceof Error ? err.message : String(err))
+        }),
+    control === null
+      ? Promise.resolve()
+      : control.end({ timeout: 5 }).catch((err: unknown) => {
+          failed++
+          console.error('[tenant-store] closing the control pool failed:', err instanceof Error ? err.message : String(err))
+        }),
+  ])
+
+  const counts: PoolDrainCounts = { live, evicted: 0, control: control === null ? 0 : 1, failed }
+  // REAL counts, not a bare "drained": a rejected end() used to be swallowed
+  // into a resolved promise and the shutdown logged success over the top of
+  // leaked connections.
+  console.log(
+    `[tenant-store] closeAllPools: live=${counts.live} evicted=${counts.evicted} ` +
+      `control=${counts.control} failed=${counts.failed}`,
+  )
+  return counts
 }
 
 // ── public: list tenants from the control catalog ─────────────────────────────
@@ -1242,9 +704,12 @@ async function openFirstContact(
 /**
  * List all tenants registered in the control DB catalog.
  *
- * Used by the CalDAV sync ticker (listTenants DI) and the /healthz/tenants
+ * Used by the CalDAV sync ticker (listTenants DI), the outbox relay and the /healthz/tenants
  * handler. Calls ensureControlDb() first (idempotent) so the control DB is
  * initialized on demand — safe to call at any point after boot.
+ *
+ * A listed tenant whose module is switched off is refused by storeFor (TenantNotProvisionedError);
+ * the loops skip it for that pass.
  *
  * Returns an empty array (not an error) if the catalog exists but has no rows.
  */
@@ -1261,27 +726,16 @@ export async function listTenants(options: StoreForOptions = {}): Promise<Tenant
 // ── test helpers ──────────────────────────────────────────────────────────────
 
 /**
- * Drain every pool, clear the registry, and reset the control DB connection.
+ * Drain every pool, clear the state, and reset the control DB connection.
  *
- * TEST-ONLY. Mirrors _resetPoolRegistryForTests() in pool-registry.ts.
- * Awaitable so tests can wait for drains to complete before dropping DBs.
+ * TEST-ONLY. Awaitable so tests can wait for drains to complete before dropping DBs.
  */
 export async function _resetTenantStoreForTests(): Promise<void> {
-  // Drain all tenant pools.
-  const drains: Promise<void>[] = []
-  for (const [, entry] of _poolMap) {
-    drains.push(entry.sql.end().catch(() => {}))
-  }
-  _poolMap.clear()
-  _nextOrder = 0
-  // An explicit reset is not a capacity eviction: nothing is in flight, so the
-  // deferred drains are cancelled and their pools ENDED here and now. Cancelling
-  // the timer alone would orphan the handle - the evicted entry is already out
-  // of _poolMap, so nothing else could ever end() it.
-  drains.push(drainPendingNow().then(() => {}))
-  _lastEvictionWarnAt.clear()
-  _evictionCount = 0
-  await Promise.all(drains)
+  const dbs = _dbs
+  _dbs = null
+  _boundSlug.clear()
+  _firstContact.clear()
+  if (dbs !== null) await dbs.store.close().catch(() => {})
 
   // Drain + reset the control DB connection.
   if (_controlSql !== null) {
@@ -1293,9 +747,4 @@ export async function _resetTenantStoreForTests(): Promise<void> {
   // An integration test that exercised the shutdown path must not leave the
   // store latched shut for the next test in the file.
   _closing = false
-  _lastOverflowWarnAt = null
-  _overflowCount = 0
-
-  // Clear the manifest cache so a fresh load happens on next call.
-  _manifestCache = null
 }

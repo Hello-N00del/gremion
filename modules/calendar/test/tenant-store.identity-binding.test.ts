@@ -1,106 +1,34 @@
 /**
  * calendar leaf: the (tenant id, slug) binding of storeFor (audit #534).
  *
- * The per-tenant database name is derived from the slug alone. A store that
- * trusts the (id, slug) pair it is handed therefore follows a changed slug to a
- * NEW, empty database and rewrites the catalog binding (the old blind upsert), or
- * opens a database the id was never bound to. storeFor must refuse any pair the
- * catalog does not hold - on a warm pool and on a cold miss - before a database
- * is created or a catalog row is written.
+ * The slug names the customer's catalogue row and CalDAV collection; the customer database itself is the
+ * lifecycle's t_<hex32>__calendar, from the id alone. A store that trusts the (id, slug) pair it is handed
+ * would follow a changed slug and rewrite the catalog binding (the old blind upsert), or hand one slug's
+ * collection to another tenant. storeFor must refuse any pair the catalog does not hold - on a warm tenant
+ * and on a cold miss - before the customer database is opened or a catalog row is written.
  *
- * PG-free: the `postgres` driver is replaced by an in-memory stand-in whose
- * catalog keeps the real table's constraints (tenant_id PRIMARY KEY, slug UNIQUE).
- * The real-Postgres twin is tenant-store.identity-binding.integration.test.ts.
+ * PG-free: `postgres` and the package store are the in-memory stand-ins of support/fake-lifecycle-store.ts,
+ * whose catalog keeps the real table's constraints (tenant_id PRIMARY KEY, slug UNIQUE). The real-Postgres
+ * twin is tenant-store.identity-binding.integration.test.ts.
  *
- * Also the call-site guard: storeFor is reached only from the process wiring
- * (src/index.ts); the http layer gets it injected, so the one mapping of the
- * refusal to a 409 (see identity-mismatch-http.test.ts) cannot be bypassed.
+ * Also the call-site guard: storeFor is reached only from the process wiring (src/index.ts); the http layer
+ * gets it injected, so the one mapping of the refusal to a 409 (see identity-mismatch-http.test.ts) cannot
+ * be bypassed.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-// ── in-memory stand-in for the driver (hoisted so the vi.mock factory sees it) ─
-const h = vi.hoisted(() => ({
-  catalog: [] as { tenant_id: string; slug: string; db_name: string }[],
-  databases: new Set<string>(),
-  /** CREATE DATABASE and every catalog write, in order. */
-  writes: [] as string[],
-  /** Every url handed to the driver factory, in order. */
-  opened: [] as string[],
-}))
-
-vi.mock('postgres', () => {
-  const uniqueViolation = (): Error & { code: string } =>
-    Object.assign(new Error('duplicate key value violates unique constraint "tenant_catalog_slug_key"'), {
-      code: '23505',
-    })
-
-  const run = (text: string, params: readonly unknown[]): unknown[] => {
-    if (/SELECT count\(\*\) AS count FROM pg_database/i.test(text)) {
-      return [{ count: h.databases.has(String(params[0])) ? '1' : '0' }]
-    }
-    const create = /^\s*CREATE DATABASE "([^"]+)"/i.exec(text)
-    if (create) {
-      h.databases.add(create[1]!)
-      h.writes.push(`CREATE DATABASE ${create[1]}`)
-      return []
-    }
-    if (/SELECT tenant_id::text AS tenant_id, slug FROM tenant_catalog WHERE tenant_id = \$1 OR slug = \$2/i.test(text)) {
-      return h.catalog
-        .filter((r) => r.tenant_id === params[0] || r.slug === params[1])
-        .map(({ tenant_id, slug }) => ({ tenant_id, slug }))
-    }
-    if (/INSERT INTO tenant_catalog/i.test(text)) {
-      h.writes.push(text.replace(/\s+/g, ' ').trim())
-      const [id, slug, dbName] = params as [string, string, string]
-      const sameId = h.catalog.find((r) => r.tenant_id === id)
-      const sameSlug = h.catalog.find((r) => r.slug === slug)
-      if (/ON CONFLICT DO NOTHING/i.test(text)) {
-        if (!sameId && !sameSlug) h.catalog.push({ tenant_id: id, slug, db_name: dbName })
-        return []
-      }
-      if (/ON CONFLICT \(tenant_id\) DO UPDATE/i.test(text)) {
-        if (sameId) {
-          if (sameSlug !== undefined && sameSlug !== sameId) throw uniqueViolation()
-          sameId.slug = slug
-          sameId.db_name = dbName
-        } else {
-          if (sameSlug !== undefined) throw uniqueViolation()
-          h.catalog.push({ tenant_id: id, slug, db_name: dbName })
-        }
-        return []
-      }
-      throw new Error(`unmodelled INSERT: ${text}`)
-    }
-    return [] // CREATE TABLE, the leaf migrations, SELECT 1 ...
-  }
-
-  const factory = (url: string, _opts?: unknown) => {
-    h.opened.push(url)
-    const guarded = (text: string, params: readonly unknown[]): Promise<unknown[]> => {
-      try {
-        return Promise.resolve(run(text, params))
-      } catch (err) {
-        return Promise.reject(err)
-      }
-    }
-    const sql = ((strings: TemplateStringsArray | string, ...vals: unknown[]) => {
-      const text = typeof strings === 'string' ? strings : strings.join(' ? ')
-      return guarded(text, vals)
-    }) as unknown as Record<string, unknown> & ((...a: unknown[]) => Promise<unknown[]>)
-    sql.unsafe = (text: string, params?: unknown[]) => guarded(text, params ?? [])
-    sql.end = () => Promise.resolve()
-    sql.begin = async (fn: (tx: unknown) => Promise<unknown>) => fn(sql)
-    return sql
-  }
-  return { default: factory }
-})
+vi.mock('postgres', async () => ({ default: (await import('./support/fake-lifecycle-store.ts')).fakePostgres }))
+vi.mock('@gremion/tenant-store', async (importOriginal) =>
+  (await import('./support/fake-lifecycle-store.ts')).fakeTenantStorePackage(await importOriginal<object>()),
+)
+import { fake as h, resetFake } from './support/fake-lifecycle-store.ts'
 
 // Imported AFTER vi.mock so the stand-in driver is in place.
-const { storeFor, InvalidTenantIdError, InvalidTenantSlugError, _poolRegistryForTests, _resetTenantStoreForTests } =
-  await import('../src/tenant-store.ts')
+const { storeFor, InvalidTenantIdError, InvalidTenantSlugError, _resetTenantStoreForTests } = await import('../src/tenant-store.ts')
+const { tenantModuleDbName } = await import('@gremion/tenant-store')
 
 const PREFIX = 'calendar_test_'
 const CONTROL_DB = PREFIX + 'control'
@@ -109,11 +37,12 @@ const OPTS = {
   // is mocked anyway, so nothing is dialled.
   pgUrl: 'postgres://u:p@127.0.0.1:59999/postgres',
   dbPrefix: PREFIX,
+  moduleUrl: 'postgres://m_calendar_app:p@127.0.0.1:59999/postgres',
 } as const
 
-const A = { id: 'a1000000-0000-4000-8000-0000000000a1', slug: 'bind-a' }
-const B = { id: 'b1000000-0000-4000-8000-0000000000b1', slug: 'bind-b' }
-const C = { id: 'c1000000-0000-4000-8000-0000000000c1', slug: 'bind-c' }
+const A = { id: '01920000-0000-7000-8000-0000000000a1', slug: 'bind-a' }
+const B = { id: '01920000-0000-7000-8000-0000000000b1', slug: 'bind-b' }
+const C = { id: '01920000-0000-7000-8000-0000000000c1', slug: 'bind-c' }
 
 const MISMATCH = { code: 'TENANT_IDENTITY_MISMATCH', name: 'TenantIdentityMismatchError' }
 
@@ -121,28 +50,24 @@ const MISMATCH = { code: 'TENANT_IDENTITY_MISMATCH', name: 'TenantIdentityMismat
 function catalogued(...tenants: { id: string; slug: string }[]): void {
   h.databases.add(CONTROL_DB)
   for (const t of tenants) {
-    h.databases.add(PREFIX + t.slug)
-    h.catalog.push({ tenant_id: t.id, slug: t.slug, db_name: PREFIX + t.slug })
+    h.catalog.push({ tenant_id: t.id, slug: t.slug, db_name: tenantModuleDbName(t.id, 'calendar') })
   }
 }
 
-const tenantPoolsOpened = (): string[] => h.opened.filter((u) => !u.endsWith('/postgres') && !u.endsWith('/' + CONTROL_DB))
+/** The customer databases the package store was asked to open. */
+const tenantPoolsOpened = (): [string, string][] => h.storeOpens
 
 beforeEach(async () => {
   await _resetTenantStoreForTests()
-  h.catalog.length = 0
-  h.databases.clear()
-  h.writes.length = 0
-  h.opened.length = 0
+  resetFake()
 })
 
 describe('storeFor refuses a pair the catalog does not bind (cold miss)', () => {
-  it('a catalogued id under a CHANGED slug: no database created, no catalog write, no tenant pool', async () => {
+  it('a catalogued id under a CHANGED slug: no catalog write, no tenant pool', async () => {
     catalogued(A)
     await expect(storeFor({ id: A.id, slug: 'bind-a-renamed' }, OPTS)).rejects.toMatchObject(MISMATCH)
     expect(h.writes).toEqual([])
-    expect(h.databases.has(PREFIX + 'bind-a-renamed')).toBe(false)
-    expect(h.catalog).toEqual([{ tenant_id: A.id, slug: 'bind-a', db_name: PREFIX + 'bind-a' }])
+    expect(h.catalog).toEqual([{ tenant_id: A.id, slug: 'bind-a', db_name: tenantModuleDbName(A.id, 'calendar') }])
     expect(tenantPoolsOpened()).toEqual([])
   })
 
@@ -170,25 +95,25 @@ describe('storeFor refuses a pair the catalog does not bind (cold miss)', () => 
     h.databases.add(CONTROL_DB)
     const pool = await storeFor(A, OPTS)
     expect(pool).toBeDefined()
-    expect(h.catalog).toEqual([{ tenant_id: A.id, slug: A.slug, db_name: PREFIX + A.slug }])
+    expect(h.catalog).toEqual([{ tenant_id: A.id, slug: A.slug, db_name: tenantModuleDbName(A.id, 'calendar') }])
     const claims = h.writes.filter((w) => w.startsWith('INSERT INTO tenant_catalog'))
     expect(claims).toHaveLength(1)
     expect(claims[0]).toMatch(/ON CONFLICT DO NOTHING/)
     expect(claims[0]).not.toMatch(/DO UPDATE/)
   })
 
-  it('the claim precedes CREATE DATABASE, so a refused pair leaves no database behind', async () => {
+  it('the catalogue is claimed only after the customer database was opened: a tenant that is not provisioned leaves no row', async () => {
     h.databases.add(CONTROL_DB)
-    await storeFor(A, OPTS)
-    const claim = h.writes.findIndex((w) => w.startsWith('INSERT INTO tenant_catalog'))
-    const create = h.writes.indexOf(`CREATE DATABASE ${PREFIX}${A.slug}`)
-    expect(claim).toBeGreaterThanOrEqual(0)
-    expect(create).toBeGreaterThan(claim)
+    h.verdict = { ok: false, reason: 'unavailable', retryAfterSeconds: 30 }
+    h.probeError = { code: '3D000' }
+    await expect(storeFor(A, OPTS)).rejects.toMatchObject({ code: 'TENANT_NOT_PROVISIONED' })
+    expect(h.writes).toEqual([])
+    expect(h.catalog).toEqual([])
   })
 
   it('a non-canonical tenant id is refused before the driver is touched', async () => {
-    await expect(storeFor({ id: A.id.toUpperCase(), slug: A.slug }, OPTS)).rejects.toThrow(/canonical lowercase uuid/)
-    await expect(storeFor({ id: 'not-a-uuid', slug: A.slug }, OPTS)).rejects.toThrow(/canonical lowercase uuid/)
+    await expect(storeFor({ id: A.id.toUpperCase(), slug: A.slug }, OPTS)).rejects.toThrow(/canonical lowercase UUIDv7/)
+    await expect(storeFor({ id: 'not-a-uuid', slug: A.slug }, OPTS)).rejects.toThrow(/canonical lowercase UUIDv7/)
     expect(h.opened).toEqual([])
   })
 
@@ -226,25 +151,21 @@ describe('storeFor refuses a pair the catalog does not bind (warm pool)', () => 
     expect(await storeFor(A, OPTS)).toBe(poolA)
   })
 
-  it('the registry entry records the slug it was bound under', () => {
-    const stub = Object.assign(() => Promise.resolve([]), { end: () => Promise.resolve() })
-    _poolRegistryForTests.set(A.id, stub as never, A.slug)
-    expect(_poolRegistryForTests.slug(A.id)).toBe(A.slug)
-    expect(_poolRegistryForTests.slug(B.id)).toBeUndefined()
-  })
-
-  it('a stand-in pool is refused under another slug without opening anything', async () => {
-    const stub = Object.assign(() => Promise.resolve([]), { end: () => Promise.resolve() })
-    _poolRegistryForTests.set(A.id, stub as never, A.slug)
+  it('a tenant bound in this process is refused under another slug without opening the customer database again', async () => {
+    catalogued(A)
+    await storeFor(A, OPTS)
+    const opens = tenantPoolsOpened().length
+    const driverOpens = h.opened.length
     await expect(storeFor({ id: A.id, slug: B.slug }, OPTS)).rejects.toMatchObject(MISMATCH)
-    expect(await storeFor(A, OPTS)).toBe(stub)
-    expect(h.opened).toEqual([])
+    expect(tenantPoolsOpened()).toHaveLength(opens)
+    expect(h.opened).toHaveLength(driverOpens)
   })
 })
 
-describe('storeFor refuses a slug that is not a tenant database (B2b, B2d), before any database work', () => {
+describe('storeFor refuses a slug that is not bindable (B2b), before any database work', () => {
   const nothingTouched = (): void => {
     expect(h.opened).toEqual([])
+    expect(h.storeOpens).toEqual([])
     expect(h.writes).toEqual([])
     expect(h.databases.size).toBe(0)
     expect(h.catalog).toEqual([])
@@ -264,22 +185,13 @@ describe('storeFor refuses a slug that is not a tenant database (B2b, B2d), befo
     expect(h.catalog.map((r) => r.slug)).toEqual(['control-room'])
   })
 
-  it('a slug whose database name is the maintenance database of the admin url is refused', async () => {
-    // An empty prefix makes <prefix><slug> the url database itself.
-    await expect(storeFor({ id: A.id, slug: 'postgres' }, { ...OPTS, dbPrefix: '' })).rejects.toThrow(/maintenance database/)
-    await expect(
-      storeFor({ id: A.id, slug: 'maint' }, { pgUrl: 'postgres://u:p@127.0.0.1:59999/maint', dbPrefix: '' }),
-    ).rejects.toThrow(/maintenance database/)
-    nothingTouched()
-  })
-
-  it('postgres and the template databases are never served as a tenant database', async () => {
-    for (const slug of ['postgres', 'template0', 'template1']) {
-      await expect(
-        storeFor({ id: A.id, slug }, { pgUrl: 'postgres://u:p@127.0.0.1:59999/other', dbPrefix: '' }),
-      ).rejects.toThrow(/maintenance database/)
+  it('a slug named like a cluster database is only a label: no database of that name is looked at or made', async () => {
+    h.databases.add(CONTROL_DB)
+    for (const [i, slug] of ['postgres', 'template0', 'template1'].entries()) {
+      await expect(storeFor({ id: `01920000-0000-7000-8000-00000000f0${i}0`, slug }, { ...OPTS, dbPrefix: PREFIX })).resolves.toBeDefined()
     }
-    nothingTouched()
+    expect(h.databases.size).toBe(1)
+    expect(h.opened.filter((u) => /\/(postgres|template0|template1)$/.test(u) && !u.endsWith('/postgres'))).toEqual([])
   })
 })
 
@@ -318,14 +230,23 @@ describe('storeFor call sites and the catalog statements (source guard)', () => 
     expect(store!.code).toMatch(/INSERT INTO tenant_catalog[\s\S]*?ON CONFLICT DO NOTHING/)
   })
 
-  it('storeFor checks the warm entry slug and claims the catalog before it creates a database', () => {
+  it('storeFor checks the warm slug, and the cold path checks the binding, opens the customer database, then claims the catalog', () => {
     const body = store!.code.slice(store!.code.indexOf('export async function storeFor'))
-    const claim = body.indexOf('claimCatalog(')
-    const create = body.indexOf('ensureTenantDb(')
-    expect(body).toMatch(/existing\.slug\s*!==\s*tenant\.slug/)
+    expect(body).toMatch(/bound\s*!==\s*tenant\.slug/)
     expect(body).toMatch(/throw new TenantIdentityMismatchError\(/)
-    expect(claim).toBeGreaterThan(-1)
-    expect(create).toBeGreaterThan(claim)
+    const cold = body.slice(body.indexOf('async function openFirstContact'))
+    const check = cold.indexOf('assertCatalogBinding(')
+    const open = cold.indexOf('openLifecycleDb(')
+    const claim = cold.indexOf('claimCatalog(')
+    expect(check).toBeGreaterThan(-1)
+    expect(open).toBeGreaterThan(check)
+    expect(claim).toBeGreaterThan(open)
+  })
+
+  it('tenant-store.ts creates no database but the catalogue one, and runs no migration', () => {
+    const creates = [...store!.code.matchAll(/CREATE DATABASE[^\n]*/g)].map((m) => m[0])
+    expect(creates).toEqual(['CREATE DATABASE "${dbName}"`)'])
+    expect(store!.code).not.toMatch(/runMigrations|readdir|manifest\.json|ensureTenantDb/)
   })
 
   it('enumerates the storeFor call sites: only the process wiring (src/index.ts) calls it', () => {

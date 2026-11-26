@@ -36,9 +36,12 @@
 import type http from 'node:http'
 import { z } from 'zod'
 import {
+  classifyQueryFailure,
   InvalidTenantIdError,
   InvalidTenantSlugError,
   TenantIdentityMismatchError,
+  TenantNotProvisionedError,
+  TenantUnavailableError,
   type Sql,
   type TenantRef,
 } from '../tenant-store.js'
@@ -98,6 +101,16 @@ function sendJson(
 
 function sendError(res: http.ServerResponse, status: number, error: string): void {
   sendJson(res, status, { success: false, error })
+}
+
+/**
+ * The tenant-level refusal an error stands for, or null. storeFor throws the two typed refusals; a
+ * query that fails because the database went away under it (the module was just switched off: 3D000, or
+ * a connection terminated by the drop) is the same state seen one step later.
+ */
+function refusalOf(err: unknown): TenantNotProvisionedError | TenantUnavailableError | null {
+  if (err instanceof TenantNotProvisionedError || err instanceof TenantUnavailableError) return err
+  return classifyQueryFailure(err)
 }
 
 // ── body reader ───────────────────────────────────────────────────────────────
@@ -235,6 +248,15 @@ export function buildApiRoutes(storeFn: StoreFn): Route[] {
           // grammar): the caller's error. The body names nothing.
           console.warn(`[calendar:api] ${err.message}`)
           sendError(extended.res, 400, 'invalid_tenant_slug')
+        } else if (refusalOf(err) !== null) {
+          // The customer's calendar database is not there (the module is switched off), not current,
+          // or went away under the query: the customer's state, never a server fault. The body names nothing.
+          const refusal = refusalOf(err)!
+          if (refusal instanceof TenantNotProvisionedError) {
+            sendError(extended.res, 404, 'tenant_not_provisioned')
+          } else {
+            sendJson(extended.res, 503, { success: false, error: refusal.reason }, { 'retry-after': String(refusal.retryAfterSeconds) })
+          }
         } else {
           console.error('[calendar:api] unhandled route error', err)
           if (!extended.res.headersSent) {
@@ -505,6 +527,8 @@ export interface TenantHealth {
   tenant_id: string
   tenant_slug: string
   db_ok: boolean
+  /** The module is switched off for this customer: no database, on purpose. */
+  not_provisioned?: boolean
   events?: number
   error?: string
 }
@@ -538,6 +562,11 @@ export async function tenantHealthHandler(
           events: Number(rows[0]!.c),
         }
       } catch (err) {
+        // A catalogued customer whose module is switched off has no database on purpose: reported,
+        // not a failure of the leaf.
+        if (err instanceof TenantNotProvisionedError) {
+          return { tenant_id: t.id, tenant_slug: t.slug, db_ok: false, not_provisioned: true, error: 'tenant_not_provisioned' }
+        }
         return {
           tenant_id: t.id,
           tenant_slug: t.slug,
@@ -548,7 +577,7 @@ export async function tenantHealthHandler(
     }),
   )
 
-  const allOk = results.every((r) => r.db_ok)
+  const allOk = results.every((r) => r.db_ok || r.not_provisioned === true)
   res.writeHead(allOk ? 200 : 503, { 'content-type': 'application/json' })
   res.end(JSON.stringify({ success: allOk, data: results }))
 }

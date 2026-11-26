@@ -1,11 +1,11 @@
 /**
  * `node dist/index.js --migrate-only` - the CD leaf step - PG-free unit tests.
  *
- * Pins: the error classes behind the exit codes (3 retry later vs 1 defect of the commit), the usage
- * exits (2), and that the entry STARTS NOTHING: no HTTP server, no scheduler, no NATS client, no outbox
- * relay, and the process ends with the entry's own exit code. The database behaviour (catalogue read
- * without creating anything, skipped customers, advisory lock, retries, idempotence, the overlap with
- * the old runner) is in migrate-only.integration.test.ts against a throwaway Postgres.
+ * The customer databases are the lifecycle's (t_<tenant>__calendar, migrated by the module step), so the
+ * entry opens no database. Pins: it answers the host's counts contract (one JSON line of zero counts,
+ * exit 0), refuses any argument (exit 2), imports no database driver and names no DDL, and that the
+ * process STARTS NOTHING: no HTTP server, no scheduler, no NATS client, no outbox relay, and ends with
+ * the entry's own exit code.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -22,9 +22,6 @@ vi.mock('../src/scheduler.js', () => ({ startScheduler: spies.startScheduler }))
 vi.mock('../src/nats-broker.js', () => ({ NatsBroker: { connect: spies.natsConnect } }))
 vi.mock('../src/relay-supervisor.js', () => ({ createRelaySupervisor: spies.createRelaySupervisor }))
 vi.mock('../src/migrate-only.js', () => ({ runMigrateOnlyCli: spies.runMigrateOnlyCli }))
-
-// A store opener that must never be reached by these PG-free tests.
-const deps = { openStore: async (): Promise<never> => { throw new Error('openStore is not reachable here') } }
 
 class ExitSignal extends Error {
   constructor(readonly exitCode: number | undefined) {
@@ -73,8 +70,8 @@ describe('index.ts --migrate-only starts nothing', () => {
     expect(err).toBeInstanceOf(ExitSignal)
     expect((err as ExitSignal).exitCode).toBe(0)
     expect(spies.runMigrateOnlyCli).toHaveBeenCalledTimes(1)
-    // The process wiring hands over the leaf's own store opener (the only storeFor call site).
-    expect(spies.runMigrateOnlyCli).toHaveBeenCalledWith({ openStore: expect.any(Function) })
+    // The entry takes nothing from the process wiring: no store opener, no url.
+    expect(spies.runMigrateOnlyCli).toHaveBeenCalledWith()
     expect(spies.createServer).not.toHaveBeenCalled()
     expect(spies.startScheduler).not.toHaveBeenCalled()
     expect(spies.natsConnect).not.toHaveBeenCalled()
@@ -109,91 +106,39 @@ describe('the entry itself (real module)', () => {
     const actual = await vi.importActual<typeof import('../src/migrate-only.ts')>('../src/migrate-only.ts')
     const out = vi.spyOn(process.stdout, 'write').mockImplementation((() => true) as never)
     const errOut = vi.spyOn(process.stderr, 'write').mockImplementation((() => true) as never)
-    const code = await actual.runMigrateOnlyCli(deps, ['--migrate-only', 'some-customer'])
+    const code = await actual.runMigrateOnlyCli(['--migrate-only', 'some-customer'])
     expect(code).toBe(2)
     expect(out).not.toHaveBeenCalled()
     // The refusal text names no argument it was given.
     expect(errOut.mock.calls.map((c) => String(c[0])).join('')).not.toContain('some-customer')
   })
 
-  it('a missing CALENDAR_PG_URL is exit 2, no localhost fallback, no counts line', async () => {
+  it('answers the counts contract with exactly one JSON line of zero counts and exit 0, without any database url', async () => {
     const actual = await vi.importActual<typeof import('../src/migrate-only.ts')>('../src/migrate-only.ts')
     delete process.env.CALENDAR_PG_URL
-    const result = await actual.runMigrateOnly(deps)
-    expect(result.code).toBe(2)
-    expect(result.counts).toEqual({ v: 1, total: 0, migrated: 0, skipped: 0, failed: 0 })
-
-    const out = vi.spyOn(process.stdout, 'write').mockImplementation((() => true) as never)
-    vi.spyOn(process.stderr, 'write').mockImplementation((() => true) as never)
-    expect(await actual.runMigrateOnlyCli(deps, ['--migrate-only'])).toBe(2)
-    expect(out).not.toHaveBeenCalled()
+    delete process.env.GREMION_CALENDAR_PG_URL
+    const lines: string[] = []
+    vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown, cb?: unknown) => {
+      lines.push(String(chunk))
+      if (typeof cb === 'function') (cb as () => void)()
+      return true
+    }) as never)
+    const code = await actual.runMigrateOnlyCli(['--migrate-only'])
+    expect(code).toBe(0)
+    expect(lines).toHaveLength(1)
+    const counts = JSON.parse(lines[0]!) as Record<string, number>
+    expect(counts).toEqual({ v: 1, total: 0, migrated: 0, skipped: 0, failed: 0 })
+    // the host reads exit 0 as ok only when failed = 0 and migrated + skipped + failed = total
+    expect(counts.failed).toBe(0)
+    expect(counts.migrated! + counts.skipped! + counts.failed!).toBe(counts.total)
   })
 
-  it('an unreachable server is exit 3 with a valid counts line (retry later, not a defect of the commit)', async () => {
-    const actual = await vi.importActual<typeof import('../src/migrate-only.ts')>('../src/migrate-only.ts')
-    const result = await actual.runMigrateOnly(deps, { pgUrl: 'postgres://postgres@127.0.0.1:1/postgres' })
-    expect(result.code).toBe(3)
-    expect(result.counts).toEqual({ v: 1, total: 0, migrated: 0, skipped: 0, failed: 0 })
-  })
-})
-
-describe('classifyFailure: the phase decides what a dropped connection is', () => {
-  const lost = (code: string): Error => Object.assign(new Error('boom'), { code })
-  it.each(['ECONNRESET', 'CONNECTION_CLOSED', 'CONNECTION_ENDED', '57P01'])(
-    '%s before any DDL is retry-later, inside a migration file it is a defect of the run',
-    async (code) => {
-      const m = await vi.importActual<typeof import('../src/migrate-only.ts')>('../src/migrate-only.ts')
-      expect(m.classifyFailure(lost(code), 'before-ddl')).toBe('unreachable')
-      expect(m.classifyFailure(lost(code), 'in-migration')).toBe('sql')
-      expect(m.classifyFailure(lost(code))).toBe('sql')
-    },
-  )
-})
-
-describe('classifyFailure: a bounded wait that ran out is retry-later, whatever the phase', () => {
-  const server = (code: string): Error => Object.assign(new Error('boom'), { code })
-  it.each(['55P03', '57014'])('%s (lock_timeout / statement_timeout) is class timeout before any DDL and inside a file', async (code) => {
-    const m = await vi.importActual<typeof import('../src/migrate-only.ts')>('../src/migrate-only.ts')
-    expect(m.classifyFailure(server(code), 'before-ddl')).toBe('timeout')
-    expect(m.classifyFailure(server(code), 'in-migration')).toBe('timeout')
-    expect(m.classifyFailure(server(code))).toBe('timeout')
-  })
-  it('a timeout is not an unreachable server: the customers after it are still tried', async () => {
-    const m = await vi.importActual<typeof import('../src/migrate-only.ts')>('../src/migrate-only.ts')
-    expect(m.classifyFailure(server('55P03'), 'before-ddl')).not.toBe('unreachable')
-  })
-})
-
-describe('classifyFailure: which exit code an error earns', () => {
-  const pgErr = (code: string, extra: Record<string, unknown> = {}): Error =>
-    Object.assign(new Error('boom'), { code, ...extra })
-
-  it.each([
-    ['23505 on a pg_ catalogue index', pgErr('23505', { constraint_name: 'pg_type_typname_nsp_index' }), 'race'],
-    ['42710 duplicate_object', pgErr('42710'), 'race'],
-    ['42P07 duplicate_table', pgErr('42P07'), 'race'],
-    ['40P01 deadlock_detected', pgErr('40P01'), 'race'],
-    ['40001 serialization_failure', pgErr('40001'), 'race'],
-    ['a refused connection', pgErr('ECONNREFUSED'), 'unreachable'],
-    ['a connect timeout', pgErr('CONNECT_TIMEOUT'), 'unreachable'],
-    ['a database that is starting up', pgErr('57P03'), 'unreachable'],
-    ['a refused connection reported as an AggregateError', Object.assign(new AggregateError([pgErr('ECONNREFUSED'), pgErr('ECONNREFUSED')]), {}), 'unreachable'],
-    ['23505 on a user table index is a real defect', pgErr('23505', { constraint_name: 'events_pkey' }), 'sql'],
-    ['42601 syntax error', pgErr('42601'), 'sql'],
-    ['a connection LOST inside a file', pgErr('CONNECTION_CLOSED'), 'sql'],
-    ['ECONNRESET inside a file', pgErr('ECONNRESET'), 'sql'],
-    ['a hash mismatch (a plain Error)', new Error('manifest hash mismatch for 001_init.sql'), 'sql'],
-    ['a thrown string', 'boom', 'sql'],
-    ['XX000 tuple concurrently updated (two sessions replacing one function)', pgErr('XX000', { message: 'tuple concurrently updated' }), 'race'],
-    ['XX000 with another message is a defect', pgErr('XX000', { message: 'something else' }), 'sql'],
-    ['55P03 lock_not_available', pgErr('55P03'), 'timeout'],
-    ['57014 query_canceled', pgErr('57014'), 'timeout'],
-    ['a refused login (28P01)', pgErr('28P01'), 'precondition'],
-    ['a role that does not exist (28000)', pgErr('28000'), 'precondition'],
-  ] as const)('%s', (_label, err, expected) => {
-    // Imported for real: the module under mock above is only the index.ts view of it.
-    return vi.importActual<typeof import('../src/migrate-only.ts')>('../src/migrate-only.ts').then((m) => {
-      expect(m.classifyFailure(err)).toBe(expected)
-    })
+  it('the source opens no database: no driver import, no connection url, no DDL or migration call', async () => {
+    const { readFileSync } = await import('node:fs')
+    const src = readFileSync(new URL('../src/migrate-only.ts', import.meta.url), 'utf-8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^\s*\/\/.*$/gm, '')
+    expect(src).not.toMatch(/from ['"]postgres['"]/)
+    expect(src).not.toMatch(/CREATE\s+DATABASE|runMigrations|storeFor|_PG_URL/)
   })
 })
