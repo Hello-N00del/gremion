@@ -12,6 +12,7 @@ import {
 import { oidcProviderIdFor } from './oidc-provider'
 import { createNextcloudClient } from './nextcloud-client'
 import { createNextcloudSubsystem } from './provisioning/nextcloud-subsystem'
+import { currentTenantKey } from './namespace'
 import { protocolDocumentPort } from './protocol-documents'
 import { filesErasureHook } from './erasure'
 import { registerKarenzParticipant } from '$lib/server/module-karenz/participants'
@@ -25,7 +26,8 @@ import { filesRetainedSink } from './retained-sink'
 // (its registry row, else NEXTCLOUD_OIDC_PROVIDER_ID: oidc-provider.ts). The factory
 // runs inside the customer's tenant scope.
 registerProvisioningSubsystem('nextcloud', (kc) =>
-  createNextcloudSubsystem({ nc: createNextcloudClient(), kc }, oidcProviderIdFor()),
+  // the customer's namespace key: the Nextcloud is shared, so its folders and groups carry it (namespace.ts)
+  createNextcloudSubsystem({ nc: createNextcloudClient(), kc }, oidcProviderIdFor(), { key: currentTenantKey }),
 )
 
 // A3a-2: the protocol document port (the Nextcloud draft/publish/PDF ops the

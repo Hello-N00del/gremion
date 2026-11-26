@@ -299,7 +299,7 @@ describe('filesKarenz', () => {
       createGroup: vi.fn(), createGroupFolder: vi.fn(), assignGroupFolderPermissions: vi.fn(),
       listGroupFolders: vi.fn(async () => [{ id: 7, mountPoint: 'a', groups: ['ou-a'] }]),
     }
-    const subsystem = createNextcloudSubsystem({ nc: nc as never, kc: { getUser: vi.fn() } as never }, 1)
+    const subsystem = createNextcloudSubsystem({ nc: nc as never, kc: { getUser: vi.fn() } as never }, 1, { key: 'k1' })
     const result = await subsystem.ensureResource(units[0]! as never, {} as never, ledger.get('a')!.external_id)
     expect(result).toEqual({ externalId: a })
     expect(nc.createGroupFolder).not.toHaveBeenCalled()
@@ -330,7 +330,7 @@ describe('filesKarenz', () => {
       createGroup: vi.fn(), createGroupFolder: vi.fn(), assignGroupFolderPermissions: vi.fn(),
       listGroupFolders: vi.fn(async () => [{ id: 77, mountPoint: 'Gremium x', groups: [] as string[] }]),
     }
-    const subsystem = createNextcloudSubsystem({ nc: nc as never, kc: { getUser: vi.fn() } as never }, 1)
+    const subsystem = createNextcloudSubsystem({ nc: nc as never, kc: { getUser: vi.fn() } as never }, 1, { key: 'k1' })
     const result = await subsystem.ensureResource(units[0]! as never, {} as never, ledger.get('x')!.external_id)
     expect(result).toEqual({ externalId: '77:ou-x' })
     expect(nc.createGroupFolder).not.toHaveBeenCalled()

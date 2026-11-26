@@ -723,8 +723,13 @@ class FakeGroupFolders {
       return ok(this.shape === 'array' ? rows : Object.fromEntries(rows.map((r) => [String(r.id), r])))
     }
     if (method === 'POST' && path === '/index.php/apps/groupfolders/folders') {
+      // Nextcloud keeps ONE mount-point namespace for the whole instance, whoever owns the folder
+      const mount = body.get('mountpoint') ?? ''
+      if ([...this.folders.values()].some((f) => f.mount_point === mount)) {
+        return new Response('{"ocs":{"meta":{"status":"failure","statuscode":400,"message":"Mount point already exists"}}}', { status: 400 })
+      }
       const id = this.nextId++
-      const f = { id, mount_point: body.get('mountpoint') ?? '', groups: {} }
+      const f = { id, mount_point: mount, groups: {} }
       this.folders.set(id, f)
       return ok({ id, mount_point: f.mount_point })
     }
@@ -746,9 +751,14 @@ class FakeGroupFolders {
   }
 }
 
-function subsystemOn(fake: FakeGroupFolders) {
+/** The namespace keys of the two customers on the shared Nextcloud (namespace.ts: one per tenant id). */
+const KEY_A = 'ka00000001'
+const KEY_B = 'kb00000002'
+
+/** The adapter of ONE customer: `key` is that customer's namespace key. */
+function subsystemOn(fake: FakeGroupFolders, key = KEY_A) {
   vi.stubGlobal('fetch', vi.fn((input: string | URL, init?: RequestInit) => fake.handle(String(input), init)))
-  return createNextcloudSubsystem({ nc: createNextcloudClient(), kc: { getUser: async () => { throw new Error('no member in this test') } } }, 1)
+  return createNextcloudSubsystem({ nc: createNextcloudClient(), kc: { getUser: async () => { throw new Error('no member in this test') } } }, 1, { key })
 }
 const ctx = { parentKeycloakGroupId: null }
 const folderIdOf = (externalId: string): number => Number(externalId.split(':')[0])
@@ -757,36 +767,52 @@ for (const shape of ['array', 'object'] as const) {
   describe(`group folders on the one shared Nextcloud (list answered as ${shape})`, () => {
     it("two customers with a unit of the same name get two folders; B is never granted on A's folder", async () => {
       const fake = new FakeGroupFolders(shape)
-      const sub = subsystemOn(fake)
-      const a = await sub.ensureResource(orgUnit(UNIT_A, 'Vorstand'), ctx, null)
-      const b = await sub.ensureResource(orgUnit(UNIT_B, 'Vorstand'), ctx, null)
+      const a = await subsystemOn(fake, KEY_A).ensureResource(orgUnit(UNIT_A, 'Vorstand'), ctx, null)
+      const b = await subsystemOn(fake, KEY_B).ensureResource(orgUnit(UNIT_B, 'Vorstand'), ctx, null)
 
       expect(folderIdOf(a.externalId)).not.toBe(folderIdOf(b.externalId))
-      expect(fake.groupsOf(folderIdOf(a.externalId))).toEqual([`ou-${UNIT_A}`])
-      expect(fake.groupsOf(folderIdOf(b.externalId))).toEqual([`ou-${UNIT_B}`])
-      expect(fake.folderOf(`ou-${UNIT_B}`)).not.toContain(folderIdOf(a.externalId))
+      expect(fake.groupsOf(folderIdOf(a.externalId))).toEqual([`ou-${KEY_A}-${UNIT_A}`])
+      expect(fake.groupsOf(folderIdOf(b.externalId))).toEqual([`ou-${KEY_B}-${UNIT_B}`])
+      expect(fake.folderOf(`ou-${KEY_B}-${UNIT_B}`)).not.toContain(folderIdOf(a.externalId))
       expect(fake.folders.size).toBe(2)
+      // the same name in two customers is two mount points, each with its own customer's key
+      expect([...fake.folders.values()].map((f) => f.mount_point).sort()).toEqual([`Vorstand (${KEY_A})`, `Vorstand (${KEY_B})`])
     })
 
     it('the order does not matter: B first, then A', async () => {
       const fake = new FakeGroupFolders(shape)
-      const sub = subsystemOn(fake)
-      const b = await sub.ensureResource(orgUnit(UNIT_B, 'Vorstand'), ctx, null)
-      const a = await sub.ensureResource(orgUnit(UNIT_A, 'Vorstand'), ctx, null)
-      expect(fake.groupsOf(folderIdOf(b.externalId))).toEqual([`ou-${UNIT_B}`])
-      expect(fake.groupsOf(folderIdOf(a.externalId))).toEqual([`ou-${UNIT_A}`])
+      const b = await subsystemOn(fake, KEY_B).ensureResource(orgUnit(UNIT_B, 'Vorstand'), ctx, null)
+      const a = await subsystemOn(fake, KEY_A).ensureResource(orgUnit(UNIT_A, 'Vorstand'), ctx, null)
+      expect(fake.groupsOf(folderIdOf(b.externalId))).toEqual([`ou-${KEY_B}-${UNIT_B}`])
+      expect(fake.groupsOf(folderIdOf(a.externalId))).toEqual([`ou-${KEY_A}-${UNIT_A}`])
+    })
+
+    it('two customers whose units carry the SAME id (a seeded unit) never share a group or a folder', async () => {
+      const fake = new FakeGroupFolders(shape)
+      const a = await subsystemOn(fake, KEY_A).ensureResource(orgUnit(UNIT_A, 'Vorstand'), ctx, null)
+      const b = await subsystemOn(fake, KEY_B).ensureResource(orgUnit(UNIT_A, 'Vorstand'), ctx, null)
+      expect(fake.groupsOf(folderIdOf(a.externalId))).toEqual([`ou-${KEY_A}-${UNIT_A}`])
+      expect(fake.groupsOf(folderIdOf(b.externalId))).toEqual([`ou-${KEY_B}-${UNIT_A}`])
+      expect([...fake.groups].sort()).toEqual([`ou-${KEY_A}-${UNIT_A}`, `ou-${KEY_B}-${UNIT_A}`])
     })
 
     it("a retry after a lost external id adopts the unit's OWN folder (carrying its own group) and mints no duplicate", async () => {
       const fake = new FakeGroupFolders(shape)
-      const other = fake.seed('Vorstand', [`ou-${UNIT_B}`])
-      const own = fake.seed('Vorstand', [`ou-${UNIT_A}`])
-      const sub = subsystemOn(fake)
-      const a = await sub.ensureResource(orgUnit(UNIT_A, 'Vorstand'), ctx, null)
+      const other = fake.seed(`Vorstand (${KEY_B})`, [`ou-${KEY_B}-${UNIT_B}`])
+      const own = fake.seed(`Vorstand (${KEY_A})`, [`ou-${KEY_A}-${UNIT_A}`])
+      const a = await subsystemOn(fake).ensureResource(orgUnit(UNIT_A, 'Vorstand'), ctx, null)
 
       expect(folderIdOf(a.externalId)).toBe(own)
       expect(fake.folders.size).toBe(2)
-      expect(fake.groupsOf(other)).toEqual([`ou-${UNIT_B}`])
+      expect(fake.groupsOf(other)).toEqual([`ou-${KEY_B}-${UNIT_B}`])
+    })
+
+    it("a folder made before the namespace (plain name, plain group) of another customer is never adopted, whoever asks", async () => {
+      const fake = new FakeGroupFolders(shape)
+      const older = fake.seed('Vorstand', [`ou-${UNIT_B}`])
+      const b = await subsystemOn(fake, KEY_A).ensureResource(orgUnit(UNIT_B, 'Vorstand'), ctx, null)
+      expect(folderIdOf(b.externalId)).not.toBe(older)
+      expect(fake.groupsOf(older)).toEqual([`ou-${UNIT_B}`])
     })
 
     it('an end-to-end retry of the same unit stays on one folder', async () => {
@@ -800,9 +826,9 @@ for (const shape of ['array', 'object'] as const) {
 
     it('a folder of the same name with no group at all is not adopted either', async () => {
       const fake = new FakeGroupFolders(shape)
-      const stray = fake.seed('Vorstand', [])
-      const a = await subsystemOn(fake).ensureResource(orgUnit(UNIT_A, 'Vorstand'), ctx, null)
-      expect(folderIdOf(a.externalId)).not.toBe(stray)
+      const stray = fake.seed(`Vorstand (${KEY_A})`, [])
+      // the stray holds this customer's mount point, so the new folder cannot take it: it fails loudly, nothing is granted on the stray
+      await expect(subsystemOn(fake).ensureResource(orgUnit(UNIT_A, 'Vorstand'), ctx, null)).rejects.toThrow('Mount point already exists')
       expect(fake.groupsOf(stray)).toEqual([])
     })
   })

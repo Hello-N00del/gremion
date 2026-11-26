@@ -9,6 +9,7 @@ const h = vi.hoisted(() => ({
   erasure: [] as { moduleId: string }[],
   factories: {} as Record<string, (kc: unknown) => unknown>,
   env: {} as Record<string, string | undefined>,
+  namespaces: [] as { key: () => string }[],
 }))
 vi.mock('$lib/server/modules/runtime-registry', () => ({
   registerErasureHook: (hook: { moduleId: string }) => h.erasure.push(hook),
@@ -27,7 +28,10 @@ vi.mock('$lib/server/config', () => ({ readConfig: vi.fn() }))
 vi.mock('$lib/server/env/service-env', () => ({ serviceEnv: (name: string) => h.env[name] }))
 vi.mock('./nextcloud-client', () => ({ createNextcloudClient: () => ({ __nc: true }) }))
 vi.mock('./provisioning/nextcloud-subsystem', () => ({
-  createNextcloudSubsystem: (_deps: unknown, providerId: number) => ({ providerId }),
+  createNextcloudSubsystem: (_deps: unknown, providerId: number, ns: { key: () => string }) => {
+    h.namespaces.push(ns)
+    return { providerId }
+  },
 }))
 
 await import('./register.server')
@@ -84,6 +88,20 @@ describe('files register.server', () => {
     it('outside a tenant scope the env value is used and nothing throws (the factory read no tenant before)', async () => {
       h.env.NEXTCLOUD_OIDC_PROVIDER_ID = '4'
       expect(buildOutsideAnyTenant()).toEqual({ providerId: 4 })
+    })
+
+    // The mount points and group ids the adapter makes carry the customer's own namespace key: two customers
+    // on the one Nextcloud may each have a unit called "Vorstand".
+    it("hands the adapter the namespace key of the customer whose scope it runs in, never another customer's", async () => {
+      const { runWithTenant } = await import('$lib/server/tenant/context')
+      const { tenantKey } = await import('./namespace')
+      h.namespaces.length = 0
+      await build(tenant('alpha'))
+      await build(tenant('beta'))
+      const [alpha, beta] = h.namespaces
+      expect(runWithTenant(tenant('alpha'), () => alpha.key())).toBe(tenantKey('id-alpha'))
+      expect(runWithTenant(tenant('beta'), () => beta.key())).toBe(tenantKey('id-beta'))
+      expect(tenantKey('id-alpha')).not.toBe(tenantKey('id-beta'))
     })
   })
 })
