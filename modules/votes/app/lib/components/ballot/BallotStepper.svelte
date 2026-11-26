@@ -14,7 +14,9 @@
   interface Props { electionUuid: string; questions: HeliosQuestion[]; publicKey: unknown; heliosBase: string }
   let { electionUuid, questions, publicKey, heliosBase }: Props = $props()
 
-  const gremionUiOrigin = env.PUBLIC_BASE_URL ?? 'http://localhost:3001'
+  // One gremion-ui serves every customer host, so the process env names ONE of them: in the browser the
+  // origin is the page the voter is on; the env value is only the server-render fallback.
+  const gremionUiOrigin = typeof window !== 'undefined' ? window.location.origin : (env.PUBLIC_BASE_URL ?? 'http://localhost:3001')
   const callbackPath = `/elections/${electionUuid}/helios-cb`
 
   const session = createHeliosVoterSession({ heliosBase, callbackPath, electionUuid, gremionUiOrigin })
