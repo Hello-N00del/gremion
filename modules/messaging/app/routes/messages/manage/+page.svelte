@@ -231,11 +231,11 @@
           </div>
           <div class="room-row-actions">
             {#if unit.state === 'leer'}
-              <button type="button" class="btn btn-sm" disabled={busyKey === unit.unitId} onclick={() => createRoom(unit.unitId)}>
+              <button type="button" class="btn btn-sm" aria-label={`Raum anlegen: ${unit.unitName}`} disabled={busyKey === unit.unitId} onclick={() => createRoom(unit.unitId)}>
                 Raum anlegen
               </button>
             {:else if unit.state === 'fehler'}
-              <button type="button" class="btn btn-sm" disabled={busyKey === unit.unitId} onclick={() => createRoom(unit.unitId)}>
+              <button type="button" class="btn btn-sm" aria-label={`Erneut versuchen: ${unit.unitName}`} disabled={busyKey === unit.unitId} onclick={() => createRoom(unit.unitId)}>
                 Erneut versuchen
               </button>
             {:else if unit.state === 'wird_angelegt'}
@@ -252,29 +252,29 @@
                     if (e.key === 'Escape') cancelRename()
                   }}
                 />
-                <button type="button" class="btn btn-sm btn-primary" disabled={busyKey === unit.unitId || !renameValue.trim()} onclick={() => submitRename(unit.unitId, unit.roomId!, roomName)}>
+                <button type="button" class="btn btn-sm btn-primary" aria-label={`Speichern: ${roomName}`} disabled={busyKey === unit.unitId || !renameValue.trim()} onclick={() => submitRename(unit.unitId, unit.roomId!, roomName)}>
                   Speichern
                 </button>
-                <button type="button" class="btn btn-sm btn-ghost" onclick={cancelRename}>Abbrechen</button>
+                <button type="button" class="btn btn-sm btn-ghost" aria-label={`Abbrechen: ${roomName}`} onclick={cancelRename}>Abbrechen</button>
               {:else}
-                <button type="button" class="btn btn-sm" disabled={busyKey === unit.unitId} onclick={() => startRename(unit.unitId, roomName)}>
+                <button type="button" class="btn btn-sm" aria-label={`Umbenennen: ${roomName}`} disabled={busyKey === unit.unitId} onclick={() => startRename(unit.unitId, roomName)}>
                   Umbenennen
                 </button>
               {/if}
               {#if confirmKey === unit.unitId && confirmAction === 'archive'}
-                <button type="button" class="btn btn-sm btn-danger" disabled={busyKey === unit.unitId} onclick={() => archiveRoom(unit.unitId, unit.roomId!)}>Bestätigen</button>
-                <button type="button" class="btn btn-sm btn-ghost" onclick={cancelConfirm}>Abbrechen</button>
+                <button type="button" class="btn btn-sm btn-danger" aria-label={`Bestätigen: ${roomName} archivieren`} disabled={busyKey === unit.unitId} onclick={() => archiveRoom(unit.unitId, unit.roomId!)}>Bestätigen</button>
+                <button type="button" class="btn btn-sm btn-ghost" aria-label={`Abbrechen: ${roomName}`} onclick={cancelConfirm}>Abbrechen</button>
               {:else}
-                <button type="button" class="btn btn-sm" disabled={busyKey === unit.unitId} onclick={() => requestConfirm(unit.unitId, 'archive')}>
+                <button type="button" class="btn btn-sm" aria-label={`Archivieren: ${roomName}`} disabled={busyKey === unit.unitId} onclick={() => requestConfirm(unit.unitId, 'archive')}>
                   Archivieren
                 </button>
               {/if}
               {#if isITAdmin}
                 {#if confirmKey === unit.unitId && confirmAction === 'delete'}
-                  <button type="button" class="btn btn-sm btn-danger" disabled={busyKey === unit.unitId} onclick={() => deleteRoom(unit.unitId, unit.unitId, unit.roomId!)}>Bestätigen</button>
-                  <button type="button" class="btn btn-sm btn-ghost" onclick={cancelConfirm}>Abbrechen</button>
+                  <button type="button" class="btn btn-sm btn-danger" aria-label={`Bestätigen: ${roomName} löschen`} disabled={busyKey === unit.unitId} onclick={() => deleteRoom(unit.unitId, unit.unitId, unit.roomId!)}>Bestätigen</button>
+                  <button type="button" class="btn btn-sm btn-ghost" aria-label={`Abbrechen: ${roomName}`} onclick={cancelConfirm}>Abbrechen</button>
                 {:else}
-                  <button type="button" class="btn btn-sm btn-ghost" disabled={busyKey === unit.unitId} onclick={() => requestConfirm(unit.unitId, 'delete')}>
+                  <button type="button" class="btn btn-sm btn-ghost" aria-label={`Löschen: ${roomName}`} disabled={busyKey === unit.unitId} onclick={() => requestConfirm(unit.unitId, 'delete')}>
                     Löschen
                   </button>
                 {/if}
@@ -302,6 +302,7 @@
       <div class="rooms-table">
         {#each archivedRooms as room (room.roomId)}
           {@const since = archivedOn(room.archivedAt)}
+          {@const archivedName = room.roomName || room.unitName}
           <div class="room-row" data-archived-room={room.roomId}>
             <div class="room-row-main">
               <span class="unit-name">{room.unitName}</span>
@@ -314,18 +315,18 @@
               {/if}
             </div>
             <div class="room-row-actions">
-              <a class="btn btn-sm btn-ghost" href={`/messages?room=${encodeURIComponent(room.roomId)}`}>Verlauf lesen</a>
+              <a class="btn btn-sm btn-ghost" aria-label={`Verlauf lesen: ${archivedName}`} href={`/messages?room=${encodeURIComponent(room.roomId)}`}>Verlauf lesen</a>
               {#if room.restorable}
-                <button type="button" class="btn btn-sm" disabled={busyKey === room.roomId} onclick={() => restoreRoom(room.unitId, room.roomId)}>
+                <button type="button" class="btn btn-sm" aria-label={`Wiederherstellen: ${archivedName}`} disabled={busyKey === room.roomId} onclick={() => restoreRoom(room.unitId, room.roomId)}>
                   Wiederherstellen
                 </button>
               {/if}
               {#if isITAdmin}
                 {#if confirmKey === room.roomId && confirmAction === 'delete'}
-                  <button type="button" class="btn btn-sm btn-danger" disabled={busyKey === room.roomId} onclick={() => deleteRoom(room.roomId, room.unitId, room.roomId)}>Bestätigen</button>
-                  <button type="button" class="btn btn-sm btn-ghost" onclick={cancelConfirm}>Abbrechen</button>
+                  <button type="button" class="btn btn-sm btn-danger" aria-label={`Bestätigen: ${archivedName} löschen`} disabled={busyKey === room.roomId} onclick={() => deleteRoom(room.roomId, room.unitId, room.roomId)}>Bestätigen</button>
+                  <button type="button" class="btn btn-sm btn-ghost" aria-label={`Abbrechen: ${archivedName}`} onclick={cancelConfirm}>Abbrechen</button>
                 {:else}
-                  <button type="button" class="btn btn-sm btn-ghost" disabled={busyKey === room.roomId} onclick={() => requestConfirm(room.roomId, 'delete')}>
+                  <button type="button" class="btn btn-sm btn-ghost" aria-label={`Löschen: ${archivedName}`} disabled={busyKey === room.roomId} onclick={() => requestConfirm(room.roomId, 'delete')}>
                     Löschen
                   </button>
                 {/if}
