@@ -161,7 +161,7 @@ export interface ProtocolSearchRow {
 
 // Minutes whose title, body text or meeting date contains `query` (case-insensitive; the date as
 // DD.MM.YYYY or YYYY-MM-DD), newest meeting first, at most `limit` rows. The body is searched as text:
-// markup between < and > is left out. UNFILTERED across units, like listProtocols: the caller applies
+// markup between < and > is left out and blanks are collapsed, as the query's are. UNFILTERED across units, like listProtocols: the caller applies
 // governance/visibility.ts BEFORE it caps the list, so it asks for more rows than it shows.
 export async function searchProtocols(query: string, limit: number): Promise<readonly ProtocolSearchRow[]> {
   const pattern = containsPattern(query)
@@ -176,7 +176,7 @@ export async function searchProtocols(query: string, limit: number): Promise<rea
     FROM protocols p
     JOIN org_units ou ON ou.id = p.committee_id
     WHERE p.title ILIKE ${pattern} ESCAPE '\\'
-       OR regexp_replace(coalesce(p.body_html, ''), '<[^>]*>', ' ', 'g') ILIKE ${pattern} ESCAPE '\\'
+       OR regexp_replace(regexp_replace(coalesce(p.body_html, ''), '<[^>]*>', ' ', 'g'), '\\s+', ' ', 'g') ILIKE ${pattern} ESCAPE '\\'
        OR to_char(p.meeting_date, 'DD.MM.YYYY') ILIKE ${pattern} ESCAPE '\\'
        OR to_char(p.meeting_date, 'YYYY-MM-DD') ILIKE ${pattern} ESCAPE '\\'
     ORDER BY p.meeting_date DESC, p.id
