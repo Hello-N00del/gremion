@@ -1,0 +1,154 @@
+#!/usr/bin/env bash
+# A stand-in for docker(1) that plays the state project's postgres and the Nextcloud container for
+# test/host/files-namespace.bats. Its whole world is the directory $FAKE:
+#
+#   tenants.txt              control registry rows: "<tenant id> <slug>"
+#   ledger-<hex32>.txt       one customer's ledger: "<unit id> <folder id>:<group id>"
+#   karenz-<hex32>.txt       its kept Karenz bindings, same shape (absent file = no such table)
+#   roster-<hex32>-<unit>.txt the user ids on a unit's roster
+#   folders.json             Nextcloud's group folders: [{id, mount_point, groups: {gid: bits}}]
+#   groups.json              Nextcloud's groups: {gid: [user ids]}
+#   nc-changes.log           every change made to Nextcloud ("METHOD path body")
+#   sql-changes.log          every ledger change
+#   refuse-rename            present: the mount point call is refused (OCS status 403)
+#   group-unreadable         present: the member list of a group answers a failure envelope
+#   array-shape              present: the folder list is answered as an array (default: id-keyed object)
+# The executor role's access record (psql -U gremion_executor) answers a record id and is logged to access.log.
+set -u
+: "${FAKE:?the fixture directory}"
+
+case "${1:-}" in
+    ps)
+        for a in "$@"; do
+            case "$a" in
+                *service=postgres) echo pg1 ;;
+                *service=nextcloud) echo nc1 ;;
+            esac
+        done
+        exit 0 ;;
+    exec) shift ;;
+    *) echo "fake-docker: unsupported: $*" >&2; exit 64 ;;
+esac
+while [[ "${1:-}" == -i || "${1:-}" == -t ]]; do shift; done
+container="$1"; shift
+
+ok() { printf '{"ocs":{"meta":{"status":"ok","statuscode":%s},"data":%s}}' "${1:-100}" "${2:-[]}"; }
+unhex() { local s="${1//+/ }"; printf '%b' "${s//%/\\x}"; }
+
+folders_out() {
+    if [[ -f "$FAKE/array-shape" ]]; then
+        ok 100 "$(jq -c 'map(.groups |= (if length == 0 then [] else . end))' "$FAKE/folders.json")"
+    else
+        ok 100 "$(jq -c 'map(.groups |= (if length == 0 then [] else . end)) | map({key: (.id | tostring), value: .}) | from_entries' "$FAKE/folders.json")"
+    fi
+}
+
+nc() {
+    # docker exec nc1 sh -c SCRIPT sh -X METHOD [--data BODY] URL
+    shift 3   # sh -c SCRIPT
+    shift     # the "sh" that is $0 of the script
+    local method="GET" body="" url=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -X) method="$2"; shift 2 ;;
+            --data) body="$2"; shift 2 ;;
+            *) url="$1"; shift ;;
+        esac
+    done
+    local path="${url#http://localhost}" bare="${url#http://localhost}"
+    bare="${bare%%\?*}"
+    [[ "$method" == GET ]] || printf '%s %s %s\n' "$method" "$bare" "$body" >> "$FAKE/nc-changes.log"
+    local id gid uid val
+    case "$method $bare" in
+        "GET /index.php/apps/groupfolders/folders") folders_out ;;
+        "POST /index.php/apps/groupfolders/folders/"*"/mountpoint")
+            if [[ -f "$FAKE/refuse-rename" ]]; then ok 403 '[]'; return; fi
+            id="${bare#/index.php/apps/groupfolders/folders/}"; id="${id%%/*}"
+            val="$(unhex "${body#mountpoint=}")"
+            jq --argjson id "$id" --arg m "$val" 'map(if .id == $id then .mount_point = $m else . end)' "$FAKE/folders.json" > "$FAKE/f.tmp" && mv "$FAKE/f.tmp" "$FAKE/folders.json"
+            ok 100 '[]' ;;
+        "POST /index.php/apps/groupfolders/folders/"*"/groups")
+            id="${bare#/index.php/apps/groupfolders/folders/}"; id="${id%%/*}"
+            gid="$(unhex "${body#group=}")"
+            jq --argjson id "$id" --arg g "$gid" 'map(if .id == $id then .groups[$g] = 0 else . end)' "$FAKE/folders.json" > "$FAKE/f.tmp" && mv "$FAKE/f.tmp" "$FAKE/folders.json"
+            ok 100 '{"success":true}' ;;
+        "POST /index.php/apps/groupfolders/folders/"*"/groups/"*)
+            id="${bare#/index.php/apps/groupfolders/folders/}"; id="${id%%/*}"
+            gid="$(unhex "${bare##*/groups/}")"
+            jq --argjson id "$id" --arg g "$gid" --argjson p "${body#permissions=}" 'map(if .id == $id then .groups[$g] = $p else . end)' "$FAKE/folders.json" > "$FAKE/f.tmp" && mv "$FAKE/f.tmp" "$FAKE/folders.json"
+            ok 100 '{"success":true}' ;;
+        "DELETE /index.php/apps/groupfolders/folders/"*"/groups/"*)
+            id="${bare#/index.php/apps/groupfolders/folders/}"; id="${id%%/*}"
+            gid="$(unhex "${bare##*/groups/}")"
+            jq --argjson id "$id" --arg g "$gid" 'map(if .id == $id then del(.groups[$g]) else . end)' "$FAKE/folders.json" > "$FAKE/f.tmp" && mv "$FAKE/f.tmp" "$FAKE/folders.json"
+            ok 100 '{"success":true}' ;;
+        "POST /ocs/v1.php/cloud/groups")
+            gid="$(unhex "${body#groupid=}")"
+            if jq -e --arg g "$gid" 'has($g)' "$FAKE/groups.json" >/dev/null; then ok 102 '[]'; return; fi
+            jq --arg g "$gid" '.[$g] = []' "$FAKE/groups.json" > "$FAKE/g.tmp" && mv "$FAKE/g.tmp" "$FAKE/groups.json"
+            ok 100 '[]' ;;
+        "GET /ocs/v1.php/cloud/groups/"*)
+            gid="$(unhex "${bare#/ocs/v1.php/cloud/groups/}")"
+            if [[ -f "$FAKE/group-unreadable" ]] || ! jq -e --arg g "$gid" 'has($g)' "$FAKE/groups.json" >/dev/null; then
+                ok 101 'null'; return
+            fi
+            ok 100 "$(jq -c --arg g "$gid" '{users: .[$g]}' "$FAKE/groups.json")" ;;
+        "POST /ocs/v1.php/cloud/users/"*"/groups")
+            uid="${bare#/ocs/v1.php/cloud/users/}"; uid="$(unhex "${uid%%/*}")"
+            gid="$(unhex "${body#groupid=}")"
+            jq --arg g "$gid" --arg u "$uid" '.[$g] = ((.[$g] // []) + [$u] | unique)' "$FAKE/groups.json" > "$FAKE/g.tmp" && mv "$FAKE/g.tmp" "$FAKE/groups.json"
+            ok 100 '[]' ;;
+        "DELETE /ocs/v1.php/cloud/groups/"*)
+            gid="$(unhex "${bare#/ocs/v1.php/cloud/groups/}")"
+            jq --arg g "$gid" 'del(.[$g])' "$FAKE/groups.json" > "$FAKE/g.tmp" && mv "$FAKE/g.tmp" "$FAKE/groups.json"
+            ok 100 '[]' ;;
+        *) echo "fake nextcloud: no route for $method $path" >&2; return 22 ;;
+    esac
+}
+
+pgsql() {
+    local user="" db="" sql; declare -A v=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -U) user="$2"; shift 2 ;;
+            -d) db="$2"; shift 2 ;;
+            -v) v["${2%%=*}"]="${2#*=}"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+    sql="$(cat)"
+    if [[ "$user" == gremion_executor ]]; then
+        printf '%s %s\n' "${v[slug]:-}" "${v[action]:-}" >> "$FAKE/access.log"
+        echo "0192f0c4-0000-7000-8000-0000000000ac"; return 0
+    fi
+    if [[ "$db" == control ]]; then cat "$FAKE/tenants.txt"; return 0; fi
+    if [[ "$db" =~ ^t_([0-9a-f]{32})__kernel$ ]]; then
+        local hex="${BASH_REMATCH[1]}"
+        [[ ! -f "$FAKE/db-missing-$hex" ]] || { echo "psql: error: database \"$db\" does not exist" >&2; return 2; }
+        case "$sql" in
+            *"to_regclass"*) if [[ -f "$FAKE/karenz-$hex.txt" ]]; then echo t; else echo f; fi ;;
+            *"module_karenz_item i"*) cat "$FAKE/karenz-$hex.txt" ;;
+            *"provisioning_resources r"*) cat "$FAKE/ledger-$hex.txt" ;;
+            *"org_unit_members"*) cat "$FAKE/roster-$hex-${v[unit]}.txt" 2>/dev/null || true ;;
+            *"WITH l AS"*)
+                local old="${v[old]}" new="${v[new]}" l=0 k=0
+                printf 'UPDATE %s -> %s\n' "$old" "$new" >> "$FAKE/sql-changes.log"
+                l="$(grep -c " ${old}\$" "$FAKE/ledger-$hex.txt" || true)"
+                sed -i "s| ${old}\$| ${new}|" "$FAKE/ledger-$hex.txt"
+                if [[ -f "$FAKE/karenz-$hex.txt" ]]; then
+                    k="$(grep -c " ${old}\$" "$FAKE/karenz-$hex.txt" || true)"
+                    sed -i "s| ${old}\$| ${new}|" "$FAKE/karenz-$hex.txt"
+                fi
+                if [[ "$sql" == *module_karenz_item* ]]; then echo "ledger $l, binding $k"; else echo "ledger $l"; fi ;;
+            *) echo "fake postgres: unknown statement in $db" >&2; return 3 ;;
+        esac
+        return 0
+    fi
+    echo "fake postgres: unknown database $db" >&2; return 3
+}
+
+case "$container" in
+    pg1|fx-pg) pgsql "$@" ;;
+    nc1) nc "$@" ;;
+    *) echo "fake-docker: unknown container $container" >&2; exit 64 ;;
+esac

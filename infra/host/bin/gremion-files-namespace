@@ -1,0 +1,465 @@
+#!/usr/bin/env bash
+set -euo pipefail
+#
+# gremion-files-namespace -- move the Nextcloud group folders and groups of EVERY customer into the
+# per-customer namespace (modules/files/app/lib/server/files/namespace.ts).
+#
+# WHY. The install's Nextcloud is shared by all customers and its group-folder mount points and group
+# ids are instance-wide. Before the namespace a unit's folder was named by the unit alone ("Vorstand")
+# in a group "ou-<unit id>", so the second customer with a unit of that name failed to get a folder. A
+# folder made today is "<name> (<key>)" in the group "ou-<key>-<unit id>" (key = the first 10 hex digits
+# of sha256 of the customer's tenant id). The app keeps working on a folder made the old way (it goes by
+# the ledger's folder id); this program moves what exists, once, so every folder is in the same form.
+#
+#   gremion-files-namespace [--slug SLUG]                      DRY RUN (the default): reads, prints, changes nothing
+#   gremion-files-namespace --apply --backed-up --reason TEXT [--slug SLUG]
+#   gremion-files-namespace --key-of TENANT-ID                  print the key of a tenant id and exit
+#
+# WHAT IT READS. The control registry (`tenant`) for the customers, each customer's kernel database
+# (t_<hex>__kernel) for its Nextcloud ledger rows (provisioning_resources) and the folder bindings that a
+# module switch-off keeps (module_karenz_item, kind file_binding), and Nextcloud's own folder and group
+# lists, through the Nextcloud container's own admin credentials (nothing on an argv).
+#
+# WHAT --apply DOES, per folder and idempotently (a re-run finds the state and does nothing, or finishes
+# an interrupted folder):
+#   1. renames the mount point to "<current mount point> (<key>)"; the name members are shown is the
+#      unit's, the app strips the key again;
+#   2. creates the group "ou-<key>-<unit id>", copies the members of the old group into it (only the
+#      unit's own roster when the old group is shared by several folders), and grants it on the folder
+#      with the permission bits of the old group;
+#   3. points the ledger and the Karenz binding at "<folder id>:<new group>" in ONE transaction;
+#   4. takes the old group off the folder and deletes it, unless another folder still uses it.
+# The folder id never changes, so nothing is moved or copied in Nextcloud: the files stay where they are.
+# A folder that cannot be moved without guessing (not on Nextcloud, not carrying the recorded group, the
+# target name taken, a key of another customer on it) is reported as a PROBLEM and left alone.
+#
+# BACKUP. --apply is refused without --backed-up: take `gremion-backup` first (it holds the kernel
+# databases and the Nextcloud data), then pass the flag. Before the first change this program also writes
+# the state it is about to change (folder list, the members of every old group, the ledger refs) to
+# <root>/runtime/files-namespace/<UTC time>.json, mode 0600: the way back for the Nextcloud side.
+# --apply writes an access record (oac.access_record) per customer BEFORE it touches that customer, and
+# takes runtime/hostd.lock so no deploy, switch or request runs beside it.
+#
+# EXIT CODES: 0 ok (a dry run is 0 however much it would move) - 1 a step failed or a folder is a PROBLEM
+# - 2 usage or a missing precondition - 3 blocked: the host lock is held.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/common.sh
+. "$SCRIPT_DIR/../lib/common.sh"
+# shellcheck source=../lib/customer-ops.sh
+. "$SCRIPT_DIR/../lib/customer-ops.sh"
+# shellcheck source=../lib/executor/db.sh
+. "$SCRIPT_DIR/../lib/executor/db.sh"
+# shellcheck source=../lib/access-log.sh
+. "$SCRIPT_DIR/../lib/access-log.sh"
+
+KEY_LENGTH=10
+OCS_FOLDERS='/index.php/apps/groupfolders/folders'
+
+APPLY=no
+BACKED_UP=no
+REASON=""
+ONLY_SLUG=""
+PG=""
+NC=""
+PGUSER_NAME=""
+FOLDERS_JSON='[]'
+BACKUP_FILE=""
+BACKUP_STARTED=no
+HAS_KARENZ=no
+
+# counters of the summary line
+N_TENANTS=0; N_REFS=0; N_MOVE=0; N_DONE=0; N_PROBLEMS=0
+
+usage() {
+    cat <<'EOF'
+usage: gremion-files-namespace [--slug SLUG]                              dry run (default)
+       gremion-files-namespace --apply --backed-up --reason TEXT [--slug SLUG]
+       gremion-files-namespace --key-of TENANT-ID
+Moves the Nextcloud group folders and groups of every customer into the per-customer namespace.
+--apply needs --backed-up (a gremion-backup was taken first) and --reason (10 to 500 characters, for the
+access record). Exit 0 ok, 1 a step failed or a folder is a PROBLEM, 2 usage, 3 host lock held.
+EOF
+}
+
+# tenant_key <tenant id> -- namespace.ts tenantKey: sha256 of the lower-case id, first 10 hex digits.
+tenant_key() {
+    local id
+    id="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+    [[ -n "$id" ]] || die "an empty tenant id has no namespace key" "$GREMION_EXIT_USAGE"
+    printf '%s' "$id" | sha256sum | cut -c1-"$KEY_LENGTH"
+}
+
+uri() { jq -rn --arg v "$1" '$v | @uri'; }
+
+problem() {
+    N_PROBLEMS=$((N_PROBLEMS + 1))
+    printf 'PROBLEM %s\n' "$*"
+}
+
+# ── the two things this program talks to ─────────────────────────────────────
+
+# find_container <service> -- the ONE running container of a service of <STACK>-state, by its labels.
+find_container() {
+    local service="$1" ids n
+    ids="$(docker ps -q --filter "label=com.docker.compose.project=${STACK}-state" \
+                        --filter "label=com.docker.compose.service=${service}")" \
+        || die "docker ps failed while looking for ${service} of ${STACK}-state" "$GREMION_EXIT_ASSERT"
+    n="$(grep -c . <<< "$ids" || true)"
+    [[ "$n" == 1 ]] || die "expected exactly one running ${service} in ${STACK}-state, found ${n}" "$GREMION_EXIT_ASSERT"
+    printf '%s' "${ids//[[:space:]]/}"
+}
+
+# pg <db> <sql> [-v name=value ...] -- one SQL text on stdin, as the state server's own user over its local
+# socket. Small values travel as psql variables (:'name' in the SQL), never inside the SQL text.
+pg() {
+    local db="$1" sql="$2"
+    shift 2
+    printf '%s\n' "$sql" | docker exec -i "$PG" psql -X -U "$PGUSER_NAME" -d "$db" -tAq -v ON_ERROR_STOP=1 "$@" -f -
+}
+
+# nc_api <METHOD> <path> [form body] -- Nextcloud's admin API, called by curl INSIDE the Nextcloud container
+# with the container's own admin credentials (its environment), so no secret is on an argv.
+nc_api() {
+    local method="$1" path="$2" body="${3:-}"
+    local -a data=()
+    [[ -z "$body" ]] || data=(--data "$body")
+    docker exec "$NC" sh -c 'exec curl -sS --max-time 60 -u "$NEXTCLOUD_ADMIN_USER:$NEXTCLOUD_ADMIN_PASSWORD" -H "OCS-APIRequest: true" -H "Accept: application/json" "$@"' \
+        sh -X "$method" ${data[@]+"${data[@]}"} "http://localhost${path}"
+}
+
+# ocs_ok <json> [extra status code ...] -- the answer is an OCS envelope with status 100 or 200 (or one of
+# the extra codes). OCS v1 answers a refused change with HTTP 200 and a failure envelope, so the status
+# in the body is what counts, never curl's exit code.
+ocs_ok() {
+    local json="$1" code c ok=no
+    shift
+    code="$(jq -r '.ocs.meta.statuscode // empty' <<< "$json" 2>/dev/null)" || return 1
+    [[ -n "$code" ]] || return 1
+    for c in 100 200 "$@"; do [[ "$code" == "$c" ]] && ok=yes; done
+    [[ "$ok" == yes ]]
+}
+
+# nc_do <METHOD> <path> <form body> <what> [extra status code ...] -- a change; dies when Nextcloud refuses it.
+nc_do() {
+    local method="$1" path="$2" body="$3" what="$4" out
+    shift 4
+    out="$(nc_api "$method" "$path" "$body")" || die "Nextcloud: ${what}: the request failed" "$GREMION_EXIT_ASSERT"
+    ocs_ok "$out" "$@" || die "Nextcloud: ${what} was refused: $(jq -c '.ocs.meta // .' <<< "$out" 2>/dev/null | head -c 300)" "$GREMION_EXIT_ASSERT"
+}
+
+# read_folders -- FOLDERS_JSON: every group folder of the instance as an array of
+# {id, mount_point, groups: {gid: bits}} (the API answers an id-keyed object or an array, and [] for no groups).
+read_folders() {
+    local out
+    out="$(nc_api GET "${OCS_FOLDERS}?format=json")" || die "Nextcloud: the group folder list could not be read" "$GREMION_EXIT_ASSERT"
+    ocs_ok "$out" || die "Nextcloud: the group folder list was refused or unreadable (check that the Nextcloud container carries NEXTCLOUD_ADMIN_USER and NEXTCLOUD_ADMIN_PASSWORD)" "$GREMION_EXIT_ASSERT"
+    FOLDERS_JSON="$(jq -ec '
+        def bits: (if type == "object" then (.permissions // 31) else . end)
+                  | (if type == "number" then . elif type == "string" then (try tonumber catch 31) else 31 end);
+        .ocs.data
+        | (if type == "object" then [.[]] elif type == "array" then . else error("no folder list") end)
+        | map({
+            id: (.id | tonumber),
+            mount_point: (.mount_point // ""),
+            groups: ((.groups // {}) | if type == "object" then with_entries(.value |= bits) else {} end)
+          })' <<< "$out")" || die "Nextcloud: the group folder list has an unexpected shape" "$GREMION_EXIT_ASSERT"
+}
+
+folder_field() { jq -r --argjson id "$1" "[.[] | select(.id == \$id)][0] | $2 // empty" <<< "$FOLDERS_JSON"; }
+
+# group_members <gid> -- the user ids of one Nextcloud group, one per line. Dies when the answer is unreadable:
+# "nobody is in the group" read from an answer that could not be read would copy nobody.
+group_members() {
+    local out
+    out="$(nc_api GET "/ocs/v1.php/cloud/groups/$(uri "$1")?format=json")" || die "Nextcloud: the members of ${1} could not be read" "$GREMION_EXIT_ASSERT"
+    ocs_ok "$out" || die "Nextcloud: the group ${1} was not readable: $(jq -c '.ocs.meta // .' <<< "$out" 2>/dev/null | head -c 200)" "$GREMION_EXIT_ASSERT"
+    [[ "$(jq -r '.ocs.data.users | type' <<< "$out" 2>/dev/null)" == array ]] \
+        || die "Nextcloud: the group ${1} answered without a users list" "$GREMION_EXIT_ASSERT"
+    jq -r '.ocs.data.users[]' <<< "$out"
+}
+
+# ── the plan ─────────────────────────────────────────────────────────────────
+
+# process_ref <slug> <key> <kernel db> <unit id> <ref> -- one "<folder id>:<group id>" of one customer.
+process_ref() {
+    local slug="$1" key="$2" kdb="$3" unit="$4" ref="$5"
+    local fid old new legacy mount want suffix perms shared row foreign_re
+    fid="${ref%%:*}"; old="${ref#*:}"
+    new="ou-${key}-${unit}"
+    legacy="ou-${unit}"
+    suffix=" (${key})"
+    N_REFS=$((N_REFS + 1))
+
+    mount="$(folder_field "$fid" '.mount_point')"
+    if [[ -z "$(folder_field "$fid" '.id')" ]]; then
+        problem "${slug} unit ${unit}: folder ${fid} is not on Nextcloud (the ledger names it); left alone"
+        return 0
+    fi
+
+    # a key of ANOTHER customer on this customer's folder is an ownership anomaly: never touched
+    foreign_re=" \\(([0-9a-f]{${KEY_LENGTH}})\\)\$"
+    if [[ "$mount" =~ $foreign_re && "${BASH_REMATCH[1]}" != "$key" ]]; then
+        problem "${slug} unit ${unit}: folder ${fid} (\"${mount}\") carries another customer's key; left alone"
+        return 0
+    fi
+
+    local rename=no regroup=no finish=no
+    if [[ "$mount" == *"$suffix" ]]; then want="$mount"; else want="${mount}${suffix}"; rename=yes; fi
+
+    if [[ "$old" != "$new" ]]; then
+        regroup=yes
+        if [[ "$(jq -r --argjson id "$fid" --arg g "$old" '[.[] | select(.id == $id)][0].groups | has($g)' <<< "$FOLDERS_JSON")" != true ]]; then
+            problem "${slug} unit ${unit}: folder ${fid} does not carry the recorded group ${old}; left alone"
+            return 0
+        fi
+    elif [[ "$(jq -r --argjson id "$fid" --arg g "$legacy" '[.[] | select(.id == $id)][0].groups | has($g)' <<< "$FOLDERS_JSON")" == true ]]; then
+        # an earlier run stopped after the ledger moved: the old group is still on the folder
+        finish=yes; old="$legacy"
+    fi
+
+    if [[ "$rename" == yes ]] && [[ "$(jq -r --arg m "$want" --argjson id "$fid" '[.[] | select(.mount_point == $m and .id != $id)] | length' <<< "$FOLDERS_JSON")" != 0 ]]; then
+        problem "${slug} unit ${unit}: the name \"${want}\" is already taken by another folder; folder ${fid} left alone"
+        return 0
+    fi
+
+    if [[ "$rename" == no && "$regroup" == no && "$finish" == no ]]; then
+        N_DONE=$((N_DONE + 1))
+        printf 'OK   %s unit %s folder %s: already in the namespace\n' "$slug" "$unit" "$fid"
+        return 0
+    fi
+    N_MOVE=$((N_MOVE + 1))
+
+    # shared: how many folders carry the old group, or how many customers have this unit id (the larger)
+    shared="$(jq -r --arg g "$old" '[.[] | select(.groups | has($g))] | length' <<< "$FOLDERS_JSON")"
+    if (( ${UNIT_TENANTS[$unit]:-1} > shared )); then shared="${UNIT_TENANTS[$unit]}"; fi
+    perms="$(jq -r --argjson id "$fid" --arg g "$old" '[.[] | select(.id == $id)][0].groups[$g] // 31' <<< "$FOLDERS_JSON")"
+
+    [[ "$rename" == no ]] || printf 'PLAN %s unit %s folder %s: mount point "%s" -> "%s"\n' "$slug" "$unit" "$fid" "$mount" "$want"
+    if [[ "$regroup" == yes ]]; then
+        printf 'PLAN %s unit %s folder %s: group %s -> %s (permissions %s%s)\n' "$slug" "$unit" "$fid" "$old" "$new" "$perms" \
+            "$([[ "$shared" -le 1 ]] || printf '; the old group is shared by %s customers or folders, only the unit roster is copied' "$shared")"
+        printf 'PLAN %s unit %s folder %s: ledger and binding %s:%s -> %s:%s\n' "$slug" "$unit" "$fid" "$fid" "$old" "$fid" "$new"
+    elif [[ "$finish" == yes ]]; then
+        printf 'PLAN %s unit %s folder %s: finish an interrupted move, remove the old group %s\n' "$slug" "$unit" "$fid" "$old"
+    fi
+    [[ "$APPLY" == yes ]] || return 0
+
+    begin_backup
+    # 1. the mount point
+    if [[ "$rename" == yes ]]; then
+        nc_do POST "${OCS_FOLDERS}/${fid}/mountpoint" "mountpoint=$(uri "$want")" "renaming folder ${fid}"
+        read_folders
+        [[ "$(folder_field "$fid" '.mount_point')" == "$want" ]] \
+            || die "Nextcloud: folder ${fid} is not named \"${want}\" after the rename" "$GREMION_EXIT_ASSERT"
+    fi
+    # 2. the group
+    if [[ "$regroup" == yes || "$finish" == yes ]]; then
+        if [[ "$regroup" == yes ]]; then
+            nc_do POST '/ocs/v1.php/cloud/groups?format=json' "groupid=$(uri "$new")" "creating group ${new}" 102
+        fi
+        copy_members "$kdb" "$unit" "$old" "$new" "$shared"
+        if [[ "$regroup" == yes ]]; then
+            if [[ "$(jq -r --argjson id "$fid" --arg g "$new" '[.[] | select(.id == $id)][0].groups | has($g)' <<< "$FOLDERS_JSON")" != true ]]; then
+                nc_do POST "${OCS_FOLDERS}/${fid}/groups?format=json" "group=$(uri "$new")" "granting ${new} on folder ${fid}"
+            fi
+            nc_do POST "${OCS_FOLDERS}/${fid}/groups/$(uri "$new")?format=json" "permissions=${perms}" "setting the permissions of ${new} on folder ${fid}"
+            # 3. the ledger and the Karenz binding, together
+            # one statement, so the two tables change together or not at all
+            if [[ "$HAS_KARENZ" == yes ]]; then
+                row="$(pg "$kdb" "
+                    WITH l AS (UPDATE provisioning_resources SET external_id = :'new', updated_at = now()
+                                WHERE subsystem = 'nextcloud' AND external_id = :'old' RETURNING 1),
+                         k AS (UPDATE module_karenz_item SET external_id = :'new', updated_at = now()
+                                WHERE kind = 'file_binding' AND external_id = :'old' RETURNING 1)
+                    SELECT 'ledger ' || (SELECT count(*) FROM l) || ', binding ' || (SELECT count(*) FROM k)" \
+                    -v "old=${fid}:${old}" -v "new=${fid}:${new}")"
+            else
+                row="$(pg "$kdb" "
+                    WITH l AS (UPDATE provisioning_resources SET external_id = :'new', updated_at = now()
+                                WHERE subsystem = 'nextcloud' AND external_id = :'old' RETURNING 1)
+                    SELECT 'ledger ' || (SELECT count(*) FROM l)" -v "old=${fid}:${old}" -v "new=${fid}:${new}")"
+            fi || die "the ledger of ${slug} could not be updated for folder ${fid}; the new group is on the folder, rerun to finish" "$GREMION_EXIT_ASSERT"
+            printf 'DONE %s unit %s folder %s: rows updated (%s)\n' "$slug" "$unit" "$fid" "$row"
+            copy_members "$kdb" "$unit" "$old" "$new" "$shared"   # anybody added to the old group meanwhile
+        fi
+        # 4. the old group goes off the folder and is deleted, unless another folder still carries it
+        read_folders
+        if [[ "$(jq -r --argjson id "$fid" --arg g "$old" '[.[] | select(.id == $id)][0].groups | has($g)' <<< "$FOLDERS_JSON")" == true ]]; then
+            nc_do DELETE "${OCS_FOLDERS}/${fid}/groups/$(uri "$old")?format=json" "" "taking ${old} off folder ${fid}"
+            read_folders
+        fi
+        if [[ "$(jq -r --arg g "$old" '[.[] | select(.groups | has($g))] | length' <<< "$FOLDERS_JSON")" == 0 ]]; then
+            nc_do DELETE "/ocs/v1.php/cloud/groups/$(uri "$old")?format=json" "" "deleting group ${old}" 101
+        else
+            printf 'KEPT %s unit %s: group %s stays, another folder still carries it\n' "$slug" "$unit" "$old"
+        fi
+    fi
+    printf 'DONE %s unit %s folder %s: in the namespace\n' "$slug" "$unit" "$fid"
+}
+
+# copy_members <kernel db> <unit> <old group> <new group> <folders sharing the old group> -- the members of the
+# old group into the new one. A shared old group (two customers' folders carried it) holds people of other
+# customers: then only this unit's roster is copied, and the rest stay where they are. Read back afterwards.
+copy_members() {
+    local kdb="$1" unit="$2" old="$3" new="$4" shared="$5" uid roster="" missing=0 listed
+    local -a want=()
+    # read into a variable first: a failed read inside a process substitution would pass for an empty group
+    listed="$(group_members "$old")" || die "the members of ${old} could not be read; nothing was removed" "$GREMION_EXIT_ASSERT"
+    while IFS= read -r uid; do if [[ -n "$uid" ]]; then want+=("$uid"); fi; done <<< "$listed"
+    if [[ "$shared" -gt 1 ]]; then
+        roster="$(pg "$kdb" "SELECT user_keycloak_id::text FROM org_unit_members WHERE org_unit_id = :'unit'" -v "unit=${unit}")" \
+            || die "the roster of unit ${unit} could not be read" "$GREMION_EXIT_ASSERT"
+    fi
+    for uid in ${want[@]+"${want[@]}"}; do
+        if [[ "$shared" -gt 1 ]] && ! grep -qxF "$uid" <<< "$roster"; then continue; fi
+        nc_do POST "/ocs/v1.php/cloud/users/$(uri "$uid")/groups?format=json" "groupid=$(uri "$new")" "adding a member to ${new}"
+    done
+    local now_in
+    now_in="$(group_members "$new")" || die "the members of ${new} could not be read back; nothing was removed" "$GREMION_EXIT_ASSERT"
+    for uid in ${want[@]+"${want[@]}"}; do
+        if [[ "$shared" -gt 1 ]] && ! grep -qxF "$uid" <<< "$roster"; then continue; fi
+        grep -qxF "$uid" <<< "$now_in" || missing=$((missing + 1))
+    done
+    [[ "$missing" == 0 ]] || die "${missing} member(s) of ${old} are not in ${new} after copying: nothing was removed, rerun to finish" "$GREMION_EXIT_ASSERT"
+}
+
+# begin_backup -- before the FIRST change: the state about to be changed, mode 0600.
+begin_backup() {
+    [[ "$BACKUP_STARTED" == no ]] || return 0
+    local dir="${ROOT}/runtime/files-namespace"
+    mkdir -p "$dir"; chmod 700 "$dir"
+    BACKUP_FILE="${dir}/$(date -u +%Y%m%dT%H%M%SZ).json"
+    ( umask 077; jq -n --argjson folders "$FOLDERS_JSON" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        '{taken_at: $at, note: "state before gremion-files-namespace --apply; folders: id, mount point, groups with permission bits", folders: $folders}' > "$BACKUP_FILE" )
+    chmod 600 "$BACKUP_FILE"
+    BACKUP_STARTED=yes
+    info "pre-change state written to ${BACKUP_FILE}"
+}
+
+# What pass 1 learned about each customer (keyed by slug), and how many customers a unit id appears in.
+# A unit id that two customers share (a seeded unit has the same id everywhere) means the legacy group
+# "ou-<unit id>" holds people of both: the group is then split by roster, whichever customer is moved first.
+declare -A T_ID=() T_KEY=() T_DB=() T_REFS=() T_KARENZ=() T_ERR=()
+declare -A UNIT_TENANTS=()
+TENANT_SLUGS=()
+
+# collect_tenant <tenant id> <slug> -- pass 1: read one customer's Nextcloud bindings (the ledger, and the
+# folder bindings a module switch-off keeps). A failure is remembered, and reported only if the customer is selected.
+collect_tenant() {
+    local id="$1" slug="$2" key kdb refs flag unit ref seen=""
+    TENANT_SLUGS+=("$slug")
+    T_ID[$slug]="$id"
+    key="$(tenant_key "$id")"
+    kdb="t_${id//-/}__kernel"
+    if [[ ! "$kdb" =~ ^t_[0-9a-f]{32}__kernel$ ]]; then T_ERR[$slug]="the tenant id is not a uuid"; return 0; fi
+    T_KEY[$slug]="$key"; T_DB[$slug]="$kdb"; T_KARENZ[$slug]=no
+    refs="$(pg "$kdb" "
+        SELECT r.org_unit_id::text || ' ' || r.external_id
+          FROM provisioning_resources r
+         WHERE r.subsystem = 'nextcloud' AND r.external_id ~ '^[0-9]+:.+'" )" \
+        || { T_ERR[$slug]="the ledger in ${kdb} could not be read"; return 0; }
+    flag="$(pg "$kdb" "SELECT to_regclass('public.module_karenz_item') IS NOT NULL")" \
+        || { T_ERR[$slug]="${kdb} could not be read"; return 0; }
+    if [[ "$flag" == t ]]; then
+        T_KARENZ[$slug]=yes
+        refs="${refs}"$'\n'"$(pg "$kdb" "
+            SELECT (i.payload->>'unitId') || ' ' || i.external_id
+              FROM module_karenz_item i
+             WHERE i.kind = 'file_binding' AND i.external_id ~ '^[0-9]+:.+' AND i.payload ? 'unitId'")" \
+            || { T_ERR[$slug]="the Karenz bindings in ${kdb} could not be read"; return 0; }
+    fi
+    T_REFS[$slug]="$refs"
+    while IFS=' ' read -r unit ref; do
+        [[ -n "$unit" && -n "$ref" ]] || continue
+        case " ${seen} " in *" ${unit} "*) continue ;; esac
+        seen="${seen} ${unit}"
+        UNIT_TENANTS[$unit]=$(( ${UNIT_TENANTS[$unit]:-0} + 1 ))
+    done <<< "$refs"
+}
+
+# process_tenant <slug> -- pass 2: plan (and with --apply move) one selected customer.
+process_tenant() {
+    local slug="$1" unit ref seen=""
+    if [[ -n "${T_ERR[$slug]:-}" ]]; then problem "${slug}: ${T_ERR[$slug]}"; return 0; fi
+    N_TENANTS=$((N_TENANTS + 1))
+    info "${slug}: key ${T_KEY[$slug]}, database ${T_DB[$slug]}"
+    if [[ "$APPLY" == yes ]]; then
+        access_record_or_die "$slug" files_namespace \
+            "the group folders and groups of its units on the shared Nextcloud, renamed into the customer namespace" "$REASON"
+    fi
+    HAS_KARENZ="${T_KARENZ[$slug]}"
+    while IFS=' ' read -r unit ref; do
+        [[ -n "$unit" && -n "$ref" ]] || continue
+        [[ "$unit" =~ ^[0-9a-f-]{36}$ ]] || { problem "${slug}: a binding names a unit that is no uuid"; continue; }
+        case " ${seen} " in *" ${unit}/${ref} "*) continue ;; esac
+        seen="${seen} ${unit}/${ref}"
+        process_ref "$slug" "${T_KEY[$slug]}" "${T_DB[$slug]}" "$unit" "$ref"
+    done <<< "${T_REFS[$slug]}"
+}
+
+main() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help) usage; exit "$GREMION_EXIT_OK" ;;
+            --key-of) [[ $# -ge 2 ]] || die "--key-of requires a tenant id" "$GREMION_EXIT_USAGE"; need_cmd sha256sum cut tr; tenant_key "$2"; printf '\n'; exit "$GREMION_EXIT_OK" ;;
+            --apply) APPLY=yes; shift ;;
+            --backed-up) BACKED_UP=yes; shift ;;
+            --reason) [[ $# -ge 2 ]] || die "--reason requires a text" "$GREMION_EXIT_USAGE"; REASON="$2"; shift 2 ;;
+            --slug) [[ $# -ge 2 ]] || die "--slug requires a customer slug" "$GREMION_EXIT_USAGE"; ONLY_SLUG="$2"; shift 2 ;;
+            *) usage >&2; die "unknown argument: $1" "$GREMION_EXIT_USAGE" ;;
+        esac
+    done
+    [[ -z "$ONLY_SLUG" || "$ONLY_SLUG" =~ $SLUG_RE ]] || die "--slug is not a customer slug" "$GREMION_EXIT_USAGE"
+    if [[ "$APPLY" == yes ]]; then
+        [[ "$BACKED_UP" == yes ]] || die "--apply needs --backed-up: take gremion-backup first (it holds the kernel databases and the Nextcloud data), then pass the flag. Nothing was changed" "$GREMION_EXIT_USAGE"
+        [[ ${#REASON} -ge 10 && ${#REASON} -le 500 ]] || die "--apply needs --reason, 10 to 500 characters (it goes into the access record of each customer)" "$GREMION_EXIT_USAGE"
+    elif [[ "$BACKED_UP" == yes || -n "$REASON" ]]; then
+        die "--backed-up and --reason belong to --apply; a dry run changes nothing" "$GREMION_EXIT_USAGE"
+    fi
+    need_cmd docker jq sed grep tr cut sha256sum date mkdir chmod
+    setup_paths
+
+    local state="${ROOT}/etc/env/state.env" cdb
+    STACK="$(env_key "$state" STACK)"
+    PGUSER_NAME="$(env_key "$state" POSTGRES_USER)"
+    cdb="$(env_key "$state" CONTROL_DB_NAME)"; cdb="${cdb:-control}"
+    [[ -n "$STACK" ]] || die "STACK is empty in ${state}" "$GREMION_EXIT_USAGE"
+    [[ "$PGUSER_NAME" =~ ^[A-Za-z0-9_]+$ ]] || die "POSTGRES_USER in ${state} is not a plain role name" "$GREMION_EXIT_USAGE"
+    [[ "$cdb" =~ ^[A-Za-z0-9_]+$ ]] || die "CONTROL_DB_NAME in ${state} is not a plain database name" "$GREMION_EXIT_USAGE"
+
+    if [[ "$APPLY" == yes ]]; then
+        need_cmd flock
+        mkdir -p "${ROOT}/runtime"
+        exec 9>>"${ROOT}/runtime/hostd.lock" || die "cannot open the host lock ${ROOT}/runtime/hostd.lock" "$GREMION_EXIT_USAGE"
+        flock -w "${FILES_NAMESPACE_LOCK_WAIT:-20}" 9 \
+            || die "BLOCKED: another host operation holds ${ROOT}/runtime/hostd.lock; nothing was changed" "$GREMION_EXIT_BLOCKED"
+    fi
+
+    PG="$(find_container postgres)"
+    NC="$(find_container nextcloud)"
+    info "mode: $([[ "$APPLY" == yes ]] && echo APPLY || echo 'dry run (nothing is changed)')"
+
+    read_folders
+
+    local tenants line id slug
+    tenants="$(pg "$cdb" "SELECT id::text || ' ' || slug FROM tenant WHERE status IN ('active','suspended') ORDER BY slug")" \
+        || die "the customers could not be read from the control database ${cdb}" "$GREMION_EXIT_ASSERT"
+    # pass 1 reads every customer (a unit id may be shared between them), pass 2 acts on the selected ones
+    while IFS=' ' read -r id slug; do
+        [[ -n "$id" ]] || continue
+        collect_tenant "$id" "$slug"
+    done <<< "$tenants"
+    if [[ -n "$ONLY_SLUG" && -z "${T_ID[$ONLY_SLUG]:-}" ]]; then die "no customer ${ONLY_SLUG} in the registry" "$GREMION_EXIT_USAGE"; fi
+    for slug in ${TENANT_SLUGS[@]+"${TENANT_SLUGS[@]}"}; do
+        [[ -z "$ONLY_SLUG" || "$slug" == "$ONLY_SLUG" ]] || continue
+        process_tenant "$slug"
+    done
+
+    printf 'files-namespace: mode=%s tenants=%s folders=%s to-move=%s already=%s problems=%s\n' \
+        "$([[ "$APPLY" == yes ]] && echo apply || echo dry-run)" "$N_TENANTS" "$N_REFS" "$N_MOVE" "$N_DONE" "$N_PROBLEMS"
+    [[ "$N_PROBLEMS" == 0 ]] || exit "$GREMION_EXIT_ASSERT"
+    exit "$GREMION_EXIT_OK"
+}
+
+main "$@"
