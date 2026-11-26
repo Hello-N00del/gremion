@@ -2,11 +2,19 @@
   import PageTitle from '$lib/components/PageTitle.svelte'
   import type { PageData } from './$types'
   import { lang, t } from '$lib/i18n'
+  import { page } from '$app/state'
 
   let { data }: { data: PageData } = $props()
 
   let roleFilter = $state<string>('Alle')
   let selected = $state<PageData['members'][number] | null>(null)
+
+  // The command palette links a person as /members?member=<handle>: open that person's panel. A handle
+  // that is not in this caller's list (a person they may not see) opens nothing.
+  $effect(() => {
+    const handle = page.url.searchParams.get('member')
+    if (handle) selected = data.members.find((m) => m.id === handle) ?? null
+  })
 
   // design roleHue (contracts.jsx): role-tag accent per friendly role.
   const roleHue: Record<string, number> = {

@@ -13,6 +13,7 @@
     loadEvents,
     type CalendarViewEvent,
   } from '$lib/stores/calendar'
+  import { parseDateParam } from '$lib/stores/date-param'
   import CalendarToolbar from '$lib/components/calendar/CalendarToolbar.svelte'
   import MonthGrid from '$lib/components/calendar/MonthGrid.svelte'
   import WeekGrid from '$lib/components/calendar/WeekGrid.svelte'
@@ -72,6 +73,10 @@
       committeeId: url.searchParams.get('committeeId'),
       eventTypeId: url.searchParams.get('eventTypeId'),
     })
+
+    // A link from the command palette opens the calendar on the event's day.
+    const linkedDay = parseDateParam(url.searchParams.get('date'))
+    if (linkedDay) calendarDate.set(linkedDay)
 
     unsubRange = visibleRange.subscribe(async ({ from, to }) => {
       loading = true
