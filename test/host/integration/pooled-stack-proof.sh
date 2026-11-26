@@ -398,11 +398,13 @@ phase_render_env() {
     local gw_ip=""
     if [[ "${POOLED_CUSTOMER:-0}" == 1 ]]; then gw_ip="$(host_gateway_ip)" || exit $?; fi
 
-    local pw_pg pw_kcdb pw_kc pw_gr pw_ctl pw_pub pw_bnc sec_proxy sec_auth sec_push sec_board pw_board_app
+    local pw_pg pw_kcdb pw_kc pw_gr pw_ctl pw_pub pw_bnc sec_proxy sec_auth sec_push sec_board pw_board_app pw_calendar_app
     pw_pg="$(gen)"; pw_kcdb="$(gen)"; pw_kc="$(gen)"; pw_gr="$(gen)"; pw_ctl="$(gen)"; pw_pub="$(gen)"
     pw_bnc="$(gen)"; sec_proxy="$(gen)"; sec_auth="$(gen)"; sec_push="$(gen)"
     # The board leaf's guard secret and module app role password: docker-compose.app.yml requires both.
     sec_board="$(gen)"; pw_board_app="$(gen)"
+    # The calendar leaf's module app role password, required the same way.
+    pw_calendar_app="$(gen)"
     local p_http p_https p_api p_it p_mailapi
     p_http="$(free_port)"; p_https="$(free_port)"; p_api="$(free_port)"; p_it="$(free_port)"; p_mailapi="$(free_port)"
     # POOLED_CUSTOMER: the management API on the host's own 127.0.0.1:8086
@@ -497,6 +499,7 @@ KEYCLOAK_ADMIN_CLIENT_SECRET=$(gen)
 INTERNAL_PUSH_SECRET=${sec_push}
 INTERNAL_BOARD_SECRET=${sec_board}
 BOARD_APP_PASSWORD=${pw_board_app}
+CALENDAR_APP_PASSWORD=${pw_calendar_app}
 TENANT_PROXY_SHARED_SECRET=${sec_proxy}
 TENANT_SECRETS_DIR=${SROOT_H}/secrets/tenants
 # TASK-043 (app.env.tmpl): tenant-create's and the control panel's mounts

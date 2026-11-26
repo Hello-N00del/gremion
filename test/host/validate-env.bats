@@ -150,6 +150,27 @@ refute_secrets_printed() {
     [[ "$output" != *"$want"* ]]
 }
 
+@test "calendar: CALENDAR_APP_PASSWORD equal to the module password file passes, and the validator says it checked" {
+    render_filled
+    run "$VALIDATE" --env-file "${ENV_DIR}/app-blue.env" --release "$RELEASE"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"CALENDAR_APP_PASSWORD"* ]]
+}
+
+@test "calendar: a CALENDAR_APP_PASSWORD that differs from the module password file exits 1, naming the key and the file and printing no value" {
+    render_filled
+    local want; want="$(tr -d '
+' < "${GREMION_ROOT}/etc/secrets/tenant-create/module_app_password_calendar")"
+    [ -n "$want" ]
+    sed -i 's/^CALENDAR_APP_PASSWORD=.*/CALENDAR_APP_PASSWORD=a-second-generated-value/' "${ENV_DIR}/app-blue.env"
+    run "$VALIDATE" --env-file "${ENV_DIR}/app-blue.env" --release "$RELEASE"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"CALENDAR_APP_PASSWORD"* ]]
+    [[ "$output" == *"module_app_password_calendar"* ]]
+    [[ "$output" != *"a-second-generated-value"* ]]
+    [[ "$output" != *"$want"* ]]
+}
+
 @test "board: a module password file changed after the render makes both colours fail" {
     render_filled
     printf 'rotated-by-hand\n' > "${GREMION_ROOT}/etc/secrets/tenant-create/module_app_password_board"
