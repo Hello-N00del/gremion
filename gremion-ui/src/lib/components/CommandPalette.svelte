@@ -3,6 +3,17 @@
   export type PaletteCommand =
     | { kind: 'page'; label: string; href: string; icon?: string; hint?: string; lang?: string }
     | { kind: 'action'; label: string; href: string; icon?: string; hint?: string; lang?: string }
+    // Server search hits (/api/search): minutes, calendar events, units and people.
+    | { kind: 'result'; group: ResultGroup; id: string; label: string; href: string; icon?: string; hint?: string }
+
+  export type ResultGroup = 'minutes' | 'events' | 'units' | 'people'
+  /** One hit as /api/search answers it. */
+  export interface SearchHit {
+    id: string
+    label: string
+    hint: string | null
+    href: string
+  }
 </script>
 
 <script lang="ts">
@@ -39,8 +50,72 @@
 
   let query = $state('')
   let activeIndex = $state(0)
+  let remote = $state<Record<ResultGroup, SearchHit[]>>(emptyRemote())
+  let searching = $state(false)
   let inputEl = $state<HTMLInputElement | null>(null)
   const listboxId = 'command-palette-listbox'
+
+  // The server search starts at two characters (the endpoint answers empty below that) and waits for a
+  // pause in the typing. Each new query cancels the one before, so a slow older answer can never replace a
+  // newer one. A failed search leaves the page matches alone.
+  const SEARCH_MIN_LENGTH = 2
+  const SEARCH_DEBOUNCE_MS = 200
+  const GROUPS: { group: ResultGroup; icon: string; titleKey: string }[] = [
+    { group: 'minutes', icon: 'file', titleKey: 'palette.section.minutes' },
+    { group: 'events', icon: 'calendar', titleKey: 'palette.section.events' },
+    { group: 'units', icon: 'users', titleKey: 'palette.section.units' },
+    { group: 'people', icon: 'badge', titleKey: 'palette.section.people' }
+  ]
+
+  function emptyRemote(): Record<ResultGroup, SearchHit[]> {
+    return { minutes: [], events: [], units: [], people: [] }
+  }
+
+  function readHits(value: unknown): SearchHit[] {
+    if (!Array.isArray(value)) return []
+    return value.filter(
+      (h): h is SearchHit =>
+        !!h && typeof h.id === 'string' && typeof h.label === 'string' && typeof h.href === 'string'
+    )
+  }
+
+  $effect(() => {
+    const q = query.replace(/\s+/g, ' ').trim()
+    if (!open || q.length < SEARCH_MIN_LENGTH) {
+      remote = emptyRemote()
+      searching = false
+      return
+    }
+    const ctrl = new AbortController()
+    searching = true
+    const timer = setTimeout(async () => {
+      let next = emptyRemote()
+      try {
+        const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`, {
+          signal: ctrl.signal,
+          headers: { accept: 'application/json' }
+        })
+        if (res.ok) {
+          const data = (await res.json())?.data ?? {}
+          next = {
+            minutes: readHits(data.minutes),
+            events: readHits(data.events),
+            units: readHits(data.units),
+            people: readHits(data.people)
+          }
+        }
+      } catch {
+        // Aborted or unreachable: the page matches stay as they are.
+      }
+      if (ctrl.signal.aborted) return
+      remote = next
+      searching = false
+    }, SEARCH_DEBOUNCE_MS)
+    return () => {
+      clearTimeout(timer)
+      ctrl.abort()
+    }
+  })
 
   // Flatten the filtered nav tree into page commands (leaf items only).
   function flattenNav(items: NavItem[]): PaletteCommand[] {
@@ -79,9 +154,15 @@
   let filteredActions = $derived(
     actions.filter((c) => fuzzyMatch(query, c.label + ' ' + (c.hint ?? '')))
   )
-  // Single flat list for keyboard navigation — pages first, then actions, in the
-  // same visual order they render.
-  let flatResults = $derived([...filteredPages, ...filteredActions])
+  // The found items, in the order their sections render.
+  let foundItems = $derived(
+    GROUPS.flatMap(({ group, icon }) =>
+      remote[group].map((h): PaletteCommand => ({ kind: 'result', group, id: h.id, label: h.label, href: h.href, icon, hint: h.hint ?? undefined }))
+    )
+  )
+  // Single flat list for keyboard navigation — pages first, then actions, then the
+  // found items, in the same visual order they render.
+  let flatResults = $derived([...filteredPages, ...filteredActions, ...foundItems])
 
   // Clamp the highlighted row whenever the result set shrinks.
   $effect(() => {
@@ -146,6 +227,15 @@
   function actionIndex(i: number): number {
     return filteredPages.length + i
   }
+  // The flat index of the first found item of a group.
+  function groupStart(group: ResultGroup): number {
+    let n = filteredPages.length + filteredActions.length
+    for (const g of GROUPS) {
+      if (g.group === group) break
+      n += remote[g.group].length
+    }
+    return n
+  }
 </script>
 
 {#if open}
@@ -180,7 +270,7 @@
       </div>
 
       <div class="cp-results" id={listboxId} role="listbox" aria-label={$t('palette.results')}>
-        {#if flatResults.length === 0}
+        {#if flatResults.length === 0 && !searching}
           <div class="cp-empty">{$t('palette.noMatches.before')}{query}{$t('palette.noMatches.after')}</div>
         {/if}
 
@@ -228,9 +318,29 @@
           {/each}
         {/if}
 
-        <!-- Stub: people/file search is not wired yet (no unified search API). -->
-        <div class="cp-section">{$t('palette.section.people')}</div>
-        <div class="cp-stub">{$t('palette.people.soon')}</div>
+        {#each GROUPS as g (g.group)}
+          {#if remote[g.group].length > 0}
+            <div class="cp-section">{$t(g.titleKey)}</div>
+            {#each remote[g.group] as hit, i (hit.id)}
+              {@const idx = groupStart(g.group) + i}
+              <!-- svelte-ignore a11y_click_events_have_key_events -->
+              <div
+                id="cp-opt-{idx}"
+                class="cp-row"
+                class:active={idx === activeIndex}
+                role="option"
+                aria-selected={idx === activeIndex}
+                tabindex="-1"
+                onclick={() => run({ kind: 'result', group: g.group, id: hit.id, label: hit.label, href: hit.href })}
+                onmousemove={() => (activeIndex = idx)}
+              >
+                <Icon name={g.icon} size={15} aria-hidden="true" />
+                <span class="cp-label">{hit.label}</span>
+                {#if hit.hint}<span class="cp-hint">{hit.hint}</span>{/if}
+              </div>
+            {/each}
+          {/if}
+        {/each}
       </div>
 
       <div class="cp-foot">
@@ -341,14 +451,10 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .cp-empty,
-  .cp-stub {
+  .cp-empty {
     padding: 8px 10px;
     font-size: 12.5px;
     color: var(--ink-faint);
-  }
-  .cp-stub {
-    font-style: italic;
   }
   .cp-foot {
     display: flex;

@@ -1,4 +1,4 @@
-import { describe, test, expect, vi, beforeEach } from 'vitest'
+import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, fireEvent } from '@testing-library/svelte'
 import type { NavItem } from '$lib/components/layout/nav-schema'
 
@@ -72,7 +72,7 @@ describe('CommandPalette', () => {
     const { getByLabelText, queryByText, getByText } = render(CommandPalette, {
       props: { open: true, nav }
     })
-    const input = getByLabelText('Suche … Antrag, Datei, Person') as HTMLInputElement
+    const input = getByLabelText('Suche … Protokoll, Termin, Person') as HTMLInputElement
     await fireEvent.input(input, { target: { value: 'kal' } })
     expect(getByText('Kalender')).toBeTruthy()
     // Non-matching page drops out.
@@ -104,8 +104,127 @@ describe('CommandPalette', () => {
     expect(queryByRole('dialog')).toBeNull()
   })
 
-  test('shows the stubbed Personen section (people search not wired yet)', () => {
-    const { getByText } = render(CommandPalette, { props: { open: true, nav } })
-    expect(getByText('Personen — folgt')).toBeTruthy()
+  test('shows no "folgt" placeholder: people are searched now', () => {
+    const { queryByText, container } = render(CommandPalette, { props: { open: true, nav } })
+    expect(queryByText(/folgt/)).toBeNull()
+    expect(container.textContent).not.toContain('Personen')
+  })
+})
+
+// The server-side search: minutes, events, units and people next to the pages.
+describe('CommandPalette search results', () => {
+  const MINUTES = { id: 'p1', label: 'Haushaltsplan 2026', hint: '12.05.2026 · Finanzen', href: '/members/committees/u1/protokolle/p1' }
+  const EVENT = { id: 'e1', label: 'Plenum Juni', hint: '20.06.2026', href: '/calendar?date=2026-06-20' }
+  const UNIT = { id: 'u1', label: 'Finanzen', hint: null, href: '/members/committees/u1' }
+  const PERSON = { id: 'mira', label: 'Mira Kowalski', hint: 'Finanzen', href: '/members?member=mira' }
+  const none = { minutes: [], events: [], units: [], people: [] }
+
+  const fetchMock = vi.fn()
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    fetchMock.mockReset()
+    vi.stubGlobal('fetch', fetchMock)
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  function answer(data: Record<string, unknown>) {
+    return Promise.resolve(new Response(JSON.stringify({ success: true, data }), { status: 200 }))
+  }
+
+  async function type(input: HTMLElement, value: string) {
+    await fireEvent.input(input, { target: { value } })
+    await vi.advanceTimersByTimeAsync(300)
+  }
+
+  test('asks nothing for fewer than two characters', async () => {
+    const { getByLabelText } = render(CommandPalette, { props: { open: true, nav } })
+    await type(getByLabelText('Suche … Protokoll, Termin, Person'), 'h')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  test('asks the search endpoint once after the typing pauses, with the typed text', async () => {
+    fetchMock.mockImplementation(() => answer(none))
+    const { getByLabelText } = render(CommandPalette, { props: { open: true, nav } })
+    const input = getByLabelText('Suche … Protokoll, Termin, Person')
+    await fireEvent.input(input, { target: { value: 'ha' } })
+    await fireEvent.input(input, { target: { value: 'haus' } })
+    await vi.advanceTimersByTimeAsync(300)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(String(fetchMock.mock.calls[0]![0])).toBe('/api/search?q=haus')
+  })
+
+  test('lists minutes, events, units and people under their own headings, with hints', async () => {
+    fetchMock.mockImplementation(() => answer({ minutes: [MINUTES], events: [EVENT], units: [UNIT], people: [PERSON] }))
+    const { getByLabelText, getByText } = render(CommandPalette, { props: { open: true, nav } })
+    await type(getByLabelText('Suche … Protokoll, Termin, Person'), 'plan')
+    for (const heading of ['Protokolle', 'Termine', 'Gremien', 'Personen']) expect(getByText(heading)).toBeTruthy()
+    for (const text of ['Haushaltsplan 2026', '12.05.2026 · Finanzen', 'Plenum Juni', '20.06.2026', 'Mira Kowalski']) {
+      expect(getByText(text)).toBeTruthy()
+    }
+  })
+
+  test('two results that share a link and an id kind do not collide (no duplicate keys)', async () => {
+    const a = { id: 'e1', label: 'Plenum A', hint: '20.06.2026', href: '/calendar?date=2026-06-20' }
+    const b = { id: 'e2', label: 'Plenum B', hint: '20.06.2026', href: '/calendar?date=2026-06-20' }
+    fetchMock.mockImplementation(() => answer({ ...none, events: [a, b] }))
+    const { getByLabelText, getByText } = render(CommandPalette, { props: { open: true, nav } })
+    await type(getByLabelText('Suche … Protokoll, Termin, Person'), 'plenum')
+    expect(getByText('Plenum A')).toBeTruthy()
+    expect(getByText('Plenum B')).toBeTruthy()
+  })
+
+  test('a found item joins the keyboard list: Enter opens it when no page or action matches', async () => {
+    fetchMock.mockImplementation(() => answer({ ...none, people: [PERSON] }))
+    const { getByLabelText, getByRole } = render(CommandPalette, { props: { open: true, nav } })
+    await type(getByLabelText('Suche … Protokoll, Termin, Person'), 'mira')
+    const dialog = getByRole('dialog')
+    // Nothing of nav or actions matches "mira": the person is the only (first) row.
+    await fireEvent.keyDown(dialog, { key: 'Enter' })
+    expect(gotoMock).toHaveBeenCalledWith('/members?member=mira')
+  })
+
+  test('clicking a found item opens it', async () => {
+    fetchMock.mockImplementation(() => answer({ ...none, minutes: [MINUTES] }))
+    const { getByLabelText, getByText } = render(CommandPalette, { props: { open: true, nav } })
+    await type(getByLabelText('Suche … Protokoll, Termin, Person'), 'haushalt')
+    await fireEvent.click(getByText('Haushaltsplan 2026'))
+    expect(gotoMock).toHaveBeenCalledWith('/members/committees/u1/protokolle/p1')
+  })
+
+  test('a failed search keeps the page matches and shows no error text', async () => {
+    fetchMock.mockImplementation(() => Promise.resolve(new Response('boom', { status: 500 })))
+    const { getByLabelText, getByText, queryByText } = render(CommandPalette, { props: { open: true, nav } })
+    await type(getByLabelText('Suche … Protokoll, Termin, Person'), 'kal')
+    expect(getByText('Kalender')).toBeTruthy()
+    expect(queryByText(/boom/)).toBeNull()
+  })
+
+  test('a slower answer to an older query never replaces the newer one', async () => {
+    let releaseOld!: (r: Response) => void
+    fetchMock
+      .mockImplementationOnce(() => new Promise<Response>((res) => (releaseOld = res)))
+      .mockImplementationOnce(() => answer({ ...none, people: [PERSON] }))
+    const { getByLabelText, queryByText, getByText } = render(CommandPalette, { props: { open: true, nav } })
+    const input = getByLabelText('Suche … Protokoll, Termin, Person')
+    await type(input, 'ha')
+    await type(input, 'mira')
+    expect(getByText('Mira Kowalski')).toBeTruthy()
+    releaseOld(new Response(JSON.stringify({ success: true, data: { ...none, minutes: [MINUTES] } }), { status: 200 }))
+    await vi.advanceTimersByTimeAsync(10)
+    expect(queryByText('Haushaltsplan 2026')).toBeNull()
+    expect(getByText('Mira Kowalski')).toBeTruthy()
+  })
+
+  test('clearing the query drops the found items', async () => {
+    fetchMock.mockImplementation(() => answer({ ...none, people: [PERSON] }))
+    const { getByLabelText, queryByText } = render(CommandPalette, { props: { open: true, nav } })
+    const input = getByLabelText('Suche … Protokoll, Termin, Person')
+    await type(input, 'mira')
+    expect(queryByText('Mira Kowalski')).toBeTruthy()
+    await type(input, '')
+    expect(queryByText('Mira Kowalski')).toBeNull()
   })
 })

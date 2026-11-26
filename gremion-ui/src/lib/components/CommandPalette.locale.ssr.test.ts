@@ -46,20 +46,21 @@ async function palette(locale: Locale): Promise<string> {
 describe('command palette follows the interface locale', () => {
   test('en: dialog name, search field, headings, action and key hints are English', async () => {
     const html = await palette('en')
-    for (const text of ['aria-label="Command palette"', 'placeholder="Search … motion, file, person"', 'aria-label="Results"', '>Pages<', '>Actions<', 'Switch theme', 'Toggle light / dark', 'People &amp; files', 'Navigate', 'Open', 'Close']) {
+    for (const text of ['aria-label="Command palette"', 'placeholder="Search … minutes, event, person"', 'aria-label="Results"', '>Pages<', '>Actions<', 'Switch theme', 'Toggle light / dark', 'Navigate', 'Open', 'Close']) {
       expect(html, text).toContain(text)
     }
-    for (const german of ['Befehlspalette', 'Suche …', 'Ergebnisse', '>Seiten<', '>Aktionen<', 'Theme wechseln', 'umschalten', 'Personen', 'Navigieren', 'Öffnen', 'Schließen']) {
+    for (const german of ['Befehlspalette', 'Suche …', 'Ergebnisse', '>Seiten<', '>Aktionen<', 'Theme wechseln', 'umschalten', 'Personen', 'folgt', 'Navigieren', 'Öffnen', 'Schließen']) {
       expect(html, german).not.toContain(german)
     }
   })
 
   test('de: the German originals', async () => {
     const html = await palette('de')
-    for (const text of ['aria-label="Befehlspalette"', 'placeholder="Suche … Antrag, Datei, Person"', 'aria-label="Ergebnisse"', '>Seiten<', '>Aktionen<', 'Theme wechseln', 'Hell / Dunkel umschalten', 'Personen &amp; Dateien', 'Personen — folgt', 'Navigieren', 'Öffnen', 'Schließen']) {
+    for (const text of ['aria-label="Befehlspalette"', 'placeholder="Suche … Protokoll, Termin, Person"', 'aria-label="Ergebnisse"', '>Seiten<', '>Aktionen<', 'Theme wechseln', 'Hell / Dunkel umschalten', 'Navigieren', 'Öffnen', 'Schließen']) {
       expect(html, text).toContain(text)
     }
     expect(html).not.toContain('Command palette')
+    expect(html).not.toContain('folgt')
   })
 
   // WCAG 3.1.2: a rail label the translation does not reach stays German (localizeNav marks it lang 'de');
