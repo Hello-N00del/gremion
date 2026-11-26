@@ -79,6 +79,7 @@ describe('VideoCallPip on a secondary customer host', () => {
     const withoutPage = async () => {
       // The component decides between page and env once, when it is created, by looking at `window` for the
       // first time: hide the page for that one read and for nothing else (the effects that follow need it).
+      const original = Object.getOwnPropertyDescriptor(globalThis, 'window') as PropertyDescriptor
       const page = globalThis.window
       let hidden = true
       Object.defineProperty(globalThis, 'window', {
@@ -92,7 +93,7 @@ describe('VideoCallPip on a secondary customer host', () => {
       try {
         render(VideoCallPip, { props: { user: { name: 'Test Person' } as never } })
       } finally {
-        Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: page })
+        Object.defineProperty(globalThis, 'window', original)
       }
       expect(hidden).toBe(false)
       startRoomCall(ROOM, 'Testraum')

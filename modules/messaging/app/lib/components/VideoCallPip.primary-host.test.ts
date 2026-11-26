@@ -4,6 +4,7 @@
  *
  * The same component on the PRIMARY host, where the page origin and the process env name the same host: a
  * single-customer install must see exactly the values it saw before the frame was derived from the page.
+ * That the component reads the env at all (its server-render fallback) is proven in VideoCallPip.test.ts.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, waitFor } from '@testing-library/svelte'

@@ -208,7 +208,6 @@ describe('an unreachable key set is told apart from a forged token', () => {
     const jwt = await sign(own)
     await expect(mint(jwt)).rejects.toMatchObject({ status: 503 })
     keyEndpoint = 'up'
-    __resetJwksCache()
     expect(await mint(jwt)).toBe('mx-1')
   })
 
