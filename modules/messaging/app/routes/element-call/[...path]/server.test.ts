@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { runWithTenant, type TenantContext } from '$lib/server/tenant/context'
 
 // The route pins its upstream to ELEMENT_CALL_INTERNAL_URL at module load, so the
@@ -422,5 +422,74 @@ describe('GET /element-call/[...path] — config.json names the requesting host'
     fetchMock.mockResolvedValue(upstreamConfig())
     await callAs('b.example.org', 'room/config.json')
     expect(fetchedUrls()).toEqual([`${UPSTREAM}/room/config.json`])
+  })
+})
+
+// A refusal of the config path must leave a trace: the call page fails with a bare 503 or 502, and the
+// operator only has the server log to tell which check said no, for which customer and for which request.
+describe('GET /element-call/[...path] — a refused config path is logged', () => {
+  const tenant = (primaryHost: string | null) => ({ id: 'tid', slug: 'x', primaryHost }) as unknown as TenantContext
+  const CORRELATION = '0b9f6f8e-6f0e-4b53-9d41-6a1f3c2d5e77'
+  let warn: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+  afterEach(() => {
+    warn.mockRestore()
+  })
+
+  async function callAs(host: string | null | undefined, path = 'config.json', correlationId?: string) {
+    const { GET } = await import('./+server')
+    const event = {
+      params: { path },
+      url: new URL('http://localhost/element-call/' + path),
+      locals: correlationId ? { correlationId } : {},
+    } as never
+    if (host === undefined) return GET(event)
+    return runWithTenant(tenant(host), () => GET(event))
+  }
+  const logged = () => warn.mock.calls.map((c) => ({ message: String(c[0]), fields: c[1] as Record<string, unknown> }))
+  const config = (body: string) => new Response(body, { status: 200, headers: { 'content-type': 'application/json' } })
+
+  it('no tenant: the 503 is logged with the reason, no tenant and the correlation id', async () => {
+    expect((await callAs(undefined, 'config.json', CORRELATION)).status).toBe(503)
+    expect(logged()).toEqual([
+      { message: expect.stringContaining('[element-call]'), fields: { reason: 'no_tenant', tenantId: null, tenantSlug: null, correlationId: CORRELATION } },
+    ])
+  })
+
+  it('a tenant without a primary host: the 503 is logged with the tenant', async () => {
+    expect((await callAs(null, 'room/config.json', CORRELATION)).status).toBe(503)
+    expect(logged().map((l) => l.fields)).toEqual([{ reason: 'no_primary_host', tenantId: 'tid', tenantSlug: 'x', correlationId: CORRELATION }])
+  })
+
+  it('a primary host that is not a bare host: the 503 says so', async () => {
+    for (const bad of ['b.example.org/evil', 'user@b.example.org']) {
+      warn.mockClear()
+      expect((await callAs(bad, 'config.json', CORRELATION)).status).toBe(503)
+      expect(logged().map((l) => l.fields.reason)).toEqual(['host_not_bare'])
+    }
+  })
+
+  it('an upstream config that is not JSON, or not an object: the 502 says which, and never logs the body', async () => {
+    fetchMock.mockResolvedValue(config('SECRET-UPSTREAM-BODY <html>'))
+    expect((await callAs('b.example.org', 'config.json', CORRELATION)).status).toBe(502)
+    fetchMock.mockResolvedValue(config('["SECRET-UPSTREAM-BODY"]'))
+    expect((await callAs('b.example.org', 'config.json', CORRELATION)).status).toBe(502)
+    expect(logged().map((l) => l.fields.reason)).toEqual(['config_not_json', 'config_not_object'])
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('SECRET-UPSTREAM-BODY')
+  })
+
+  it('a request without a correlation id is still logged', async () => {
+    expect((await callAs(null)).status).toBe(503)
+    expect(logged()[0]?.fields).toMatchObject({ reason: 'no_primary_host', correlationId: null })
+  })
+
+  it('a served config logs nothing, and neither does any other path', async () => {
+    fetchMock.mockImplementation(async () => config(JSON.stringify({ skipLobby: true })))
+    expect((await callAs('b.example.org', 'config.json', CORRELATION)).status).toBe(200)
+    expect((await callAs('b.example.org', 'assets/app.js', CORRELATION)).status).toBe(200)
+    expect(logged()).toEqual([])
   })
 })
