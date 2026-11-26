@@ -4,11 +4,15 @@ import type { SessionUser } from '$lib/auth/types'
 import { redirect, error } from '@sveltejs/kit'
 import { getOrgUnit, isMemberOf } from '$lib/server/governance/org-units-db'
 import { canSeeOrgUnit, seesAllGovernance } from '$lib/server/governance/visibility'
+import { requireCommitteeId } from '$lib/server/governance/route-ids'
 
 export const load: LayoutServerLoad = async ({ params, locals }) => {
   const session = await locals.auth()
   const user = session?.user as SessionUser | undefined
   if (!user || !hasRole(user.roles, Role.Member)) throw redirect(303, '/auth/login')
+
+  // A malformed id names no unit: 404 before the store sees it (the driver would answer 500).
+  requireCommitteeId(params.id)
 
   const committee = await getOrgUnit(params.id)
   if (!committee) throw error(404, 'Committee not found')

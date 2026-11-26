@@ -5,6 +5,7 @@
 // semantics.
 
 import type { Sql } from '../tenant-store.js'
+import { isUuid } from './uuid.js'
 
 // ── types ────────────────────────────────────────────────────────────────────
 
@@ -44,6 +45,7 @@ export async function listEventTypes(sql: Sql): Promise<DbEventType[]> {
 }
 
 export async function getEventType(sql: Sql, id: string): Promise<DbEventType | null> {
+  if (!isUuid(id)) return null
   const rows = await sql<{
     id: string; name: string; color: string; is_system: boolean; created_at: Date
   }[]>`SELECT * FROM event_types WHERE id = ${id}`

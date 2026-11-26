@@ -1,6 +1,7 @@
 import { error } from '@sveltejs/kit'
 import type { PageServerLoad } from './$types'
 import { listOrgUnitMembers } from '$lib/server/governance/org-units-db'
+import { requireCommitteeId, requireProtocolId } from '$lib/server/governance/route-ids'
 import { getKeycloakAdminClient } from '$lib/server/keycloak-admin'
 
 type AttendanceStatus = 'present' | 'absent' | 'excused'
@@ -18,6 +19,9 @@ export const load: PageServerLoad = async ({ params, fetch, locals, parent }) =>
   // URL unit. Await it BEFORE any read: on a __data.json request that skips the
   // layout, only parent() makes its 404 abort this load before the roster read.
   await parent()
+  // Malformed ids name nothing: 404 here, not the API's 400 and never a driver 500.
+  requireCommitteeId(params.id)
+  requireProtocolId(params.protocolId)
 
   const res = await fetch(`/api/protocols/${params.protocolId}`)
   if (!res.ok) throw error(res.status, 'Protokoll nicht gefunden')

@@ -18,3 +18,8 @@ export function malformedIdResponse(...ids: unknown[]): Response | null {
 export function requireCommitteeId(id: unknown): void {
   if (!isUuid(id)) throw error(404, 'Gremium nicht gefunden')
 }
+
+/** For page loads and actions under a protocol URL: 404 unless the id is a canonical UUID. */
+export function requireProtocolId(id: unknown): void {
+  if (!isUuid(id)) throw error(404, 'Protokoll nicht gefunden')
+}

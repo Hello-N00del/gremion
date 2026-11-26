@@ -6,6 +6,7 @@ import { createProtocol, listProtocols, updateProtocol, deleteProtocol } from '$
 import { getTenantProtocolDocumentPort } from '$lib/server/protocols/document-port'
 import { getOrgUnit, isMemberOf } from '$lib/server/governance/org-units-db'
 import { canSeeProtocol, seesAllGovernance } from '$lib/server/governance/visibility'
+import { requireCommitteeId } from '$lib/server/governance/route-ids'
 
 function requireAuth(event: RequestEvent): SessionUser {
   const user = event.locals.user as SessionUser | undefined
@@ -23,6 +24,8 @@ export async function GET(event: RequestEvent) {
     const user = requireAuth(event)
     const committeeId = event.url.searchParams.get('committeeId')
     if (!committeeId) throw error(400, 'committeeId required')
+    // A malformed unit id is an unknown unit: 404, never a driver error.
+    requireCommitteeId(committeeId)
     const status = event.url.searchParams.get('status') as 'draft' | 'submitted' | 'published' | undefined
     const yearParam = event.url.searchParams.get('year')
     const year = yearParam ? parseInt(yearParam, 10) : undefined

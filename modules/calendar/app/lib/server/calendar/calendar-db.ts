@@ -10,6 +10,10 @@ import {
 } from './calendar-color'
 import { readConfig } from '../config'
 
+// A malformed id names nothing: the id columns are uuid and the driver rejects any other text
+// (SQLSTATE 22P02, a 500). Lookups by id answer "not found" for it, without a query.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type EventSource = 'manual' | 'helios' | 'minutes' | 'holiday' | 'newsletter'
@@ -285,6 +289,7 @@ export async function listEvents(filter: ListEventsFilter = {}): Promise<DbEvent
 }
 
 export async function getEvent(id: string): Promise<DbEvent | null> {
+  if (!UUID_RE.test(id)) return null
   const sql = getDb()
   const rows = await sql<EventRow[]>`
     SELECT e.*, et.color AS event_type_color, et.name AS event_type_name
@@ -564,6 +569,7 @@ export async function listEventTypes(): Promise<DbEventType[]> {
 }
 
 export async function getEventType(id: string): Promise<DbEventType | null> {
+  if (!UUID_RE.test(id)) return null
   const sql = getDb()
   const rows = await sql<{
     id: string; name: string; color: string; is_system: boolean; created_at: Date

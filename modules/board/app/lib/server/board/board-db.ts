@@ -6,6 +6,11 @@
 // protocol action item via card.protocol_action_item_id (idempotent).
 import { getDb } from '../db'
 
+// A malformed id names nothing: the id columns are uuid and the driver rejects any other text
+// (SQLSTATE 22P02, a 500). Lookups by id answer "not found" for it, without a query - the same
+// answer the leaf service gives (src/http/routes.ts).
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 export interface Board {
   readonly id: string
   readonly org_unit_id: string
@@ -49,6 +54,7 @@ export async function listBoardsForOrgUnits(orgUnitIds: readonly string[]): Prom
 }
 
 export async function getBoard(id: string): Promise<Board | null> {
+  if (!UUID_RE.test(id)) return null
   const rows = await getDb()<Board[]>`SELECT * FROM board WHERE id = ${id}`
   return rows[0] ?? null
 }

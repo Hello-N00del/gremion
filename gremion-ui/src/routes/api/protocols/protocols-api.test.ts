@@ -79,7 +79,7 @@ describe('GET /api/protocols', () => {
   it('returns protocol list for a committee', async () => {
     mockListProtocols.mockResolvedValue([{ id: 'p1', title: 'VV April', status: 'draft' }])
     // @ts-expect-error partial mock
-    const res = await GET(makeEvent({ search: { committeeId: 'comm-1' } }))
+    const res = await GET(makeEvent({ search: { committeeId: 'c0a1b2c3-0000-4000-8000-0000000000c1' } }))
     const body = await res.json()
     expect(body.protocols).toHaveLength(1)
     expect(body.protocols[0].id).toBe('p1')

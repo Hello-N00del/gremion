@@ -11,6 +11,7 @@
 // boundary is the kernel's responsibility.
 
 import type { Sql } from '../tenant-store.js'
+import { isUuid } from './uuid.js'
 import { computeEventColour, DEFAULT_SHARED_EVENT_COLOR } from './calendar-color.js'
 import { deleteRecurrence, getRecurrence, insertRecurrence } from './recurrence.js'
 import type { DbRecurrence, RecurrenceFrequency } from './recurrence.js'
@@ -211,6 +212,7 @@ export async function listEvents(sql: Sql, filter: ListEventsFilter = {}): Promi
 }
 
 export async function getEvent(sql: Sql, id: string): Promise<DbEvent | null> {
+  if (!isUuid(id)) return null
   const rows = await sql<EventRow[]>`
     SELECT e.*, et.color AS event_type_color, et.name AS event_type_name
     FROM calendar_events e

@@ -1,11 +1,14 @@
 import { error, redirect } from '@sveltejs/kit'
 import type { PageServerLoad, Actions } from './$types'
 import { hasRole, Role } from '$lib/auth'
+import { requireCommitteeId } from '$lib/server/governance/route-ids'
 
 export const load: PageServerLoad = async ({ params, fetch, locals }) => {
   const user = locals.user
   if (!user) throw error(401, 'Unauthenticated')
   if (!hasRole(user.roles, Role.CouncilAdmin)) throw error(403, 'Nur Admins können Protokolle erstellen')
+
+  requireCommitteeId(params.id)
 
   const res = await fetch(`/api/governance/committees/${params.id}/members`)
   const members = res.ok ? (await res.json()).members : []
@@ -14,6 +17,8 @@ export const load: PageServerLoad = async ({ params, fetch, locals }) => {
 
 export const actions: Actions = {
   default: async ({ request, params, fetch }) => {
+    // Actions run without the layout load: a malformed id is a 404 here too.
+    requireCommitteeId(params.id)
     const data = await request.formData()
     const title = data.get('title') as string
     const meetingDate = data.get('meetingDate') as string

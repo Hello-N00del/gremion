@@ -27,18 +27,18 @@ interface Unit { id: string; visibility: 'all_members' | 'committee_only' }
 interface Proto { id: string; committee_id: string; status: Status }
 
 const UNITS: Record<string, Unit> = {
-  'u-closed': { id: 'u-closed', visibility: 'committee_only' },
-  'u-open': { id: 'u-open', visibility: 'all_members' },
+  'c0a1b2c3-0000-4000-8000-0000000000c1': { id: 'c0a1b2c3-0000-4000-8000-0000000000c1', visibility: 'committee_only' },
+  'c0a1b2c3-0000-4000-8000-0000000000a1': { id: 'c0a1b2c3-0000-4000-8000-0000000000a1', visibility: 'all_members' },
 }
 const PROTOCOLS: Proto[] = [
-  { id: '00000000-0000-4000-8000-000000000001', committee_id: 'u-closed', status: 'draft' },
-  { id: '00000000-0000-4000-8000-000000000002', committee_id: 'u-closed', status: 'published' },
-  { id: '00000000-0000-4000-8000-000000000003', committee_id: 'u-open', status: 'draft' },
-  { id: '00000000-0000-4000-8000-000000000004', committee_id: 'u-open', status: 'published' },
+  { id: '00000000-0000-4000-8000-000000000001', committee_id: 'c0a1b2c3-0000-4000-8000-0000000000c1', status: 'draft' },
+  { id: '00000000-0000-4000-8000-000000000002', committee_id: 'c0a1b2c3-0000-4000-8000-0000000000c1', status: 'published' },
+  { id: '00000000-0000-4000-8000-000000000003', committee_id: 'c0a1b2c3-0000-4000-8000-0000000000a1', status: 'draft' },
+  { id: '00000000-0000-4000-8000-000000000004', committee_id: 'c0a1b2c3-0000-4000-8000-0000000000a1', status: 'published' },
 ]
 // user id -> org units the user is a member of
 const MEMBERSHIPS: Record<string, string[]> = {
-  'unit-member': ['u-closed'],
+  'unit-member': ['c0a1b2c3-0000-4000-8000-0000000000c1'],
 }
 
 const h = vi.hoisted(() => ({
@@ -153,8 +153,8 @@ describe('D-3 Guest: nothing of committee_only, no drafts, only published all_me
   })
 
   it('GET /api/protocols lists nothing of the committee_only unit and no draft of the open unit', async () => {
-    expect(await listIds(GUEST, 'u-closed')).toEqual([])
-    expect(await listIds(GUEST, 'u-open')).toEqual(['00000000-0000-4000-8000-000000000004'])
+    expect(await listIds(GUEST, 'c0a1b2c3-0000-4000-8000-0000000000c1')).toEqual([])
+    expect(await listIds(GUEST, 'c0a1b2c3-0000-4000-8000-0000000000a1')).toEqual(['00000000-0000-4000-8000-000000000004'])
   })
 
   it('GET /api/protocols/[id] refuses committee_only protocols and drafts (404), allows the public one', async () => {
@@ -172,7 +172,7 @@ describe('Member who is not in the committee_only unit', () => {
   })
 
   it('GET /api/protocols and /api/protocols/[id] hide the committee_only unit with a 404', async () => {
-    const res = (await listGET(ev(STRANGER, { search: { committeeId: 'u-closed' } }))) as Response
+    const res = (await listGET(ev(STRANGER, { search: { committeeId: 'c0a1b2c3-0000-4000-8000-0000000000c1' } }))) as Response
     expect(res.status).toBe(404)
     expect(await statusOf(() => oneGET(ev(STRANGER, { params: { id: '00000000-0000-4000-8000-000000000001' } })))).toBe(404)
     expect(await statusOf(() => oneGET(ev(STRANGER, { params: { id: '00000000-0000-4000-8000-000000000003' } })))).toBe(200)
@@ -188,7 +188,7 @@ describe('Member who is not in the committee_only unit', () => {
 describe('unit member and CouncilAdmin still see and edit the committee_only draft', () => {
   it('the unit member sees every protocol of their own unit plus the open unit', async () => {
     expect(await pageIds(UNIT_MEMBER)).toEqual(['00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000002', '00000000-0000-4000-8000-000000000003', '00000000-0000-4000-8000-000000000004'])
-    expect(await listIds(UNIT_MEMBER, 'u-closed')).toEqual(['00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000002'])
+    expect(await listIds(UNIT_MEMBER, 'c0a1b2c3-0000-4000-8000-0000000000c1')).toEqual(['00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000002'])
     expect(await statusOf(() => oneGET(ev(UNIT_MEMBER, { params: { id: '00000000-0000-4000-8000-000000000001' } })))).toBe(200)
     expect(await statusOf(() => wopiGET(ev(UNIT_MEMBER, { params: { id: '00000000-0000-4000-8000-000000000001' } })))).toBe(200)
   })
@@ -202,7 +202,7 @@ describe('unit member and CouncilAdmin still see and edit the committee_only dra
 
   it('the CouncilAdmin sees everything', async () => {
     expect(await pageIds(ADMIN)).toEqual(['00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000002', '00000000-0000-4000-8000-000000000003', '00000000-0000-4000-8000-000000000004'])
-    expect(await listIds(ADMIN, 'u-closed')).toEqual(['00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000002'])
+    expect(await listIds(ADMIN, 'c0a1b2c3-0000-4000-8000-0000000000c1')).toEqual(['00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000002'])
     expect(await statusOf(() => oneGET(ev(ADMIN, { params: { id: '00000000-0000-4000-8000-000000000001' } })))).toBe(200)
     expect(await statusOf(() => wopiGET(ev(ADMIN, { params: { id: '00000000-0000-4000-8000-000000000001' } })))).toBe(200)
   })

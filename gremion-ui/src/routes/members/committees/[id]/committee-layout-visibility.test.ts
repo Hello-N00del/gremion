@@ -20,10 +20,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { Role } from '$lib/auth/types'
 
 const UNITS: Record<string, { id: string; name: string; visibility: 'all_members' | 'committee_only' }> = {
-  'u-closed': { id: 'u-closed', name: 'Closed', visibility: 'committee_only' },
-  'u-open': { id: 'u-open', name: 'Open', visibility: 'all_members' },
+  'c0a1b2c3-0000-4000-8000-0000000000c1': { id: 'c0a1b2c3-0000-4000-8000-0000000000c1', name: 'Closed', visibility: 'committee_only' },
+  'c0a1b2c3-0000-4000-8000-0000000000a1': { id: 'c0a1b2c3-0000-4000-8000-0000000000a1', name: 'Open', visibility: 'all_members' },
 }
-const MEMBERSHIPS: Record<string, string[]> = { 'unit-member': ['u-closed'] }
+const MEMBERSHIPS: Record<string, string[]> = { 'unit-member': ['c0a1b2c3-0000-4000-8000-0000000000c1'] }
 
 const h = vi.hoisted(() => ({
   listOrgUnitMembers: vi.fn(),
@@ -92,7 +92,7 @@ function protocolEvent(user: unknown, urlId: string, protocolCommitteeId: string
     actionItems: [],
   }
   return {
-    params: { id: urlId, protocolId: 'p1' },
+    params: { id: urlId, protocolId: 'd0a1b2c3-0000-4000-8000-0000000000d1' },
     locals: { user, tenant: undefined },
     fetch: async (url: string) =>
       url.startsWith('/api/protocols?')
@@ -111,36 +111,36 @@ beforeEach(() => {
 
 describe('/members/committees/[id] layout follows D-3', () => {
   it('a Member outside a committee_only unit gets 404 and the roster is never read', async () => {
-    expect(await layoutStatus(STRANGER, 'u-closed')).toBe(404)
-    expect(await pageStatus(STRANGER, 'u-closed')).toBe(404)
+    expect(await layoutStatus(STRANGER, 'c0a1b2c3-0000-4000-8000-0000000000c1')).toBe(404)
+    expect(await pageStatus(STRANGER, 'c0a1b2c3-0000-4000-8000-0000000000c1')).toBe(404)
     expect(h.listOrgUnitMembers).not.toHaveBeenCalled()
   })
 
   it('a Member outside an all_members unit still reaches it', async () => {
-    expect(await layoutStatus(STRANGER, 'u-open')).toBe(200)
-    expect(await pageStatus(STRANGER, 'u-open')).toBe(200)
+    expect(await layoutStatus(STRANGER, 'c0a1b2c3-0000-4000-8000-0000000000a1')).toBe(200)
+    expect(await pageStatus(STRANGER, 'c0a1b2c3-0000-4000-8000-0000000000a1')).toBe(200)
   })
 
   it('a member of the committee_only unit and a CouncilAdmin reach it', async () => {
-    expect(await layoutStatus(UNIT_MEMBER, 'u-closed')).toBe(200)
-    expect(await pageStatus(UNIT_MEMBER, 'u-closed')).toBe(200)
-    expect(await layoutStatus(ADMIN, 'u-closed')).toBe(200)
+    expect(await layoutStatus(UNIT_MEMBER, 'c0a1b2c3-0000-4000-8000-0000000000c1')).toBe(200)
+    expect(await pageStatus(UNIT_MEMBER, 'c0a1b2c3-0000-4000-8000-0000000000c1')).toBe(200)
+    expect(await layoutStatus(ADMIN, 'c0a1b2c3-0000-4000-8000-0000000000c1')).toBe(200)
   })
 
   it('a Guest is still sent to login, an unknown unit is still 404', async () => {
-    expect(await layoutStatus(GUEST, 'u-open')).toBe(303)
+    expect(await layoutStatus(GUEST, 'c0a1b2c3-0000-4000-8000-0000000000a1')).toBe(303)
     expect(await layoutStatus(ADMIN, 'u-missing')).toBe(404)
   })
 
   it('the CouncilAdmin needs no membership query', async () => {
-    await layoutLoad(layoutEvent(ADMIN, 'u-closed'))
+    await layoutLoad(layoutEvent(ADMIN, 'c0a1b2c3-0000-4000-8000-0000000000c1'))
     expect(h.isMemberOf).not.toHaveBeenCalled()
   })
 })
 
 describe('protocol detail: gated by the layout and bound to the URL committee', () => {
   it('a Member outside the committee_only URL unit gets 404 and no roster is read', async () => {
-    const ev = protocolEvent(STRANGER, 'u-closed', 'u-closed', () => layoutLoad(layoutEvent(STRANGER, 'u-closed')))
+    const ev = protocolEvent(STRANGER, 'c0a1b2c3-0000-4000-8000-0000000000c1', 'c0a1b2c3-0000-4000-8000-0000000000c1', () => layoutLoad(layoutEvent(STRANGER, 'c0a1b2c3-0000-4000-8000-0000000000c1')))
     expect(await statusOf(() => protocolDetailLoad(ev))).toBe(404)
     expect(h.listOrgUnitMembers).not.toHaveBeenCalled()
   })
@@ -149,29 +149,29 @@ describe('protocol detail: gated by the layout and bound to the URL committee', 
     const throws404 = async () => {
       throw Object.assign(new Error('Not found'), { status: 404 })
     }
-    expect(await statusOf(() => protocolDetailLoad(protocolEvent(ADMIN, 'u-open', 'u-open', throws404)))).toBe(404)
+    expect(await statusOf(() => protocolDetailLoad(protocolEvent(ADMIN, 'c0a1b2c3-0000-4000-8000-0000000000a1', 'c0a1b2c3-0000-4000-8000-0000000000a1', throws404)))).toBe(404)
     expect(h.listOrgUnitMembers).not.toHaveBeenCalled()
   })
 
   it('a protocol of another committee is a 404 and no roster is read', async () => {
-    // A readable protocol of u-open paired with the URL unit u-closed would
-    // otherwise serve u-closed's roster next to it.
-    const ev = protocolEvent(UNIT_MEMBER, 'u-closed', 'u-open', () => layoutLoad(layoutEvent(UNIT_MEMBER, 'u-closed')))
+    // A readable protocol of c0a1b2c3-0000-4000-8000-0000000000a1 paired with the URL unit c0a1b2c3-0000-4000-8000-0000000000c1 would
+    // otherwise serve c0a1b2c3-0000-4000-8000-0000000000c1's roster next to it.
+    const ev = protocolEvent(UNIT_MEMBER, 'c0a1b2c3-0000-4000-8000-0000000000c1', 'c0a1b2c3-0000-4000-8000-0000000000a1', () => layoutLoad(layoutEvent(UNIT_MEMBER, 'c0a1b2c3-0000-4000-8000-0000000000c1')))
     expect(await statusOf(() => protocolDetailLoad(ev))).toBe(404)
     expect(h.listOrgUnitMembers).not.toHaveBeenCalled()
   })
 
   it('the matching committee still loads its roster', async () => {
-    const ev = protocolEvent(UNIT_MEMBER, 'u-closed', 'u-closed', () => layoutLoad(layoutEvent(UNIT_MEMBER, 'u-closed')))
+    const ev = protocolEvent(UNIT_MEMBER, 'c0a1b2c3-0000-4000-8000-0000000000c1', 'c0a1b2c3-0000-4000-8000-0000000000c1', () => layoutLoad(layoutEvent(UNIT_MEMBER, 'c0a1b2c3-0000-4000-8000-0000000000c1')))
     expect(await statusOf(() => protocolDetailLoad(ev))).toBe(200)
-    expect(h.listOrgUnitMembers).toHaveBeenCalledWith('u-closed')
+    expect(h.listOrgUnitMembers).toHaveBeenCalledWith('c0a1b2c3-0000-4000-8000-0000000000c1')
   })
 })
 
 describe('the roster page awaits parent() before any read', () => {
   it('reads nothing when parent() throws', async () => {
     const ev = {
-      params: { id: 'u-open' },
+      params: { id: 'c0a1b2c3-0000-4000-8000-0000000000a1' },
       locals: { auth: async () => ({ user: ADMIN }), tenant: undefined },
       parent: async () => {
         throw Object.assign(new Error('Not found'), { status: 404 })
