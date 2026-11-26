@@ -2,12 +2,13 @@ import { env } from '$env/dynamic/private'
 import { error } from '@sveltejs/kit'
 import { currentTenantId, getTenant } from '$lib/server/tenant/context'
 import { assertIssMatch } from '$lib/server/tenant/iss-match'
-import { verifyBearerJwt } from '$lib/server/jwt-verify'
+import { verifyBearerJwtResult } from '$lib/server/jwt-verify'
+import { REFRESH_GRACE_MS } from '$lib/auth/refresh-grace'
 import { serviceEnv } from '$lib/server/env/service-env'
 import { resolveSecret } from '$lib/server/tenant/secrets'
 import { isShowableName } from '$lib/components/messaging/sender-label'
-import { TENANT_MARKER_TYPE, matrixIdentityMode, matrixLocalpart } from './matrix-namespace'
-import { __resetChatIdentityGuardForTests, assertNamespacedChatReady } from './chat-identity-guard'
+import { CHAT_UNAVAILABLE, TENANT_MARKER_TYPE, matrixIdentityMode, matrixLocalpart } from './matrix-namespace'
+import { __resetChatIdentityGuardForTests, assertNamespacedChatReady, refuseExpiredLogin } from './chat-identity-guard'
 import { getSynapseAdmin } from './synapse-admin'
 
 // Cache Matrix access tokens per Keycloak user sub.
@@ -178,10 +179,10 @@ class MatrixClient {
   // MATRIX_IDENTITY=namespaced: Matrix token of a customer's member, minted by the app.
   //
   //   1. whose token is it: the JWT must name THIS request's customer as its issuer, must not be
-  //      expired, and must verify (signature, issuer, audience) against that customer's key set. The
-  //      claims are only read from the verified payload, so the exchange does not depend on the caller
-  //      having verified the token, whatever route it came through. It must carry the username the
-  //      account is named after;
+  //      expired for longer than the refresh grace, and must verify (signature, issuer, audience)
+  //      against that customer's key set. The claims are only read from the verified payload, so the
+  //      exchange does not depend on the caller having verified the token, whatever route it came
+  //      through. It must carry the username the account is named after;
   //   2. may chat run at all (chat-identity-guard.ts);
   //   3. the account `<slug>.<escaped username>` is created if missing (never reactivated, never
   //      renamed), then the Synapse admin API issues a login for it that the homeserver itself ends at
@@ -189,19 +190,30 @@ class MatrixClient {
   //
   // That endpoint takes no device_id and the token belongs to no device (device-less), so there is NO
   // device continuity and `deviceId` is ignored. The checks of step 1 run before the cache is read, so a
-  // cached token is never handed to an expired token or to a token of another customer.
+  // cached token is never handed to a token expired past the grace or to a token of another customer.
   private async mintNamespacedToken(keycloakJwt: string): Promise<string> {
     const tenant = getTenant()
     const claimed = decodeJwtPayload(keycloakJwt)
     if (!assertIssMatch({ tokenIss: typeof claimed.iss === 'string' ? claimed.iss : undefined, tenantIssuer: tenant.issuer })) {
       throw error(403, 'Die Anmeldung gehört nicht zu diesem Mandanten.')
     }
+    // A session whose refresh failed for a transient reason keeps its expired access token for
+    // REFRESH_GRACE_MS (auth.ts), and the legacy exchange serves a cached Matrix token in that window. This
+    // exchange accepts the token for as long: the signature check below carries the same clock tolerance.
+    // Past the grace the client gets a 401 and refreshes its session.
     const claimedExp = typeof claimed.exp === 'number' ? claimed.exp * 1000 : 0
-    if (claimedExp > 0 && Date.now() >= claimedExp) {
-      throw new Error('Keycloak JWT is expired — session refresh required')
+    if (claimedExp > 0 && Date.now() >= claimedExp + REFRESH_GRACE_MS) refuseExpiredLogin()
+    const verified = await verifyBearerJwtResult(keycloakJwt, tenant, { clockToleranceSeconds: REFRESH_GRACE_MS / 1000 })
+    if (!verified.ok) {
+      if (verified.reason === 'keys_unavailable') {
+        // Not a forged token: the customer's key set could not be read. Chat is unavailable until it can; the
+        // cause (tenant id, jose error code; never the token) goes to the server log.
+        console.error(`[chat-identity] chat refused: key set of tenant ${tenant.id} unavailable (${verified.code})`)
+        throw error(503, CHAT_UNAVAILABLE)
+      }
+      throw error(403, 'Die Anmeldung konnte nicht bestätigt werden.')
     }
-    const payload = await verifyBearerJwt(keycloakJwt, tenant)
-    if (!payload) throw error(403, 'Die Anmeldung konnte nicht bestätigt werden.')
+    const payload = verified.payload
     const username = typeof payload.preferred_username === 'string' ? payload.preferred_username : ''
     if (username === '') throw error(403, 'Der Anmeldung fehlt der Benutzername für den Chat.')
     const localpart = matrixLocalpart(tenant.slug, username)
