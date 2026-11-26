@@ -6,18 +6,19 @@
  * (PUBLIC_ELEMENT_CALL_URL, PUBLIC_BASE_URL) names ONE host: host A here. This page was opened on host B.
  * The frame, the postMessage target, the accepted message origin and the widget's parent URL must all be
  * host B, or the iframe is cross-origin and `frame-src 'self'` blocks it.
+ *
+ * The mocked env below is a live object: the tests change its values and look at what the frame does, so a
+ * component that stops reading the env, or reads it where it must not, fails here.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, waitFor } from '@testing-library/svelte'
 import { startRoomCall, endCall } from '$lib/stores/call-store.svelte'
 import VideoCallPip from './VideoCallPip.svelte'
-// The very module the component imports, resolved to the mock below: what the component can read from the
-// process env. The test that follows pins it, so a mock that stops reaching the component cannot go unseen.
-import { env as publicEnv } from '$env/dynamic/public'
 
-vi.mock('$env/dynamic/public', () => ({
-  env: { PUBLIC_ELEMENT_CALL_URL: 'https://a.example.org/element-call', PUBLIC_BASE_URL: 'https://a.example.org' },
-}))
+// What the component can read from the process env: host A, until a test changes it.
+const HOST_A_ENV = { PUBLIC_ELEMENT_CALL_URL: 'https://a.example.org/element-call', PUBLIC_BASE_URL: 'https://a.example.org' }
+const ENV = vi.hoisted(() => ({}) as Record<string, string | undefined>)
+vi.mock('$env/dynamic/public', () => ({ env: ENV }))
 
 const ROOM = '!room:platform.example.org'
 const CREDS = {
@@ -27,6 +28,7 @@ const CREDS = {
 }
 
 beforeEach(() => {
+  Object.assign(ENV, HOST_A_ENV)
   vi.stubGlobal(
     'fetch',
     vi.fn(async () => new Response(JSON.stringify(CREDS), { headers: { 'content-type': 'application/json' } })),
@@ -60,12 +62,57 @@ function fromWidget(origin: string, action: string, source: Window | null) {
 }
 
 describe('VideoCallPip on a secondary customer host', () => {
-  it('the page itself is on host B and the process env names host A', () => {
+  it('the page itself is on host B', () => {
     expect(window.location.origin).toBe('https://b.example.org')
-    // The component's import of the process env is this mock; without it the frame tests below would
-    // pass for any env, host A or none.
-    expect(publicEnv.PUBLIC_ELEMENT_CALL_URL).toBe('https://a.example.org/element-call')
-    expect(publicEnv.PUBLIC_BASE_URL).toBe('https://a.example.org')
+  })
+
+  it('takes the frame from the page: another value in the process env moves nothing', async () => {
+    ENV.PUBLIC_ELEMENT_CALL_URL = 'https://c.example.org/element-call'
+    ENV.PUBLIC_BASE_URL = 'https://c.example.org'
+    const { iframe } = await mountCall()
+    const src = new URL(iframe.getAttribute('src') ?? '')
+    expect(src.origin).toBe('https://b.example.org')
+    expect(src.searchParams.get('parentUrl')).toBe('https://b.example.org')
+  })
+
+  it('without a page (server render) the frame base and the parent URL are the process env, and follow it', async () => {
+    const withoutPage = async () => {
+      // The component decides between page and env once, when it is created, by looking at `window` for the
+      // first time: hide the page for that one read and for nothing else (the effects that follow need it).
+      const original = Object.getOwnPropertyDescriptor(globalThis, 'window') as PropertyDescriptor
+      const page = globalThis.window
+      let hidden = true
+      Object.defineProperty(globalThis, 'window', {
+        configurable: true,
+        get: () => {
+          if (!hidden) return page
+          hidden = false
+          return undefined
+        },
+      })
+      try {
+        render(VideoCallPip, { props: { user: { name: 'Test Person' } as never } })
+      } finally {
+        Object.defineProperty(globalThis, 'window', original)
+      }
+      expect(hidden).toBe(false)
+      startRoomCall(ROOM, 'Testraum')
+      const iframe = await waitFor(() => {
+        const el = document.querySelector('iframe')
+        if (!el) throw new Error('no iframe yet')
+        return el
+      })
+      const src = new URL(iframe.getAttribute('src') ?? '')
+      cleanup()
+      endCall()
+      return { origin: src.origin, base: `${src.origin}${src.pathname}`, parentUrl: src.searchParams.get('parentUrl') }
+    }
+    const first = await withoutPage()
+    expect(first).toEqual({ origin: 'https://a.example.org', base: `https://a.example.org/element-call/room/${encodeURIComponent(ROOM)}`, parentUrl: 'https://a.example.org' })
+    ENV.PUBLIC_ELEMENT_CALL_URL = 'https://d.example.org/call'
+    ENV.PUBLIC_BASE_URL = 'https://d.example.org'
+    const second = await withoutPage()
+    expect(second).toEqual({ origin: 'https://d.example.org', base: `https://d.example.org/call/room/${encodeURIComponent(ROOM)}`, parentUrl: 'https://d.example.org' })
   })
 
   it('points the iframe at this host\'s Element Call, not at the process env host', async () => {

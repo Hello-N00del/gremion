@@ -2,7 +2,7 @@
 // Real RS256 SignJWT/generateKeyPair require a single JS realm: jose's sign path
 // guards `payload instanceof Uint8Array`, which fails under jsdom's cross-realm
 // typed arrays (the codebase's established idiom — see e.g. sepa-backend.test.ts).
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, test, expect, beforeEach, vi } from 'vitest'
 import { SignJWT, exportJWK, generateKeyPair } from 'jose'
 
 const envMock: Record<string, string> = {}
@@ -111,5 +111,91 @@ describe('verifyBearerJwt(token, tenant)', () => {
     const fetched = fetchSpy.mock.calls.map((c) => String(c[0]))
     expect(fetched.some((u) => u.includes('kc-internal-a'))).toBe(true)
     expect(fetched.some((u) => u.includes('kc-internal-b'))).toBe(true)
+  })
+})
+
+// A key-set outage and a rejected token are told apart (verifyBearerJwtResult); verifyBearerJwt keeps
+// answering null for both, which is what the request hook relies on.
+describe('verifyBearerJwtResult(token, tenant, options)', () => {
+  let pub: Record<string, unknown>, priv: CryptoKey, other: CryptoKey
+  let keyEndpoint: () => Promise<Response>
+  const tenant: TenantAuth = { id: 'tid-a', issuer: ISS_A, kcInternal: ISS_A, audiences: ['gremion-ui'] }
+  beforeEach(async () => {
+    vi.resetModules()
+    const a = await generateKeyPair('RS256'); priv = a.privateKey
+    pub = { ...(await exportJWK(a.publicKey)), kid: 'a1', use: 'sig', alg: 'RS256' }
+    other = (await generateKeyPair('RS256')).privateKey
+    keyEndpoint = async () => new Response(JSON.stringify({ keys: [pub] }), { headers: { 'content-type': 'application/json' } })
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => keyEndpoint())
+  })
+  const expiring = (offsetSeconds: number, key: CryptoKey = priv) =>
+    new SignJWT({ sub: 'user-1' })
+      .setProtectedHeader({ alg: 'RS256', kid: 'a1' })
+      .setIssuer(ISS_A).setAudience('gremion-ui')
+      .setIssuedAt(Math.floor(Date.now() / 1000) - 600)
+      .setExpirationTime(Math.floor(Date.now() / 1000) + offsetSeconds)
+      .sign(key)
+
+  test('a good token answers ok with its payload', async () => {
+    const { verifyBearerJwtResult } = await import('./jwt-verify')
+    const r = await verifyBearerJwtResult(await expiring(300), tenant)
+    expect(r).toMatchObject({ ok: true, payload: { sub: 'user-1', iss: ISS_A } })
+  })
+
+  test('a token signed by another key, for another audience, or without a token is rejected, not an outage', async () => {
+    const { verifyBearerJwtResult } = await import('./jwt-verify')
+    expect(await verifyBearerJwtResult(await expiring(300, other), tenant)).toEqual({ ok: false, reason: 'rejected' })
+    const wrongAud = await new SignJWT({ sub: 'u' }).setProtectedHeader({ alg: 'RS256', kid: 'a1' })
+      .setIssuer(ISS_A).setAudience('some-other-client').setExpirationTime('5m').sign(priv)
+    expect(await verifyBearerJwtResult(wrongAud, tenant)).toEqual({ ok: false, reason: 'rejected' })
+    expect(await verifyBearerJwtResult('', tenant)).toEqual({ ok: false, reason: 'rejected' })
+    expect(await verifyBearerJwtResult('not-a-jwt', tenant)).toEqual({ ok: false, reason: 'rejected' })
+  })
+
+  test('a token signed under a key id the key set does not list is rejected, not an outage', async () => {
+    const { verifyBearerJwtResult } = await import('./jwt-verify')
+    const unknownKid = await new SignJWT({ sub: 'u' }).setProtectedHeader({ alg: 'RS256', kid: 'zz9' })
+      .setIssuer(ISS_A).setAudience('gremion-ui').setExpirationTime('5m').sign(priv)
+    expect(await verifyBearerJwtResult(unknownKid, tenant)).toEqual({ ok: false, reason: 'rejected' })
+  })
+
+  test('an expired token is rejected, unless the caller grants a clock tolerance that covers it', async () => {
+    const { verifyBearerJwtResult } = await import('./jwt-verify')
+    const tenSecondsAgo = await expiring(-10)
+    expect(await verifyBearerJwtResult(tenSecondsAgo, tenant)).toEqual({ ok: false, reason: 'rejected' })
+    expect(await verifyBearerJwtResult(tenSecondsAgo, tenant, { clockToleranceSeconds: 60 })).toMatchObject({ ok: true })
+    expect(await verifyBearerJwtResult(await expiring(-61), tenant, { clockToleranceSeconds: 60 })).toEqual({ ok: false, reason: 'rejected' })
+  })
+
+  test('a key endpoint that answers 500 is an outage, with the jose error code', async () => {
+    keyEndpoint = async () => new Response('boom', { status: 500 })
+    const { verifyBearerJwtResult } = await import('./jwt-verify')
+    expect(await verifyBearerJwtResult(await expiring(300), tenant)).toEqual({ ok: false, reason: 'keys_unavailable', code: 'ERR_JOSE_GENERIC' })
+  })
+
+  test('a key endpoint that cannot be reached is an outage', async () => {
+    keyEndpoint = async () => { throw new TypeError('fetch failed') }
+    const { verifyBearerJwtResult } = await import('./jwt-verify')
+    expect(await verifyBearerJwtResult(await expiring(300), tenant)).toEqual({ ok: false, reason: 'keys_unavailable', code: 'TypeError' })
+  })
+
+  test('a key endpoint that answers something that is no key set is an outage', async () => {
+    keyEndpoint = async () => new Response(JSON.stringify({ nope: true }), { headers: { 'content-type': 'application/json' } })
+    const { verifyBearerJwtResult } = await import('./jwt-verify')
+    expect(await verifyBearerJwtResult(await expiring(300), tenant)).toEqual({ ok: false, reason: 'keys_unavailable', code: 'ERR_JWKS_INVALID' })
+  })
+
+  test('verifyBearerJwt still answers null for an outage and for a rejection alike', async () => {
+    const { verifyBearerJwt } = await import('./jwt-verify')
+    expect(await verifyBearerJwt(await expiring(300, other), tenant)).toBeNull()
+    keyEndpoint = async () => new Response('boom', { status: 500 })
+    const { __resetJwksCache } = await import('./jwt-verify')
+    __resetJwksCache()
+    expect(await verifyBearerJwt(await expiring(300), tenant)).toBeNull()
+  })
+
+  test('verifyBearerJwt grants no clock tolerance: a token that expired a second ago is null', async () => {
+    const { verifyBearerJwt } = await import('./jwt-verify')
+    expect(await verifyBearerJwt(await expiring(-1), tenant)).toBeNull()
   })
 })

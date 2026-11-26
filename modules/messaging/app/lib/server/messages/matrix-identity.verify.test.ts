@@ -24,6 +24,9 @@ vi.mock('$lib/server/env/service-env', () => ({ serviceEnv: (name: string) => EN
 import { __resetMatrixCachesForTests, getMatrixClient } from './matrix-client'
 import { __resetSynapseAdminForTests } from './synapse-admin'
 import { __resetJwksCache } from '$lib/server/jwt-verify'
+import { REFRESH_GRACE_MS } from '$lib/auth/refresh-grace'
+import { isChatRefusal } from './chat-identity-guard'
+import { error as kitError } from '@sveltejs/kit'
 
 const ACME = { id: 'tid-acme', slug: 'acme', issuer: 'https://id.example.org/realms/acme' } as unknown as TenantContext
 const as = <T>(t: TenantContext, fn: () => T): T => runWithTenant(t, fn)
@@ -36,6 +39,8 @@ let foreign: Keys
 let ownJwk: Record<string, unknown>
 let calls: string[]
 let keyRequests: number
+/** How the scripted key endpoint behaves: `up`, `down` (answers 500) or `unreachable` (the request fails). */
+let keyEndpoint: 'up' | 'down' | 'unreachable'
 
 async function sign(
   keys: Keys,
@@ -64,12 +69,15 @@ beforeEach(async () => {
   delete process.env.MESSAGES_BACKEND
   calls = []
   keyRequests = 0
+  keyEndpoint = 'up'
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const raw = input instanceof Request ? input.url : String(input)
       if (raw === KEY_URL) {
         keyRequests++
+        if (keyEndpoint === 'unreachable') throw new TypeError('fetch failed')
+        if (keyEndpoint === 'down') return new Response('unavailable', { status: 500 })
         return Response.json({ keys: [ownJwk] })
       }
       const u = new URL(raw)
@@ -121,14 +129,95 @@ describe('the token is verified before its claims name an account', () => {
     expect(await mint(await sign(own, {}, { aud: 'gremion-mobile' }))).toBe('mx-1')
   })
 
-  test('an expired token is refused with the refresh error, also while a token for that user sits in the cache', async () => {
+  test('a token that expired within the refresh grace is served like the session layer serves it, also from the cache', async () => {
     await mint(await sign(own))
-    const expired = await sign(own, {}, { exp: Math.floor(NOW / 1000) - 10 })
+    const inGrace = await sign(own, {}, { exp: Math.floor(NOW / 1000) - 10 })
     const n = calls.length
-    await expect(mint(expired)).rejects.toThrow(/expired/)
+    expect(await mint(inGrace)).toBe('mx-1')
     expect(calls.length).toBe(n)
   })
 
+  test('a token that expired within the refresh grace is exchanged when nothing is cached yet', async () => {
+    const edge = await sign(own, {}, { exp: Math.floor(NOW / 1000) - (REFRESH_GRACE_MS / 1000 - 1) })
+    expect(await mint(edge)).toBe('mx-1')
+  })
+
+  test('a token that expired before the grace is refused with a 401 the client answers by refreshing, never a 500', async () => {
+    await mint(await sign(own))
+    const expired = await sign(own, {}, { exp: Math.floor(NOW / 1000) - REFRESH_GRACE_MS / 1000 - 1 })
+    const n = calls.length
+    const refusal = await mint(expired).then(
+      () => null,
+      (e: unknown) => e,
+    )
+    expect(refusal).toMatchObject({ status: 401, body: { message: 'Die Anmeldung ist abgelaufen. Bitte erneut anmelden.' } })
+    expect(isChatRefusal(refusal)).toBe(true)
+    expect(calls.length).toBe(n)
+  })
+
+  test('only that expiry is passed on as a 401: an ordinary 401 of a route is still wrapped by it', () => {
+    let ordinary: unknown
+    try {
+      kitError(401, 'No Keycloak access token in session')
+    } catch (e) {
+      ordinary = e
+    }
+    expect(ordinary).toMatchObject({ status: 401 })
+    expect(isChatRefusal(ordinary)).toBe(false)
+  })
+})
+
+describe('an unreachable key set is told apart from a forged token', () => {
+  let logged: string[]
+  beforeEach(() => {
+    logged = []
+    vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      logged.push(args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' '))
+    })
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  test('a key endpoint that answers 500 gives 503 (chat not available), no account is touched, the cause is logged without the token', async () => {
+    keyEndpoint = 'down'
+    const jwt = await sign(own)
+    const refusal = await mint(jwt).then(
+      () => null,
+      (e: unknown) => e,
+    )
+    expect(refusal).toMatchObject({ status: 503 })
+    expect(isChatRefusal(refusal)).toBe(true)
+    expect(adminCalls()).toEqual([])
+    const line = logged.find((l) => l.includes('tid-acme'))
+    expect(line).toBeDefined()
+    expect(line).toContain('ERR_JOSE_GENERIC')
+    expect(logged.join(' ')).not.toContain(jwt)
+    expect(logged.join(' ')).not.toContain(jwt.split('.')[1] ?? 'x')
+  })
+
+  test('a key endpoint that cannot be reached gives 503 as well', async () => {
+    keyEndpoint = 'unreachable'
+    await expect(mint(await sign(own))).rejects.toMatchObject({ status: 503 })
+    expect(adminCalls()).toEqual([])
+    expect(logged.some((l) => l.includes('tid-acme') && l.includes('TypeError'))).toBe(true)
+  })
+
+  test('with the key endpoint up again the same token is exchanged: an outage is not remembered', async () => {
+    keyEndpoint = 'down'
+    const jwt = await sign(own)
+    await expect(mint(jwt)).rejects.toMatchObject({ status: 503 })
+    keyEndpoint = 'up'
+    expect(await mint(jwt)).toBe('mx-1')
+  })
+
+  test('a forged token while the key endpoint is up is still 403 and logs no outage', async () => {
+    await expect(mint(await sign(foreign))).rejects.toMatchObject({ status: 403 })
+    expect(logged).toEqual([])
+  })
+})
+
+describe('the verified token still counts once per call', () => {
   test('a verified token is not verified against the key set again for every call', async () => {
     await mint(await sign(own))
     await mint(await sign(own))

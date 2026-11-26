@@ -5,6 +5,7 @@ import { Role, type SessionUser } from '$lib/auth/types'
 import { safeDecodeAccessToken } from '$lib/auth/decode'
 import { acrToLoa, LOA } from '$lib/auth/step-up'
 import { authRedirect } from '$lib/safe-redirect'
+import { REFRESH_GRACE_MS } from '$lib/auth/refresh-grace'
 import { env } from '$env/dynamic/private'
 import { resolveSecret } from '$lib/server/tenant/secrets'
 import { getTenant, getTenantOrNull, type TenantContext } from '$lib/server/tenant/context'
@@ -105,8 +106,7 @@ export async function buildAuthConfig(event: RequestEvent): Promise<SvelteKitAut
   }
 }
 
-/** A transient refresh failure keeps the expired access token for this long (ms). */
-const REFRESH_GRACE_MS = 60_000
+// A transient refresh failure keeps the expired access token for REFRESH_GRACE_MS (lib/auth/refresh-grace.ts).
 /** [A] Assumption: how long the refresh fetch may wait for Keycloak. Well under
  *  REFRESH_GRACE_MS and above normal Keycloak latency. */
 const REFRESH_FETCH_TIMEOUT_MS = 5_000

@@ -4,17 +4,18 @@
  *
  * The same component on the PRIMARY host, where the page origin and the process env name the same host: a
  * single-customer install must see exactly the values it saw before the frame was derived from the page.
+ * That the component reads the env at all (its server-render fallback) is proven in VideoCallPip.test.ts.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, waitFor } from '@testing-library/svelte'
 import { startRoomCall, endCall } from '$lib/stores/call-store.svelte'
 import VideoCallPip from './VideoCallPip.svelte'
-// The very module the component imports, resolved to the mock below (see the test that pins it).
-import { env as publicEnv } from '$env/dynamic/public'
 
-vi.mock('$env/dynamic/public', () => ({
-  env: { PUBLIC_ELEMENT_CALL_URL: 'https://a.example.org/element-call', PUBLIC_BASE_URL: 'https://a.example.org' },
-}))
+// What the component can read from the process env: the same host as the page, until a test changes it.
+// The mock is a live object, so a test can move the env and look at what the frame does.
+const HOST_A_ENV = { PUBLIC_ELEMENT_CALL_URL: 'https://a.example.org/element-call', PUBLIC_BASE_URL: 'https://a.example.org' }
+const ENV = vi.hoisted(() => ({}) as Record<string, string | undefined>)
+vi.mock('$env/dynamic/public', () => ({ env: ENV }))
 
 const ROOM = '!room:platform.example.org'
 const CREDS = {
@@ -24,6 +25,7 @@ const CREDS = {
 }
 
 beforeEach(() => {
+  Object.assign(ENV, HOST_A_ENV)
   vi.stubGlobal(
     'fetch',
     vi.fn(async () => new Response(JSON.stringify(CREDS), { headers: { 'content-type': 'application/json' } })),
@@ -47,10 +49,16 @@ async function mountCall() {
 }
 
 describe('VideoCallPip on the primary host', () => {
-  it('the page and the process env name the same host (the mock is what the component imports)', () => {
+  it('the page is on host A', () => {
     expect(window.location.origin).toBe('https://a.example.org')
-    expect(publicEnv.PUBLIC_ELEMENT_CALL_URL).toBe('https://a.example.org/element-call')
-    expect(publicEnv.PUBLIC_BASE_URL).toBe('https://a.example.org')
+  })
+
+  it('keeps following the page when the process env is changed (the env is a server-render fallback only)', async () => {
+    ENV.PUBLIC_ELEMENT_CALL_URL = 'https://c.example.org/element-call'
+    ENV.PUBLIC_BASE_URL = 'https://c.example.org'
+    const src = new URL((await mountCall()).getAttribute('src') ?? '')
+    expect(`${src.origin}${src.pathname}`).toBe(`https://a.example.org/element-call/room/${encodeURIComponent(ROOM)}`)
+    expect(src.searchParams.get('parentUrl')).toBe('https://a.example.org')
   })
 
   it('builds the same iframe URL the process env gave before', async () => {
