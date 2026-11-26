@@ -332,6 +332,7 @@
 
 <div class="space-y-5 py-4" data-testid="tab-modules" lang={$lang}>
   <p class="text-sm text-ink-muted">{$t('settings.modules.intro')}</p>
+  <p class="text-sm text-ink-muted" data-testid="modules-availability-note">{$t('settings.modules.availability')}</p>
 
   {#if resumeError}
     <p role="alert" class="rounded-md border border-rust/50 bg-rust-soft px-3 py-2 text-sm text-rust-ink" data-testid="module-resume-error">

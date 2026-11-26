@@ -82,6 +82,15 @@ describe('TabModules.svelte', () => {
     expect(screen.getByText('DSFA-Entscheidung fehlt noch')).toBeTruthy()
   })
 
+  it('says why only some modules are listed and who can change that', async () => {
+    fetchDouble([ok(overview([item({ enabled: true })]))])
+    render(TabModules, { props: { pollMs: 10_000 } })
+    expect(await screen.findByText('Abstimmungen')).toBeTruthy()
+    const note = screen.getByTestId('modules-availability-note')
+    expect(note.textContent).toContain('Weitere Module sind für Ihr Gremium nicht verfügbar')
+    expect(note.textContent).toContain('Betreiber')
+  })
+
   it('shows "nicht konfiguriert" for a 503 NOT_CONFIGURED, never an empty list', async () => {
     fetchDouble([reply(503, { success: false, code: 'NOT_CONFIGURED', error: 'Modulschalter nicht konfiguriert.' })])
     render(TabModules, { props: { pollMs: 10_000 } })
