@@ -741,8 +741,10 @@ state is itself an alert (`stalled`, detail `state_unreadable`), never a silence
 
 A `stalled` mail carries a detail: `no_heartbeat` and `heartbeat_unreadable` (the heartbeat file is
 missing or not a heartbeat), `no_tick` (no process holds the lock and the heartbeat is older than
-three timer intervals), `release_stuck` (a process holds the lock but its beat is older than three
-minutes), `release_over_budget` (a stage ran past its budget), `state_unreadable`, `poll_stale` (the
+three timer intervals), `release_stuck` (a process holds the lock but its own beat is older than three
+minutes, or it has written no beat of its own: the beat on disk is another process's, and an
+earlier watchdog run saw it there with the lock held more than three minutes ago; a tick that has
+only just taken the lock is judged by its own beat, which it writes first), `release_over_budget` (a stage ran past its budget), `state_unreadable`, `poll_stale` (the
 last successful poll is older than `CD_STALL_MINUTES` while the remote shows a new tip), `main_red`
 (the main branch has been red for six hours) and `outbox_old` (a queued mail is older than an hour:
 the mail path is dead, so no mail can say so) and `alert`.

@@ -281,6 +281,9 @@ drv_hostlock_free() { ( exec 9>>"${GREMION_ROOT}/runtime/hostd.lock"; flock -n 9
     [ "$status" -eq 2 ]
     [ "$(cut -d' ' -f1,3 "${GREMION_ROOT}/runtime/cd/heartbeat")" = "$(cd_clock) tick" ]
     [ "$(cut -d' ' -f6 "${GREMION_ROOT}/runtime/cd/heartbeat")" != 99999 ]
+    # the signal for this tick is the ALERT file (the watchdog reads it, and reports the state
+    # itself as unreadable), no longer a heartbeat that goes stale
+    [ -s "${GREMION_ROOT}/data/cd/ALERT" ]
 }
 
 @test "tick: the poll is stored in the state (verdict, tip, time)" {

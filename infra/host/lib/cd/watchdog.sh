@@ -25,8 +25,9 @@
 #                        itself at the same limit, core.sh). A 60 minute build with a live beat
 #                        is not stuck; a hung stage whose beat stopped is. A beat written by a
 #                        process that does not hold the lock is the previous run's (the
-#                        holder has taken the lock a moment ago): it is judged by the rule for
-#                        an unheld lock instead.
+#                        holder has taken the lock a moment ago) and says nothing about the
+#                        holder: a holder that never replaces it is reported by a later run
+#                        (_cd_wd_holder_beatless), whatever the kill switch says.
 #   an outbox file older than one hour (on any transport but a stated Stalwart) -> data/cd/ALERT
 #                        and a logger line (cd_alert): the mail path is dead, so no mail can say
 #                        so. The watchdog sends the queue first and judges the age of what is
@@ -128,6 +129,32 @@ _cd_wd_stalled() {
 }
 
 # -- liveness (state-free) ---------------------------------------------------------------
+# _cd_wd_holder_beatless NOW -- the lock is held and the beat on disk (HB_*) was written by
+# another process: either the holder took the lock a moment ago and has not beaten yet (the
+# normal case, nothing to report), or it holds the lock and never beats (a verb that writes no
+# beat, a tick whose beat did not start, a program that ended while a child kept the lock).
+# One run cannot tell the two apart, so the first run that sees the old beat only notes it
+# (the beat's time and now, in the watchdog's own file). A later run that finds the same beat
+# still there with the lock still held, more than three minutes after that first sighting,
+# reports `release_stuck`, once. A holder that beats at all replaces the beat, which ends the
+# episode. The kill switch is not looked at: a process that holds the lock is not automation
+# that is off on purpose.
+_cd_wd_holder_beatless() {
+    local now="$1" mark since=""
+    mark="$(_cd_wd_get beatless)"
+    if [[ "$mark" =~ ^${HB_EPOCH}:([0-9]{1,12})$ ]]; then
+        since="${BASH_REMATCH[1]}"
+    fi
+    if [[ -z "$since" ]]; then
+        _cd_wd_put beatless "${HB_EPOCH}:${now}" || true
+        return 0
+    fi
+    if (( now - since > CD_WD_BEAT_STALE_S )); then
+        _cd_wd_stalled release_stuck "stuck-${HB_EPOCH}-nobeat" "" unknown "" "$(( (now - HB_EPOCH) / 60 ))"
+    fi
+    return 0
+}
+
 _cd_wd_liveness() {
     local now="$1" held=0 hbrc=0 owner_rc=0 age limit detail="" key
     _cd_wd_lock_held && held=1
@@ -140,29 +167,33 @@ _cd_wd_liveness() {
         # Whose beat is it? A process that has just taken the lock has not written its own
         # beat yet, so the file still holds the previous run's. Such a beat says nothing about
         # the holder: it is neither "stale" nor "over budget" for a run that began a moment
-        # ago, and it falls to the rule for an unheld lock below (it must still be recent, so a
-        # holder that never beats is reported once the old beat is three intervals old). Only
-        # a beat written by the process that holds the lock is judged by the rules here; when
-        # the holder cannot be told (unknown), the beat is judged as it always was.
+        # ago. Only a beat written by the process that holds the lock is judged by the rules
+        # below; a holder that never replaces the old beat is reported by a later run
+        # (_cd_wd_holder_beatless). When the holder cannot be told (unknown), the beat is
+        # judged as it always was.
         owner_rc=0
         cd_pid_holds_cd_lock "$HB_PID" || owner_rc=$?
-        if (( owner_rc != 1 )); then
-            age=$(( now - HB_EPOCH ))
-            (( age < 0 )) && age=0
-            limit=$(( HB_BUDGET + HB_BUDGET / 4 + 120 ))
-            if (( age > CD_WD_BEAT_STALE_S )); then
-                detail=release_stuck
-                key="stuck-${HB_START}-beat"
-            elif (( now > HB_START + limit )); then
-                detail=release_over_budget
-                key="stuck-${HB_START}-budget"
-            fi
-            if [[ -n "$detail" ]]; then
-                _cd_wd_stalled "$detail" "$key" "" "$HB_PHASE" "$HB_STAGE" "$(( age / 60 ))"
-            fi
+        if (( owner_rc == 1 )); then
+            _cd_wd_holder_beatless "$now"
             return 0
         fi
+        _cd_wd_del beatless || true
+        age=$(( now - HB_EPOCH ))
+        (( age < 0 )) && age=0
+        limit=$(( HB_BUDGET + HB_BUDGET / 4 + 120 ))
+        if (( age > CD_WD_BEAT_STALE_S )); then
+            detail=release_stuck
+            key="stuck-${HB_START}-beat"
+        elif (( now > HB_START + limit )); then
+            detail=release_over_budget
+            key="stuck-${HB_START}-budget"
+        fi
+        if [[ -n "$detail" ]]; then
+            _cd_wd_stalled "$detail" "$key" "" "$HB_PHASE" "$HB_STAGE" "$(( age / 60 ))"
+        fi
+        return 0
     fi
+    _cd_wd_del beatless || true
     # no lock holder: the tick is not running right now, so the heartbeat of its last run
     # must be recent. With the kill switch on and an idle program, automation is off on
     # purpose and the weekly reminder speaks instead. A heartbeat that names a release in

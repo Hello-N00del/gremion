@@ -165,12 +165,92 @@ gone_pid() { bash -c 'echo $$'; }
     [ "$(mails_with release_stuck)" -eq 1 ]
 }
 
-@test "stuck: a holder that never writes a beat of its own is not silent forever (the beat of an earlier run ages into no_tick)" {
+# A holder that never beats: the lock is held and the beat on disk belongs to another process.
+# The first run that sees this only notes it (a holder that has just taken the lock looks the
+# same); a later run that sees the same old beat with the lock still held, more than three
+# minutes after the first sighting, reports it. The kill switch does not hide it: it is a
+# process that holds the lock, not a program that is off on purpose.
+@test "stuck: a holder that never writes a beat of its own is reported on the run that finds it still holding, once" {
     hold_cd_lock_unannounced
     hb $(( NOW - 1000 )) idle tick $(( NOW - 1000 )) 600 "$(gone_pid)"
     wd
     [ "$status" -eq 0 ]
-    [ "$(mails_with no_tick)" -eq 1 ]
+    [ "$(mail_count)" -eq 0 ]
+    cd_advance 600
+    wd
+    [ "$status" -eq 0 ]
+    [ "$(mails_with release_stuck)" -eq 1 ]
+    [ "$(mails_with no_tick)" -eq 0 ]
+    cd_advance 600
+    wd
+    [ "$(mails_with release_stuck)" -eq 1 ]
+}
+
+@test "stuck: the kill switch does not hide a holder that never beats (an idle beat of an earlier run, long past)" {
+    hold_cd_lock_unannounced
+    touch "${GREMION_ROOT}/etc/cd.disabled"
+    hb $(( NOW - 5000 )) idle tick $(( NOW - 5000 )) 600 "$(gone_pid)"
+    wd
+    [ "$status" -eq 0 ]
+    [ "$(mails_with release_stuck)" -eq 0 ]
+    cd_advance 600
+    wd
+    [ "$status" -eq 0 ]
+    [ "$(mails_with release_stuck)" -eq 1 ]
+}
+
+@test "stuck: a holder whose main process ended while a child keeps the lock is reported the same way (a release beat of a dead pid)" {
+    hold_cd_lock_unannounced
+    hb $(( NOW - 100 )) releasing build $(( NOW - 200 )) 3600 "$(gone_pid)"
+    wd
+    [ "$(mail_count)" -eq 0 ]
+    cd_advance 600
+    wd
+    [ "$(mails_with release_stuck)" -eq 1 ]
+}
+
+@test "stuck: a second run within three minutes of the first sighting is still quiet (a hand-run verb that has just taken the lock)" {
+    hold_cd_lock_unannounced
+    hb $(( NOW - 5000 )) idle tick $(( NOW - 5000 )) 600 "$(gone_pid)"
+    wd
+    cd_advance 120
+    wd
+    [ "$status" -eq 0 ]
+    [ "$(mail_count)" -eq 0 ]
+}
+
+@test "stuck: once the holder beats, the first sighting is forgotten (a later holder with the same old beat is a new first sighting)" {
+    hold_cd_lock_unannounced
+    local old_beat="$(( NOW - 5000 )) idle tick $(( NOW - 5000 )) 600 $(gone_pid)"
+    # shellcheck disable=SC2086
+    hb $old_beat
+    wd
+    cd_advance 600
+    # the holder beats, so the lock is judged by its own beat, which is fresh
+    hb "$(cd_clock)" idle tick "$(cd_clock)" 600 "$CD_BG_PID"
+    wd
+    [ "$(mail_count)" -eq 0 ]
+    cd_advance 600
+    # the same old beat is back and the lock is held again: first sighting, quiet
+    # shellcheck disable=SC2086
+    hb $old_beat
+    wd
+    [ "$(mail_count)" -eq 0 ]
+}
+
+@test "stuck: with the lock free the first sighting is forgotten too" {
+    hold_cd_lock_unannounced
+    hb $(( NOW - 5000 )) idle tick $(( NOW - 5000 )) 600 "$(gone_pid)"
+    wd
+    kill "$CD_BG_PID" 2>/dev/null || true
+    wait "$CD_BG_PID" 2>/dev/null || true
+    touch "${GREMION_ROOT}/etc/cd.disabled"
+    cd_advance 600
+    wd
+    [ "$(mails_with release_stuck)" -eq 0 ]
+    hold_cd_lock_unannounced
+    cd_advance 600
+    wd
     [ "$(mails_with release_stuck)" -eq 0 ]
 }
 
@@ -214,6 +294,16 @@ gone_pid() { bash -c 'echo $$'; }
         [ "$(mails_with state_unreadable)" -eq 1 ]
         [ "$(mails_with no_tick)" -eq 1 ]
     done
+}
+
+@test "state-free: a tick that dies at the state read leaves a fresh beat, and the unreadable state is still reported with the kill switch on" {
+    cd_need_flock
+    touch "${GREMION_ROOT}/etc/cd.disabled"
+    printf 'not json' > "${GREMION_ROOT}/data/cd/state.json"
+    hb "$NOW"
+    wd
+    [ "$status" -eq 0 ]
+    [ "$(mails_with state_unreadable)" -eq 1 ]
 }
 
 @test "state-free: through the program, a deleted state is exit 0 with the same mails (the dispatcher does not turn it into exit 2)" {

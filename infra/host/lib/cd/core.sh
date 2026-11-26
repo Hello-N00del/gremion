@@ -714,9 +714,10 @@ cd_lock_take() {
 
 # cd_pid_holds_cd_lock PID -- whom a heartbeat belongs to. 0 when PID is a live process that
 # has the cd lock open on fd 8 (the descriptor cd_lock_take holds the flock on), 1 when it is
-# not: the process has ended, or it is some other process. 2 when that cannot be told (not a
-# pid, no /proc, a process of another user whose descriptors are not readable); the caller
-# then keeps its old judgement. The check reads /proc/PID/fd/8, not the flock: the flock is
+# not: the process has ended, or it is some other process (on a host whose /proc hides other
+# users' processes a process of another user looks ended, which is 1 too; the tick and the
+# watchdog run as the same user). 2 when that cannot be told (not a pid, no /proc, a process
+# whose descriptors are not readable); the caller then keeps its old judgement. The check reads /proc/PID/fd/8, not the flock: the flock is
 # taken by the `flock` child on the inherited descriptor, so the owner the kernel records
 # for it is that short-lived child and never the program. A holder has the file open from
 # before the flock until it lets go, so there is no gap between "holds the lock" and
