@@ -12,7 +12,8 @@
 #   sql-changes.log          every ledger change
 #   refuse-rename            present: the mount point call is refused (OCS status 403)
 #   group-unreadable         present: the member list of a group answers a failure envelope
-#   array-shape              present: the folder list is answered as an array (default: id-keyed object)
+#   ledger-stale             present: the ledger/binding UPDATE finds no row (the row changed under the run)
+#   array-shape             present: the folder list is answered as an array (default: id-keyed object)
 # The executor role's access record (psql -U gremion_executor) answers a record id and is logged to access.log.
 set -u
 : "${FAKE:?the fixture directory}"
@@ -45,14 +46,31 @@ folders_out() {
 
 nc() {
     # docker exec nc1 sh -c SCRIPT sh -X METHOD [--data BODY] URL
+    # The program's script is RUN, with curl replaced by a recorder (its argv and its stdin config are kept in
+    # curl-args.last and curl-stdin.last) and the container's admin credentials in the environment, as the real
+    # container has them. The request it made is then answered from the files.
+    local script="$3"
     shift 3   # sh -c SCRIPT
-    shift     # the "sh" that is $0 of the script
-    local method="GET" body="" url=""
+    mkdir -p "$FAKE/bin"
+    cat > "$FAKE/bin/curl" <<'EOS'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$FAKE/curl-args.last"
+cat > "$FAKE/curl-stdin.last"
+EOS
+    chmod +x "$FAKE/bin/curl"
+    PATH="$FAKE/bin:$PATH" NEXTCLOUD_ADMIN_USER='nc-admin' NEXTCLOUD_ADMIN_PASSWORD='p"w\d' sh -c "$script" "$@" < /dev/null || return $?   # no -i: docker gives the process no stdin
+    local method="GET" body="" url="" a
+    local -a cargs=()
+    mapfile -t cargs < "$FAKE/curl-args.last"
+    set -- ${cargs[@]+"${cargs[@]}"}
     while [[ $# -gt 0 ]]; do
-        case "$1" in
+        a="$1"
+        case "$a" in
             -X) method="$2"; shift 2 ;;
             --data) body="$2"; shift 2 ;;
-            *) url="$1"; shift ;;
+            --max-time|-H|-K|-u) shift 2 ;;
+            -*) shift ;;
+            *) url="$a"; shift ;;
         esac
     done
     local path="${url#http://127.0.0.1}" bare="${url#http://127.0.0.1}"
@@ -133,6 +151,10 @@ pgsql() {
             *"WITH l AS"*)
                 local old="${v[old]}" new="${v[new]}" l=0 k=0
                 printf 'UPDATE %s -> %s\n' "$old" "$new" >> "$FAKE/sql-changes.log"
+                if [[ -f "$FAKE/ledger-stale" ]]; then
+                    if [[ "$sql" == *module_karenz_item* ]]; then echo "ledger 0, binding 0"; else echo "ledger 0"; fi
+                    return 0
+                fi
                 l="$(grep -c " ${old}\$" "$FAKE/ledger-$hex.txt" || true)"
                 sed -i "s| ${old}\$| ${new}|" "$FAKE/ledger-$hex.txt"
                 if [[ -f "$FAKE/karenz-$hex.txt" ]]; then

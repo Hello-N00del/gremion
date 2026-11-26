@@ -310,3 +310,83 @@ group_gone() {
     group_gone "ou-${SEED}"
     [[ "$output" == *"KEPT alpha unit ${SEED}: group ou-${SEED} stays, another folder still carries it"* ]]
 }
+
+# two customers built from the same seed carry the same unit id, and the old adopt rule could leave both
+# ledgers on ONE folder (20): nobody can say whose it is
+seed_one_folder_in_both_ledgers() {
+    SEED='aaaaaaaa-0000-0000-0000-000000000002'
+    jq --arg g "ou-${SEED}" '. + [{"id": 20, "mount_point": "Vorstand (Demo)", "groups": {($g): 31}}]' "$FAKE/folders.json" > "$FAKE/f.tmp" && mv "$FAKE/f.tmp" "$FAKE/folders.json"
+    jq --arg g "ou-${SEED}" '.[$g] = ["ua", "ub"]' "$FAKE/groups.json" > "$FAKE/g.tmp" && mv "$FAKE/g.tmp" "$FAKE/groups.json"
+    printf '%s 20:ou-%s\n' "$SEED" "$SEED" >> "$FAKE/ledger-$HA.txt"
+    printf '%s 20:ou-%s\n' "$SEED" "$SEED" >> "$FAKE/ledger-$HB.txt"
+    printf 'ua\n' > "$FAKE/roster-$HA-$SEED.txt"
+    printf 'ub\n' > "$FAKE/roster-$HB-$SEED.txt"
+}
+
+@test "a folder that the ledgers of two customers both name is a PROBLEM for both, in the dry run and with --apply, and is left as it is" {
+    seed_one_folder_in_both_ledgers
+    run "$PROG"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"PROBLEM alpha unit ${SEED}: folder 20 is named in the ledgers of more than one customer (alpha, beta); left alone"* ]]
+    [[ "$output" == *"PROBLEM beta unit ${SEED}: folder 20 is named in the ledgers of more than one customer (alpha, beta); left alone"* ]]
+    [[ "$output" == *"to-move=4 already=1 problems=2"* ]]
+    if [[ "$output" == *"PLAN alpha unit ${SEED}"* || "$output" == *"PLAN beta unit ${SEED}"* ]]; then echo 'the shared folder was planned'; return 1; fi
+    apply
+    [ "$status" -eq 1 ]
+    [ "$(mount_of 20)" = "Vorstand (Demo)" ]
+    [ "$(groups_of 20)" = "ou-${SEED}" ]
+    [ "$(members_of "ou-${SEED}")" = "ua,ub" ]
+    grep -qx "${SEED} 20:ou-${SEED}" "$FAKE/ledger-$HA.txt"
+    grep -qx "${SEED} 20:ou-${SEED}" "$FAKE/ledger-$HB.txt"
+    # the folders that only one customer names were still moved
+    [ "$(mount_of 12)" = "Vorstand (${KA})" ]
+    [ "$(mount_of 14)" = "Studierendenrat (${KB})" ]
+}
+
+@test "--slug does not hide a folder that another customer's ledger also names" {
+    seed_one_folder_in_both_ledgers
+    apply --slug alpha
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"PROBLEM alpha unit ${SEED}: folder 20 is named in the ledgers of more than one customer (alpha, beta)"* ]]
+    [ "$(mount_of 20)" = "Vorstand (Demo)" ]
+    [ "$(groups_of 20)" = "ou-${SEED}" ]
+}
+
+@test "a ledger row that changed under the run is caught before the old group is taken off the folder" {
+    touch "$FAKE/ledger-stale"
+    apply
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"held no row for folder 12:ou-${UA1}"* ]]
+    # the old group is still on the folder and still has its members: nothing was removed
+    [[ "$(groups_of 12)" == *"ou-${UA1}"* ]]
+    [ "$(members_of "ou-${UA1}")" = "m1,m2" ]
+    if grep -q '^DELETE' "$FAKE/nc-changes.log"; then echo 'something was deleted'; return 1; fi
+}
+
+@test "a shared old group whose members cannot be matched to the unit roster is not removed" {
+    # a customer whose Nextcloud accounts carry a derived id: its roster holds the raw ids, so none of the
+    # group's members matches and nothing is copied. That must stop the run, not read as "nobody is in it".
+    SEED='aaaaaaaa-0000-0000-0000-000000000002'
+    jq --arg g "ou-${SEED}" '. + [{"id": 20, "mount_point": "Vorstand (Demo)", "groups": {($g): 31}}, {"id": 21, "mount_point": "Gremium (Demo)", "groups": {($g): 31}}]' "$FAKE/folders.json" > "$FAKE/f.tmp" && mv "$FAKE/f.tmp" "$FAKE/folders.json"
+    jq --arg g "ou-${SEED}" '.[$g] = ["derived-ua", "derived-ub"]' "$FAKE/groups.json" > "$FAKE/g.tmp" && mv "$FAKE/g.tmp" "$FAKE/groups.json"
+    printf '%s 20:ou-%s\n' "$SEED" "$SEED" >> "$FAKE/ledger-$HA.txt"
+    printf '%s 21:ou-%s\n' "$SEED" "$SEED" >> "$FAKE/ledger-$HB.txt"
+    printf 'raw-ua\n' > "$FAKE/roster-$HA-$SEED.txt"
+    printf 'raw-ub\n' > "$FAKE/roster-$HB-$SEED.txt"
+    apply
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"none of the members of ou-${SEED} is on the roster of unit ${SEED}"* ]]
+    [ "$(members_of "ou-${SEED}")" = "derived-ua,derived-ub" ]
+    [[ "$(groups_of 20)" == *"ou-${SEED}"* ]]
+    grep -qx "${SEED} 20:ou-${SEED}" "$FAKE/ledger-$HA.txt"
+}
+
+@test "the Nextcloud admin password is never on an argv: curl reads its credentials from a stdin config" {
+    run "$PROG"
+    [ "$status" -eq 0 ]
+    # the stand-in runs the program's own script with the container's environment; what curl was given:
+    if grep -qxF -- '-u' "$FAKE/curl-args.last"; then echo 'curl was given -u'; return 1; fi
+    if grep -qF 'p"w' "$FAKE/curl-args.last"; then echo 'the password is on curl argv'; return 1; fi
+    grep -qxF -- '-K' "$FAKE/curl-args.last"
+    grep -qxF 'user = "nc-admin:p\"w\\d"' "$FAKE/curl-stdin.last"
+}

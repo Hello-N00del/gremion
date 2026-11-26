@@ -642,8 +642,9 @@ than it gives:
 
 A group folder made before the namespace is named by its unit alone (`Vorstand`) and sits in
 the group `ou-<unit id>`. The app keeps working on such a folder (it goes by the folder id in
-the ledger), but a second customer with a unit of that name cannot get a folder until the first
-customer's is moved.
+the ledger). A folder made from now on is named `<unit name> (<key>)`, so it never meets an old
+plain name, and a second customer's unit of the same name gets its own folder. The old folders
+are moved into the same form so that every folder looks alike.
 `infra/host/bin/gremion-files-namespace` moves them, once, for every customer:
 
 ```
@@ -660,8 +661,15 @@ Nextcloud container's own admin credentials. Per folder it renames the mount poi
 permission bits, repoints the ledger and the Karenz binding in one statement, then takes the old group
 off the folder and deletes it (kept while another folder still carries it). The folder id never
 changes: no file is moved. A folder it cannot move without guessing (not on Nextcloud, not carrying the
-recorded group, the target name taken, another customer's key on it) is printed as `PROBLEM` and left
-alone, and the exit code is 1. A group that more than one folder carries, or a unit id that occurs in more than one customer, is copied by the unit's roster only.
+recorded group, the target name taken, another customer's key on it, or one folder id named in the
+ledgers of more than one customer) is printed as `PROBLEM`, in the dry run as well, and left alone; the
+exit code is 1. A folder that two customers' ledgers both name (it can happen where two customers were
+built from the same demo seed, because the old adopt rule matched on name and unit id) is a `PROBLEM`
+for each of them: decide by hand whose it is before moving anything, because whichever customer went
+first would take it from the other. A group that more than one folder carries, or a unit id that
+occurs in more than one customer, is copied by the unit's roster only; if none of the group's members
+is on the roster (for instance Nextcloud accounts with ids derived from the identity provider) the run
+stops with the old group untouched.
 
 - It is idempotent: a second run prints `already in the namespace` for every folder and changes
   nothing, and an interrupted folder is finished by the next run.
@@ -673,6 +681,18 @@ alone, and the exit code is 1. A group that more than one folder carries, or a u
   units are listed by their plain name, and a document opens.
 - Until it has run, the app is unchanged for the folders that exist; only a folder made from now on
   carries the key.
+- Not carried over: step 4 deletes the old group `ou-<unit id>`. Nextcloud shares made to that group
+  (members can share from `/cloud`) and folder permission rules keyed on it go with it; the program
+  neither detects nor copies them, and the saved pre-change file records only the folder list. Look for
+  them before `--apply` if members use them. A member removed through the app while a folder is being
+  moved is removed from the old group only and would stay in the new one: run `--apply` when nobody is
+  changing rosters and compare the new groups' members with the rosters afterwards.
+- Units whose folder failed before the deploy (for instance with `Mount point already exists`) are
+  retried by the app on its own only for 24 hours after their first failure; after that the ledger
+  stops retrying them. If the deploy lands later than that, give those rows a fresh start, per
+  customer, after the deploy and before the check in `/files`:
+  `docker exec -i <state postgres container> psql -U <postgres user> -d t_<tenant id without dashes>__kernel -c "UPDATE provisioning_resources SET attempts = 0, first_failed_at = NULL, next_attempt_at = NULL WHERE subsystem = 'nextcloud' AND status = 'failed'"`.
+  The next provisioning pass then makes the folder in the namespaced form.
 
 ### Evidence for two customers
 
@@ -765,5 +785,6 @@ switch-over, the login flows read back from the running `matrix`.
 
 After the deploy that first carries the namespace: the dry run of `gremion-files-namespace` read on the
 running install, then its `--apply`, and `/files` opened as a member of each customer (plain unit names, a
-document opened). The group folders and OCS calls it makes (the `mountpoint` route, removing a group from a
+document opened); and, for a unit whose folder failed more than 24 hours before the deploy, the fresh start
+of its ledger row described in the section on moving the folders. The group folders and OCS calls it makes (the `mountpoint` route, removing a group from a
 folder) are proven only against a stand-in until that run.

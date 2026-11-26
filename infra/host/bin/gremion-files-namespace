@@ -18,7 +18,8 @@ set -euo pipefail
 # WHAT IT READS. The control registry (`tenant`) for the customers, each customer's kernel database
 # (t_<hex>__kernel) for its Nextcloud ledger rows (provisioning_resources) and the folder bindings that a
 # module switch-off keeps (module_karenz_item, kind file_binding), and Nextcloud's own folder and group
-# lists, through the Nextcloud container's own admin credentials (nothing on an argv).
+# lists, through the Nextcloud container's own admin credentials. curl runs inside the Nextcloud container
+# and reads those credentials from a config on its stdin; they are on no argv of this program.
 #
 # WHAT --apply DOES, per folder and idempotently (a re-run finds the state and does nothing, or finishes
 # an interrupted folder):
@@ -31,7 +32,14 @@ set -euo pipefail
 #   4. takes the old group off the folder and deletes it, unless another folder still uses it.
 # The folder id never changes, so nothing is moved or copied in Nextcloud: the files stay where they are.
 # A folder that cannot be moved without guessing (not on Nextcloud, not carrying the recorded group, the
-# target name taken, a key of another customer on it) is reported as a PROBLEM and left alone.
+# target name taken, a key of another customer on it, or one folder id named in the ledgers of more than one
+# customer) is reported as a PROBLEM, in the dry run as well, and left alone. Step 3 checks that a row really
+# moved before step 4 removes anything.
+#
+# NOT CARRIED. Step 4 deletes the old group. Nextcloud shares made to that group and folder permission rules
+# (ACL) keyed on it go with it: they are neither detected nor copied, so list them before --apply if members
+# use them. A member removed through the app while a folder is being moved is removed from the old group only;
+# run --apply when nobody is changing rosters, and check the new group's members afterwards.
 #
 # BACKUP. --apply is refused without --backed-up: take `gremion-backup` first (it holds the kernel
 # databases and the Nextcloud data), then pass the flag. Before the first change this program also writes
@@ -118,15 +126,23 @@ pg() {
     printf '%s\n' "$sql" | docker exec -i "$PG" psql -X -U "$PGUSER_NAME" -d "$db" -tAq -v ON_ERROR_STOP=1 "$@" -f -
 }
 
+# The script run inside the Nextcloud container: curl takes the container's own admin credentials from a
+# config on its STDIN (`-K -`), which printf (a shell builtin) writes from the environment, so the secret is
+# on no argv, neither here nor in the container's process list. A backslash or quote in a value is escaped
+# for the config syntax.
+# shellcheck disable=SC2016  # the $ expansions are meant for the shell INSIDE the container
+NC_CURL_SCRIPT='q() { printf "%s" "$1" | sed "s/[\\\\\"]/\\\\&/g"; }
+printf "user = \"%s:%s\"\n" "$(q "$NEXTCLOUD_ADMIN_USER")" "$(q "$NEXTCLOUD_ADMIN_PASSWORD")" \
+  | curl -sS --max-time 60 -K - -H "Host: nextcloud" -H "OCS-APIRequest: true" -H "Accept: application/json" "$@"'
+
 # nc_api <METHOD> <path> [form body] -- Nextcloud's admin API, called by curl INSIDE the Nextcloud container
-# with the container's own admin credentials (its environment), so no secret is on an argv.
+# with the container's own admin credentials (its environment).
 nc_api() {
     local method="$1" path="$2" body="${3:-}"
     local -a data=()
     [[ -z "$body" ]] || data=(--data "$body")
     # Host: nextcloud, the trusted domain the container's own healthcheck uses (http://127.0.0.1 inside it)
-    docker exec "$NC" sh -c 'exec curl -sS --max-time 60 -u "$NEXTCLOUD_ADMIN_USER:$NEXTCLOUD_ADMIN_PASSWORD" -H "Host: nextcloud" -H "OCS-APIRequest: true" -H "Accept: application/json" "$@"' \
-        sh -X "$method" ${data[@]+"${data[@]}"} "http://127.0.0.1${path}"
+    docker exec "$NC" sh -c "$NC_CURL_SCRIPT" sh -X "$method" ${data[@]+"${data[@]}"} "http://127.0.0.1${path}"
 }
 
 # ocs_ok <json> [extra status code ...] -- the answer is an OCS envelope with status 100 or 200 (or one of
@@ -185,12 +201,21 @@ group_members() {
 # process_ref <slug> <key> <kernel db> <unit id> <ref> -- one "<folder id>:<group id>" of one customer.
 process_ref() {
     local slug="$1" key="$2" kdb="$3" unit="$4" ref="$5"
-    local fid old new legacy mount want suffix perms shared row foreign_re
+    local fid old new legacy mount want suffix perms shared row foreign_re claimants rows
     fid="${ref%%:*}"; old="${ref#*:}"
     new="ou-${key}-${unit}"
     legacy="ou-${unit}"
     suffix=" (${key})"
     N_REFS=$((N_REFS + 1))
+
+    # a folder that the ledgers of more than one customer name belongs to nobody in particular: it is left
+    # alone for every claimant, in the dry run as well, until an operator decides (whichever customer went
+    # first would take it from the others)
+    claimants="${FOLDER_CLAIMS[$fid]:-}"
+    if [[ "$claimants" == *" "* ]]; then
+        problem "${slug} unit ${unit}: folder ${fid} is named in the ledgers of more than one customer (${claimants// /, }); left alone"
+        return 0
+    fi
 
     mount="$(folder_field "$fid" '.mount_point')"
     if [[ -z "$(folder_field "$fid" '.id')" ]]; then
@@ -281,6 +306,13 @@ process_ref() {
                                 WHERE subsystem = 'nextcloud' AND external_id = :'old' RETURNING 1)
                     SELECT 'ledger ' || (SELECT count(*) FROM l)" -v "old=${fid}:${old}" -v "new=${fid}:${new}")"
             fi || die "the ledger of ${slug} could not be updated for folder ${fid}; the new group is on the folder, rerun to finish" "$GREMION_EXIT_ASSERT"
+            # the old group goes only when a row really moved: "0 rows" means the ledger changed under this run,
+            # and removing the group then would leave the ledger naming one that is gone
+            [[ "$row" =~ ^ledger\ ([0-9]+)(,\ binding\ ([0-9]+))?$ ]] \
+                || die "the answer to the ledger update of ${slug} for folder ${fid} was not understood (${row}); the old group was NOT removed" "$GREMION_EXIT_ASSERT"
+            rows=$(( BASH_REMATCH[1] + ${BASH_REMATCH[3]:-0} ))
+            (( rows > 0 )) \
+                || die "the ledger and the Karenz binding of ${slug} held no row for folder ${fid}:${old} when they were to be moved (they changed under this run); the new group is on the folder and the old group was NOT removed; look at the state, then rerun" "$GREMION_EXIT_ASSERT"
             printf 'DONE %s unit %s folder %s: rows updated (%s)\n' "$slug" "$unit" "$fid" "$row"
             copy_members "$kdb" "$unit" "$old" "$new" "$shared"   # anybody added to the old group meanwhile
         fi
@@ -303,7 +335,7 @@ process_ref() {
 # old group into the new one. When the old group is carried by several folders or the unit id occurs in
 # several customers, only the members on this unit's roster are copied. Read back afterwards.
 copy_members() {
-    local kdb="$1" unit="$2" old="$3" new="$4" shared="$5" uid roster="" missing=0 listed
+    local kdb="$1" unit="$2" old="$3" new="$4" shared="$5" uid roster="" n_absent=0 n_matched=0 listed
     local -a want=()
     # read into a variable first: a failed read inside a process substitution would pass for an empty group
     listed="$(group_members "$old")" || die "the members of ${old} could not be read; nothing was removed" "$GREMION_EXIT_ASSERT"
@@ -311,6 +343,14 @@ copy_members() {
     if [[ "$shared" -gt 1 ]]; then
         roster="$(pg "$kdb" "SELECT user_keycloak_id::text FROM org_unit_members WHERE org_unit_id = :'unit'" -v "unit=${unit}")" \
             || die "the roster of unit ${unit} could not be read" "$GREMION_EXIT_ASSERT"
+    fi
+    if [[ "$shared" -gt 1 && -n "$roster" && ${#want[@]} -gt 0 ]]; then
+        for uid in "${want[@]}"; do if grep -qxF "$uid" <<< "$roster"; then n_matched=$((n_matched + 1)); fi; done
+        # nobody matched: either the group holds only other customers' people, or the Nextcloud account ids are
+        # not the roster's ids (an id derived from the identity provider). Copying nobody and then removing the
+        # old group would cut the unit's members off, so this stops here with the old group intact.
+        [[ "$n_matched" -gt 0 ]] \
+            || die "none of the members of ${old} is on the roster of unit ${unit}: their Nextcloud account ids may not be the roster's ids; nothing was removed, look at the accounts first" "$GREMION_EXIT_ASSERT"
     fi
     for uid in ${want[@]+"${want[@]}"}; do
         if [[ "$shared" -gt 1 ]] && ! grep -qxF "$uid" <<< "$roster"; then continue; fi
@@ -320,9 +360,9 @@ copy_members() {
     now_in="$(group_members "$new")" || die "the members of ${new} could not be read back; nothing was removed" "$GREMION_EXIT_ASSERT"
     for uid in ${want[@]+"${want[@]}"}; do
         if [[ "$shared" -gt 1 ]] && ! grep -qxF "$uid" <<< "$roster"; then continue; fi
-        grep -qxF "$uid" <<< "$now_in" || missing=$((missing + 1))
+        grep -qxF "$uid" <<< "$now_in" || n_absent=$((n_absent + 1))
     done
-    [[ "$missing" == 0 ]] || die "${missing} member(s) of ${old} are not in ${new} after copying: nothing was removed, rerun to finish" "$GREMION_EXIT_ASSERT"
+    [[ "$n_absent" == 0 ]] || die "${n_absent} member(s) of ${old} are not in ${new} after copying: nothing was removed, rerun to finish" "$GREMION_EXIT_ASSERT"
 }
 
 # begin_backup -- before the FIRST change: the state about to be changed, mode 0600.
@@ -343,12 +383,14 @@ begin_backup() {
 # roster, whichever customer is moved first.
 declare -A T_ID=() T_KEY=() T_DB=() T_REFS=() T_KARENZ=() T_ERR=()
 declare -A UNIT_TENANTS=()
+# folder id -> the slugs (space separated, in registry order) whose ledger or Karenz bindings name it
+declare -A FOLDER_CLAIMS=()
 TENANT_SLUGS=()
 
 # collect_tenant <tenant id> <slug> -- pass 1: read one customer's Nextcloud bindings (the ledger, and the
 # folder bindings a module switch-off keeps). A failure is remembered, and reported only if the customer is selected.
 collect_tenant() {
-    local id="$1" slug="$2" key kdb refs flag unit ref seen=""
+    local id="$1" slug="$2" key kdb refs flag unit ref seen="" fid
     TENANT_SLUGS+=("$slug")
     T_ID[$slug]="$id"
     key="$(tenant_key "$id")"
@@ -373,6 +415,8 @@ collect_tenant() {
     T_REFS[$slug]="$refs"
     while IFS=' ' read -r unit ref; do
         [[ -n "$unit" && -n "$ref" ]] || continue
+        fid="${ref%%:*}"
+        case " ${FOLDER_CLAIMS[$fid]:-} " in *" ${slug} "*) ;; *) FOLDER_CLAIMS[$fid]="${FOLDER_CLAIMS[$fid]:+${FOLDER_CLAIMS[$fid]} }${slug}" ;; esac
         case " ${seen} " in *" ${unit} "*) continue ;; esac
         seen="${seen} ${unit}"
         UNIT_TENANTS[$unit]=$(( ${UNIT_TENANTS[$unit]:-0} + 1 ))
