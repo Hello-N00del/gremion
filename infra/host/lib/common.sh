@@ -589,7 +589,7 @@ SECONDARY_HOST_MODULES_OFF="content elections files messages newsletter vault vo
 # of the newsletter (the unsubscribe link) are built from the SENDING customer's own host, asked of the kernel
 # through the link-base callback, so they need no process-wide host. Their drafts live on the shared
 # Nextcloud: the news drafts are keyed per customer, and publishing is listed in the key only once its newsletter
-# drafts are keyed per customer too. Not in the set: elections and vault (no per-customer isolation yet). The key
+# drafts are keyed per customer too. Not in the set: elections and vault. The key
 # absent or empty: exactly the default deny above.
 # shellcheck disable=SC2034  # read by scripts/check-panel-host-reserved.test.mjs, which pins it against the manifests
 SECONDARY_TENANT_MODULES_SET="files votes messaging content publishing"

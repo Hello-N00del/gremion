@@ -878,7 +878,8 @@ CASES
     SECONDARY_TENANT_MODULES='votes files' run_with 'secondary_host_modules_pinned_off | tr "\n" " "'
     [ "$output" = 'content elections messages newsletter vault ' ] || { echo "[$output]"; return 1; }
     SECONDARY_TENANT_MODULES='messaging' run_with 'secondary_host_modules_pinned_off | tr "\n" " "'
-    [ "$output" = 'content elections files newsletter vault votes ' ] || { echo "[$output]"; return 1; }    # content opts in content, publishing opts in the manifest id newsletter
+    [ "$output" = 'content elections files newsletter vault votes ' ] || { echo "[$output]"; return 1; }
+    # content opts in content, publishing opts in the manifest id newsletter
     SECONDARY_TENANT_MODULES='content' run_with 'secondary_host_modules_pinned_off | tr "\n" " "'
     [ "$output" = 'elections files messages newsletter vault votes ' ] || { echo "[$output]"; return 1; }
     SECONDARY_TENANT_MODULES='publishing' run_with 'secondary_host_modules_pinned_off | tr "\n" " "'
