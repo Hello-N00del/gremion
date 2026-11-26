@@ -44,6 +44,7 @@ const pageData = (
     resolutions: over.resolutions ?? [],
     actionItems: [],
     wopiToken: null,
+    approval: { canApprove: false, refusal: null, otherEligibleCount: null, submitted: null, approved: null },
     pendingApprovals: [],
     committee: { id: 'c1', name: 'Finanzausschuss' },
     committeeId: 'c1',

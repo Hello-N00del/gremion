@@ -33,6 +33,7 @@ const DATA = {
   actionItems: [],
   pendingApprovals: [],
   wopiToken: null,
+  approval: { canApprove: false, refusal: null, otherEligibleCount: null, submitted: null, approved: null },
   quorum: { eligibleVotingCount: 3, presentVotingCount: 0, quorate: false },
 }
 
