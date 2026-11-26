@@ -286,10 +286,10 @@ red.
   the **Edge** block from `.env.example` (`STACK`, `GREMION_ROOT`,
   `ACME_CA_SERVER`, the `EDGE_*` keys, `TRAEFIK_API_PORT`,
   `INTERNALTEST_PORT`). CI is unaffected because it copies `.env.example`.
-  The same holds for the board leaf: `docker-compose.app.yml` interpolates every
-  service, also one behind a profile that is off, so a local `.env` created before it
-  needs `INTERNAL_BOARD_SECRET` and `BOARD_APP_PASSWORD` (a random hex value each;
-  `scripts/setup.sh` writes them into a new `.env`, an existing one gets them by hand).
+  The same holds for the board leaf and the calendar leaf: `docker-compose.app.yml` interpolates every
+  service, also one behind a profile that is off, so a local `.env` created before them
+  needs `INTERNAL_BOARD_SECRET`, `BOARD_APP_PASSWORD` and `CALENDAR_APP_PASSWORD` (a random hex value
+  each; `scripts/setup.sh` writes them into a new `.env`, an existing one gets them by hand).
 - **Static configuration.** `docker/traefik/traefik.yml` holds no host value.
   Its five markers `@ACME_EMAIL@`, `@ACME_CA_SERVER@`, `@EDGE_V4_SUBNET@`,
   `@EDGE_V6_SUBNET@` and `@STACK@` are substituted from the container's environment into

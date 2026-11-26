@@ -850,10 +850,11 @@ services:
   # repo root (modules/<id>/Dockerfile), and reached ONLY by its colour-suffixed
   # alias on _app and _state: no edge network, no published port, no Traefik route.
   # Its database server is the state project's <id>-postgres (profile of the same
-  # name). Calendar, content and newsletter connect as that server's admin and create
-  # one database per customer themselves (calendar_<slug> ...), which is not the
-  # database the module enable gate creates (docs/ops/pilot-services.md, named
-  # residual). Board is the exception, see its own comment below.
+  # name). Content and newsletter connect as that server's admin and create one
+  # database per customer themselves (content_<slug> ...), which is not the database
+  # the module enable gate creates (docs/ops/pilot-services.md, named residual).
+  # Calendar and board are the exceptions: they open the lifecycle database of the
+  # customer as the module's app role, see calendar-service and the board comment below.
   #
   # The broker URL is deliberately absent: the kernel NATS admits only the nkeys
   # tenant-create holds, so the leaves run with the relay loop OFF. Their outbox
@@ -876,7 +877,16 @@ services:
     environment:
       COLOUR: ${COLOUR:?COLOUR required}
       PORT: "8080"
+      # The server admin login: used ONLY for the leaf's catalogue database calendar_control (the
+      # id-to-slug binding and the tenant list of its background loops), never for a customer's calendar.
       CALENDAR_PG_URL: postgresql://${CALENDAR_PG_USER:-calendar}:${CALENDAR_PG_PASSWORD}@calendar-postgres:5432/postgres
+      # A customer's calendar is t_<tenant>__calendar, created, migrated, exported and blocked by the
+      # module lifecycle; the leaf only opens it, as the module's APP role m_calendar_app (the Karenz
+      # block revokes CONNECT from that role, and a superuser would ignore it). The role's password is the
+      # content of etc/secrets/tenant-create/module_app_password_calendar, which gremion-init-secrets
+      # derives CALENDAR_APP_PASSWORD from: one source, so the URL and the role cannot disagree. Required
+      # on purpose (see board-service): a recreate without it fails by variable NAME.
+      GREMION_CALENDAR_PG_URL: postgresql://m_calendar_app:${CALENDAR_APP_PASSWORD:?CALENDAR_APP_PASSWORD required}@calendar-postgres:5432/postgres
       # This colour's gremion-ui, derived from COLOUR like INTERNAL_BASE_URL: never an
       # env value that could name the other colour.
       KERNEL_BASE_URL: http://gremion-ui-${COLOUR:?COLOUR required}:3000
@@ -979,7 +989,7 @@ services:
       retries: 3
       start_period: 15s
 
-  # The board leaf. Unlike the three above it does not create its own databases: the customer's
+  # The board leaf. Unlike content and newsletter it does not create its own databases: the customer's
   # board lives in t_<tenant>__board on the state project's board-postgres, created, migrated,
   # exported and blocked by the module lifecycle (enable-module / disable-module of tenant-create),
   # and the leaf only opens it. It therefore connects as the module's APP role m_board_app, never as

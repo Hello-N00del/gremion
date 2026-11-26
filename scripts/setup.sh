@@ -147,6 +147,8 @@ else
     # requires both). Hex, so the password is safe inside the leaf's database URL.
     _sed "s|^INTERNAL_BOARD_SECRET=.*|INTERNAL_BOARD_SECRET=$(openssl rand -hex 32)|" .env
     _sed "s|^BOARD_APP_PASSWORD=.*|BOARD_APP_PASSWORD=$(openssl rand -hex 32)|" .env
+    # The calendar leaf's module app role password, required the same way.
+    _sed "s|^CALENDAR_APP_PASSWORD=.*|CALENDAR_APP_PASSWORD=$(openssl rand -hex 32)|" .env
 
     # restic backup repository encryption passphrase
     _sed "s|^RESTIC_PASSWORD=.*|RESTIC_PASSWORD=$(gen)|" .env

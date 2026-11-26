@@ -170,11 +170,11 @@
     },
     {
       "path": "modules/calendar/src/tenant-store.ts",
-      "calls": 5,
+      "calls": 2,
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "the calendar module's own per-tenant pool (one database per tenant, opened with postgres()); replaced by openTenantDb when TASK-021 creates and migrates one database per (tenant, module); frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "the calendar leaf's CONTROL (catalogue) database only: the one pool of calendar_control (tenant_catalog: the id-to-slug binding and the tenant list of the background loops) and the one-time creation of that database with the admin login; a customer's calendar is the lifecycle database t_<hex32>__calendar, which the leaf opens only through openTenantDb (never creates or migrates)"
     },
     {
       "path": "modules/calendar/test/api.integration.test.ts",
@@ -226,35 +226,19 @@
     },
     {
       "path": "modules/calendar/test/tenant-store.integration.test.ts",
-      "calls": 2,
+      "calls": 4,
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "test of the calendar module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
-    },
-    {
-      "path": "modules/calendar/src/migrate-only.ts",
-      "calls": 1,
-      "imports": 1,
-      "adoptedBy": "TASK-021",
-      "since": "2026-11-20",
-      "reason": "the calendar leaf's continuous-deployment migrate-only entry (node dist/index.js --migrate-only): one admin connection per catalogued customer database, held for a session advisory lock while the leaf's own runner migrates it, and the existence and catalogue probes before that; it never creates a database and starts no server; retires with the leaf's per-tenant store when TASK-021 moves the module onto openTenantDb and the one runner"
-    },
-    {
-      "path": "modules/calendar/test/migrate-only.integration.test.ts",
-      "calls": 2,
-      "imports": 1,
-      "adoptedBy": "TASK-021",
-      "since": "2026-11-20",
-      "reason": "test of the calendar leaf's migrate-only entry against a scratch Postgres (direct admin/test connections, fixture databases created and dropped); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner"
+      "reason": "test of the calendar leaf's store against a scratch Postgres (direct admin/test connections: pg_database probes, the catalogue database and one database made a migration behind); the fixture lifecycle databases are provisioned by test/support/scratch-pg.ts"
     },
     {
       "path": "modules/calendar/test/tenant-store.first-contact.integration.test.ts",
-      "calls": 2,
+      "calls": 1,
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-11-25",
-      "reason": "test of the calendar leaf's first contact under concurrency against a scratch Postgres (direct admin/test connections, fixture databases with a test-only prefix created and dropped); retires with the code it tests when TASK-021 moves the module onto openTenantDb"
+      "reason": "test of the calendar leaf's first contact under concurrency against a scratch Postgres (one direct admin connection that probes and drops the catalogue and fixture databases); the fixture lifecycle databases are provisioned by test/support/scratch-pg.ts"
     },
     {
       "path": "modules/content/scripts/backfill.ts",
@@ -615,6 +599,22 @@
       "adoptedBy": "TASK-152",
       "since": "2026-11-18",
       "reason": "scratch-server proof, not a tenant connection: it starts a throwaway PostgreSQL container and connects with the rendered board role URL to prove it authenticates and the wrong one is refused; openTenantDb cannot address a server that exists only for this test; stays allow-listed while the test exists"
+    },
+    {
+      "path": "modules/calendar/test/support/scratch-pg.ts",
+      "calls": 2,
+      "imports": 1,
+      "adoptedBy": "TASK-152",
+      "since": "2026-11-26",
+      "reason": "destructive scratch-server helper, not a tenant connection: the calendar suites' one place that CREATEs the fixture t_<hex32>__calendar databases and migrates them with the tenant-store runner the way enableModule does (the leaf never creates one); only fixture tenant ids are accepted"
+    },
+    {
+      "path": "modules/calendar/test/lifecycle.integration.test.ts",
+      "calls": 4,
+      "imports": 1,
+      "adoptedBy": "TASK-152",
+      "since": "2026-11-26",
+      "reason": "end-to-end proof of the calendar leaf on the real module lifecycle against a scratch Postgres: gremion_platform and the module server as the scratch superuser for enableModule and disableModule, a read of the fixture database and pg_stat_activity; the leaf itself reaches its tenant databases only through its store"
     }
   ]
 }

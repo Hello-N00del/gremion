@@ -27,11 +27,11 @@ set -euo pipefail
 #                                     a value that EMBEDS a group (the reader
 #                                     password in GREMION_PUBLIC_DB_URL) contains
 #                                     it: exit 1.
-#   5. board password source       -- an app file that declares BOARD_APP_PASSWORD
-#                                     holds the content of etc/secrets/tenant-create/
-#                                     module_app_password_board, the file the board
-#                                     module role is set from (absent file: no
-#                                     finding): exit 1.
+#   5. module password source      -- an app file that declares BOARD_APP_PASSWORD or
+#                                     CALENDAR_APP_PASSWORD holds the content of
+#                                     etc/secrets/tenant-create/module_app_password_<module>,
+#                                     the file the module's app role is set from (absent
+#                                     file: no finding): exit 1.
 #   6. secondary customer hosts    -- SECONDARY_TENANT_HOSTS (optional; the extra hosts of
 #                                     core-only customers), when a file declares it with a
 #                                     value: every entry a lowercase DNS name that is no scheme,
@@ -192,31 +192,35 @@ check_aliases() {
     [[ "$__gve_failures" -gt "$before" ]] || ok "alias equality: ${pairs} aliased key(s) agree"
 }
 
-# The board leaf's database password has ONE source: the file the module lifecycle sets the role
-# m_board_app from (etc/secrets/tenant-create/module_app_password_board, written by gremion-tenant
-# or, first, by gremion-init-secrets). gremion-init-secrets derives BOARD_APP_PASSWORD from it, but a
-# host rendered before the board leaf gets its new keys by hand, and a second value (typed, or
-# generated once more) is refused by the module server with 28P01 for EVERY customer while the
-# leaf's /healthz stays green. Judged only for a file whose template declares the key (the app
-# files); an absent secret file is not a failure (nothing has set the role yet). Findings name the
-# key and the file, never a value.
-check_board_app_password() {
-    grep -qE '^BOARD_APP_PASSWORD=' "$__gve_template" || return 0
+# A leaf that opens its customers' databases as the module's app role (board, calendar) has ONE
+# password source: the file the module lifecycle sets the role m_<module>_app from
+# (etc/secrets/tenant-create/module_app_password_<module>, written by gremion-tenant or, first, by
+# gremion-init-secrets). gremion-init-secrets derives <MODULE>_APP_PASSWORD from it, but a host rendered
+# before the leaf got its new keys gets them by hand, and a second value (typed, or generated once more)
+# is refused by the module server with 28P01 for EVERY customer while the leaf's /healthz stays green.
+# Judged only for a file whose template declares the key (the app files); an absent secret file is not a
+# failure (nothing has set the role yet). Findings name the key and the file, never a value.
+check_app_role_password() {
+    local mod="$1" key="${1^^}_APP_PASSWORD"
+    grep -qE "^${key}=" "$__gve_template" || return 0
     local file want
-    file="$(gremion_root)/etc/secrets/tenant-create/module_app_password_board"
+    file="$(gremion_root)/etc/secrets/tenant-create/module_app_password_${mod}"
     if [[ ! -s "$file" ]]; then
-        ok "BOARD_APP_PASSWORD: ${file} is not written yet, nothing to compare with"
+        ok "${key}: ${file} is not written yet, nothing to compare with"
         return 0
     fi
     want="$(cat "$file")"
     want="${want#"${want%%[![:space:]]*}"}"
     want="${want%"${want##*[![:space:]]}"}"
-    if [[ "${BOARD_APP_PASSWORD-}" != "$want" ]]; then
-        fail "BOARD_APP_PASSWORD differs from the content of ${file} (the module role m_board_app is set from that file): set it to the file's content"
+    if [[ "${!key-}" != "$want" ]]; then
+        fail "${key} differs from the content of ${file} (the module role m_${mod}_app is set from that file): set it to the file's content"
         return 0
     fi
-    ok "BOARD_APP_PASSWORD equals the module password file (one source for the role and the leaf)"
+    ok "${key} equals the module password file (one source for the role and the leaf)"
 }
+
+check_board_app_password() { check_app_role_password board; }
+check_calendar_app_password() { check_app_role_password calendar; }
 
 # Every key the template declares must be declared by the file, and every
 # key the operator fills in (template value CHANGE_ME_OPERATOR_*) must hold
@@ -339,6 +343,7 @@ main() {
     check_compose_files
     check_aliases
     check_board_app_password
+    check_calendar_app_password
     check_secondary_tenant_hosts
     check_secondary_tenant_modules
     check_synapse_jwt_login

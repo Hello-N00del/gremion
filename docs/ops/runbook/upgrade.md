@@ -161,6 +161,26 @@ for c in blue green; do
 done
 ```
 
+   Once per host (the calendar leaf now opens the lifecycle database): `calendar-service` opens each
+   customer's calendar as the module app role `m_calendar_app` (`t_<tenant>__calendar`) and no longer
+   creates a `calendar_<slug>` database of its own, and `docker-compose.app.yml` marks one more value
+   required, for both colours: `CALENDAR_APP_PASSWORD`. Add it the same way as the board password: the
+   content of the module password file the role is set from.
+   Before starting the release that carries this leaf, move the data of every customer with the
+   operator script and follow its order (stop `calendar-service`, run the script, start the new release):
+   `docs/ops/pilot-services.md`, section "Calendar: move to the lifecycle database".
+
+```bash
+pwf=/opt/gremion/etc/secrets/tenant-create/module_app_password_calendar
+test -s "$pwf" && stat -c '%U %a %n' "$pwf"                        # gremion 600
+for c in blue green; do
+  f="/opt/gremion/etc/env/app-${c}.env"
+  grep -q '^CALENDAR_APP_PASSWORD=' "$f" || printf 'CALENDAR_APP_PASSWORD=%s
+' "$(tr -d '[:space:]' < "$pwf")" | sudo -u gremion tee -a "$f" >/dev/null
+  stat -c '%U %a %n' "$f"                                           # still gremion 600
+done
+```
+
    Then validate:
 
 ```bash
