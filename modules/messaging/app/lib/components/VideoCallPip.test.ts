@@ -14,11 +14,20 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, waitFor } from '@testing-library/svelte'
 import { startRoomCall, endCall } from '$lib/stores/call-store.svelte'
 import VideoCallPip from './VideoCallPip.svelte'
+import { pageOrigin } from './page-origin'
 
 // What the component can read from the process env: host A, until a test changes it.
 const HOST_A_ENV = { PUBLIC_ELEMENT_CALL_URL: 'https://a.example.org/element-call', PUBLIC_BASE_URL: 'https://a.example.org' }
 const ENV = vi.hoisted(() => ({}) as Record<string, string | undefined>)
 vi.mock('$env/dynamic/public', () => ({ env: ENV }))
+
+// The one place the component asks "is there a page?". Real by default; the server-render test answers "no page"
+// for the one component it renders, so nothing depends on which other test touched `window` first.
+vi.mock('./page-origin', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./page-origin')>()
+  return { pageOrigin: vi.fn(actual.pageOrigin) }
+})
+const realPageOrigin = (await vi.importActual<typeof import('./page-origin')>('./page-origin')).pageOrigin
 
 const ROOM = '!room:platform.example.org'
 const CREDS = {
@@ -28,6 +37,7 @@ const CREDS = {
 }
 
 beforeEach(() => {
+  vi.mocked(pageOrigin).mockImplementation(realPageOrigin)
   Object.assign(ENV, HOST_A_ENV)
   vi.stubGlobal(
     'fetch',
@@ -77,25 +87,11 @@ describe('VideoCallPip on a secondary customer host', () => {
 
   it('without a page (server render) the frame base and the parent URL are the process env, and follow it', async () => {
     const withoutPage = async () => {
-      // The component decides between page and env once, when it is created, by looking at `window` for the
-      // first time: hide the page for that one read and for nothing else (the effects that follow need it).
-      const original = Object.getOwnPropertyDescriptor(globalThis, 'window') as PropertyDescriptor
-      const page = globalThis.window
-      let hidden = true
-      Object.defineProperty(globalThis, 'window', {
-        configurable: true,
-        get: () => {
-          if (!hidden) return page
-          hidden = false
-          return undefined
-        },
-      })
-      try {
-        render(VideoCallPip, { props: { user: { name: 'Test Person' } as never } })
-      } finally {
-        Object.defineProperty(globalThis, 'window', original)
-      }
-      expect(hidden).toBe(false)
+      // The component decides between page and env once, when it is created: answer "no page" for that one.
+      vi.mocked(pageOrigin).mockClear()
+      vi.mocked(pageOrigin).mockReturnValueOnce(null)
+      render(VideoCallPip, { props: { user: { name: 'Test Person' } as never } })
+      expect(pageOrigin).toHaveBeenCalledTimes(1)
       startRoomCall(ROOM, 'Testraum')
       const iframe = await waitFor(() => {
         const el = document.querySelector('iframe')

@@ -4,6 +4,7 @@
   import { callStore, endCall, setFullscreen, setExpanded } from '$lib/stores/call-store.svelte'
   import { draggable } from '$lib/actions/draggable'
   import { env } from '$env/dynamic/public'
+  import { pageOrigin as readPageOrigin } from './page-origin'
   import type { SessionUser } from '$lib/auth/types'
 
   interface MatrixCredentials {
@@ -38,7 +39,7 @@
   // /element-call on every host, and a frame on any other origin is blocked by `frame-src 'self'`. The env
   // values are only the server-render fallback (this component renders no frame until a call is started,
   // which is client-side only).
-  const pageOrigin = typeof window !== 'undefined' ? window.location.origin : null
+  const pageOrigin = readPageOrigin()
   const elementCallBase = pageOrigin ? `${pageOrigin}/element-call` : (env.PUBLIC_ELEMENT_CALL_URL ?? 'http://localhost:8085')
   // Scheme+host+port only — used for postMessage targetOrigin and event.origin checks.
   // When element-call is proxied under /element-call/, the origin is the same as the
