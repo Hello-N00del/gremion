@@ -601,6 +601,155 @@ test('every source path the document cites exists and defines its function, and 
   assert.ok(!/\bboard\b/i.test(read('gremion-ui/scripts/tenant-provision.ts')), 'tenant-provision.ts has a board verb now: replace the gap in the document by the procedure')
 })
 
+test('the hand-switch and nightly-window passages say what the code does', () => {
+  const text = docText()
+  const defaults = defaultsOfProgram()
+  // (1) the retag stage refuses while the old colour still runs: the document quotes the refusal as the program prints it
+  const driver = read('infra/host/lib/cd/driver.sh')
+  const prepare = read('infra/host/lib/cd/prepare.sh')
+  const refusal = (/_cd_prep_err "(retag: the target colour project is running)"/.exec(prepare) ?? [])[1]
+  assert.ok(refusal, 'prepare.sh no longer refuses a retag while the target colour project runs')
+  assert.match(prepare, /_cd_prep_err\(\) \{ printf 'cd-prepare: %s\\n' "\$\*" >&2; \}/, 'the prefix of the refusal line changed')
+  assert.match(read('infra/host/lib/cd/docker.sh'), /printf '%s\/etc\/env\/%s\.env\\n' "\$\(_cd_docker_root\)" "\$proj"/, 'the env file of a colour is no longer etc/env/app-<colour>.env')
+  const refusalLine = `cd-prepare: ${refusal}`
+  const adoption = flat(section(text, 'Adoption'))
+  const afterHand = flat(subsection(section(text, 'Hand procedures'), 'After any hand intervention'))
+  const stop = 'docker compose --env-file /opt/gremion/etc/env/app-<colour>.env stop'
+  for (const [where, body] of [['the adoption steps', adoption], ['the hand intervention procedure', afterHand]]) {
+    assert.ok(body.includes(refusalLine), `${where} do not quote the refusal "${refusalLine}"`)
+    assert.ok(body.includes(stop), `${where} do not show how the old colour is stopped (${stop})`)
+    assert.ok(body.includes('its images and its tag stay'), `${where} do not say that the images and the tag of the stopped colour stay`)
+  }
+  assert.ok(adoption.includes('before the first release of CD'), 'the adoption steps do not say the old colour is stopped before the first release')
+  assert.match(driver, /_cd_drv_st_retag\(\) \{ cd_prepare_retag /, 'the retag stage is no longer cd_prepare_retag')
+  assert.match(driver, /host\) _cd_drv_abort host "/, 'a refused retag is no longer a host failure')
+  assert.match(read('infra/host/lib/cd/driver.sh'), /host\)\s*\n\s*cd_hold_set failure /, 'a host failure no longer sets the hold failure')
+  // (2) the worked example of the nightly window is computed from the defaults and the purge timer
+  const span = Number(defaults.get('CD_LOCK_SPAN_MAX_MIN'))
+  const purgeMax = Number(defaults.get('CD_PURGE_MAX_MIN'))
+  const timer = read('infra/host/templates/systemd/gremion-purge.timer')
+  const at = /^OnCalendar=\*-\*-\* (\d\d):(\d\d):00 UTC$/m.exec(timer)
+  assert.ok(at, 'the purge timer is no longer a daily OnCalendar in UTC')
+  const hhmm = (min) => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`
+  const purgeLocal = Number(at[1]) * 60 + Number(at[2]) + 60 // a host on UTC+1 reads the unit one hour later
+  const opens = hhmm(purgeLocal - span - purgeMax)
+  const closes = hhmm(purgeLocal + purgeMax)
+  assert.equal(`${opens} ${closes}`, '00:25 03:35', 'the defaults no longer give the window the example states')
+  const locks = flat(section(text, 'Locks, the timer guard and the reboot case'))
+  assert.ok(locks.includes(`purge timer is written as ${at[1]}:${at[2]} UTC`), 'the locks section does not name the purge time of the unit')
+  assert.ok(locks.includes(`closes the window from about ${opens} to ${closes}`), `the locks section does not state the window ${opens} to ${closes}`)
+  // the backup timer widens the window the same way: its default time and longest run, read from the code
+  const backupAt = /^BACKUP_ONCALENDAR="\$\{BACKUP_ONCALENDAR:-\*-\*-\* (\d\d):(\d\d):00\}"$/m.exec(read('infra/host/bootstrap.sh'))
+  assert.ok(backupAt, 'bootstrap.sh no longer has a default backup time')
+  const backupMax = Number(defaults.get('CD_BACKUP_MAX_MIN'))
+  const backupOpens = hhmm((Number(backupAt[1]) * 60 + Number(backupAt[2]) - span - backupMax + 1440) % 1440)
+  assert.equal(backupOpens, '21:30', 'the defaults no longer give the backup window the example states')
+  assert.ok(locks.includes(`BACKUP_ONCALENDAR\` ${backupAt[1]}:${backupAt[2]}`) && locks.includes(`is ${backupOpens}, so it is closed from about ${backupOpens} to ${closes}`), 'the locks section does not state the window of the default backup time')
+  for (const phrase of ['snapshot_waiting', 'gremion-cd tick', 'systemctl list-timers gremion-purge.timer gremion-backup.timer', 'NEXT']) {
+    assert.ok(locks.includes(phrase), `the locks section does not say: ${phrase}`)
+  }
+  assert.match(driver, /cd_hist snapshot_waiting why=timer_guard/, 'the timer guard no longer records snapshot_waiting')
+  assert.match(read('infra/host/lib/cd/data.sh'), /next <= now \+ \(span \+ max\) \* 60/, 'the guard no longer widens a timer by the span plus its longest run')
+  // (3) a release-now meets the start gate before the timer guard: the quiet window and a held host lock refuse it, and the request is consumed
+  assert.equal(defaults.get('CD_QUIET_WINDOWS'), '01:45-03:15', 'the default quiet window changed: restate it in the locks section')
+  assert.match(prepare, /_cd_prep_in_quiet_window \|\| rc=\$\?\s*\n\s*if \(\(rc == 0\)\); then\s*\n\s*_cd_prep_refuse quiet_window /, 'the precheck no longer refuses inside a quiet window')
+  assert.match(prepare, /_cd_prep_refuse lock_busy "the host lock is held"/, 'the precheck no longer refuses while the host lock is held')
+  assert.match(driver, /_cd_drv_say "no release now: \$\{why\}"/, 'the start gate no longer says "no release now: <why>"')
+  assert.match(driver, /cd_hist start_refused why="\$why"/, 'the start gate no longer records start_refused')
+  assert.match(driver, /\[\[ "\$sha" =~ \^\[0-9a-f\]\{40\}\$ \]\] \|\| return 0\s*\n\s*_cd_drv_start_gate \|\| return 0\s*\n(?:\s*#[^\n]*\n)+\s*CD_DRV_ROLLED=0\s*\n\s*_cd_drv_select "\$sha" manual/, 'release-now no longer meets the start gate before it selects the release')
+  assert.match(read('infra/host/lib/cd/core.sh'), /cd_request_next prints the oldest VALID request and moves it to processed\//, 'a request is no longer moved to processed/ when it is read')
+  assert.ok(locks.includes(`\`CD_QUIET_WINDOWS\` (default \`${defaults.get('CD_QUIET_WINDOWS')}\``), 'the locks section does not state the default of CD_QUIET_WINDOWS')
+  for (const phrase of ['no release now: quiet_window', 'no release now: lock_busy', '`start_refused`', 'is consumed', 'Run `gremion-cd release-now` again']) {
+    assert.ok(locks.includes(phrase), `the locks section does not say: ${phrase}`)
+  }
+  assert.ok(!locks.includes('is neither refused nor a failure'), 'the locks section again says a release-now in the window is never refused')
+  // (4) the purge unit is in UTC, the backup time is host time: summer time moves the purge window and not the backup opening
+  assert.match(read('infra/host/bootstrap.sh'), /^BACKUP_ONCALENDAR="\$\{BACKUP_ONCALENDAR:-\*-\*-\* \d\d:\d\d:00\}"$/m, 'the default backup time has a UTC suffix now: it moves with summer time')
+  const summerOpens = hhmm(purgeLocal + 60 - span - purgeMax)
+  const summerCloses = hhmm(purgeLocal + 60 + purgeMax)
+  assert.equal(`${summerOpens} ${summerCloses}`, '01:25 04:35', 'the defaults no longer give the summer window the example states')
+  assert.ok(locks.includes(`the purge moves to ${hhmm(purgeLocal + 60)} host time and its window to about ${summerOpens} to ${summerCloses}`), 'the locks section does not state the summer window of the purge')
+  assert.ok(locks.includes(`is host time without a UTC suffix and does not move`), 'the locks section does not say that the backup time does not move in summer')
+  assert.ok(locks.includes(`closed from about ${backupOpens} to ${summerCloses}`), 'the locks section does not state the summer window of the default backup time')
+  assert.ok(!locks.includes('moves every clock time below by one hour'), 'the locks section again says summer time moves every time of the example')
+  // (5) a refused retag ends the release, and its teardown is a compose down of the target colour: the old colour is down afterwards
+  assert.match(driver, /_cd_drv_teardown\n\s*_cd_drv_load\n\s*local -a m=/, 'a pre-switch end no longer runs the teardown first')
+  assert.match(driver, /cd_colour_down "\$R_TREE" "\$R_COL" \|\| rc=\$\?/, 'the teardown no longer takes the target colour down')
+  assert.match(read('infra/host/lib/cd/colour.sh'), /cd_dc "\$tree" "app-\$\{colour\}" down \|\| rc=\$\?/, 'cd_colour_down is no longer a compose down of that colour project')
+  for (const [where, body] of [['the adoption steps', adoption], ['the hand intervention procedure', afterHand]]) {
+    assert.ok(body.includes('takes the old colour down itself'), `${where} do not say that the refused release takes the old colour down itself`)
+  }
+  assert.ok(!afterHand.includes('stop the colour, then `adopt'), 'the hand intervention procedure again tells the operator to stop a colour the failed release has already taken down')
+  // (6) the old colour of step 2 is named by its env file (adopt comes later), and the hand command runs in a shell without compose variables
+  assert.ok(adoption.includes('`IMAGE_TAG` line of `/opt/gremion/etc/env/app-<colour>.env`'), 'the adoption steps do not name the old colour by the IMAGE_TAG of its env file')
+  assert.ok(!adoption.includes('the `previous` line of `gremion-cd status` after adopt'), 'the adoption steps again name the old colour by a status line that exists only after adopt')
+  const unset = 'unset COMPOSE_PROJECT_NAME COMPOSE_FILE COMPOSE_PROFILES COMPOSE_PATH_SEPARATOR COMPOSE_ENV_FILES'
+  assert.match(read('infra/host/lib/cd/docker.sh'), /^\s*unset COMPOSE_PROJECT_NAME COMPOSE_PROFILES COMPOSE_FILE COMPOSE_PATH_SEPARATOR COMPOSE_ENV_FILES$/m, 'cd_dc no longer clears the compose variables of the caller')
+  for (const [where, body] of [['the adoption steps', adoption], ['the hand intervention procedure', afterHand]]) {
+    assert.ok(body.includes(unset), `${where} do not clear the compose variables before the hand command (${unset})`)
+  }
+})
+
+test('the hand-switch order, the start gate history, the stages of the window and the stall mail say what the code does', () => {
+  const text = docText()
+  const defaults = defaultsOfProgram()
+  const driver = read('infra/host/lib/cd/driver.sh')
+  const prepare = read('infra/host/lib/cd/prepare.sh')
+  const colour = read('infra/host/lib/cd/colour.sh')
+  const adoption = flat(section(text, 'Adoption'))
+  const afterHand = flat(subsection(section(text, 'Hand procedures'), 'After any hand intervention'))
+  const locks = flat(section(text, 'Locks, the timer guard and the reboot case'))
+  // (1) the release targets the colour other than the RECORDED live one: a state that was not re-adopted after a hand switch points at the serving colour
+  assert.match(driver, /colour="\$\(_cd_drv_other "\$D_LCOL"\)"/, 'the release no longer targets the colour other than the recorded live one')
+  assert.match(prepare, /if \[\[ "\$colour" == "\$active" \]\]; then\s*\n\s*_cd_prep_err "retag: the target colour is the active colour"/, 'the retag stage no longer refuses a target colour that is the active one')
+  assert.match(colour, /_cd_colour_err "\$\{2:-cd_colour\}: refusing, the \$\{1\} colour is the one that serves"/, 'the colour guard no longer refuses a colour that serves')
+  assert.match(colour, /_cd_colour_guard "\$colour" cd_colour_down \|\| return \$\?/, 'cd_colour_down no longer runs the colour guard first')
+  assert.match(colour, /_cd_colour_err\(\) \{ printf 'cd-colour: %s\\n' "\$\*" >&2; \}/, 'the prefix of the colour refusal changed')
+  assert.match(driver, /cd_err "the teardown of the target colour did not complete \(code \$\{rc\}\)"/, 'the teardown no longer says it did not complete')
+  assert.match(read('infra/host/lib/cd/adopt.sh'), /idle \| parked\) ;;\s*\n\s*\*\) cd_die 3 "adopt: a release is in flight/, 're-adopt no longer refuses only while a release is in flight')
+  for (const phrase of [
+    'cd-prepare: retag: the target colour is the active colour',
+    'cd-colour: cd_colour_down: refusing, the <colour> colour is the one that serves',
+    'did not complete (code 1)',
+    'right after the hand switch and before the next release',
+  ]) {
+    assert.ok(afterHand.includes(phrase), `the hand intervention procedure does not say: ${phrase}`)
+  }
+  const reAdoptAt = afterHand.indexOf('adopt --re-adopt --reason TEXT` right after the hand switch')
+  const stopAt = afterHand.indexOf('docker compose --env-file')
+  const runningAt = afterHand.indexOf('cd-prepare: retag: the target colour project is running')
+  assert.ok(reAdoptAt >= 0 && stopAt > reAdoptAt && runningAt > stopAt, 'the hand intervention procedure does not put the re-adopt first, then the stop of the old colour, then the refusals')
+  assert.ok(!afterHand.includes('there is nothing left to stop: the teardown of that release takes the old colour down itself (a `compose down` of the target colour project, which is the old colour; check with the same command and `ps`). What is left is the hold'), 'the hand intervention procedure again says the teardown takes the old colour down whether or not the state was re-adopted')
+  // (2) the start gate says its line on every tick, the history gets one line per change of reason
+  assert.match(driver, /_cd_drv_say "no release now: \$\{why\}"\s*\n\s*if \[\[ "\$last" != "\$why" \]\]; then\s*\n\s*cd_hist start_refused why="\$why"/, 'the start gate no longer records start_refused only when the reason changes')
+  for (const phrase of ['on every tick', 'once, when the reason changes']) {
+    assert.ok(locks.includes(phrase), `the locks section does not say about the start gate: ${phrase}`)
+  }
+  assert.ok(!locks.includes('the history says `start_refused`, and the request'), 'the locks section again says the history gets start_refused on every refusal')
+  // (3) previous and its startable flag come from adopt, not from the installed program
+  assert.match(read('infra/host/lib/cd/adopt.sh'), /startable: true\}'\)" \|\| return 2/, 'adopt no longer writes the startable flag of previous')
+  assert.ok(!adoption.includes('once the program is installed'), 'the adoption steps again say status shows startable once the program is installed')
+  assert.ok(adoption.includes('once `gremion-cd adopt` (step 5) has written the state'), 'the adoption steps do not say that startable shows only after adopt')
+  // (4) a --with-state release runs host_apply and state_apply before the retag: they take the host lock and can wait for it, outside the timer guard
+  assert.match(driver, /CD_DRV_STAGES=\(select fetch classify host_apply state_apply retag render build snapshot/, 'the stage order changed')
+  assert.match(driver, /cd_hist apply_waiting why=host_lock stage="\$stage"/, 'a busy host lock at host_apply or state_apply is no longer a waiting with apply_waiting')
+  assert.match(driver, /_cd_drv_say "waiting: the host lock is held"\s*\n\s*return 3/, 'a busy host lock no longer says "waiting: the host lock is held"')
+  for (const phrase of ['host_apply', 'state_apply', '--with-state', 'apply_waiting', 'waiting: the host lock is held']) {
+    assert.ok(locks.includes(phrase), `the locks section does not say about a release with the state tier: ${phrase}`)
+  }
+  // (5) the wait of the default backup is longer than CD_STALL_MINUTES, and a tick with a release in flight polls nothing
+  const stall = Number(defaults.get('CD_STALL_MINUTES'))
+  const purgeMax = Number(defaults.get('CD_PURGE_MAX_MIN'))
+  const waitMin = 3 * 60 + 30 + purgeMax + 24 * 60 - (21 * 60 + 30)
+  assert.equal(waitMin, 365, 'the defaults no longer give a wait of 6 h 05 for the default backup')
+  assert.ok(waitMin > stall, 'the wait of the default backup no longer exceeds CD_STALL_MINUTES: the stall paragraph may go')
+  assert.match(driver, /_cd_drv_tick_idle\(\) \{[^]*?_cd_drv_candidate\n\}/, 'only an idle tick polls for a candidate')
+  assert.match(read('infra/host/lib/cd/watchdog.sh'), /_cd_wd_stalled poll_stale poll_stale 86400 /, 'the watchdog no longer mails poll_stale once a day')
+  for (const phrase of ['6 h 05', 'CD_STALL_MINUTES', '`poll_stale`', 'No poll is made while a release is in flight', 'not a sign that the release is stuck']) {
+    assert.ok(locks.includes(phrase), `the locks section does not say about the stall mail: ${phrase}`)
+  }
+})
+
 test('the pointers lead to the document and the old "in progress" row is gone', () => {
   const tooling = read('docs/ops/host-tooling.md')
   const row = tooling.split('\n').find((l) => l.startsWith('| `gremion-cd'))
@@ -624,5 +773,5 @@ test('this file is collected by unit:node (a count assertion over the same glob 
   assert.ok(collected.includes('scripts/cd/cd-guards.test.mjs'), 'the sibling guard file is no longer collected')
   assert.ok(collected.length >= 20, `only ${collected.length} node test files collected: the glob emptied`)
   const declared = (readFileSync(path.join(ROOT, self), 'utf8').match(/^[ \t]*test(?:\.(?:skip|only|todo))?\(/gm) ?? []).length
-  assert.equal(declared, 18, `this file declares ${declared} tests, not the 18 that the count in this assertion knows`)
+  assert.equal(declared, 20, `this file declares ${declared} tests, not the 20 that the count in this assertion knows`)
 })
