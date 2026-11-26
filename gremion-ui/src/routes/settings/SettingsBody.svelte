@@ -5,6 +5,7 @@
   import { scopeLabels, type ScopeKind } from '$lib/auth/labels'
   import { goto } from '$app/navigation'
   import { untrack } from 'svelte'
+  import { renderSafeMarkdown } from '$lib/safe-markdown'
 
   // Tab bodies lifted in as section panels (logic unchanged):
   // Keep TabModules first: imported after the other tabs, the vitest SSR render of this file loses its
@@ -351,7 +352,8 @@
           </div>
           <div>
             <h3 class="text-sm font-semibold mb-3 text-ink-muted uppercase tracking-wide">Vorschau Löschkonzept</h3>
-            <pre class="whitespace-pre-wrap text-xs font-mono leading-relaxed text-ink/80 overflow-auto max-h-96">{compDoc}</pre>
+            <!-- eslint-disable-next-line svelte/no-at-html-tags — renderSafeMarkdown escapes the whole source; its output holds only the tags it writes -->
+            <div class="text-sm leading-relaxed text-ink/80 overflow-auto max-h-96" data-testid="loeschkonzept-preview">{@html renderSafeMarkdown(compDoc, { baseHeading: 4 })}</div>
           </div>
         </div>
         {#if data.verarbeitungsverzeichnis}
@@ -409,7 +411,8 @@
                 Verzeichnis drucken →
               </a>
             </div>
-            <pre class="whitespace-pre-wrap text-xs font-mono leading-relaxed text-ink/80 overflow-auto max-h-96">{vvtDoc}</pre>
+            <!-- eslint-disable-next-line svelte/no-at-html-tags — renderSafeMarkdown escapes the whole source; its output holds only the tags it writes -->
+            <div class="text-sm leading-relaxed text-ink/80 overflow-auto max-h-96" data-testid="vvt-preview">{@html renderSafeMarkdown(vvtDoc, { baseHeading: 4 })}</div>
           </div>
         {/if}
       {:else if activeKey === 'sicherungen' && data.config}

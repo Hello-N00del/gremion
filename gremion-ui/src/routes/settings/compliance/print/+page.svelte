@@ -1,6 +1,7 @@
 <script lang="ts">
   import PageTitle from '$lib/components/PageTitle.svelte'
   import type { PageData } from './$types'
+  import { renderSafeMarkdown } from '$lib/safe-markdown'
 
   let { data }: { data: PageData } = $props()
 </script>
@@ -26,5 +27,6 @@
     <a href="/settings/compliance" class="text-sm text-ink-muted hover:underline">← Zurück</a>
   </div>
 
-  <pre class="whitespace-pre-wrap font-mono text-sm leading-relaxed">{data.document}</pre>
+  <!-- eslint-disable-next-line svelte/no-at-html-tags — renderSafeMarkdown escapes the whole source -->
+  <div class="text-sm leading-relaxed">{@html renderSafeMarkdown(data.document)}</div>
 </div>
