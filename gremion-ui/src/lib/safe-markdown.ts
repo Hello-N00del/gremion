@@ -29,8 +29,9 @@ const LIST_ITEM = /^[-*]\s+(.*)$/
 function cells(line: string): string[] {
   let body = line.trim()
   if (body.startsWith('|')) body = body.slice(1)
-  if (body.endsWith('|')) body = body.slice(0, -1)
-  return body.split('|').map((c) => c.trim())
+  if (body.endsWith('|') && !body.endsWith('\\|')) body = body.slice(0, -1)
+  // A pipe the generator escaped (backslash, pipe) belongs to its cell; only an unescaped one ends it.
+  return body.split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, '|'))
 }
 
 const TABLE_CLASS = 'w-full border-collapse text-left text-xs'

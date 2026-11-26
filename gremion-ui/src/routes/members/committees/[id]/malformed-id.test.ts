@@ -71,7 +71,7 @@ function event(params: Record<string, string>) {
 }
 
 beforeEach(() => {
-  fetchSpy.mockClear()
+  fetchSpy.mockReset()
   h.getOrgUnit.mockClear()
   h.listOrgUnitMembers.mockClear()
 })
@@ -114,8 +114,18 @@ describe('malformed committee id answers 404', () => {
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 
-  it('protocol detail: a malformed committee id is 404 before any roster read', async () => {
+  it('protocol detail: a malformed committee id is 404 before any fetch or roster read', async () => {
+    // The protocol answers as if it belonged to the malformed id, so only the id guard itself can
+    // stop the load: without it the roster read reaches the store and the driver rejects the id.
+    fetchSpy.mockImplementationOnce(
+      async () =>
+        new Response(
+          JSON.stringify({ protocol: { committee_id: 'not-a-uuid' }, attendance: [], resolutions: [], actionItems: [] }),
+          { status: 200 },
+        ),
+    )
     expect(await statusOf(() => protocolLoad(event({ id: 'not-a-uuid', protocolId: PROTOCOL })))).toBe(404)
+    expect(fetchSpy).not.toHaveBeenCalled()
     expect(h.listOrgUnitMembers).not.toHaveBeenCalled()
   })
 })

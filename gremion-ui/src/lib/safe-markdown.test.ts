@@ -37,6 +37,14 @@ describe('renderSafeMarkdown', () => {
     expect(html).not.toContain('| Backups')
   })
 
+  it('keeps an escaped pipe inside its cell, as the Verzeichnis writes it', () => {
+    const md = ['| Zweck | Frist |', '|---|---|', '| Wahl \\| Abstimmung | 7 Tage |'].join('\n')
+    const html = renderSafeMarkdown(md)
+    expect((html.match(/<td[ >]/g) ?? []).length).toBe(2)
+    expect(html).toContain('>Wahl | Abstimmung</td>')
+    expect(html).not.toContain('\\')
+  })
+
   it('renders list items and a horizontal rule', () => {
     const html = renderSafeMarkdown('- **IP-Adressen** werden verschluesselt\n- Backups\n\n---\n*Ende*')
     expect((html.match(/<li[ >]/g) ?? []).length).toBe(2)

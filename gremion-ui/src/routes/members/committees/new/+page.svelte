@@ -74,6 +74,26 @@
       </select>
     </div>
 
+    <div class="space-y-1">
+      <label for="kindLabel" class="block text-xs font-medium">Bezeichnung der Art (optional)</label>
+      <input
+        id="kindLabel"
+        name="kindLabel"
+        type="text"
+        maxlength="40"
+        list="kind-label-options"
+        autocomplete="off"
+        aria-describedby="kindLabel-hint"
+        class="w-full rounded-md border border-border-strong bg-paper px-3 py-2 text-sm"
+      />
+      <datalist id="kind-label-options">
+        {#each data.kindLabels ?? [] as label (label)}
+          <option value={label}></option>
+        {/each}
+      </datalist>
+      <p id="kindLabel-hint" class="text-xs text-ink-muted">Ersetzt die Art in Listen und Übersichten, zum Beispiel wenn eine Gruppe als Fachschaft oder AG erscheinen soll.</p>
+    </div>
+
     {#if kindDef && kindDef.allowedParentKinds.length > 0}
       <div class="space-y-1">
         <label for="parentId" class="block text-xs font-medium">
@@ -110,11 +130,9 @@
     <div class="flex gap-3 pt-2">
       <button
         type="submit"
-        lang={$lang}
-        aria-label={$t('members.new.submit')}
         class="rounded-md bg-accent px-4 py-2 text-sm font-medium text-paper hover:bg-accent/90"
       >
-        {$t('members.new.submit')}
+        <span lang={$lang}>{$t('members.new.submit')}</span>
       </button>
     </div>
   </form>

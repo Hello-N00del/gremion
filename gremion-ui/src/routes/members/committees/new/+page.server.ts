@@ -21,8 +21,15 @@ export const load: PageServerLoad = async ({ locals }) => {
   const kinds = Object.values(schema.kinds)
     .sort((a, b) => a.sortOrder - b.sortOrder)
     .map((k) => ({ key: k.key, label: k.label, canBeRoot: k.canBeRoot, allowedParentKinds: [...k.allowedParentKinds] }))
-  return { kinds, parents: units.map((u) => ({ id: u.id, name: u.name, kind: u.kind })) }
+  // A unit may carry a display label of its own instead of its kind's label (Fachschaft, AG, ...). The
+  // labels already in use are offered as suggestions; the field itself takes any text.
+  const kindLabels = [...new Set(units.map((u) => u.kind_label?.trim()).filter((l): l is string => !!l))].sort((a, b) =>
+    a.localeCompare(b, 'de')
+  )
+  return { kinds, kindLabels, parents: units.map((u) => ({ id: u.id, name: u.name, kind: u.kind })) }
 }
+
+const MAX_KIND_LABEL = 40
 
 export const actions: Actions = {
   default: async ({ request, locals }) => {
@@ -34,6 +41,7 @@ export const actions: Actions = {
     const name = (data.get('name') as string | null)?.trim()
     const description = (data.get('description') as string | null)?.trim() || null
     const kind = data.get('kind') as string | null
+    const kindLabelRaw = ((data.get('kindLabel') as string | null) ?? '').trim()
     const parentIdRaw = (data.get('parentId') as string | null)?.trim() || null
     const wantsMatrixRoom = data.get('wantsMatrixRoom') === 'on'
     const wantsNextcloudFolder = data.get('wantsNextcloudFolder') === 'on'
@@ -42,9 +50,15 @@ export const actions: Actions = {
     // P2.2 (#202): the kind is validated against the TENANT catalog, not a
     // hardcoded council/committee/group triple.
     const schema = await loadOrgSchema()
-    if (!kind || schema.kinds[kind] === undefined) {
+    const kindDef = kind ? schema.kinds[kind] : undefined
+    if (!kind || kindDef === undefined) {
       return fail(400, { error: 'Ungültige Art.' })
     }
+    if (kindLabelRaw.length > MAX_KIND_LABEL) {
+      return fail(400, { error: `Die Bezeichnung darf höchstens ${MAX_KIND_LABEL} Zeichen lang sein.` })
+    }
+    // The display label only stands in for the kind's label: when it says the same, nothing is stored.
+    const kindLabel = kindLabelRaw === '' || kindLabelRaw === kindDef.label ? null : kindLabelRaw
     // A council must be top-level (design spec §4.2).
     const parentId = kind === 'council' ? null : parentIdRaw
     let parentKind: string | null = null
@@ -60,7 +74,7 @@ export const actions: Actions = {
 
     const unit = await getDb().begin(async (tx) => {
       const u = await createOrgUnit(tx, {
-        name, description, parentId, kind,
+        name, description, parentId, kind, kindLabel,
         visibility: 'all_members', wantsMatrixRoom, wantsNextcloudFolder
       })
       await enqueueResources(tx, u.id, wantedSubsystems(u))
