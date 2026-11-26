@@ -17,7 +17,8 @@ describe('TabDangerZone.svelte (K2#9)', () => {
     expect(screen.queryByRole('button', { name: /Alle Daten löschen/ })).toBeNull()
     expect(container.querySelector('input[type="password"]')).toBeNull()
     // the explanation of the real path stays
-    expect(container.textContent).toMatch(/Server-CLI/)
+    expect(container.textContent).toMatch(/auf dem Server/)
+    expect(container.textContent).not.toMatch(/CLI/)
   })
 
   it('resets through the server action, with no module ids in the client request', async () => {

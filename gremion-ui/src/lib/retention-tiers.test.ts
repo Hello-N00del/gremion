@@ -106,7 +106,7 @@ describe('RETENTION_CAVEATS: tiers without a purge consumer', () => {
   it('no tier is enforced by the application: every caveat is set, and security_logs_days is the log-store window, not the audit table', () => {
     expect(RETENTION_FIELDS.filter((f) => RETENTION_CAVEATS[f] === null)).toEqual([])
     expect(RETENTION_CAVEATS.security_logs_days).toContain('Audit-Tabelle')
-    expect(RETENTION_CAVEATS.security_logs_days).toContain('RC-GOV-CHAIN')
+    expect(RETENTION_CAVEATS.security_logs_days).not.toContain('RC-GOV-CHAIN')
     expect(registry).toMatch(/RC-GOV-CHAIN/)
   })
 
@@ -115,6 +115,7 @@ describe('RETENTION_CAVEATS: tiers without a purge consumer', () => {
     expect(caveat).toMatch(/^Konfigurationswert/)
     expect(caveat).toContain('nicht')
     expect(caveat).not.toMatch(/R\d\d-|TASK-|S2b/)
+    expect(caveat).not.toMatch(/RC-|Traefik|Vector|ipcrypt/)
   })
 })
 

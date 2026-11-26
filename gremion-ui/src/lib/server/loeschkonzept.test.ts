@@ -47,7 +47,8 @@ describe('generateLoeschkonzept', () => {
     const doc = generateLoeschkonzept(mockConfig, new Date('2026-05-04'))
     const rows = doc.split('\n').filter((l) => l.startsWith('| Audit-Tabelle der Anwendung'))
     expect(rows).toHaveLength(1)
-    expect(rows[0]).toContain('RC-GOV-CHAIN')
+    expect(rows[0]).not.toContain('RC-GOV-CHAIN')
+    expect(rows[0]).toContain('verkettet')
     expect(rows[0]).toContain('keinem Zeitgeber')
     expect(rows[0]).not.toMatch(/\d+ Tage/)
     expect(doc).not.toContain('wird von der Anwendung täglich durchgesetzt')
@@ -68,6 +69,16 @@ describe('generateLoeschkonzept', () => {
     expect(doc).not.toContain('BayLDA')
     // (backup rows legitimately say "365 Tage Remote"; only the bold log values are checked)
     expect(doc).not.toMatch(/\*\*(90|180|365) Tage\*\*/)
+  })
+
+  // The document is read by people, not by the operator: it says what is meant in plain German, with
+  // no record-class id, no product or library name of the log pipeline.
+  it('names no internal id or pipeline product: the plain German words are used', async () => {
+    const { generateLoeschkonzept } = await import('./loeschkonzept')
+    const doc = generateLoeschkonzept(mockConfig, new Date('2026-05-04'))
+    expect(doc).not.toMatch(/RC-GOV|ipcrypt|Traefik|Vector|logrotate/i)
+    expect(doc).toContain('pseudonymisiert')
+    expect(doc).toContain('Webservers')
   })
 
   // No tier has a purge consumer in gremion-ui (the audit table is a governance record, and the

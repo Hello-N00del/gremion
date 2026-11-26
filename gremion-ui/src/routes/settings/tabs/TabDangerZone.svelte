@@ -105,7 +105,7 @@
         <h3 class="text-sm font-semibold text-rust-ink">Alle Daten löschen</h3>
         <p class="text-sm text-ink-muted mt-1">
           Löscht alle Daten unwiderruflich. Diese Aktion kann nicht rückgängig gemacht werden.
-          Dieser Vorgang kann nicht über die Oberfläche ausgelöst werden: er muss über die Server-CLI
+          Dieser Vorgang kann nicht über die Oberfläche ausgelöst werden: er muss auf dem Server
           eingeleitet werden.
         </p>
       </div>

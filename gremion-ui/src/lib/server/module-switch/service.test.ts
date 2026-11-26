@@ -444,6 +444,16 @@ describe('enable: DPIA decision', () => {
     expect(submits()).toHaveLength(0)
   })
 
+  it('the German refusal texts say DSFA, the German abbreviation, never the English DPIA', async () => {
+    const required = await submitModuleSwitch(ctx(), { moduleId: 'votes', action: 'enable' }, deps())
+    const invalid = await submitModuleSwitch(ctx(), { moduleId: 'votes', action: 'enable', dpia: { requiresDpia: false, documentRef: '' } }, deps())
+    for (const r of [required, invalid]) {
+      const text = (r as { error?: string; message?: string }).error ?? (r as { message?: string }).message ?? ''
+      expect(text).toContain('DSFA-Entscheidung')
+      expect(text).not.toContain('DPIA')
+    }
+  })
+
   it('with {requiresDpia:false, documentRef:"TOM 4.2"} it queues args {slug, module, dpia} carrying the council reason', async () => {
     const r = await submitModuleSwitch(ctx(), { moduleId: 'votes', action: 'enable', dpia: { requiresDpia: false, documentRef: 'TOM 4.2' } }, deps())
     expect(r).toEqual({ ok: true, requestId: REQUEST })
