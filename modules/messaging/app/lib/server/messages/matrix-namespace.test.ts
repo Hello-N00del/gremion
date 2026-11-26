@@ -6,12 +6,15 @@ import {
   archiveAliasLocalpart,
   currentArchiveAliasLocalpart,
   currentArchiveAliasPrefix,
+  currentMeetingAliasLocalpart,
+  currentMeetingAliasPrefix,
   currentUnitAliasLocalpart,
   currentMatrixLocalpart,
   displayUsername,
   escapeUsername,
   matrixIdentityMode,
   matrixLocalpart,
+  meetingAliasLocalpart,
   stripTenantPrefix,
   unitAliasLocalpart,
   unitNameSlug,
@@ -188,5 +191,36 @@ describe('the alias of a unit room and of its archive, under the identity switch
   test('namespaced outside a tenant scope throws (no ambient customer)', () => {
     process.env.MATRIX_IDENTITY = 'namespaced'
     expect(() => currentUnitAliasLocalpart('Vorstand')).toThrow(/No tenant context/)
+  })
+})
+
+describe('the alias of a meeting room, under the identity switch', () => {
+  const EVT = '0B7C6F1E-4a8e-4c51-9f3a-2d1e8c7b6a50'
+
+  test('the namespaced helper carries the customer and the lower-cased event id', () => {
+    expect(meetingAliasLocalpart('acme', EVT)).toBe('meeting.acme.0b7c6f1e-4a8e-4c51-9f3a-2d1e8c7b6a50')
+    expect(meetingAliasLocalpart('acme', EVT)).not.toBe(meetingAliasLocalpart('beta', EVT))
+    expect(() => meetingAliasLocalpart('Bad.Slug', EVT)).toThrow(/slug/)
+  })
+
+  test('legacy: exactly meeting-<event id>, and no tenant context is read', () => {
+    expect(currentMeetingAliasLocalpart(EVT)).toBe('meeting-0b7c6f1e-4a8e-4c51-9f3a-2d1e8c7b6a50')
+    expect(currentMeetingAliasPrefix()).toBe('#meeting-')
+  })
+
+  test('namespaced: the alias and the prefix of the request customer; a slug is never the start of another slug', () => {
+    process.env.MATRIX_IDENTITY = 'namespaced'
+    runWithTenant(tenant('acme'), () => {
+      expect(currentMeetingAliasLocalpart(EVT)).toBe('meeting.acme.0b7c6f1e-4a8e-4c51-9f3a-2d1e8c7b6a50')
+      expect(currentMeetingAliasPrefix()).toBe('#meeting.acme.')
+      expect(`#${currentMeetingAliasLocalpart(EVT)}:srv`.startsWith(currentMeetingAliasPrefix())).toBe(true)
+      expect('#meeting.acme-2.0b7c6f1e:srv'.startsWith(currentMeetingAliasPrefix())).toBe(false)
+      expect('#meeting-0b7c6f1e:srv'.startsWith(currentMeetingAliasPrefix())).toBe(false)
+    })
+  })
+
+  test('namespaced outside a tenant scope throws (no ambient customer)', () => {
+    process.env.MATRIX_IDENTITY = 'namespaced'
+    expect(() => currentMeetingAliasLocalpart(EVT)).toThrow(/No tenant context/)
   })
 })
