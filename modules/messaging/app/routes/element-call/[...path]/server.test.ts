@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest'
 import { runWithTenant, type TenantContext } from '$lib/server/tenant/context'
 
 // The route pins its upstream to ELEMENT_CALL_INTERNAL_URL at module load, so the
@@ -430,7 +430,7 @@ describe('GET /element-call/[...path] — config.json names the requesting host'
 describe('GET /element-call/[...path] — a refused config path is logged', () => {
   const tenant = (primaryHost: string | null) => ({ id: 'tid', slug: 'x', primaryHost }) as unknown as TenantContext
   const CORRELATION = '0b9f6f8e-6f0e-4b53-9d41-6a1f3c2d5e77'
-  let warn: ReturnType<typeof vi.spyOn>
+  let warn: MockInstance<typeof console.warn>
 
   beforeEach(() => {
     warn = vi.spyOn(console, 'warn').mockImplementation(() => {})

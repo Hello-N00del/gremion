@@ -976,7 +976,7 @@ describe('messagingKarenz', () => {
       it('a room under this customer\'s own prefix whose marker cannot be read still fails the step: it would be a room we do not record', async () => {
         addRoom('!mine:matrix.test', { alias: '#meeting.default.mine:matrix.test' }).state.set('org.gremion.tenant', { tenant_id: 'default' })
         faults.push({ match: (url, m) => m === 'GET' && decodeURIComponent(url).includes('!mine:') && url.includes('org.gremion.tenant'), once: false, status: 503 })
-        await expect(karenz.messagingKarenz.switchOff(ctx)).rejects.toThrow()
+        await expect(karenz.messagingKarenz.switchOff(ctx)).rejects.toThrow(/503/)
       })
 
       it('a ledger room with a meeting alias stays kept and is never archived, whichever alias form it carries', async () => {
