@@ -145,7 +145,7 @@ describe('the token is verified before its claims name an account', () => {
     expect(await mint(edge)).toBe('mx-1')
   })
 
-  test('a token that expired before the grace is refused with a 401 the client answers by refreshing, never a 500', async () => {
+  test('a token that expired before the grace is refused with a 401 (the session is refreshed on the next request), never a 500', async () => {
     await mint(await sign(own))
     const expired = await sign(own, {}, { exp: Math.floor(NOW / 1000) - REFRESH_GRACE_MS / 1000 - 1 })
     const n = calls.length

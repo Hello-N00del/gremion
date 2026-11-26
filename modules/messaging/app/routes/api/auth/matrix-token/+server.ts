@@ -89,7 +89,7 @@ export const GET: RequestHandler = async ({ request, url, locals }) => {
       }
     })
   } catch (err) {
-    // A refusal of the exchange (503: chat not available, 403: not this customer's token) reaches the client as it is.
+    // A refusal of the exchange (503: chat not available, 403: not this customer's token, 401: the login expired) reaches the client as it is.
     if (isChatRefusal(err)) throw err
     const msg = err instanceof Error ? err.message : String(err)
     return json({ success: false, error: `Matrix token exchange failed: ${msg}` }, { status: 502 })

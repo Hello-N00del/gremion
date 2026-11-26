@@ -52,7 +52,7 @@ export async function resolveMatrixCreds(event: RequestEvent): Promise<MatrixCre
     }
   } catch (e) {
     // A refusal made on purpose (MATRIX_IDENTITY=namespaced: chat not available, token not this
-    // customer's) is the caller's answer, not a missing identity. Legacy mode never throws one here.
+    // customer's, login expired) is the caller's answer, not a missing identity. Legacy mode never throws one here.
     if (isChatRefusal(e)) throw e
     // Fall through — Matrix creds unavailable, caller decides how to degrade.
   }

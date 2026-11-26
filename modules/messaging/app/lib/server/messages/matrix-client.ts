@@ -200,7 +200,7 @@ class MatrixClient {
     // A session whose refresh failed for a transient reason keeps its expired access token for
     // REFRESH_GRACE_MS (auth.ts), and the legacy exchange serves a cached Matrix token in that window. This
     // exchange accepts the token for as long: the signature check below carries the same clock tolerance.
-    // Past the grace the client gets a 401 and refreshes its session.
+    // Past the grace the client gets a 401 (it does not retry; the session layer refreshes on the next request).
     const claimedExp = typeof claimed.exp === 'number' ? claimed.exp * 1000 : 0
     if (claimedExp > 0 && Date.now() >= claimedExp + REFRESH_GRACE_MS) refuseExpiredLogin()
     const verified = await verifyBearerJwtResult(keycloakJwt, tenant, { clockToleranceSeconds: REFRESH_GRACE_MS / 1000 })

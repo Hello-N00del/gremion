@@ -30,7 +30,7 @@ export const GET: RequestHandler = async (event) => {
     const keycloakJwt = await getKeycloakJwt(event)
     matrixToken = await mc.getMatrixToken(keycloakJwt)
   } catch (e) {
-    // A refusal of the token exchange (503: chat not available, 403: not this customer's token) is passed on as it is.
+    // A refusal of the token exchange (503: chat not available, 403: not this customer's token, 401: the login expired) is passed on as it is.
     if (isChatRefusal(e)) throw e
     const msg = e instanceof Error ? e.message : String(e)
     throw error(502, `Matrix authentication failed: ${msg}`)

@@ -33,8 +33,10 @@ const EXPIRED_LOGIN = 'Die Anmeldung ist abgelaufen. Bitte erneut anmelden.'
 const expiredLogins = new WeakSet<object>()
 
 /**
- * The token handed to the namespaced exchange expired before the refresh grace: a 401, so that the client
- * refreshes its session and asks again, instead of an error the route would turn into a server error.
+ * The token handed to the namespaced exchange expired before the refresh grace: a 401 that reaches the
+ * client as it is, instead of an error the route would turn into a server error. The client does not retry
+ * the request: the session layer refreshes the session on the next request, so the next call (the next
+ * poll, or a reload) carries a fresh token.
  */
 export function refuseExpiredLogin(): never {
   try {
@@ -48,7 +50,7 @@ export function refuseExpiredLogin(): never {
 /**
  * True for the errors a namespaced token exchange throws on purpose: 503 (chat not available, or the
  * customer's key set could not be read), 403 (the token is not this customer's, has no username, or the
- * account is deactivated) and the 401 of refuseExpiredLogin. The routes that wrap a failed exchange in a
+ * account is deactivated) and the 401 of refuseExpiredLogin (the login expired). The routes that wrap a failed exchange in a
  * 502 let exactly these through; every other error, a 401 for a missing session token included, is
  * wrapped as before.
  */
