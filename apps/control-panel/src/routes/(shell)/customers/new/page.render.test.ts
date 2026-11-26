@@ -168,15 +168,17 @@ describe('Neuer Mandant host field: the opted-in modules of a secondary host', (
     expect(text).toContain('Nicht verfügbar sind dort: Chat, Dateien, Dokumentbearbeitung, Videokonferenz, Inhalte und Newsletter.')
   })
 
-  it('messaging opted in: chat moves to the available side, video never does', () => {
+  it('messaging opted in: chat and video come together (the one messages manifest owns /api/video), so both move to the available side', () => {
     const text = hostHints({ ...PRIMARY, secondaryModules: ['messaging'] })
-    expect(text).toContain('freigegeben: Chat.')
-    expect(text).toContain('Nicht verfügbar sind dort: Dateien, Dokumentbearbeitung, Videokonferenz, Abstimmungen, Inhalte und Newsletter.')
+    expect(text).toContain('freigegeben: Chat und Videokonferenz.')
+    expect(text).toContain('Nicht verfügbar sind dort: Dateien, Dokumentbearbeitung, Abstimmungen, Inhalte und Newsletter.')
+    expect(text).not.toMatch(/Nicht verfügbar sind dort:[^.]*Videokonferenz/)
   })
 
-  it('every opt-in of the set: only video, content and newsletter remain unavailable', () => {
+  it('every opt-in of the set: only content and newsletter remain unavailable', () => {
     const text = hostHints({ ...PRIMARY, secondaryModules: ['files', 'votes', 'messaging'] })
-    expect(text).toContain('Nicht verfügbar sind dort: Videokonferenz, Inhalte und Newsletter.')
+    expect(text).toContain('freigegeben: Chat, Videokonferenz, Dateien, Dokumentbearbeitung und Abstimmungen.')
+    expect(text).toContain('Nicht verfügbar sind dort: Inhalte und Newsletter.')
   })
 
   it('the opt-in is shown only next to secondary hosts and a known customer host', () => {

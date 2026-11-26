@@ -16,14 +16,15 @@
   // the shared-service modules the install opts in for such customers (SECONDARY_TENANT_MODULES); an older page data has none
   const secondaryModules = $derived((data.secondaryModules ?? []) as string[])
   const secondaryHas = $derived([
-    ...(secondaryModules.includes('messaging') ? ['Chat'] : []),
+    // video comes with chat: the one messages module owns /api/video as well as /api/messages
+    ...(secondaryModules.includes('messaging') ? ['Chat', 'Videokonferenz'] : []),
     ...(secondaryModules.includes('files') ? ['Dateien', 'Dokumentbearbeitung'] : []),
     ...(secondaryModules.includes('votes') ? ['Abstimmungen'] : [])
   ])
   const secondaryLacks = $derived([
     ...(secondaryModules.includes('messaging') ? [] : ['Chat']),
     ...(secondaryModules.includes('files') ? [] : ['Dateien', 'Dokumentbearbeitung']),
-    'Videokonferenz',
+    ...(secondaryModules.includes('messaging') ? [] : ['Videokonferenz']),
     ...(secondaryModules.includes('votes') ? [] : ['Abstimmungen']),
     'Inhalte',
     'Newsletter'
