@@ -136,6 +136,14 @@ export interface UpcomingEventRow {
   committeeIds: string[]
 }
 
+/** One calendar event found by the command palette's search. */
+export interface EventSearchRow {
+  id: string
+  title: string
+  startAt: Date
+  allDay: boolean
+}
+
 /** One dashboard "Auf deine Freigabe" row (the finance my-approvals projection). */
 export interface DashApprovalRow {
   type: 'expense' | 'project' | 'budget'
@@ -201,6 +209,9 @@ export type BoardOrgUnitCleanup =
 export interface DataProviderContract {
   /** Calendar: upcoming events in [from, to) (dashboard loadCommon). */
   'calendar:upcoming-events': (range: { from: Date; to: Date }) => Promise<UpcomingEventRow[]>
+  /** Calendar: events whose title contains `query` (the command palette's search), the nearest to today
+   *  first, at most `limit`. The caller has already applied the calendar page's own role and on/off gate. */
+  'calendar:search-events': (q: { query: string; limit: number }) => Promise<EventSearchRow[]>
   /** Finance: GLOBAL pending-approval COUNT for the sidebar badge (layout loadCounts). */
   'finance:pending-approvals-count': () => Promise<number>
   /** Finance: planned EXPENSE budget (integer cents) per org-unit id (committees tree). */

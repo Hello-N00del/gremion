@@ -16,7 +16,9 @@
 // (Karenz phase 1; council-admin used to be shown as "Vorstand"). The labels.ts
 // util stays the source of truth for hidden-plumbing rules elsewhere.
 import { roleLabel } from '$lib/auth/labels'
-import { getKeycloakAdminClientForCurrentTenant, type KcUser } from '$lib/server/keycloak-admin'
+import { getKeycloakAdminClientForCurrentTenant, type KcUser, type KeycloakAdminClient } from '$lib/server/keycloak-admin'
+import { infixSearch } from './search-words'
+import { foldedIncludes } from '$lib/server/search/fold'
 import { getOrgUnitIdsForUser, getOrgUnit, listOrgUnitMembers } from '$lib/server/governance/org-units-db'
 import { tlog } from '$lib/server/observability/tenant-log'
 import { canSeeOrgUnit, seesAllGovernance, type Viewer } from '$lib/server/governance/visibility'
@@ -153,6 +155,73 @@ async function redactHiddenMemberships(viewer: Viewer | null, members: Member[])
       }),
     }))
     .filter((m) => m.memberships.length > 0)
+}
+
+export interface PersonHit {
+  /** The opaque username handle, as in Member.id: never the Keycloak UUID. */
+  handle: string
+  name: string
+  /** Set for the admin view only. */
+  email: string | null
+  /** The visible units of the person (non-admin view); empty for the admin view. */
+  units: string[]
+}
+
+/** How many accounts one search asks Keycloak for: the non-admin name filter and the placement check
+ *  run on these, so a few that do not qualify do not empty the result. */
+const PEOPLE_FETCH_MAX = 50
+
+/**
+ * People search for the command palette, the same audience as listMembers.
+ *
+ * Admin view: enabled or not, placed or not, found by name, user name or e-mail address (Keycloak's own
+ * match); the e-mail address is returned. Basic view: only enabled, placed people with at least one unit
+ * the viewer may see (the rule redactHiddenMemberships applies to the directory), found by their DISPLAYED
+ * NAME alone. Keycloak also matches the e-mail address and the user name, so the hits are narrowed to the
+ * name here: matching on an address would let a typed address confirm that somebody holds it. No address
+ * is returned. `words` are searchWords() output, already free of Keycloak's wildcard and quote characters.
+ */
+export async function searchMembers(
+  kc: KeycloakAdminClient,
+  opts: { words: readonly string[]; adminView: boolean; viewer: Viewer | null; limit: number },
+): Promise<PersonHit[]> {
+  if (opts.words.length === 0 || opts.limit < 1) return []
+  const found = await kc.listUsers({
+    search: infixSearch(opts.words),
+    max: PEOPLE_FETCH_MAX,
+    first: 0,
+    enabled: opts.adminView ? undefined : true,
+  })
+  const accounts = found
+    .filter((u) => !u.username.startsWith('service-account-'))
+    .map((u) => ({ u, name: [u.firstName, u.lastName].filter(Boolean).join(' ').trim() || u.username }))
+
+  if (opts.adminView) {
+    return accounts.slice(0, opts.limit).map(({ u, name }) => ({ handle: u.username, name, email: u.email || null, units: [] }))
+  }
+
+  const named = accounts.filter(({ name }) => opts.words.every((w) => foldedIncludes(name, w)))
+  const own = new Set(
+    opts.viewer
+      ? await getOrgUnitIdsForUser(opts.viewer.id).catch((err) => {
+          tlog('warn', 'people search: viewer unit lookup failed, hiding committee_only units', { error: err instanceof Error ? err.name : 'error' })
+          return [] as readonly string[]
+        })
+      : [],
+  )
+  const unitCache = new Map<string, Awaited<ReturnType<typeof getOrgUnit>>>()
+  const hits: PersonHit[] = []
+  for (const { u, name } of named) {
+    if (hits.length >= opts.limit) break
+    const units: string[] = []
+    for (const id of await getOrgUnitIdsForUser(u.id)) {
+      if (!unitCache.has(id)) unitCache.set(id, await getOrgUnit(id))
+      const unit = unitCache.get(id)
+      if (unit && canSeeOrgUnit(opts.viewer, unit, own.has(id))) units.push(unit.name)
+    }
+    if (units.length > 0) hits.push({ handle: u.username, name, email: null, units })
+  }
+  return hits
 }
 
 export async function listMembers(opts: { adminView: boolean; viewer: Viewer | null }): Promise<Member[]> {

@@ -142,3 +142,43 @@ export async function listProtocols(): Promise<readonly ProtokollRow[]> {
     JOIN org_units ou ON ou.id = p.committee_id
     ORDER BY p.meeting_date DESC`
 }
+
+/** A LIKE pattern that finds `text` anywhere: the characters LIKE treats as wildcards (and the escape
+ *  character itself) are escaped, so a typed `%` or `_` only ever matches itself. Pair with ESCAPE '\'. */
+export function containsPattern(text: string): string {
+  return `%${text.replace(/[\\%_]/g, (c) => `\\${c}`)}%`
+}
+
+export interface ProtocolSearchRow {
+  id: string
+  title: string
+  meetingDate: string // YYYY-MM-DD
+  status: 'draft' | 'submitted' | 'published'
+  committeeId: string
+  committeeName: string
+  visibility: 'all_members' | 'committee_only'
+}
+
+// Minutes whose title, body text or meeting date contains `query` (case-insensitive; the date as
+// DD.MM.YYYY or YYYY-MM-DD), newest meeting first, at most `limit` rows. The body is searched as text:
+// markup between < and > is left out. UNFILTERED across units, like listProtocols: the caller applies
+// governance/visibility.ts BEFORE it caps the list, so it asks for more rows than it shows.
+export async function searchProtocols(query: string, limit: number): Promise<readonly ProtocolSearchRow[]> {
+  const pattern = containsPattern(query)
+  return getDb()<ProtocolSearchRow[]>`
+    SELECT p.id::text                            AS "id",
+           p.title                               AS "title",
+           to_char(p.meeting_date, 'YYYY-MM-DD') AS "meetingDate",
+           p.status                              AS "status",
+           ou.id::text                           AS "committeeId",
+           ou.name                               AS "committeeName",
+           ou.visibility                         AS "visibility"
+    FROM protocols p
+    JOIN org_units ou ON ou.id = p.committee_id
+    WHERE p.title ILIKE ${pattern} ESCAPE '\\'
+       OR regexp_replace(coalesce(p.body_html, ''), '<[^>]*>', ' ', 'g') ILIKE ${pattern} ESCAPE '\\'
+       OR to_char(p.meeting_date, 'DD.MM.YYYY') ILIKE ${pattern} ESCAPE '\\'
+       OR to_char(p.meeting_date, 'YYYY-MM-DD') ILIKE ${pattern} ESCAPE '\\'
+    ORDER BY p.meeting_date DESC, p.id
+    LIMIT ${limit}`
+}
