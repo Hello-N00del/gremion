@@ -496,6 +496,15 @@ main() {
         collect_tenant "$id" "$slug"
     done <<< "$tenants"
     if [[ -n "$ONLY_SLUG" && -z "${T_ID[$ONLY_SLUG]:-}" ]]; then die "no customer ${ONLY_SLUG} in the registry" "$GREMION_EXIT_USAGE"; fi
+    # Which customers name a folder is only known when every customer's bindings were read. A move made
+    # without one of them could take a folder from a customer it cannot see, so --apply starts only when
+    # pass 1 read all of them (selected or not); the dry run still plans the rest and reports the failure.
+    if [[ "$APPLY" == yes ]]; then
+        for slug in ${TENANT_SLUGS[@]+"${TENANT_SLUGS[@]}"}; do
+            [[ -z "${T_ERR[$slug]:-}" ]] || problem "${slug}: ${T_ERR[$slug]}"
+        done
+        [[ "$N_PROBLEMS" == 0 ]] || die "--apply needs the bindings of every customer, and ${N_PROBLEMS} could not be read: nothing was changed" "$GREMION_EXIT_ASSERT"
+    fi
     for slug in ${TENANT_SLUGS[@]+"${TENANT_SLUGS[@]}"}; do
         [[ -z "$ONLY_SLUG" || "$slug" == "$ONLY_SLUG" ]] || continue
         process_tenant "$slug"

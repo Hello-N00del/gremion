@@ -7,8 +7,8 @@
 // Each customer gets a short stable key, derived from its tenant id, and every name the module creates
 // carries it:
 //
-//   group folder mount point   <unit name> (<key>)          e.g. "Vorstand (cfe3ee6357)"
-//   Nextcloud group id         ou-<key>-<unit id>           e.g. "ou-cfe3ee6357-0192f0c4-..."
+//   group folder mount point   <unit name> (<key>)          e.g. "Vorstand (1efb7da1c9)"
+//   Nextcloud group id         ou-<key>-<unit id>           e.g. "ou-1efb7da1c9-0192f0c4-..."
 //
 // The name SHOWN to members is the plain unit name: the mount point is only where the folder lives. A
 // folder is always found by the folder id the provisioning ledger stores ("<folderId>:<groupId>"), never

@@ -10,7 +10,7 @@ load 'test_helper/host'
 
 # two customers on one install, and the key of each (sha256 of the tenant id, 10 hex digits; the same
 # vector is asserted by modules/files/app/lib/server/files/namespace.test.ts)
-TA='01a2132e-7c11-7a3d-8b2e-4f5a6b7c8d9e'; HA='01a2132e7c117a3d8b2e4f5a6b7c8d9e'; KA='cfe3ee6357'
+TA='0192f0c4-0000-7000-8000-000000000001'; HA='0192f0c4000070008000000000000001'; KA='1efb7da1c9'
 TB='0192f0c4-0000-7000-8000-000000000002'; HB='0192f0c4000070008000000000000002'; KB='f6ddcbee9b'
 
 UA1='aaaaaaaa-0000-4000-8000-0000000000a1'   # alpha: "Vorstand", legacy folder 12
@@ -290,6 +290,24 @@ group_gone() {
     [ "$status" -eq 1 ]
     [[ "$output" == *"PROBLEM alpha: the ledger in t_${HA}__kernel could not be read"* ]]
     [[ "$output" == *"PLAN beta unit ${UB1} folder 14"* ]]
+}
+
+@test "--apply refuses to start while any customer's ledger cannot be read, selected or not; nothing is changed" {
+    seed_one_folder_in_both_ledgers
+    touch "$FAKE/db-missing-$HA"
+    before="$(state_sum)"
+    apply --slug beta
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"alpha"* ]]
+    [[ "$output" == *"could not be read"* ]]
+    [ "$(state_sum)" = "$before" ]
+    [ "$(mount_of 20)" = "Vorstand (Demo)" ]
+    [ "$(groups_of 20)" = "ou-${SEED}" ]
+    [ "$(members_of "ou-${SEED}")" = "ua,ub" ]
+    apply
+    [ "$status" -ne 0 ]
+    [ "$(state_sum)" = "$before" ]
+    [ ! -e "${GREMION_ROOT}/runtime/files-namespace" ] || [ -z "$(ls -A "${GREMION_ROOT}/runtime/files-namespace")" ]
 }
 
 @test "a group carried by two customers' folders is copied by roster and deleted only after the last one" {

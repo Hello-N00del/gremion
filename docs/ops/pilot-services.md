@@ -677,6 +677,14 @@ stops with the old group untouched.
   data are what a way back needs) and `--reason`. It takes `runtime/hostd.lock`, writes an access record
   per customer before it touches that customer, and writes the state it is about to change to
   `<root>/runtime/files-namespace/<time>.json` (mode 0600) before the first change.
+- `--apply` starts only when the bindings of every customer in the registry could be read, whether or
+  not `--slug` selects it: which customers name a folder is known only then. If one cannot be read it
+  prints a `PROBLEM` line per customer, exits 1 and changes nothing; the dry run still plans the others.
+- A folder made before the namespace whose ledger row never stored its folder id is not adopted by the
+  app: it makes a new, empty folder in the namespaced form (a mount point alone proves nothing on a
+  shared instance). The program only moves folders a ledger or a Karenz binding names, so a folder
+  like that stays under its plain name; find it by comparing `/files` with the Nextcloud folder list
+  after `--apply`.
 - Run the dry run first and read it. After `--apply`, open `/files` as a member of each customer: the
   units are listed by their plain name, and a document opens.
 - Until it has run, the app is unchanged for the folders that exist; only a folder made from now on

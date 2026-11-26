@@ -18,7 +18,7 @@ afterEach(() => {
   goto.mockReset()
 })
 
-const SUFFIX = ' (cfe3ee6357)'
+const SUFFIX = ' (1efb7da1c9)'
 
 function stubListing(files: unknown[]) {
   vi.stubGlobal(
@@ -41,7 +41,7 @@ describe('FileBrowser shows the plain unit name, not the namespaced mount point'
     await waitFor(() => expect(container.querySelectorAll('.fb-row').length).toBe(2))
     const rows = [...container.querySelectorAll('.fb-row')].map((r) => r.textContent ?? '')
     expect(rows[0]).toContain('Vorstand')
-    expect(rows[0]).not.toContain('cfe3ee6357')
+    expect(rows[0]).not.toContain('1efb7da1c9')
     expect(rows[1]).toContain('Persönlich')
   })
 
