@@ -544,24 +544,26 @@ wire_caldav_collection() {
 #       and reads it back BY IDENTIFIER: bearer validation on, unique-uid not off, the discovery URI the realm's
 #       own; prints its numeric id;
 #       the app list and the office URLs are checked as the primary wire checks them;
-#   6a. ONLY with NC_PROVIDER_PER_CUSTOMER=on in state.env (absent, empty or off: this step does not exist and
-#       nothing is recorded, as before the switch): records that id in the customer's registry row, merged
-#       into nc_target.providerId (the keys it holds stay), and reads it back: the app creates this customer's
-#       Nextcloud accounts under it, where the primary customer keeps NEXTCLOUD_OIDC_PROVIDER_ID. The primary
-#       wire writes nothing of the kind. Switching it off again does not remove an id already recorded.
-#       NOT YET SAFE: the provider has unique-uid on (derived ids) and the app still addresses accounts by the
-#       raw Keycloak id, so the wire says so when it records; leave the switch off until the app uses derived ids;
+#   6a. there is no step that records the provider id in the customer's registry row: NC_PROVIDER_PER_CUSTOMER
+#       accepts off (absent or empty means off) only, and `on` is refused before anything is read or written.
+#       A provider of the customer's own has unique-uid on (derived ids) and the app still addresses accounts by
+#       the raw Keycloak id (group membership, file access, erasure), so recording its id would send the
+#       customer's accounts to ids the app does not address. The way back for a row that holds nc_target.providerId
+#       is in docs/ops/pilot-services.md;
 #   6b. the customer's CalDAV collection; 6c. the mail login (mail_login_apply);
 #   8.  the creation order, as for any customer.
 wire_secondary() {
     local slug="$1" discovery="$2" nc_c="$3" nc_file="$4" tsd="$5"
     local ident="Keycloak-${slug}" prov prim pid keys ui_c token per_customer
 
-    # the switch of step 6a: judged before anything is read or written; a value that is neither on nor off is no
-    # silent default
+    # the switch of the provider id: judged before anything is read or written. It accepts off (absent or empty
+    # means off) only: `on` would have this wire record a provider id the app cannot address yet, and any other
+    # value is no silent default
     per_customer="$(env_key "$STATE_ENV" NC_PROVIDER_PER_CUSTOMER)"
-    [[ -z "$per_customer" || "$per_customer" == on || "$per_customer" == off ]] \
-        || die "NC_PROVIDER_PER_CUSTOMER in ${STATE_ENV} is neither on nor off (absent or empty means off). Nothing was written" "$GREMION_EXIT_USAGE"
+    [[ "$per_customer" != on ]] \
+        || die "NC_PROVIDER_PER_CUSTOMER=on in ${STATE_ENV} is refused: the provider of a customer's own creates Nextcloud accounts under derived ids, and the app still addresses accounts by the raw Keycloak id (group membership, file access, erasure). Set it to off or remove it. Nothing was written" "$GREMION_EXIT_USAGE"
+    [[ -z "$per_customer" || "$per_customer" == off ]] \
+        || die "NC_PROVIDER_PER_CUSTOMER in ${STATE_ENV} is not off (absent or empty means off). Nothing was written" "$GREMION_EXIT_USAGE"
 
     # -- 0 (first, nothing is written before it). the primary customer is wired, and the running app is current --
     wait_healthy "$nc_c" nextcloud
@@ -601,23 +603,6 @@ wire_secondary() {
     docker exec "$nc_c" curl -fsS --max-time 15 -o /dev/null "$discovery" \
         || die "the discovery URI is not reachable from inside the nextcloud container (a staging ACME certificate fails here): ${discovery}" "$GREMION_EXIT_ASSERT"
     ok "nextcloud: provider ${ident} (checkBearer, id ${pid}), apps enabled, discovery reachable"
-
-    # -- 6a. the customer's provider id, recorded in its own registry row (nc_target.providerId) --
-    # The app creates this customer's Nextcloud accounts under it (the env value NEXTCLOUD_OIDC_PROVIDER_ID is the
-    # primary customer's provider). MERGED into nc_target, so the keys the row holds stay; the id is a psql variable.
-    if [[ "$per_customer" == on ]]; then
-        local nn got
-        info "NC_PROVIDER_PER_CUSTOMER=on is NOT YET SAFE: this provider has unique-uid on, so Nextcloud accounts created under it carry derived ids, but the app still addresses accounts by the raw Keycloak id (group membership, file access, erasure). Leave the switch off until the app uses the derived id"
-        nn="$(prov_psql "$PROV_PG_CONTROL" "WITH u AS (UPDATE tenant SET nc_target = nc_target || jsonb_build_object('providerId', (:'pid')::int), updated_at = now() WHERE slug = :'slug' RETURNING 1) SELECT count(*) FROM u;" -v slug="$slug" -v pid="$pid")" \
-            || die "the registry row of ${slug} could not be updated with the Nextcloud provider id (nc_target.providerId, control database ${PROV_PG_CONTROL})" "$GREMION_EXIT_ASSERT"
-        [[ "${nn//[[:space:]]/}" == 1 ]] \
-            || die "nc_target.providerId of the registry row of ${slug} was not written (rows updated: ${nn//[[:space:]]/})" "$GREMION_EXIT_ASSERT"
-        got="$(prov_psql "$PROV_PG_CONTROL" "SELECT nc_target->>'providerId' FROM tenant WHERE slug = :'slug';" -v slug="$slug")" \
-            || die "the registry row of ${slug} could not be read back (nc_target.providerId)" "$GREMION_EXIT_ASSERT"
-        [[ "${got//[[:space:]]/}" == "$pid" ]] \
-            || die "the registry row of ${slug} reads back nc_target.providerId '${got//[[:space:]]/}', not the provider id ${pid} of ${ident}" "$GREMION_EXIT_ASSERT"
-        ok "registry: nc_target.providerId of ${slug} is ${pid} (the app re-reads the row within its resolution cache TTL)"
-    fi
 
     # -- 6b. the customer's CalDAV collection --
     wire_caldav_collection "$slug" "$nc_c"

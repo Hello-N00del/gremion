@@ -197,19 +197,22 @@ set, so:
   identifier (`checkBearer` true, unique-uid not off, the customer's discovery
   URI), prints its numeric id, and keeps the app and office
   checks (read only; `richdocuments:activate-config` and the callback URL stay
-  the primary wire's); 6a runs only with `NC_PROVIDER_PER_CUSTOMER=on` in
-  `state.env` (absent, empty or `off`, the default: the step does not exist and
-  nothing is recorded; any other value is refused before anything is written).
-  It records that id in the customer's registry row (`nc_target.providerId`,
-  merged, read back), which the app then uses instead of
-  `NEXTCLOUD_OIDC_PROVIDER_ID` for this customer's Nextcloud accounts. The
-  primary customer keeps the env value in every case, and switching the key off
-  again does not remove an id already recorded. Accounts under such a provider
-  carry the ids user_oidc derives for it (see `--unique-uid=1` above), not the
-  raw Keycloak id, and the app does not address them that way yet (group
-  membership, file access and erasure use the raw Keycloak id). The switch is
-  NOT YET SAFE: leave it off until the app addresses derived ids; 6b creates the customer's CalDAV collection and 6c
-  the mail login;
+  the primary wire's); the provider id is not recorded anywhere. The key
+  `NC_PROVIDER_PER_CUSTOMER` in `state.env` accepts `off` only for now (absent
+  or empty means `off`, the default): `on` is refused by `gremion-validate-env`
+  and by the wire, before anything is written, and so is any other value. The
+  reason: accounts under a provider of the customer's own carry the ids
+  user_oidc derives for it (see `--unique-uid=1` above), not the raw Keycloak
+  id, and the app does not address them that way yet (group membership, file
+  access and erasure use the raw Keycloak id). Every customer, the primary
+  included, keeps `NEXTCLOUD_OIDC_PROVIDER_ID`. The app would take a different
+  id from `nc_target.providerId` of the customer's registry row if the row held
+  one, and nothing in the product writes it. A row that does hold it (set by
+  hand, or by an earlier build of the wire) is cleared in the control database
+  with `UPDATE tenant SET nc_target = nc_target - 'providerId', updated_at =
+  now() WHERE slug = '<slug>';`; the app re-reads the row within about 30
+  seconds. Accounts already created under such an id stay where they are; 6b
+  creates the customer's CalDAV collection and 6c the mail login;
 - step 7 does not recreate `gremion-ui`: the mail login writes the customer's
   registry row and `config.json`, which the app re-reads within about a minute,
   so no other customer's app restarts;

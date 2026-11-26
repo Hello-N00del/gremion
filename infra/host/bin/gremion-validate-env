@@ -301,15 +301,15 @@ check_synapse_jwt_login() {
     ok "Synapse login switch: ${v}"
 }
 
-# NC_PROVIDER_PER_CUSTOMER is an OPTIONAL key (a comment in the state template): on makes the wire of a customer on
-# a secondary host record that customer's own Nextcloud provider id in its registry row; absent, empty and off are
-# today's behaviour. Judged only when a file declares it with a value; anything but on and off fails. The finding
-# names the key, never the value.
+# NC_PROVIDER_PER_CUSTOMER is an OPTIONAL key (a comment in the state template) that accepts off only for now: a
+# secondary customer's own Nextcloud provider creates accounts under derived ids and the app still addresses
+# accounts by the raw Keycloak id, so on is refused here and in the wire. Absent, empty and off are today's
+# behaviour. Judged only when a file declares it with a value. The finding names the key, never the value.
 check_nc_provider_per_customer() {
     local v="${NC_PROVIDER_PER_CUSTOMER-}"
     [[ -n "$v" ]] || return 0
-    if [[ "$v" != on && "$v" != off ]]; then
-        fail "NC_PROVIDER_PER_CUSTOMER is refused: it is on or off (absent or empty means off)"
+    if [[ "$v" != off ]]; then
+        fail "NC_PROVIDER_PER_CUSTOMER is refused: it is off for now (absent or empty means off); a customer's own provider creates accounts under derived ids that the app does not address yet"
         return 0
     fi
     ok "NC_PROVIDER_PER_CUSTOMER: ${v}"

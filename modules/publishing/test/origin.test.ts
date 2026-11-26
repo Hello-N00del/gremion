@@ -566,4 +566,25 @@ describe('boot — the leaf REPORTS an unusable link base instead of crash-loopi
     ).toMatch(/allowLoopbackLinks/)
     expect(source).not.toMatch(/process\.env\.NEWSLETTER_ALLOW_LOOPBACK_LINKS/)
   })
+
+  it('derives the override from the flag alone: the boot value is informational, so it must not gate the override', () => {
+    expect(
+      source,
+      'the override is the flag (loopbackLinksAllowed), like the content leaf reads its own flag; ' +
+        'tying it to a usable loopback boot value refuses a kernel answer the README says is allowed',
+    ).toMatch(/const allowLoopbackLinks = loopbackLinksAllowed\(process\.env\)/)
+    expect(source).not.toMatch(/linkBase\.loopbackOverride/)
+  })
+
+  it('the flag alone switches the override on, with no boot value, a real https origin or a loopback one', () => {
+    for (const env of [
+      { NEWSLETTER_ALLOW_LOOPBACK_LINKS: '1' },
+      { NEWSLETTER_ALLOW_LOOPBACK_LINKS: '1', PUBLIC_BASE_URL: 'https://rat.example.org' },
+      { NEWSLETTER_ALLOW_LOOPBACK_LINKS: 'true', PUBLIC_BASE_URL: 'http://localhost:3000' },
+    ]) {
+      expect(dispatchModule.loopbackLinksAllowed(env)).toBe(true)
+    }
+    expect(dispatchModule.loopbackLinksAllowed({ PUBLIC_BASE_URL: 'http://localhost:3000' })).toBe(false)
+    expect(dispatchModule.loopbackLinksAllowed({ NEWSLETTER_ALLOW_LOOPBACK_LINKS: '0' })).toBe(false)
+  })
 })

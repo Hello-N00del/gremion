@@ -3,9 +3,10 @@
 //
 // The provider belongs to the customer's realm. The primary customer's provider is the one the install's
 // NEXTCLOUD_OIDC_PROVIDER_ID names (default 1). A customer on a secondary host has a provider of its own;
-// when the operator switched NC_PROVIDER_PER_CUSTOMER on, the wire records its id in the customer's registry
-// row (nc_target.providerId) and the tenant context carries it as services.ncProviderId. Without it (the
-// primary customer, every install with the switch off) the customer keeps the env value, exactly as before.
+// if the customer's registry row names its id (nc_target.providerId), the tenant context carries it as
+// services.ncProviderId and it wins. Nothing writes that key for now (the wire refuses NC_PROVIDER_PER_CUSTOMER=on,
+// docs/ops/pilot-services.md says how to clear a row that holds one). Without it (the primary customer, every
+// install with the switch off) the customer keeps the env value, exactly as before.
 import { serviceEnv } from '$lib/server/env/service-env'
 import { getTenantOrNull, type TenantContext } from '$lib/server/tenant/context'
 
