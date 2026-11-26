@@ -9,7 +9,7 @@ import { createServer } from './http/server.js'
 import { buildApiRoutes } from './http/routes.js'
 import { storeFor, listTenants, closeAllPools } from './tenant-store.js'
 import { startScheduler } from './scheduler.js'
-import { dispatch, resolveLinkBase, logLinkBaseResolution } from './dispatch.js'
+import { dispatch, resolveLinkBase, logLinkBaseResolution, loopbackLinksAllowed } from './dispatch.js'
 import { createShutdown, resolveShutdownTimeoutMs } from './shutdown.js'
 import { createRelaySupervisor, type RelaySupervisor } from './relay-supervisor.js'
 import {
@@ -172,7 +172,9 @@ async function main(): Promise<void> {
   // refusal belongs on the one operation a bad link base corrupts, and
   // dispatch() enforces it, on the kernel's answer, before a single recipient
   // is claimed.
-  const allowLoopbackLinks = linkBase.usable && linkBase.loopbackOverride
+  // The loopback override is the flag alone (NEWSLETTER_ALLOW_LOOPBACK_LINKS), not a function of the boot
+  // value above: that one is informational, and the kernel's answer is what a send checks.
+  const allowLoopbackLinks = loopbackLinksAllowed(process.env)
 
   // F3 (T16): TRACE_EXPORTER — 'log' activates logTracer (default for the leaf);
   // anything else (incl. 'none') falls back to the behaviorally-silent noopTracer.
