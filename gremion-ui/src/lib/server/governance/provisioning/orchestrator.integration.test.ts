@@ -118,14 +118,19 @@ describe('orchestrator.provisionOrgUnit', () => {
     const u = await unit({ wantsMatrixRoom: false })
     const other = await unit({ name: 'V', wantsMatrixRoom: false })
     await ensureResourceRow(other.id, 'nextcloud')
+    let statusRightAfterRecording: string | undefined
     const recorder: ProvisioningSubsystem = {
       ...okAdapter('nextcloud', 'unused'),
       async ensureResource(_unit, ctx) {
         await ctx.recordExternalId?.('13:ou-y')
+        // read at the moment of recording: the failure handler has not run yet, so a status written
+        // by the recorder itself cannot be hidden by it
+        statusRightAfterRecording = (await getResource(u.id, 'nextcloud'))?.status
         throw new Error('stop here')
       }
     }
     await provisionOrgUnit(u.id, { ...allOk(), nextcloud: recorder })
+    expect(statusRightAfterRecording).toBe('pending')
     // the unit's own row holds the recorded id, and recording it did not finish the resource
     const own = await getResource(u.id, 'nextcloud')
     expect(own?.external_id).toBe('13:ou-y')

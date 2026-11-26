@@ -189,13 +189,15 @@ describe('nextcloud subsystem', () => {
       expect(nc.grants).toEqual([[77, 'ou-abc']])
     })
 
-    it('does not mint a folder when the folder list is empty: a recorded folder cannot be verified then', async () => {
+    it('creates a new folder when the recorded one is gone and Nextcloud lists no folder at all', async () => {
       const nc = fakeNc([])
       const { row, ctx } = ledgerRow()
       row.externalId = '41:ou-abc'
-      await expect(subsystem(nc).ensureResource(unit, ctx, row.externalId)).rejects.toThrow('cannot be verified')
-      expect(nc.folders).toHaveLength(0)
-      expect(row.externalId).toBe('41:ou-abc')
+      const r = await subsystem(nc).ensureResource(unit, ctx, row.externalId)
+      expect(nc.folders).toEqual(['Vorstand'])
+      expect(r.externalId).toBe('77:ou-abc')
+      expect(row.externalId).toBe('77:ou-abc')
+      expect(nc.grants).toEqual([[77, 'ou-abc']])
     })
 
     it('keeps a recorded folder that already carries the unit group, without granting again', async () => {
@@ -231,6 +233,26 @@ describe('nextcloud subsystem', () => {
       await subsystem(nc).ensureResource(unit, ctx, row.externalId)
       expect(nc.permissionSets).toHaveLength(0)
       expect(nc.grants).toHaveLength(0)
+    })
+
+    it('leaves permissions an operator lowered alone: a recorded folder with the unit group and other bits is not reset', async () => {
+      const nc = fakeNc([{ id: 41, mountPoint: 'Vorstand', groups: ['ou-abc'], groupPermissions: { 'ou-abc': 1 } }])
+      const { row, ctx } = ledgerRow()
+      row.externalId = '41:ou-abc'
+      const r = await subsystem(nc).ensureResource(unit, ctx, row.externalId)
+      expect(r.externalId).toBe('41:ou-abc')
+      expect(nc.permissionSets).toHaveLength(0)
+      expect(nc.grants).toHaveLength(0)
+    })
+
+    it('does not grant a recorded group-less folder whose mount point is another name: it makes its own', async () => {
+      const nc = fakeNc([{ id: 41, mountPoint: 'Fremd', groups: [] }, { id: 5, mountPoint: 'X', groups: ['ou-x'] }])
+      const { row, ctx } = ledgerRow()
+      row.externalId = '41:ou-abc'
+      const r = await subsystem(nc).ensureResource(unit, ctx, row.externalId)
+      expect(nc.folders).toEqual(['Vorstand'])
+      expect(r.externalId).toBe('77:ou-abc')
+      expect(nc.grants).toEqual([[77, 'ou-abc']]) // folder 41 was not granted
     })
 
     it('does not adopt a recorded folder that carries only another group: it makes its own', async () => {

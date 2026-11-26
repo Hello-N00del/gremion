@@ -61,24 +61,20 @@ export function createNextcloudSubsystem(deps: NextcloudDeps, providerId: number
         const folder = folders.find((f) => f.id === recorded.folderId)
         if (folder?.groups.includes(groupId)) {
           // The group is on the folder, but an earlier grant may have stopped between adding it and setting
-          // its permissions. Set them again only when Nextcloud reports bits other than the ones we grant.
-          const bits = folder.groupPermissions?.[groupId]
-          if (bits !== undefined && bits !== 31) await nc.setGroupFolderPermissions(folder.id, groupId, 31)
+          // its permissions. Finish that only when Nextcloud reports no bits at all: any other value is
+          // what the unit's folder has been set to since, and is left as it is.
+          if (folder.groupPermissions?.[groupId] === 0) await nc.setGroupFolderPermissions(folder.id, groupId, 31)
           return { externalId: existing }
         }
-        if (folder && folder.groups.length === 0) {
-          // made by an earlier attempt that stopped before the grant: no other group holds it
+        if (folder && folder.mountPoint === unit.name && folder.groups.length === 0) {
+          // made by an earlier attempt that stopped before the grant: it bears this unit's name and no
+          // group holds it
           await nc.createGroup(groupId)
           await nc.assignGroupFolderPermissions(folder.id, groupId, 31)
           return { externalId: encodeRef(folder.id, groupId) }
         }
-        // An empty list while a folder is recorded is a failed read, not proof that the folder is gone:
-        // minting another one would hand the unit an empty folder beside the real one.
-        if (!folder && folders.length === 0) {
-          throw new Error(`[nextcloud] the folder list is empty; recorded folder ${recorded.folderId} cannot be verified`)
-        }
-        // The recorded folder is gone, or carries only other groups (so it is not this unit's):
-        // fall through and make a folder of its own.
+        // The recorded folder is gone, belongs to another name, or carries only other groups (so it is not
+        // this unit's): fall through and make a folder of its own.
       }
 
       await nc.createGroup(groupId)
