@@ -80,10 +80,10 @@
 
   <!-- Color vision -->
   <section>
-    <h3 class="text-sm font-semibold mb-1" style="font-family: var(--font-display);">{$t('settings.appearance.cb.heading')}</h3>
+    <h3 id="cb-heading" class="text-sm font-semibold mb-1" style="font-family: var(--font-display);">{$t('settings.appearance.cb.heading')}</h3>
     <p class="text-xs text-ink-muted mb-4">{$t('settings.appearance.cb.help')}</p>
 
-    <div class="space-y-2">
+    <div class="space-y-2" role="radiogroup" aria-labelledby="cb-heading">
       {#each MODES as mode}
         <label class="flex items-start gap-4 p-3 rounded-lg border border-border cursor-pointer hover:bg-surface-2/50 transition-colors" class:border-accent={$colorblind === mode.key}>
           <input
@@ -121,12 +121,13 @@
 
   <!-- Theme -->
   <section>
-    <h3 class="text-sm font-semibold mb-1" style="font-family: var(--font-display);">{$t('settings.appearance.theme.heading')}</h3>
+    <h3 id="theme-heading" class="text-sm font-semibold mb-1" style="font-family: var(--font-display);">{$t('settings.appearance.theme.heading')}</h3>
     <p class="text-xs text-ink-muted mb-4">{$t('settings.appearance.theme.help')}</p>
-    <div class="flex gap-2">
+    <div class="flex gap-2" role="group" aria-labelledby="theme-heading">
       {#each THEMES as theme}
         <button
           type="button"
+          aria-pressed={$themeMode === theme.key}
           onclick={() => themeMode.set(theme.key)}
           class="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg border transition-colors text-sm"
           style={$themeMode === theme.key
@@ -142,12 +143,13 @@
 
   <!-- Font size -->
   <section>
-    <h3 class="text-sm font-semibold mb-1" style="font-family: var(--font-display);">{$t('settings.appearance.font.heading')}</h3>
+    <h3 id="font-heading" class="text-sm font-semibold mb-1" style="font-family: var(--font-display);">{$t('settings.appearance.font.heading')}</h3>
     <p class="text-xs text-ink-muted mb-4">{$t('settings.appearance.font.help')}</p>
-    <div class="flex gap-2">
+    <div class="flex gap-2" role="group" aria-labelledby="font-heading">
       {#each FONT_SIZES as f}
         <button
           type="button"
+          aria-pressed={$fontSize === f.key}
           onclick={() => fontSize.set(f.key)}
           class="flex-1 py-2 rounded-lg border text-sm transition-colors"
           style={$fontSize === f.key
