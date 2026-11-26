@@ -3,10 +3,10 @@
 # image as /synapse-healthcheck.sh and named by both the Dockerfile
 # HEALTHCHECK and the compose service.
 #
-# Healthy means LOGIN WORKS, not "the process answers": the entrypoint boots
-# Synapse with jwt_config disabled when the identity provider's realm key
-# cannot be fetched, and /_matrix/client/versions answers 200 either way. So
-# this reads GET /_matrix/client/v3/login and exits 0 only when its flows list
+# Healthy means LOGIN WORKS, not "the process answers": /_matrix/client/versions
+# answers 200 whatever the login configuration is (the entrypoint itself waits for
+# the realm key and ends the container rather than boot without it). So this
+# reads GET /_matrix/client/v3/login and exits 0 only when its flows list
 #   - org.matrix.login.jwt (gremion-ui's token exchange), and
 #   - an m.login.sso flow whose identity_providers include oidc-keycloak.
 # Anything else -- a missing arm, an unreachable listener, a body that is not

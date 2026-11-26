@@ -144,8 +144,12 @@ and the member import.
 5. boots `matrix` again without bootstrap mode (that closes shared-secret
    registration) and asserts `GET /_matrix/client/versions` and
    `GET /_matrix/client/v3/login` through the edge, the latter listing
-   `org.matrix.login.jwt` (a failed realm key fetch boots Synapse without it,
-   and `/versions` answers regardless). With `SYNAPSE_JWT_LOGIN=off` in
+   `org.matrix.login.jwt` (the chat container waits for the realm key and ends
+   instead of booting without it; `/versions` answers regardless). Both reads
+   are retried for up to 60 s (`GREMION_SERVICES_EDGE_WAIT_S`, every
+   `GREMION_SERVICES_EDGE_POLL_S` = 3 s) because the edge may not route the
+   recreated container at once; a failure names the last HTTP status and the
+   first 200 bytes of the body. With `SYNAPSE_JWT_LOGIN=off` in
    `state.env` (default on; see "Chat switch-over runbook") steps 2 to 5 change:
    no synapse client secret is copied, no issuer or fetch URL is written (the
    profiles still are), the running `matrix` must carry `SYNAPSE_JWT_LOGIN=off`

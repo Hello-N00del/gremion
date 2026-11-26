@@ -30,9 +30,13 @@ set -euo pipefail
 #      ONCE, and the token is printed only then. The token is captured without
 #      echoing or logging it and written into state.env and both app-<colour>.env;
 #   5. boots matrix again WITHOUT bootstrap mode (that closes shared-secret
-#      registration) and asserts the login flows list org.matrix.login.jwt: a
-#      failed realm key fetch boots Synapse without it, and /versions answers
-#      regardless;
+#      registration) and asserts the login flows list org.matrix.login.jwt (the
+#      entrypoint waits for the realm key and ends instead of booting without it;
+#      /versions answers whatever the login configuration is). Both reads go
+#      through the edge, which may not route the recreated container at once, so
+#      each is retried every GREMION_SERVICES_EDGE_POLL_S (default 3) seconds for up
+#      to GREMION_SERVICES_EDGE_WAIT_S (default 60); a failure names the last HTTP
+#      status and the first 200 bytes of the body;
 #      With SYNAPSE_JWT_LOGIN=off in state.env (optional; absent or empty = on, the steps above as they
 #      always were) the shared chat service has neither the JWT login nor the OIDC provider: the realm's
 #      synapse client secret is not needed and not copied (step 2 only makes sure the mount's host
@@ -99,6 +103,10 @@ umask 077
 
 PROFILES_FILE="${SCRIPT_DIR}/../module-profiles.json"
 WAIT_S="${GREMION_SERVICES_WAIT_S:-420}"
+# The reads of matrix through the edge right after its recreate (wire's step 5): the budget in seconds and the pause
+# between two attempts. The edge may not route the new container at once.
+EDGE_WAIT_S="${GREMION_SERVICES_EDGE_WAIT_S:-60}"
+EDGE_POLL_S="${GREMION_SERVICES_EDGE_POLL_S:-3}"
 BOT_LOCALPART="gremion-admin-bot"
 
 usage() {
@@ -189,13 +197,47 @@ wait_healthy() {
 # edge_curl <url> -- the edge answering by its public name, resolved to this host's own edge address
 # (a hairpin to the public address is not assumed). A certificate that is not publicly trusted (an
 # ACME staging directory) fails here, loudly.
-edge_curl() {
+edge_curl() { edge_curl_with "$1" -fsS; }
+
+# edge_curl_with <url> <curl flags...> -- edge_curl's pinned request; the caller's flags come after the defaults (a later --max-time wins).
+edge_curl_with() {
     local url="$1" host rest
     host="${url#https://}"; host="${host%%/*}"
     rest="${url#https://"${host}"}"
     # --resolve pins the PORT too, so a non-443 edge port has to be in the URL for the pin to apply
     [[ "$EDGE_HTTPS_PORT" == 443 ]] || url="https://${host}:${EDGE_HTTPS_PORT}${rest}"
-    curl -fsS --max-time 20 --resolve "${host}:${EDGE_HTTPS_PORT}:${EDGE_BIND_IP}" "$url"
+    curl --max-time 20 --resolve "${host}:${EDGE_HTTPS_PORT}:${EDGE_BIND_IP}" "${@:2}" "$url"
+}
+
+# edge_read <url> <jq-filter> -- the edge read after matrix was recreated: retried every EDGE_POLL_S seconds until
+# EDGE_WAIT_S seconds of wall clock have passed (one attempt is capped at 10 s, so the budget holds against an edge that
+# hangs) and the edge answers HTTP 2xx with a body the jq filter accepts (the login reads pass a filter that wants a
+# flows list). The body is left in EDGE_BODY; on failure EDGE_LAST holds what the last attempt got -- the HTTP status
+# (000: no answer), curl's own error line if it printed one, and the first 200 bytes of the body -- for the caller's
+# message. Not a command substitution on purpose: the caller reads the variables. A body that answered but says the
+# wrong thing is the caller's to judge, once; only the transport and the shape of the answer are retried here.
+EDGE_BODY=""
+EDGE_LAST=""
+edge_read() {
+    local url="$1" filter="$2" start="$SECONDS" out status body errf cerr
+    errf="$(mktemp)" || die "cannot create a temp file for the edge read" "$GREMION_EXIT_ASSERT"
+    while :; do
+        out="$(edge_curl_with "$url" -sS --max-time 10 -w '|%{http_code}' 2>"$errf")" || out="${out:-|000}"
+        status="${out##*|}"
+        body="${out%|*}"
+        if [[ "$status" =~ ^2[0-9][0-9]$ ]] && jq -e "$filter" <<< "$body" >/dev/null 2>&1; then
+            EDGE_BODY="$body"
+            rm -f "$errf"
+            return 0
+        fi
+        cerr="$(head -c 200 "$errf" | tr -c '[:print:]' ' ')"
+        EDGE_LAST="HTTP ${status}${cerr:+, curl said: ${cerr}}, body starts: $(printf '%s' "${body:0:200}" | tr -c '[:print:]' ' ')"
+        if (( SECONDS - start >= EDGE_WAIT_S )); then
+            rm -f "$errf"
+            return 1
+        fi
+        sleep "$EDGE_POLL_S"
+    done
 }
 
 # Armed by wire's step 4, disarmed once step 5 has recreated matrix: an exit in between (a die)
@@ -636,6 +678,8 @@ cmd_wire() {
     # the shared chat service's own JWT and SSO login (state.env; absent or empty = on, as the wire always was)
     jwt_login="$(env_key "$STATE_ENV" SYNAPSE_JWT_LOGIN)"
     [[ -n "$jwt_login" ]] || jwt_login=on
+    [[ "$EDGE_WAIT_S" =~ ^[0-9]+$ && "$EDGE_POLL_S" =~ ^[1-9][0-9]*$ ]] \
+        || die "GREMION_SERVICES_EDGE_WAIT_S ('${EDGE_WAIT_S}') must be a number of seconds and GREMION_SERVICES_EDGE_POLL_S ('${EDGE_POLL_S}') a positive one" "$GREMION_EXIT_USAGE"
     [[ "$jwt_login" == on || "$jwt_login" == off ]] \
         || die "SYNAPSE_JWT_LOGIN in ${STATE_ENV} must be on or off (empty or absent means on)" "$GREMION_EXIT_USAGE"
     host="$(env_key "$STATE_ENV" PILOT_TENANT_HOST)"
@@ -814,17 +858,25 @@ cmd_wire() {
         [[ "$(docker exec "$mx" printenv SYNAPSE_JWT_LOGIN 2>/dev/null | tr -d '[:space:]')" == off ]] \
             || die "matrix does not carry SYNAPSE_JWT_LOGIN=off (docker exec ${mx} printenv): the running service was not recreated with the switch" "$GREMION_EXIT_ASSERT"
     fi
-    edge_curl "https://${platform}/_matrix/client/versions" >/dev/null \
-        || die "GET /_matrix/client/versions through the edge failed (router, certificate or DNS of ${platform})" "$GREMION_EXIT_ASSERT"
+    # The edge may not route the recreated container at once (the versions read has answered and the login read
+    # right after it failed on a live install): both reads are retried for a bounded time, and what the last
+    # attempt got is part of the message when the budget is spent.
+    edge_read "https://${platform}/_matrix/client/versions" '(.versions | type) == "array"' \
+        || die "GET /_matrix/client/versions through the edge failed (router, certificate or DNS of ${platform}); last read: ${EDGE_LAST}" "$GREMION_EXIT_ASSERT"
     if [[ "$jwt_login" == on ]]; then
-        edge_curl "https://${platform}/_matrix/client/v3/login" | jq -e '[.flows[]?.type] | index("org.matrix.login.jwt") != null' >/dev/null 2>&1 \
-            || die "GET /_matrix/client/v3/login does not list org.matrix.login.jwt: Synapse booted with jwt_config disabled because the realm key fetch failed (read: docker logs ${mx}; if the in-network fetch is refused under sslRequired=all, GREMION_WIRE_FETCH_URL names the URL to fetch from)" "$GREMION_EXIT_ASSERT"
+        local no_jwt="GET /_matrix/client/v3/login does not list org.matrix.login.jwt: Synapse booted with jwt_config disabled because the realm key fetch failed (read: docker logs ${mx}; if the in-network fetch is refused under sslRequired=all, GREMION_WIRE_FETCH_URL names the URL to fetch from)"
+        edge_read "https://${platform}/_matrix/client/v3/login" '(.flows | type) == "array"' \
+            || die "${no_jwt}; last read: ${EDGE_LAST}" "$GREMION_EXIT_ASSERT"
+        jq -e '[.flows[]?.type] | index("org.matrix.login.jwt") != null' <<< "$EDGE_BODY" >/dev/null 2>&1 \
+            || die "$no_jwt" "$GREMION_EXIT_ASSERT"
         ok "matrix: out of bootstrap mode, login flows list org.matrix.login.jwt"
     else
         # off: a homeserver without the JWT and SSO login (and with password login off, as the compose service runs it)
         # lists the application-service flow and nothing else; the flow list is read back, never inferred
         local flows want_flows='["m.login.application_service"]'
-        flows="$(edge_curl "https://${platform}/_matrix/client/v3/login" | jq -ce 'if (.flows | type) == "array" then [.flows[].type] | sort else error("no flows list") end' 2>/dev/null)" \
+        edge_read "https://${platform}/_matrix/client/v3/login" '(.flows | type) == "array"' \
+            || die "GET /_matrix/client/v3/login through the edge did not answer a login-flows document (read: docker logs ${mx}); last read: ${EDGE_LAST}" "$GREMION_EXIT_ASSERT"
+        flows="$(jq -ce '[.flows[].type] | sort' <<< "$EDGE_BODY" 2>/dev/null)" \
             || die "GET /_matrix/client/v3/login through the edge did not answer a login-flows document (read: docker logs ${mx})" "$GREMION_EXIT_ASSERT"
         [[ "$flows" == "$want_flows" ]] \
             || die "GET /_matrix/client/v3/login lists ${flows}, but with SYNAPSE_JWT_LOGIN=off it must list exactly the expected set ${want_flows}: a JWT or SSO login flow means the homeserver still has a login block (read: docker logs ${mx}); a missing flow or an extra one means the homeserver is not the one this wire was written for" "$GREMION_EXIT_ASSERT"
