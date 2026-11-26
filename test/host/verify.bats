@@ -582,7 +582,7 @@ fake_leaf() {   # <id> <leaf> <colour>
 }
 
 green_colour_with_leaves() {   # <leaf>...
-    local leaf n=5 key
+    local leaf n=50 key
     fake_container c4 gremion-ui-green "gremion-ui-green gremion-public-green" running healthy 0 "" \
         '{"com.docker.compose.project":"staging-app-green","com.docker.compose.service":"gremion-ui"}'
     {
@@ -668,7 +668,7 @@ prepare_green_colour() {
 
 @test "--colour fails when a leaf running in the colour's project does not resolve" {
     prepare_green_colour
-    fake_leaf c20 votes green
+    fake_leaf c80 votes green
     run "$VERIFY" --colour green --hosts "$HOSTS"
     [ "$status" -eq 1 ]
     [[ "$output" == *"votes-service-green does not resolve"* ]]
@@ -677,7 +677,7 @@ prepare_green_colour() {
 
 @test "--colour ignores a leaf container of the other colour's project" {
     prepare_green_colour
-    fake_container c21 votes-service-blue votes-service-blue running healthy 0 "" \
+    fake_container c81 votes-service-blue votes-service-blue running healthy 0 "" \
         '{"com.docker.compose.project":"staging-app-blue","com.docker.compose.service":"votes-service"}'
     run "$VERIFY" --colour green --hosts "$HOSTS"
     [ "$status" -eq 0 ]
