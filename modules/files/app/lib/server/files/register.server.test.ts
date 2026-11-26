@@ -3,6 +3,7 @@
 // Module Karenz (phase 2, Task 16): and its Karenz participant, its "retains nothing" declaration and its
 // retained sink, into the kernel's REAL registries (the registrations are the behaviour under test).
 import { describe, expect, it, vi } from 'vitest'
+import type { TenantContext } from '$lib/server/tenant/context'
 
 const h = vi.hoisted(() => ({
   erasure: [] as { moduleId: string }[],
@@ -60,12 +61,12 @@ describe('files register.server', () => {
   // provider. A customer that was wired with its own provider carries its id in its registry row.
   describe('the Nextcloud provisioning adapter and the user_oidc provider id', () => {
     const tenant = (slug: string, ncProviderId?: number) =>
-      ({ id: `id-${slug}`, slug, services: { ncProviderId } }) as unknown as import('$lib/server/tenant/context').TenantContext
-    const build = async (ctx: import('$lib/server/tenant/context').TenantContext | null) => {
+      ({ id: `id-${slug}`, slug, services: { ncProviderId } }) as unknown as TenantContext
+    const build = async (ctx: TenantContext) => {
       const { runWithTenant } = await import('$lib/server/tenant/context')
-      const factory = h.factories['nextcloud']
-      return (ctx ? runWithTenant(ctx, () => factory({})) : factory({})) as { providerId: number }
+      return runWithTenant(ctx, () => h.factories['nextcloud']({})) as { providerId: number }
     }
+    const buildOutsideAnyTenant = () => h.factories['nextcloud']({}) as { providerId: number }
 
     it('two customers with their own provider ids each get their own', async () => {
       h.env.NEXTCLOUD_OIDC_PROVIDER_ID = '1'
@@ -82,7 +83,7 @@ describe('files register.server', () => {
 
     it('outside a tenant scope the env value is used and nothing throws (the factory read no tenant before)', async () => {
       h.env.NEXTCLOUD_OIDC_PROVIDER_ID = '4'
-      expect(await build(null)).toEqual({ providerId: 4 })
+      expect(buildOutsideAnyTenant()).toEqual({ providerId: 4 })
     })
   })
 })

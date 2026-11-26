@@ -189,8 +189,12 @@ the primary customer's Nextcloud provider `Keycloak` is never set, so:
   identifier (`checkBearer` true, unique-uid not off, the customer's discovery
   URI), prints its numeric id, and keeps the app and office
   checks (read only; `richdocuments:activate-config` and the callback URL stay
-  the primary wire's); 6b creates the customer's CalDAV collection and 6c the
-  mail login;
+  the primary wire's); 6a records that id in the customer's registry row
+  (`nc_target.providerId`, merged, read back), which the app uses instead of
+  `NEXTCLOUD_OIDC_PROVIDER_ID` for this customer's Nextcloud accounts (the
+  primary customer keeps the env value, and a secondary customer wired before
+  this step keeps it until its wire runs again); 6b creates the customer's
+  CalDAV collection and 6c the mail login;
 - step 7 does not recreate `gremion-ui`: the mail login writes the customer's
   registry row and `config.json`, which the app re-reads within about a minute,
   so no other customer's app restarts;
