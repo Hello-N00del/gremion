@@ -271,6 +271,18 @@ drv_hostlock_free() { ( exec 9>>"${GREMION_ROOT}/runtime/hostd.lock"; flock -n 9
     [ -s "${GREMION_ROOT}/data/cd/ALERT" ]
 }
 
+@test "tick: the beat is written as soon as the lock is taken, before the state is read (a watchdog that probes in between finds this run's beat, not the previous one's)" {
+    # a state this program cannot read stops the tick at its first read of it, so whatever
+    # the heartbeat file holds then was written before that read
+    printf 'not json' > "${GREMION_ROOT}/data/cd/state.json"
+    printf '1600000000 idle tick 1600000000 600 99999
+' > "${GREMION_ROOT}/runtime/cd/heartbeat"
+    run cd_prog tick
+    [ "$status" -eq 2 ]
+    [ "$(cut -d' ' -f1,3 "${GREMION_ROOT}/runtime/cd/heartbeat")" = "$(cd_clock) tick" ]
+    [ "$(cut -d' ' -f6 "${GREMION_ROOT}/runtime/cd/heartbeat")" != 99999 ]
+}
+
 @test "tick: the poll is stored in the state (verdict, tip, time)" {
     drv_seed
     cd_stub_set cd_gh_candidate 0 '{"verdict":"none","sha":"","reason":"no_green_commit","final":true,"tip":"cccccccccccccccccccccccccccccccccccccccc"}'

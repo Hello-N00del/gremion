@@ -87,7 +87,7 @@ wd() { run nlib 'cd_cmd_watchdog'; }
 
 @test "stuck: a 60 minute build with a live heartbeat is NOT stuck" {
     hold_cd_lock
-    hb $(( NOW - 10 )) releasing build $(( NOW - 3000 )) 3600 4321
+    hb $(( NOW - 10 )) releasing build $(( NOW - 3000 )) 3600 "$CD_BG_PID"
     wd
     [ "$status" -eq 0 ]
     [ "$(mail_count)" -eq 0 ]
@@ -95,7 +95,7 @@ wd() { run nlib 'cd_cmd_watchdog'; }
 
 @test "stuck: a hung stage whose beat stopped (older than three minutes) IS stuck, once" {
     hold_cd_lock
-    hb $(( NOW - 400 )) releasing build $(( NOW - 3000 )) 3600 4321
+    hb $(( NOW - 400 )) releasing build $(( NOW - 3000 )) 3600 "$CD_BG_PID"
     wd
     [ "$status" -eq 0 ]
     [ "$(mails_with release_stuck)" -eq 1 ]
@@ -108,16 +108,78 @@ wd() { run nlib 'cd_cmd_watchdog'; }
 @test "stuck: now past stage start + 1.25 x budget + 120 s is stuck even while a beat is fresh" {
     hold_cd_lock
     # budget 600 s: the limit is 870 s after the stage started
-    hb $(( NOW - 5 )) releasing snapshot $(( NOW - 1000 )) 600 4321
+    hb $(( NOW - 5 )) releasing snapshot $(( NOW - 1000 )) 600 "$CD_BG_PID"
     wd
     [ "$status" -eq 0 ]
     [ "$(mails_with release_over_budget)" -eq 1 ]
     [ "$(mails_with release_stuck)" -eq 0 ]
     # and just inside the limit it is not
     rm -f "${GREMION_ROOT}"/data/cd/outbox/*.eml "${GREMION_ROOT}/data/cd/notified.marks"
-    hb $(( NOW - 5 )) releasing snapshot $(( NOW - 860 )) 600 4321
+    hb $(( NOW - 5 )) releasing snapshot $(( NOW - 860 )) 600 "$CD_BG_PID"
     wd
     [ "$(mail_count)" -eq 0 ]
+}
+
+# the process that has just taken the cd lock and has not yet written a beat of its own: the
+# lock is held, the heartbeat on disk is still the previous run's
+hold_cd_lock_unannounced() {
+    cd_need_flock
+    cd_bg 'cd_mkdir "$CD_RUN"; exec 8>>"${CD_RUN}/cd.lock"; flock -n 8; echo ready; exec sleep 300'
+}
+# a process id that is certainly not running
+gone_pid() { bash -c 'echo $$'; }
+
+@test "stuck: a lock just taken, with the previous run's old beat (another pid) still on disk, is NOT stuck" {
+    hold_cd_lock_unannounced
+    # the shape seen on a host: the beat of the previous tick, 368 s old, written by a process that has ended
+    hb $(( NOW - 368 )) idle tick $(( NOW - 368 )) 600 "$(gone_pid)"
+    wd
+    [ "$status" -eq 0 ]
+    [ "$(mail_count)" -eq 0 ]
+}
+
+@test "stuck: an old beat of a live process that does not hold the lock is the previous run's, not the holder's" {
+    hold_cd_lock_unannounced
+    sleep 30 3>&- &
+    local other=$!
+    hb $(( NOW - 368 )) idle tick $(( NOW - 368 )) 600 "$other"
+    wd
+    kill "$other" 2>/dev/null || true
+    [ "$status" -eq 0 ]
+    [ "$(mail_count)" -eq 0 ]
+}
+
+@test "stuck: the budget rule is not applied to the previous run's beat either" {
+    hold_cd_lock_unannounced
+    hb $(( NOW - 5 )) releasing snapshot $(( NOW - 1000 )) 600 "$(gone_pid)"
+    wd
+    [ "$status" -eq 0 ]
+    [ "$(mail_count)" -eq 0 ]
+}
+
+@test "stuck: the holder's own beat older than three minutes is stuck as before (the holder is told apart by pid)" {
+    hold_cd_lock_unannounced
+    hb $(( NOW - 368 )) idle tick $(( NOW - 368 )) 600 "$CD_BG_PID"
+    wd
+    [ "$status" -eq 0 ]
+    [ "$(mails_with release_stuck)" -eq 1 ]
+}
+
+@test "stuck: a holder that never writes a beat of its own is not silent forever (the beat of an earlier run ages into no_tick)" {
+    hold_cd_lock_unannounced
+    hb $(( NOW - 1000 )) idle tick $(( NOW - 1000 )) 600 "$(gone_pid)"
+    wd
+    [ "$status" -eq 0 ]
+    [ "$(mails_with no_tick)" -eq 1 ]
+    [ "$(mails_with release_stuck)" -eq 0 ]
+}
+
+@test "stuck: when the holder cannot be told apart (unknown) the beat is judged as before" {
+    hold_cd_lock_unannounced
+    hb $(( NOW - 368 )) idle tick $(( NOW - 368 )) 600 "$(gone_pid)"
+    run nlib 'cd_pid_holds_cd_lock() { return 2; }; cd_cmd_watchdog'
+    [ "$status" -eq 0 ]
+    [ "$(mails_with release_stuck)" -eq 1 ]
 }
 
 @test "stuck: a missing or unreadable heartbeat while the lock is held is stuck (a held lock is not proof of life)" {
@@ -217,7 +279,7 @@ wd() { run nlib 'cd_cmd_watchdog'; }
 @test "kill switch: a stuck release is still reported while the switch is present" {
     hold_cd_lock
     touch "${GREMION_ROOT}/etc/cd.disabled"
-    hb $(( NOW - 400 )) watching watch $(( NOW - 600 )) 1200 4321
+    hb $(( NOW - 400 )) watching watch $(( NOW - 600 )) 1200 "$CD_BG_PID"
     wd
     [ "$(mails_with release_stuck)" -eq 1 ]
 }
