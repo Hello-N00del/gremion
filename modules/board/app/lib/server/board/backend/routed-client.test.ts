@@ -14,6 +14,7 @@ const h = vi.hoisted(() => {
     'createCard',
     'moveCard',
     'updateCard',
+    'deleteCard',
     'promoteActionItem',
     'listPromotedActionItemIds',
     'createBoard',

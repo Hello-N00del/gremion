@@ -33,7 +33,7 @@ Kernel app (`app/routes/`):
 | `/tasks` | page |
 | `/api/board` | GET |
 | `/api/board/[id]` | GET |
-| `/api/board/[id]/cards` | POST, PATCH |
+| `/api/board/[id]/cards` | POST, PATCH, DELETE |
 | `/api/board/[id]/promotable` | GET |
 | `/api/board/[id]/promote` | POST |
 
@@ -41,7 +41,7 @@ Leaf (`src/http/routes.ts`), all under the shared-secret guard except `/healthz`
 
 `GET|POST /api/v1/boards`, `GET /api/v1/boards/:id`, `POST /api/v1/boards/:id/stacks`,
 `GET /api/v1/boards/:id/deck`, `POST /api/v1/boards/:id/promote`, `POST /api/v1/cards`,
-`PATCH /api/v1/cards/:id`, `PATCH /api/v1/cards/:id/move`, `POST /api/v1/cards/promoted`.
+`PATCH|DELETE /api/v1/cards/:id`, `PATCH /api/v1/cards/:id/move`, `POST /api/v1/cards/promoted`.
 
 ## Where a customer's board lives
 

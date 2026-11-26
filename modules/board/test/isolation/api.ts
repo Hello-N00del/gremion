@@ -49,6 +49,8 @@ export interface BoardApi {
   createCard(as: TenantRef, input: CreateCardInput): Promise<ApiResult>
   /** PATCH /api/v1/cards/:id */
   updateCard(as: TenantRef, cardId: string, patch: { title?: string; description?: string | null; dueDate?: string | null }): Promise<ApiResult>
+  /** DELETE /api/v1/cards/:id */
+  deleteCard(as: TenantRef, cardId: string): Promise<ApiResult>
   /** PATCH /api/v1/cards/:id/move */
   moveCard(as: TenantRef, cardId: string, to: { stackId: string; order: number }): Promise<ApiResult>
   /** POST /api/v1/boards/:id/promote */

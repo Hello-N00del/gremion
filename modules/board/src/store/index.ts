@@ -163,6 +163,12 @@ export async function updateCard(
   return rows[0] ?? null
 }
 
+/** Delete one card of this tenant's database. false when there is no such card. */
+export async function deleteCard(sql: Sql, id: string): Promise<boolean> {
+  const rows = await sql<{ id: string }[]>`DELETE FROM card WHERE id = ${id} RETURNING id`
+  return rows.length > 0
+}
+
 export async function deckFor(sql: Sql, boardId: string): Promise<Deck> {
   const board = await getBoard(sql, boardId)
   if (!board) throw new Error('board not found')

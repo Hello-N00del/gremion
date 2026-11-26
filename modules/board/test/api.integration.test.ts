@@ -248,6 +248,35 @@ describe('PATCH /api/v1/cards/:id (the card edit)', () => {
   })
 })
 
+describe('DELETE /api/v1/cards/:id (the card delete)', () => {
+  async function seedCards(): Promise<{ keep: string; drop: string; boardId: string }> {
+    const b = await createBoard(sql, { orgUnitId: OU1, name: 'StuRa' })
+    const s = await createStack(sql, { boardId: b.id, name: 'To Do', order: 0 })
+    const keep = await createCard(sql, { stackId: s.id, title: 'Bleibt', createdBy: 'u1' })
+    const drop = await createCard(sql, { stackId: s.id, title: 'Weg', createdBy: 'u1' })
+    return { keep: keep.id, drop: drop.id, boardId: b.id }
+  }
+
+  it('deletes exactly the named card and answers 200', async () => {
+    const { keep, drop, boardId } = await seedCards()
+    const r = await callServer(server, 'DELETE', `/api/v1/cards/${drop}`, guardHeaders())
+    expect(r.status).toBe(200)
+    const deck = await callServer(server, 'GET', `/api/v1/boards/${boardId}/deck`, guardHeaders())
+    expect((deck.body as { cards: { id: string }[] }).cards.map((c) => c.id)).toEqual([keep])
+  })
+
+  it('returns 404 for an unknown card, and a second delete of the same card is 404 too', async () => {
+    const { drop } = await seedCards()
+    expect((await callServer(server, 'DELETE', `/api/v1/cards/${MISSING_UUID}`, guardHeaders())).status).toBe(404)
+    expect((await callServer(server, 'DELETE', `/api/v1/cards/${drop}`, guardHeaders())).status).toBe(200)
+    expect((await callServer(server, 'DELETE', `/api/v1/cards/${drop}`, guardHeaders())).status).toBe(404)
+  })
+
+  it('returns 404 for an id that is not a uuid', async () => {
+    expect((await callServer(server, 'DELETE', '/api/v1/cards/not-a-uuid', guardHeaders())).status).toBe(404)
+  })
+})
+
 describe('PATCH /api/v1/cards/:id/move', () => {
   it('moves a card to another stack', async () => {
     const b = await createBoard(sql, { orgUnitId: OU1, name: 'StuRa' })

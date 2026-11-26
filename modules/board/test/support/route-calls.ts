@@ -28,6 +28,7 @@ export function everyRouteCall(ids: { orgUnitId?: string; boardId?: string; stac
     { route: 'POST /api/v1/boards/:id/stacks', method: 'POST', path: `/api/v1/boards/${boardId}/stacks`, body: { name: 'route-call', order: 0 } },
     { route: 'POST /api/v1/cards', method: 'POST', path: '/api/v1/cards', body: { stackId, title: 'route-call', createdBy: 'route-call' } },
     { route: 'PATCH /api/v1/cards/:id', method: 'PATCH', path: `/api/v1/cards/${cardId}`, body: { title: 'route-call' } },
+    { route: 'DELETE /api/v1/cards/:id', method: 'DELETE', path: `/api/v1/cards/${cardId}` },
     { route: 'PATCH /api/v1/cards/:id/move', method: 'PATCH', path: `/api/v1/cards/${cardId}/move`, body: { stackId, order: 0 } },
     { route: 'POST /api/v1/cards/promoted', method: 'POST', path: '/api/v1/cards/promoted', body: { candidateIds: [randomUUID()] } },
     {

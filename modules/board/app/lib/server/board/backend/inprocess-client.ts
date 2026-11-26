@@ -52,6 +52,10 @@ export class InprocessBoardClient implements BoardBackendPort {
     return boardDb.updateCard(id, patch)
   }
 
+  async deleteCard(id: string): Promise<boolean> {
+    return boardDb.deleteCard(id)
+  }
+
   async promoteActionItem(
     boardId: string,
     item: PromoteActionItemInput,

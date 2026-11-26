@@ -20,6 +20,7 @@ const {
   mockCreateCard,
   mockMoveCard,
   mockUpdateCard,
+  mockDeleteCard,
   mockDeckFor,
   mockPromoteActionItem,
   mockListPromotedActionItemIds,
@@ -33,6 +34,7 @@ const {
   mockCreateCard: vi.fn(),
   mockMoveCard: vi.fn(),
   mockUpdateCard: vi.fn(),
+  mockDeleteCard: vi.fn(),
   mockDeckFor: vi.fn(),
   mockPromoteActionItem: vi.fn(),
   mockListPromotedActionItemIds: vi.fn(),
@@ -47,6 +49,7 @@ vi.mock('../board-db', () => ({
     createCard: mockCreateCard,
     moveCard: mockMoveCard,
     updateCard: mockUpdateCard,
+    deleteCard: mockDeleteCard,
     deckFor: mockDeckFor,
     promoteActionItem: mockPromoteActionItem,
     listPromotedActionItemIds: mockListPromotedActionItemIds,
@@ -133,6 +136,14 @@ describe('InprocessBoardClient — byte-identical delegation to boardDb', () => 
   it('updateCard returns null when boardDb returns null', async () => {
     mockUpdateCard.mockResolvedValueOnce(null)
     expect(await client.updateCard('gone', { title: 'x' })).toBeNull()
+  })
+
+  it('deleteCard delegates the id to boardDb.deleteCard and passes the answer through', async () => {
+    mockDeleteCard.mockResolvedValueOnce(true)
+    expect(await client.deleteCard('c1')).toBe(true)
+    expect(mockDeleteCard).toHaveBeenCalledWith('c1')
+    mockDeleteCard.mockResolvedValueOnce(false)
+    expect(await client.deleteCard('gone')).toBe(false)
   })
 
   it('promoteActionItem delegates argument-for-argument and returns the card', async () => {

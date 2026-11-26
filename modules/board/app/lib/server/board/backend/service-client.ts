@@ -300,6 +300,17 @@ export class ServiceBoardClient implements BoardBackendPort {
     }
   }
 
+  /** DELETE /api/v1/cards/:id. Not retried; 404 → false (already gone) like moveCard's null. */
+  async deleteCard(id: string): Promise<boolean> {
+    try {
+      await this.leafFetch('DELETE', `/api/v1/cards/${encodeURIComponent(id)}`)
+      return true
+    } catch (err) {
+      if (err instanceof BoardServiceError && err.status === 404) return false
+      throw err
+    }
+  }
+
   async promoteActionItem(
     boardId: string,
     item: PromoteActionItemInput,

@@ -107,6 +107,21 @@ export const PATCH: RequestHandler = mapBoardUnavailable(async ({ params, reques
   return json({ data: card })
 })
 
+// DELETE /api/board/[id]/cards?cardId=… — delete a card. Same gate as an edit (member + board in scope)
+// and the same BOLA check: the card must be on THIS board, else 404.
+export const DELETE: RequestHandler = mapBoardUnavailable(async ({ params, url, locals }) => {
+  const resolved = resolveBoardBackendOr503()
+  if (resolved instanceof Response) return resolved
+  const backend = resolved
+  await gate(locals, params.id, backend)
+  const cardId = url.searchParams.get('cardId')
+  if (!cardId) throw error(400, 'Karte fehlt')
+  const deck = await backend.deckFor(params.id)
+  if (!deck.cards.some((c) => c.id === cardId)) throw error(404, 'Karte nicht gefunden')
+  if (!(await backend.deleteCard(cardId))) throw error(404, 'Karte nicht gefunden')
+  return json({ data: { id: cardId, deleted: true } })
+})
+
 // The edit shares the move's gate (member + board in scope) and its BOLA check: the card must be
 // on THIS board. The assignee must be a member of the board's own body (also checked here, never
 // trusted from the client); null clears it.

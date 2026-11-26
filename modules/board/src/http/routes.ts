@@ -11,6 +11,7 @@
 //   POST  /api/v1/boards/:id/stacks    → Stack (201) | 404   (createStack, R29-BOARD-STORE-K)
 //   POST  /api/v1/cards                → Card (201) | 404    (createCard)
 //   PATCH /api/v1/cards/:id            → Card | 404          (updateCard: title, description, assignee, due date)
+//   DELETE /api/v1/cards/:id           → { deleted: true } | 404 (deleteCard)
 //   PATCH /api/v1/cards/:id/move       → Card | 404          (moveCard)
 //   POST  /api/v1/cards/promoted       → { data: string[] } (listPromotedActionItemIds, #384)
 //         body: { candidateIds: string[] } — a POST body (not repeated GET query
@@ -54,6 +55,7 @@ import {
   createCard,
   moveCard,
   updateCard,
+  deleteCard,
   stackExists,
   promoteActionItem,
   listPromotedActionItemIds,
@@ -379,6 +381,21 @@ export function buildApiRoutes(store: StoreFn): Route[] {
         const card = await updateCard(sql, cardId, body)
         if (!card) return sendError(res, 404, 'not found')
         sendJson(res, 200, card)
+      }, 'not found'),
+    },
+
+    // ── DELETE /api/v1/cards/:id ─────────────────────────────────────────────
+    // One card of THIS tenant's database; an id that is not a uuid, or a card of another
+    // tenant (not in this database), answers 404 and deletes nothing.
+    {
+      method: 'DELETE',
+      path: '/api/v1/cards/:id',
+      handler: wrap(async ({ res, params, tenant }) => {
+        const sql = await storeFn(tenant)
+        const cardId = params['id']!
+        if (!UUID.test(cardId)) return sendError(res, 404, 'not found')
+        if (!(await deleteCard(sql, cardId))) return sendError(res, 404, 'not found')
+        sendJson(res, 200, { deleted: true })
       }, 'not found'),
     },
 

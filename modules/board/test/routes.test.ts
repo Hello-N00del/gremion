@@ -28,6 +28,7 @@ describe('board leaf route table — exact endpoint set', () => {
         'POST /api/v1/boards/:id/stacks',
         'POST /api/v1/cards',
         'PATCH /api/v1/cards/:id',
+        'DELETE /api/v1/cards/:id',
         'PATCH /api/v1/cards/:id/move',
         'POST /api/v1/cards/promoted',
         'POST /api/v1/boards/:id/promote',
@@ -100,6 +101,13 @@ describe('board leaf router — path-param matching', () => {
 
   it('extracts :id for PATCH /api/v1/cards/:id (the card edit), distinct from …/move', () => {
     const m = router.match('PATCH', '/api/v1/cards/c-9')
+    expect(m.type).toBe('matched')
+    if (m.type !== 'matched') throw new Error('unreachable')
+    expect(m.params).toEqual({ id: 'c-9' })
+  })
+
+  it('extracts :id for DELETE /api/v1/cards/:id (the card delete)', () => {
+    const m = router.match('DELETE', '/api/v1/cards/c-9')
     expect(m.type).toBe('matched')
     if (m.type !== 'matched') throw new Error('unreachable')
     expect(m.params).toEqual({ id: 'c-9' })

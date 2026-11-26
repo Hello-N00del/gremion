@@ -126,6 +126,11 @@ export async function updateCard(
   return rows[0] ?? null
 }
 
+export async function deleteCard(id: string): Promise<boolean> {
+  const rows = await getDb()<{ id: string }[]>`DELETE FROM card WHERE id = ${id} RETURNING id`
+  return rows.length > 0
+}
+
 export async function deckFor(boardId: string): Promise<{ board: Board; stacks: readonly Stack[]; cards: readonly Card[] }> {
   const board = await getBoard(boardId)
   if (!board) throw new Error('board not found')
@@ -179,6 +184,7 @@ export const boardDb = {
   createCard,
   moveCard,
   updateCard,
+  deleteCard,
   deckFor,
   promoteActionItem,
   listPromotedActionItemIds,

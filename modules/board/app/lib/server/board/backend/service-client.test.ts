@@ -306,6 +306,20 @@ describe('ServiceBoardClient — method routing', () => {
     expect(await withTenant(() => client.updateCard('missing', { title: 'x' }))).toBeNull()
   })
 
+  it('deleteCard → DELETE /api/v1/cards/c1, true when the leaf deleted it', async () => {
+    resetStub({ body: { deleted: true } })
+    const client = new ServiceBoardClient()
+    expect(await withTenant(() => client.deleteCard('c1'))).toBe(true)
+    expect(lastRequest!.method).toBe('DELETE')
+    expect(lastRequest!.url).toBe('/api/v1/cards/c1')
+  })
+
+  it('deleteCard is false when the leaf answers 404', async () => {
+    resetStub({ firstStatus: 404, body: { success: false, error: 'not found' } })
+    const client = new ServiceBoardClient()
+    expect(await withTenant(() => client.deleteCard('missing'))).toBe(false)
+  })
+
   it('moveCard → PATCH /api/v1/cards/c1/move', async () => {
     resetStub({ body: makeCardBody({ stack_id: 's2' }) })
     const client = new ServiceBoardClient()

@@ -34,7 +34,7 @@ import type {
 export const BOARD_READ_METHODS = ['listBoardsForOrgUnits', 'getBoard', 'deckFor', 'listPromotedActionItemIds'] as const
 /** Methods that write. They are refused while a move copies the board. A method of the port that
  *  is in neither list fails the classification test, so a new write cannot slip past the freeze. */
-export const BOARD_WRITE_METHODS = ['createCard', 'moveCard', 'updateCard', 'promoteActionItem', 'createBoard', 'createStack'] as const
+export const BOARD_WRITE_METHODS = ['createCard', 'moveCard', 'updateCard', 'deleteCard', 'promoteActionItem', 'createBoard', 'createStack'] as const
 
 export interface RoutedBoardBackendOptions {
   /** Forwarded to the service client as x-correlation-id. */
@@ -98,6 +98,10 @@ export class RoutedBoardBackend implements BoardBackendPort {
 
   async updateCard(id: string, patch: UpdateCardPatch): Promise<Card | null> {
     return (await this.forWrite()).updateCard(id, patch)
+  }
+
+  async deleteCard(id: string): Promise<boolean> {
+    return (await this.forWrite()).deleteCard(id)
   }
 
   async promoteActionItem(boardId: string, item: PromoteActionItemInput, createdBy: string): Promise<Card> {

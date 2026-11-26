@@ -133,6 +133,9 @@ export interface BoardBackendPort {
   /** Edit a card's title / description / assignee / due date. null when the card is gone.
    *  The port does NOT check the assignee: the route does (a member of the board's body). */
   updateCard(id: string, patch: UpdateCardPatch): Promise<Card | null>
+  /** Delete a card. true when it was deleted, false when it was already gone. The route checks that
+   *  the card is on the board the caller may reach; the port deletes by id. */
+  deleteCard(id: string): Promise<boolean>
   /** Promote a resolved action item into the board's first stack (idempotent).
    *  THROWS when the board has no stacks. */
   promoteActionItem(boardId: string, item: PromoteActionItemInput, createdBy: string): Promise<Card>
