@@ -154,8 +154,9 @@ Properties the pipeline keeps:
 
 1. **Slug and host guard.** The slug must match `^[a-z0-9-]{1,30}$`; the host is
    validated, and on a single-customer install it must equal `PILOT_TENANT_HOST` (or, when the operator
-   lists extra core-only hosts in `SECONDARY_TENANT_HOSTS`, be one of those; see
-   [ops/pilot-services.md](../ops/pilot-services.md), "A secondary customer host").
+   lists extra hosts in `SECONDARY_TENANT_HOSTS`, be one of those, with board and calendar unless the
+   install opted further modules in; see [ops/pilot-services.md](../ops/pilot-services.md),
+   "Two customers on one install").
 2. **Tombstone refusal (§7.8).** A `deleted`/`deleting` slug is a permanent
    tombstone; creating over it is refused before any write (subdomain-takeover
    defence: identifier reuse is forbidden on delete).
@@ -445,6 +446,101 @@ satellite, and purge their media.
 These leave no copy encrypted under the shredded key, so they are a separate
 data-erasure-completion step the crypto-shred does not cover. Track them off the
 failed ledger rows until done.
+
+### A customer on the shared Nextcloud and Synapse: manual teardown
+
+Files, polls and the calendar's CalDAV mirror of a customer live in the install's
+ONE Nextcloud, and chat in its ONE Synapse. `delete` drops the customer's own
+databases and shreds its keys; it does not reach these two services, and their
+backups are per install (no per-customer restore), so a deleted customer's data
+stays in those backups until they rotate out. On an install with two customers
+the teardown is therefore a hand step, and it must not touch the other
+customer. Nothing here is a verb of this repository unless it says so.
+
+**1. Capture first, before `delete`.** The identifiers live in places `delete`
+removes: the provisioning ledger is in the customer's kernel database, which
+step 3 above drops, and the member list is in the realm, which step 5 deletes.
+Write down, for the customer only:
+
+- the ledger's `matrix` rows (`external_id` = the Matrix room id) and `nextcloud`
+  rows (`external_id` = `<folderId>:<groupId>`, the group being `ou-<unit id>`),
+  from `provisioning_resources` in the customer's kernel database;
+- the realm's members: Keycloak id, username and e-mail;
+- the tenant id (the retained-records folder is `Aufbewahrung-<tenant id>`, its
+  groups `gremion-retained-<tenant id>` and `gremion-retained-<tenant id>-w`);
+- for a customer on a secondary host: its slug (the provider `Keycloak-<slug>`, the
+  CalDAV collection named by the leaf's `CALDAV_CALENDAR_TEMPLATE`, by default
+  `gremion-<slug>`, under the leaf's shared account, and the namespaced chat
+  names below).
+
+Run what follows through the running containers on the host, the way
+`gremion-services` does: `occ` as `docker exec -u www-data <nextcloud> php occ ...`;
+the Synapse admin API from inside the `matrix` container (`/_synapse` is never
+routed at the edge) with the admin bot's token handed to `docker exec` by name and
+the header read from curl's stdin config, never on an argv.
+
+**2. Nextcloud.**
+
+- Group folders: for each ledger folder id and for the retained folder, confirm
+  with `occ groupfolders:list --output=json` that the folder carries the
+  customer's own group (`ou-<unit id>` or the retained groups) and no other
+  customer's, then delete it. The app does this itself per unit with the group
+  folders REST route (`DELETE /index.php/apps/groupfolders/folders/<id>`), then
+  deletes the group; the matching `occ` verbs and the folders' trash bin are not
+  used anywhere in this repository: read `occ list groupfolders` and `occ list
+  group` on the installed version and confirm the verb before using it. A folder
+  is identified by its id and groups, never by its mount name, which is the unit
+  name and can exist in another customer.
+- Groups: `ou-<unit id>` for each unit, `gremion-retained-<tenant id>` and its `-w`
+  group.
+- Accounts: the members' Nextcloud accounts. The first customer's accounts carry
+  the raw Keycloak id; accounts of a customer under its own provider carry an id
+  `user_oidc` derives, so find each with `occ user:info <id> --output=json`, tie it
+  to a captured member, and delete only those. Never delete by prefix or display
+  name. The `occ` verb for deleting an account is not used in this repository:
+  confirm it with `occ list user`.
+- Calendar: the customer's collection (`occ dav:list-calendars <owner>` lists it;
+  the delete verb is not used here: confirm it with `occ list dav`).
+- Provider (secondary host only): the customer's `Keycloak-<slug>` login provider
+  (`occ user_oidc:provider <identifier> --output=json` reads it; confirm the delete
+  verb with `occ list user_oidc`). Never remove `Keycloak`: it is the first
+  customer's provider (id 1), which every secondary wire reads.
+- Polls: they are created by the install's one Nextcloud admin account and carry
+  the title marker `[gt:<tenant id>] `. No `occ` verb lists them by customer: use
+  the Polls app as that account, delete exactly the polls whose title starts with
+  that marker, and confirm none is left.
+
+**3. Synapse.**
+
+- Rooms: the ledger room ids. For each, read the room's `org.gremion.tenant` state
+  event and continue only when it names this customer's tenant id and was written
+  by the admin bot (a room without it is not provably the customer's: leave it and
+  report it). Delete with `DELETE /_synapse/admin/v1/rooms/<room id>` and the body
+  `{"block": true, "purge": true}`, which is what the app's own room delete sends.
+  Also look for the customer's rooms that the ledger lacks (a room whose unit was
+  removed): aliases `#stura.<slug>.`, `#stura-archiv.<slug>.` and `#meeting.<slug>.`,
+  accepted only with the same marker check.
+- Accounts: on an install in the namespaced identity, the customer's members are
+  `@<slug>.<escaped username>:<server>` (escaping: `a-z 0-9 . = / -` stay, every
+  other UTF-8 byte becomes `_hh` in lower-case hex, `_` included). Erase each with
+  `POST /_synapse/admin/v1/deactivate/<user id>` and the body `{"erase": true}`,
+  which is what the app's erasure hook sends. In the legacy identity the accounts
+  are the bare usernames of the FIRST customer: never erase one on behalf of a
+  second customer's teardown, and on the first customer's own teardown only after
+  confirming that no other customer is on the homeserver.
+- Media: the room delete does not remove files that members uploaded. Delete the
+  accounts' uploaded media with the admin API's per-user media delete; it is not
+  used in this repository, so confirm the route in the installed Synapse's admin
+  documentation.
+
+**4.** Then run `delete <slug>`.
+
+**5. Read it back** from the running services, not from the exit codes: the
+`groupfolders:list` output holds no folder with the customer's groups, `user:info`
+answers not found for each captured account, the room list holds no room with
+the customer's marker, and the erased accounts read deactivated. Keep the lists
+from step 1 until this passes, and name any object you could not identify as left
+over in the handover.
 
 ## Module self-service by the council
 
