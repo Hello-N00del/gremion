@@ -745,3 +745,33 @@ secondary_fixture() {
     run grep -ciE 're-created' "${HOST_SRC}/templates/env/state.env.tmpl"
     [ "$output" -ge 1 ]
 }
+
+# NC_PROVIDER_PER_CUSTOMER (optional, on|off): records a secondary customer's own user_oidc provider id when its
+# customer is wired. Judged in any file that declares it; absent, empty and off are today's behaviour.
+@test "NC_PROVIDER_PER_CUSTOMER: absent, empty, off and on validate, and any other value fails naming the key" {
+    secondary_fixture
+    run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" != *"NC_PROVIDER_PER_CUSTOMER"* ]] || { echo "$output"; return 1; }
+    local v
+    for v in '' off on; do
+        sed -i '/^NC_PROVIDER_PER_CUSTOMER=/d' "${ENV_DIR}/state.env"
+        printf 'NC_PROVIDER_PER_CUSTOMER=%s\n' "$v" >> "${ENV_DIR}/state.env"
+        run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
+        [ "$status" -eq 0 ] || { echo "'${v}': ${output}"; return 1; }
+    done
+    for v in yes true 1 ON maybe; do
+        sed -i '/^NC_PROVIDER_PER_CUSTOMER=/d' "${ENV_DIR}/state.env"
+        printf 'NC_PROVIDER_PER_CUSTOMER=%s\n' "$v" >> "${ENV_DIR}/state.env"
+        run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
+        [ "$status" -eq 1 ] || { echo "'${v}' was accepted: ${output}"; return 1; }
+        [[ "$output" == *"NC_PROVIDER_PER_CUSTOMER"* ]] || { echo "no key named for '${v}': ${output}"; return 1; }
+    done
+}
+
+@test "NC_PROVIDER_PER_CUSTOMER is an optional key: the state template carries it only as a comment, so an older state.env stays valid" {
+    run grep -cE '^NC_PROVIDER_PER_CUSTOMER=' "${HOST_SRC}/templates/env/state.env.tmpl"
+    [ "$output" = 0 ]
+    run grep -cE '^# NC_PROVIDER_PER_CUSTOMER=' "${HOST_SRC}/templates/env/state.env.tmpl"
+    [ "$output" = 1 ]
+}
