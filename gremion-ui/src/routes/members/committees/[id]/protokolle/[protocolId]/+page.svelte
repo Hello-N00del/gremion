@@ -199,17 +199,86 @@
     }
   }
 
-  async function addActionItem() {
-    const res = await fetch(`/api/protocols/${data.protocol.id}/action-items`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: '' }),
-    })
-    if (res.ok) {
-      actionItems = [...actionItems, (await res.json()).actionItem]
-    } else {
-      alert('Aufgabe konnte nicht hinzugefügt werden.')
+  // "+ Aufgabe hinzufügen" only opens an entry form (an unsaved row, no id).
+  // Nothing is stored until the admin saves it with its title; Abbrechen discards
+  // it, so no empty task is ever left behind.
+  let newActionItem = $state<ProtocolActionItem | null>(null)
+  let newActionItemError = $state<string | null>(null)
+  // True while the create request is on its way: it cannot be repeated (two POSTs would store
+  // two identical tasks) nor cancelled (it is stored regardless of what the form shows).
+  let creatingActionItem = false
+
+  // Everyone of the body may be made responsible, voting or not.
+  const assignees = $derived([...data.attendance, ...data.advisoryAttendance])
+
+  function addActionItem() {
+    newActionItemError = null
+    newActionItem = { text: '', completed: false } as ProtocolActionItem
+  }
+
+  function cancelNewActionItem() {
+    if (creatingActionItem) return
+    newActionItem = null
+    newActionItemError = null
+  }
+
+  // The body a task is sent with: the route reads camelCase names; fields left empty stay unsent.
+  function actionItemBody(i: ProtocolActionItem) {
+    return {
+      text: i.text,
+      ...(i.due_date ? { dueDate: i.due_date } : {}),
+      ...(i.assignee_keycloak_id ? { assigneeKeycloakId: i.assignee_keycloak_id } : {}),
     }
+  }
+
+  async function createActionItem(i: ProtocolActionItem): Promise<boolean> {
+    if (creatingActionItem) return false
+    creatingActionItem = true
+    newActionItemError = null
+    const failed = 'Aufgabe konnte nicht hinzugefügt werden.'
+    try {
+      const res = await fetch(`/api/protocols/${data.protocol.id}/action-items`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(actionItemBody(i)),
+      })
+      if (res.ok) {
+        actionItems = [...actionItems, (await res.json()).actionItem]
+        newActionItem = null
+        return true
+      }
+      newActionItemError = await refusalMessage(res, failed)
+    } catch {
+      // network failure: keep the form (and the typed text) so it can be retried
+      newActionItemError = failed
+    } finally {
+      creatingActionItem = false
+    }
+    return false
+  }
+
+  let actionItemError = $state<string | null>(null)
+
+  async function saveActionItem(i: ProtocolActionItem): Promise<boolean> {
+    actionItemError = null
+    const failed = 'Aufgabe konnte nicht gespeichert werden.'
+    try {
+      const res = await fetch(`/api/protocols/${data.protocol.id}/action-items/${i.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(actionItemBody(i)),
+      })
+      if (res.ok) {
+        // Show what the server stored (title, date, assignee), not what the page held before.
+        const saved = (await res.json()).actionItem as ProtocolActionItem
+        actionItems = actionItems.map((x) => (x.id === saved.id ? saved : x))
+        return true
+      }
+      actionItemError = await refusalMessage(res, failed)
+    } catch {
+      actionItemError = failed
+    }
+    return false
   }
 
   async function submitForVote() {
@@ -294,6 +363,11 @@
 
   <section class="space-y-2">
     <h3 class="font-medium">Protokollinhalt</h3>
+    {#if isAdmin && isEditable && data.protocol.draftDocumentMissing}
+      <p role="status" class="rounded-md border p-3 text-sm">
+        Das Entwurfsdokument auf Nextcloud konnte nicht angelegt werden. Der Protokolltext wird hier im Editor gespeichert.
+      </p>
+    {/if}
     {#if bodyMode === 'collabora' && data.wopiToken}
       <iframe
         src="{data.wopiToken.editorUrl}&lang=de&closebutton=1"
@@ -356,14 +430,9 @@
         <ActionItemRow
           {item}
           isAdmin={isAdmin && isEditable}
-          onSave={async (i) => {
-            const res = await fetch(`/api/protocols/${data.protocol.id}/action-items/${i.id}`, {
-              method: 'PATCH',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(i),
-            })
-            if (!res.ok) alert('Aufgabe konnte nicht gespeichert werden.')
-          }}
+          members={assignees}
+          error={actionItemError}
+          onSave={saveActionItem}
           onToggle={async (id, completed) => {
             const res = await fetch(`/api/protocols/${data.protocol.id}/action-items/${id}`, {
               method: 'PATCH',
@@ -380,8 +449,20 @@
           }}
         />
       {/each}
+      {#if newActionItem && isAdmin && isEditable}
+        <ActionItemRow
+          item={newActionItem}
+          isAdmin={true}
+          startEditing
+          members={assignees}
+          error={newActionItemError}
+          onSave={createActionItem}
+          onToggle={() => {}}
+          onCancel={cancelNewActionItem}
+        />
+      {/if}
     </div>
-    {#if isAdmin && isEditable}
+    {#if isAdmin && isEditable && !newActionItem}
       <Button variant="outline" size="sm" onclick={addActionItem}>+ Aufgabe hinzufügen</Button>
     {/if}
   </section>

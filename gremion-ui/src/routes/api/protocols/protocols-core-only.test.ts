@@ -136,4 +136,32 @@ describe('protocol routes for a customer whose files module is pinned off', () =
     expect((await create()).status).toBe(201)
     expect(h.port.createDraftFile).toHaveBeenCalledTimes(1)
   })
+
+  // The page tells the admin when a customer that uses the shared Nextcloud got a minutes record without its draft
+  // document, instead of silently showing the in-app editor.
+  describe('detail: draftDocumentMissing', () => {
+    const detail = async () => (await (await DETAIL({ locals: { user }, params: { id: ID } } as never)).json()).protocol
+
+    it('is true when the files module is on and the draft was never created', async () => {
+      h.config = { modules: { files: true } }
+      h.getProtocol.mockResolvedValue({ ...withDraft, nextcloud_draft_path: null })
+      expect((await detail()).draftDocumentMissing).toBe(true)
+    })
+
+    it('is false when the draft document exists', async () => {
+      h.config = { modules: { files: true } }
+      expect((await detail()).draftDocumentMissing).toBe(false)
+    })
+
+    it('is false for a customer without the files module (the in-app body is the design there)', async () => {
+      h.getProtocol.mockResolvedValue({ ...withDraft, nextcloud_draft_path: null })
+      expect((await detail()).draftDocumentMissing).toBe(false)
+    })
+
+    it('is false once the minutes are no longer a draft', async () => {
+      h.config = { modules: { files: true } }
+      h.getProtocol.mockResolvedValue({ ...withDraft, status: 'submitted', nextcloud_draft_path: null })
+      expect((await detail()).draftDocumentMissing).toBe(false)
+    })
+  })
 })

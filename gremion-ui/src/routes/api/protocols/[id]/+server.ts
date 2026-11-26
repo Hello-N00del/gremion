@@ -43,12 +43,16 @@ export async function GET(event: RequestEvent) {
   const { nextcloud_draft_path: draftPath, ...safeProtocol } = protocol
   // R33b: an ODT draft (path set AND files port present) is the text publish
   // converts; the page must not offer the in-app editor for it.
-  const hasDraftDocument = Boolean(draftPath) && Boolean(getTenantProtocolDocumentPort())
+  const documentPort = Boolean(getTenantProtocolDocumentPort())
+  const hasDraftDocument = Boolean(draftPath) && documentPort
+  // A customer that uses the shared Nextcloud, a draft without its document: creating it failed (or the files
+  // module was switched on later). The page says so; the in-app editor keeps the text meanwhile.
+  const draftDocumentMissing = documentPort && protocol.status === 'draft' && !draftPath
   // R33b: body_html is rendered via {@html}; sanitize on read too so a legacy or
   // directly-written row can never reach the page as live markup (G-011).
   if (safeProtocol.body_html) safeProtocol.body_html = sanitizeRichHtml(safeProtocol.body_html)
 
-  return json({ protocol: { ...safeProtocol, hasDraftDocument }, attendance, resolutions, actionItems })
+  return json({ protocol: { ...safeProtocol, hasDraftDocument, draftDocumentMissing }, attendance, resolutions, actionItems })
 }
 
 export async function PATCH(event: RequestEvent) {
