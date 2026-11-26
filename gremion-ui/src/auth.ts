@@ -117,10 +117,9 @@ const REFRESH_FETCH_TIMEOUT_MS = 5_000
  *  within grace. */
 const REFRESH_TIMEOUT_BACKOFF_MS = 10_000
 /** 429 back-off: Retry-After as delta-seconds or HTTP-date; default 5 s when
- *  missing/unparseable/non-positive; capped at 60 s (the refresh grace). */
+ *  missing/unparseable/non-positive; capped at REFRESH_GRACE_MS. */
 function retryAfterMs(header: string | null): number {
   const DEFAULT_MS = 5_000
-  const CAP_MS = 60_000
   let ms = DEFAULT_MS
   const v = header?.trim()
   if (v) {
@@ -131,7 +130,7 @@ function retryAfterMs(header: string | null): number {
     }
   }
   if (!(ms > 0)) ms = DEFAULT_MS
-  return Math.min(ms, CAP_MS)
+  return Math.min(ms, REFRESH_GRACE_MS)
 }
 
 /**

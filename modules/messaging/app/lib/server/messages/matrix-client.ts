@@ -200,15 +200,17 @@ class MatrixClient {
     // A session whose refresh failed for a transient reason keeps its expired access token for
     // REFRESH_GRACE_MS (auth.ts), and the legacy exchange serves a cached Matrix token in that window. This
     // exchange accepts the token for as long: the signature check below carries the same clock tolerance.
-    // Past the grace the client gets a 401 and refreshes its session.
+    // Past the grace the client gets a 401 (it does not retry; the session layer refreshes on the next request).
     const claimedExp = typeof claimed.exp === 'number' ? claimed.exp * 1000 : 0
     if (claimedExp > 0 && Date.now() >= claimedExp + REFRESH_GRACE_MS) refuseExpiredLogin()
     const verified = await verifyBearerJwtResult(keycloakJwt, tenant, { clockToleranceSeconds: REFRESH_GRACE_MS / 1000 })
     if (!verified.ok) {
       if (verified.reason === 'keys_unavailable') {
         // Not a forged token: the customer's key set could not be read. Chat is unavailable until it can; the
-        // cause (tenant id, jose error code; never the token) goes to the server log.
-        console.error(`[chat-identity] chat refused: key set of tenant ${tenant.id} unavailable (${verified.code})`)
+        // cause (tenant id, error code and the short reason the verifier hands back; never the token) goes to
+        // the server log.
+        const reason = verified.detail ? `: ${verified.detail}` : ''
+        console.error(`[chat-identity] chat refused: key set of tenant ${tenant.id} unavailable (${verified.code}${reason})`)
         throw error(503, CHAT_UNAVAILABLE)
       }
       throw error(403, 'Die Anmeldung konnte nicht bestätigt werden.')

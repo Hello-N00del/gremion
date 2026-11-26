@@ -2,7 +2,7 @@
 // Real RS256 SignJWT/generateKeyPair require a single JS realm: jose's sign path
 // guards `payload instanceof Uint8Array`, which fails under jsdom's cross-realm
 // typed arrays (the codebase's established idiom — see e.g. sepa-backend.test.ts).
-import { describe, it, test, expect, beforeEach, vi } from 'vitest'
+import { describe, it, test, expect, beforeEach, afterEach, vi } from 'vitest'
 import { SignJWT, exportJWK, generateKeyPair } from 'jose'
 
 const envMock: Record<string, string> = {}
@@ -176,7 +176,75 @@ describe('verifyBearerJwtResult(token, tenant, options)', () => {
   test('a key endpoint that cannot be reached is an outage', async () => {
     keyEndpoint = async () => { throw new TypeError('fetch failed') }
     const { verifyBearerJwtResult } = await import('./jwt-verify')
-    expect(await verifyBearerJwtResult(await expiring(300), tenant)).toEqual({ ok: false, reason: 'keys_unavailable', code: 'TypeError' })
+    expect(await verifyBearerJwtResult(await expiring(300), tenant)).toEqual({ ok: false, reason: 'keys_unavailable', code: 'TypeError', detail: 'fetch failed' })
+  })
+
+  // undici reports a refused connection, a failed lookup and a TLS error alike as `TypeError: fetch failed`;
+  // the reason is only in `err.cause.code`. The bounded code stays the error name, the detail names the reason.
+  test.each(['ECONNREFUSED', 'ENOTFOUND', 'UND_ERR_CONNECT_TIMEOUT'])('a failed fetch carries its cause code (%s) as the detail', async (causeCode) => {
+    const cause = Object.assign(new Error('connect failed to 10.0.0.9:8443'), { code: causeCode })
+    keyEndpoint = async () => { throw new TypeError('fetch failed', { cause }) }
+    const { verifyBearerJwtResult } = await import('./jwt-verify')
+    expect(await verifyBearerJwtResult(await expiring(300), tenant)).toEqual({ ok: false, reason: 'keys_unavailable', code: 'TypeError', detail: causeCode })
+  })
+
+  test('an aborted fetch without a cause code gets its message as the detail, cut to 120 characters on one line', async () => {
+    keyEndpoint = async () => { throw Object.assign(new Error(['aborted', 'x'.repeat(300)].join(String.fromCharCode(10))), { name: 'AbortError' }) }
+    const { verifyBearerJwtResult } = await import('./jwt-verify')
+    const r = await verifyBearerJwtResult(await expiring(300), tenant)
+    expect(r).toMatchObject({ ok: false, reason: 'keys_unavailable', code: 'AbortError' })
+    const detail = (r as { detail?: string }).detail ?? ''
+    expect(detail.startsWith('aborted x')).toBe(true)
+    expect(detail.length).toBeLessThanOrEqual(120)
+    expect(detail.includes(String.fromCharCode(10))).toBe(false)
+  })
+
+  test('the detail never carries the token, even when an error message quotes it', async () => {
+    const jwt = await expiring(300)
+    keyEndpoint = async () => { throw Object.assign(new Error(`request for ${jwt} failed`), { name: 'AbortError' }) }
+    const { verifyBearerJwtResult } = await import('./jwt-verify')
+    const r = await verifyBearerJwtResult(jwt, tenant)
+    expect(r).toMatchObject({ ok: false, reason: 'keys_unavailable' })
+    // The detail is cut short, so the whole token could never fit: look for its first segment, which would.
+    expect(JSON.stringify(r)).not.toContain(jwt.split('.')[0] ?? 'x')
+    expect(JSON.stringify(r)).toContain('[token]')
+  })
+
+  describe('an error that is neither a key set problem nor a failed fetch', () => {
+    let logged: string[]
+    beforeEach(() => {
+      logged = []
+      vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => { logged.push(args.map((a) => String(a)).join(' ')) })
+    })
+    afterEach(() => { vi.restoreAllMocks() })
+
+    test('is logged (it is a defect in the code, not an outage) and still answers keys_unavailable', async () => {
+      keyEndpoint = async () => { throw new TypeError("Cannot read properties of undefined (reading 'keys')") }
+      const { verifyBearerJwtResult } = await import('./jwt-verify')
+      const r = await verifyBearerJwtResult(await expiring(300), tenant)
+      expect(r).toEqual({ ok: false, reason: 'keys_unavailable', code: 'TypeError', detail: "Cannot read properties of undefined (reading 'keys')" })
+      expect(logged.some((l) => l.includes('[jwt-verify]') && l.includes("reading 'keys'"))).toBe(true)
+    })
+
+    test('is logged without the token', async () => {
+      const jwt = await expiring(300)
+      keyEndpoint = async () => { throw new RangeError(`bad input ${jwt}`) }
+      const { verifyBearerJwtResult } = await import('./jwt-verify')
+      await verifyBearerJwtResult(jwt, tenant)
+      expect(logged.length).toBeGreaterThan(0)
+      expect(logged.join(' ')).not.toContain(jwt.split('.')[0] ?? 'x')
+    })
+
+    test('a plain network failure and a key set answer that is no key set are not logged here (the caller names the tenant and logs them)', async () => {
+      keyEndpoint = async () => { throw new TypeError('fetch failed', { cause: Object.assign(new Error('x'), { code: 'ECONNREFUSED' }) }) }
+      const { verifyBearerJwtResult } = await import('./jwt-verify')
+      await verifyBearerJwtResult(await expiring(300), tenant)
+      keyEndpoint = async () => new Response('boom', { status: 500 })
+      const { __resetJwksCache } = await import('./jwt-verify')
+      __resetJwksCache()
+      await verifyBearerJwtResult(await expiring(300), tenant)
+      expect(logged).toEqual([])
+    })
   })
 
   test('a key endpoint that answers something that is no key set is an outage', async () => {

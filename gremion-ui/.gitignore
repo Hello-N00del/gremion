@@ -58,6 +58,7 @@ src/lib/i18n/paraglide/
 /src/lib/stores/matrix.ts
 /src/lib/stores/call-store.svelte.ts
 /src/lib/components/VideoCallPip.svelte
+/src/lib/components/page-origin.ts
 /src/lib/components/VideoCallPip.*test.ts
 /src/lib/modules/manifests/messages.*
 # votes

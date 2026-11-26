@@ -24,8 +24,12 @@ export type BearerJwtResult =
   | { ok: true; payload: BearerJwtPayload }
   /** The token itself was not accepted: signature, issuer, audience, expiry, algorithm or key id. */
   | { ok: false; reason: 'rejected' }
-  /** The tenant's key set could not be fetched or read, so nothing was decided about the token. `code` is the jose error code (or the error name). */
-  | { ok: false; reason: 'keys_unavailable'; code: string }
+  /**
+   * The tenant's key set could not be fetched or read, so nothing was decided about the token. `code` is the
+   * jose error code (or the error name). `detail` (errors that are not jose errors only) is a short reason for
+   * the server log: the code of the error's cause, else its message; one line, cut short, never the token.
+   */
+  | { ok: false; reason: 'keys_unavailable'; code: string; detail?: string }
 
 export interface BearerJwtOptions {
   /** Seconds of clock tolerance on `exp` (and `nbf`). Unset: none, which is what the request hook uses. */
@@ -34,15 +38,45 @@ export interface BearerJwtOptions {
 
 // jose codes of an error that says the KEY SET could not be had (not that the token is bad): the fetch
 // timed out, or the body was no key set. A key endpoint that answers non-200, or whose body is no JSON,
-// throws the generic JOSEError; a network failure is not a JOSEError at all (see keySetOutageCode).
+// throws the generic JOSEError; a network failure is not a JOSEError at all (see keySetOutage).
 const KEY_SET_ERROR_CODES = new Set(['ERR_JWKS_TIMEOUT', 'ERR_JWKS_INVALID', 'ERR_JOSE_GENERIC'])
 
-/** The bounded code to log when `err` says the key set could not be had; null when it is a refusal of the token. */
-function keySetOutageCode(err: unknown): string | null {
-  if (err instanceof errors.JOSEError) return KEY_SET_ERROR_CODES.has(err.code) ? err.code : null
-  // Not a jose error: the key request itself failed (network, DNS, abort).
-  const name = err instanceof Error && err.name !== '' ? err.name : 'unknown'
-  return name.slice(0, 64)
+const DETAIL_MAX = 120
+
+/** One line of at most DETAIL_MAX characters, with the token and anything shaped like one taken out. */
+function boundedText(text: string, token: string): string {
+  const withoutToken = token === '' ? text : text.split(token).join('[token]')
+  return withoutToken
+    .replace(/eyJ[\w-]+\.[\w-]+\.[\w-]*/g, '[token]')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, DETAIL_MAX)
+}
+
+/** The reason for the log: the code of the error's cause (undici puts ECONNREFUSED, ENOTFOUND, TLS codes there), else its message. */
+function outageDetail(err: unknown, token: string): string {
+  const cause = err instanceof Error ? err.cause : undefined
+  const causeCode = typeof cause === 'object' && cause !== null && 'code' in cause && typeof cause.code === 'string' ? cause.code : ''
+  if (causeCode !== '') return boundedText(causeCode, token)
+  return boundedText(err instanceof Error ? err.message : '', token)
+}
+
+/** Whether a non-jose error is the key request failing (network, DNS, TLS, abort) rather than a defect in our own code. */
+function isFetchFailure(err: unknown): boolean {
+  if (!(err instanceof Error)) return false
+  return err.message === 'fetch failed' || err.name === 'AbortError' || err.name === 'TimeoutError' || err.cause !== undefined
+}
+
+/** What to answer when `err` says the key set could not be had; null when it is a refusal of the token. */
+function keySetOutage(err: unknown, token: string): { code: string; detail?: string } | null {
+  if (err instanceof errors.JOSEError) return KEY_SET_ERROR_CODES.has(err.code) ? { code: err.code } : null
+  // Not a jose error: the key request itself failed (network, DNS, abort), or our own code threw.
+  const code = (err instanceof Error && err.name !== '' ? err.name : 'unknown').slice(0, 64)
+  const detail = outageDetail(err, token)
+  // A defect must not read as an ordinary outage: the caller logs the tenant and the cause of an outage,
+  // so only the unexpected case is logged here.
+  if (!isFetchFailure(err)) console.error(`[jwt-verify] unexpected ${code} while reading the key set: ${detail}`)
+  return { code, detail }
 }
 
 /**
@@ -67,8 +101,8 @@ export async function verifyBearerJwtResult(
     })
     return { ok: true, payload: payload as BearerJwtPayload }
   } catch (err) {
-    const code = keySetOutageCode(err)
-    return code === null ? { ok: false, reason: 'rejected' } : { ok: false, reason: 'keys_unavailable', code }
+    const outage = keySetOutage(err, token)
+    return outage === null ? { ok: false, reason: 'rejected' } : { ok: false, reason: 'keys_unavailable', ...outage }
   }
 }
 

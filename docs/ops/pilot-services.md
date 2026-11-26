@@ -369,7 +369,7 @@ Read from the code that acts on them, not from a plan.
 | Switch | File | Default | Read by | Applying it recreates |
 |---|---|---|---|---|
 | `SECONDARY_TENANT_HOSTS` | `state.env`; the same line in both `app-<colour>.env` | empty: one customer host | the host-side create, the module guard, `gremion-services wire`, `gremion-validate-env`; the state compose reads it for Nextcloud's trusted editor hosts and Collabora's `server_name`; the app compose passes it to the control panel for the note on "Neuer Mandant" only | with a value, `nextcloud` and `collabora` of the state project (their environment changes: the first customer's files and office restart once) and, on the next deploy, the control panel |
-| `SECONDARY_TENANT_MODULES` | `state.env`; the same line in both `app-<colour>.env` | empty: only `board` and `calendar` | the create and the module guard (through `secondary_optin_load`), `gremion-validate-env` | nothing: it is read when a customer is created or a module is enabled. The app compose does not pass it to the control panel, so the note on "Neuer Mandant" stays the core-only one |
+| `SECONDARY_TENANT_MODULES` | `state.env`; the same line in both `app-<colour>.env` | empty: only `board` and `calendar` | the create and the module guard (through `secondary_optin_load`), `gremion-validate-env` | nothing: it is read when a customer is created or a module is enabled. The app compose passes it to the control panel, so the note on "Neuer Mandant" names the modules the install opts in |
 | `SYNAPSE_JWT_LOGIN` | `state.env` | `on` (absent counts as on) | the `matrix` container (render, entrypoint, health check), `gremion-services wire`, `gremion-validate-env` | `matrix` (chat restarts for every customer) |
 | `MATRIX_IDENTITY` | both `app-<colour>.env` | `legacy` (absent counts as legacy) | the chat code of `gremion-ui` on every call; the validator, for the messaging opt-in | `gremion-ui` of that colour: the active one when `wire` step 7 or a deploy recreates it, the other when it is next switched to |
 | `NC_PROVIDER_PER_CUSTOMER` | `state.env` | `off` | `gremion-services wire`, secondary branch, step 6a | nothing; read when a secondary customer is wired. NOT YET SAFE: see the operating limits below |
@@ -701,8 +701,8 @@ between two members of each customer.
   missing unpin verb, the device continuity lost under app-minted Matrix logins,
   the held `MESSAGES_BACKEND=service`, and the open Nextcloud account addressing
   are named under "Operating limits of two customers on one install"; the
-  control panel's note on "Neuer Mandant" stays the core-only one because the app
-  compose does not pass `SECONDARY_TENANT_MODULES` on.
+  control panel's note on "Neuer Mandant" names the modules the install opts in
+  because the app compose passes `SECONDARY_TENANT_MODULES` on.
 - **Platform pins.** Only the apex host pin is declared on the `traefik`
   service; the `www`, `control` and `sales` pins belong to the static routers
   that are not part of this install.

@@ -105,6 +105,7 @@ export const POST: RequestHandler = async (event) => {
       }
       return json({})
     } catch (err) {
+      // A refusal of the token exchange (503, 403, or the 401 of an expired login) is passed on as it is.
       if (isChatRefusal(err)) throw err
       return json({ error: err instanceof Error ? err.message : 'Internal error' }, { status: 500 })
     }
@@ -266,6 +267,7 @@ export const POST: RequestHandler = async (event) => {
 
     return json({ error: 'Unknown action' }, { status: 400 })
   } catch (err) {
+    // A refusal of the token exchange (503, 403, or the 401 of an expired login) is passed on as it is.
     if (isChatRefusal(err)) throw err
     return json(
       { error: err instanceof Error ? err.message : 'Internal error' },

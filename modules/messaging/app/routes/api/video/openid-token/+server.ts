@@ -61,6 +61,7 @@ export const GET: RequestHandler = async (event) => {
     const result: MatrixCredentials = { userId, matrixBaseUrl: matrixPublicBase, openidToken }
     return json(result)
   } catch (err) {
+    // A refusal of the token exchange (503, 403, or the 401 of an expired login) is passed on as it is.
     if (isChatRefusal(err)) throw err
     return json(
       { error: err instanceof Error ? err.message : 'Internal error' },
