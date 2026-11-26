@@ -1,6 +1,7 @@
 # Pilot services
 
-The services a single-customer host install runs beside the kernel: files
+The services a host install runs beside the kernel, for one customer by default
+(a second customer is an opt-in: see "Two customers on one install"): files
 (Nextcloud, Collabora), chat and video (Matrix, LiveKit, Element Call) and the
 three module leaves (calendar, content, newsletter). They are compose services
 in the state and app projects, switched on by profile, so a host that does not
@@ -51,7 +52,7 @@ profiles it needs and why. `gremion-init-secrets` renders
 Board has a database of its own on `board-postgres`, created and exported by the module lifecycle.
 Finance, vault, elections and handover render no profile. `messaging`
 (`messaging-postgres` and `matrix`) is post-realm: Synapse refuses a blank
-issuer at boot, so `gremion-services wire` adds the profile once the
+issuer at boot (unless `SYNAPSE_JWT_LOGIN=off`), so `gremion-services wire` adds the profile once the
 customer's realm exists. The messaging module has no database of its own, so a
 create with messaging ticked never connects to `messaging-postgres`.
 `scripts/check-module-profiles.test.mjs` pins the map against
@@ -144,7 +145,12 @@ and the member import.
    registration) and asserts `GET /_matrix/client/versions` and
    `GET /_matrix/client/v3/login` through the edge, the latter listing
    `org.matrix.login.jwt` (a failed realm key fetch boots Synapse without it,
-   and `/versions` answers regardless);
+   and `/versions` answers regardless). With `SYNAPSE_JWT_LOGIN=off` in
+   `state.env` (default on; see "Chat switch-over runbook") steps 2 to 5 change:
+   no synapse client secret is copied, no issuer or fetch URL is written (the
+   profiles still are), the running `matrix` must carry `SYNAPSE_JWT_LOGIN=off`
+   and the login flows must be exactly `m.login.application_service`. A value
+   other than `on` or `off` is refused before anything is written;
 6. registers Nextcloud's `user_oidc` provider (`--clientid=nextcloud`,
    bearer validation, `--unique-uid=0`), runs `occ richdocuments:activate-config`
    and reads back that `polls`, `user_oidc`, `richdocuments` and `groupfolders`
@@ -169,8 +175,10 @@ and the member import.
 
 `wire <slug>` for a customer registered on a host listed in
 `SECONDARY_TENANT_HOSTS` (see "A secondary customer host" below) runs a narrower
-branch. The shared chat service stays bound to the primary customer's realm and
-the primary customer's Nextcloud provider `Keycloak` is never set, so:
+branch. The shared chat service is not touched (a secondary customer's chat, when
+it is opted in, needs no wire step: the app makes the accounts and provisioning
+the rooms) and the primary customer's Nextcloud provider `Keycloak` is never
+set, so:
 
 - step 1 checks the realm on the customer's registered host (issuer
   `https://<registered host>/auth/realms/<slug>`);
@@ -333,13 +341,52 @@ gives its ICE servers to the client, so no client change is involved.
   passthrough. A second TCP router next to it, a UDP router, and any router when
   `PILOT_TENANT_HOST` is unset stay failures.
 
-## A secondary customer host (canary or test customer)
+## Two customers on one install
 
-The install has ONE customer host, `PILOT_TENANT_HOST`: Collabora, the call and
-office URLs, the video relay, the leaves' public base URL, and the shared Synapse
-and Nextcloud (bound by `wire` to that customer's realm) all carry it. The
-operator may allow further hosts for customers that knowingly run **core-only**,
-for example a canary or test customer beside the real one.
+An install has one customer, and that is the default. Everything above this
+section describes it, and nothing in this section changes it: every switch below
+is **off by default** (absent or empty means off, or the old behaviour), and an
+install with one customer renders, starts and answers exactly as it does without
+them. This section is for an operator who adds a second customer on a host of its
+own, for example a canary or test customer beside the real one. It says what that
+customer gets, in which order to set it up, how to switch chat over, and what
+stays shared.
+
+The second customer has its own host, realm, kernel database, module databases
+and tenant config. It shares the install's one Nextcloud (with Collabora), one
+Synapse (with LiveKit and Element Call), one Keycloak, one Postgres server per
+service and one edge. What a module gives it therefore depends on where that
+module's data lives: in the customer's own database (board, calendar) or on a
+shared service (files, votes, messaging and video).
+
+### The switches
+
+Read from the code that acts on them, not from a plan.
+
+| Switch | File | Default | Read by | Applying it recreates |
+|---|---|---|---|---|
+| `SECONDARY_TENANT_HOSTS` | `state.env`; the same line in both `app-<colour>.env` | empty: one customer host | the host-side create, the module guard, `gremion-services wire`, `gremion-validate-env`; the state compose reads it for Nextcloud's trusted editor hosts and Collabora's `server_name`; the app compose passes it to the control panel for the note on "Neuer Mandant" only | with a value, `nextcloud` and `collabora` of the state project (their environment changes: the first customer's files and office restart once) and, on the next deploy, the control panel |
+| `SECONDARY_TENANT_MODULES` | `state.env`; the same line in both `app-<colour>.env` | empty: only `board` and `calendar` | the create and the module guard (through `secondary_optin_load`), `gremion-validate-env` | nothing: it is read when a customer is created or a module is enabled. The app compose does not pass it to the control panel, so the note on "Neuer Mandant" stays the core-only one |
+| `SYNAPSE_JWT_LOGIN` | `state.env` | `on` (absent counts as on) | the `matrix` container (render, entrypoint, health check), `gremion-services wire`, `gremion-validate-env` | `matrix` (chat restarts for every customer) |
+| `MATRIX_IDENTITY` | both `app-<colour>.env` | `legacy` (absent counts as legacy) | the chat code of `gremion-ui` on every call; the validator, for the messaging opt-in | `gremion-ui` of that colour: the active one when `wire` step 7 or a deploy recreates it, the other when it is next switched to |
+| `NC_PROVIDER_PER_CUSTOMER` | `state.env` | `off` | `gremion-services wire`, secondary branch, step 6a | nothing; read when a secondary customer is wired. NOT YET SAFE: see the operating limits below |
+
+`gremion-validate-env` accepts only `on` or `off` for `SYNAPSE_JWT_LOGIN` and
+`NC_PROVIDER_PER_CUSTOMER`, judges `SECONDARY_TENANT_MODULES` (a space-separated
+list of the fixed opt-in ids, refused without `SECONDARY_TENANT_HOSTS`), and reads
+`MATRIX_IDENTITY` only for the messaging opt-in. The app judges `MATRIX_IDENTITY`
+itself: an unknown value is not read as `legacy`, chat refuses with the German
+503, so a typo can never fall back to the shared-username identity.
+
+### A secondary customer host
+
+`PILOT_TENANT_HOST` stays the first customer's host. These stay bound to it: the
+video relay's name (`turn.<PILOT_TENANT_HOST>`), the Element Call config file the
+install renders, the leaves' `PUBLIC_BASE_URL` setting (the links of a mail no
+longer use it), `COLLABORA_PUBLIC_URL`
+as Nextcloud's installer reads it, the first customer's Nextcloud login provider
+`Keycloak`, and the Synapse issuer while `SYNAPSE_JWT_LOGIN` is `on`. What the
+code makes per request host is described per module below.
 
 **Switch it on.** Add `SECONDARY_TENANT_HOSTS=canary.example.org` (comma-separated
 lowercase DNS names, no scheme, port, path or wildcard) to `etc/env/state.env`, and
@@ -348,74 +395,269 @@ panel only displays the list; the host-side create reads `state.env` and nothing
 the request says). `gremion-validate-env` refuses a malformed list, a duplicate,
 the platform domain, a platform host, the control panel host, `PILOT_TENANT_HOST`
 and its `turn.` relay host. Empty or absent means exactly one customer host, as
-before. Redeploy, create the customer from the panel with that host, add the host
-to `etc/tenant-hosts.txt` (certificate and DNS checks), and point `CD_PROBE_HOST`
-at it if it is to be the CD canary: the canary is the customer that owns the probe
-host, and the public probe asks only `/readyz` and the login page.
+before, with the state compose rendering unchanged. With a value, Nextcloud's
+trusted editor hosts (`NEXTCLOUD_PUBLIC_HOSTS`) grow by the listed hosts, and
+Collabora's `server_name` is left empty so that it names the host of each request
+(Traefik keeps it): with one fixed name a page on the second host would be told
+to use the first.
 
-**What it gives.** Login, board and calendar pages, each on the customer's own
-host, realm, and databases. The calendar's own data is the customer's; only its
-optional CalDAV mirror into the shared Nextcloud needs the customer's own
-collection, which `gremion-services wire <slug>` creates for it (the leaf cannot
-create one itself; a push that finds no collection fails and is given up after
-three attempts per entry). Until `wire` has run for the customer, nothing is
-written to the shared service. `wire` also gives the customer its own Nextcloud
-login provider and, under `MAIL_TRANSPORT=relay`, its mail login: see "A
-customer on a secondary host" under the wire steps above.
+**The default is core-only.** A customer on a secondary host gets login, board
+and calendar, each on its own host, realm and databases. The calendar's own data
+is the customer's; only its optional CalDAV mirror into the shared Nextcloud
+needs the customer's own collection, which `gremion-services wire <slug>` creates
+for it (the leaf cannot create one itself; a push that finds no collection fails
+and is given up after three attempts per entry). Until `wire` has run for the
+customer, nothing is written to the shared service. Every other module is refused
+by default (default deny: `SECONDARY_HOST_MODULES` in `infra/host/lib/common.sh`).
 
-**What it does not give.** Chat, files, office editing, video (all on the shared
-Synapse and Nextcloud), votes (they run on the shared Nextcloud Polls), the
-newsletter (its unsubscribe links carry `PILOT_TENANT_HOST`) and content pages:
-the content leaf builds the unsubscribe link of its e-mail channel from the one
-process-wide public base URL, so a secondary customer's subscribers would be
-sent to the primary host, where their token is unknown, and its news editor
-keeps drafts in the shared Nextcloud and opens them in the shared Collabora.
-Content may be allowed for a secondary host only after the leaf builds that link
-base from the customer's own host and the editor is isolated. The host side
-enforces all of this instead of leaving it to the operator:
+**The host side enforces it** instead of leaving it to the operator:
 
 - the create accepts `PILOT_TENANT_HOST` and a listed host and refuses every other
   host, naming what is allowed; on a secondary host it refuses, before anything is
-  created, any module outside `board` and `calendar` (default deny:
-  `SECONDARY_HOST_MODULES` in `infra/host/lib/common.sh`);
+  created, any module that is neither `board`, `calendar` nor opted in below;
 - the customer's tenant config is created with every other module switched off
-  (`SECONDARY_HOST_MODULES_OFF`), because a config reads a module as on until it
-  says otherwise, and with those ids listed as `pinned_off_modules`. The app pins
-  every listed module off on each read and write of the module switches, exactly
-  like the held-off set, and the list is not part of any settings update: neither
-  a settings change nor "Konfiguration zurücksetzen" by the customer's own IT
-  admin can switch such a module back on, and the provisioning worker and the
+  (`SECONDARY_HOST_MODULES_OFF`, less the opted-in ids), because a config reads a
+  module as on until it says otherwise, and with those ids listed as
+  `pinned_off_modules`. The app pins every listed module off on each read and
+  write of the module switches, and the list is not part of any settings update:
+  neither a settings change nor "Konfiguration zurücksetzen" by the customer's own
+  IT admin can switch such a module back on, and the provisioning worker and the
   route gate read the pinned value;
-- the protocol routes (create, editor URL, publish, public PDF, detail) are governance
-  and always on, so they read the current customer's files switch instead of the
-  build-wide document port: with it off, minutes live in the app only (the in-app
-  text), and the shared Nextcloud and Collabora are not called for that customer;
+- the protocol routes (create, editor URL, publish, public PDF, detail) are
+  governance and always on, so they read the current customer's files switch
+  instead of the build-wide document port: with it off, minutes live in the app
+  only (the in-app text), and the shared Nextcloud and Collabora are not called
+  for that customer;
 - the module enable (executor, council admin and break-glass alike) refuses the
   same modules for a customer registered on a secondary host;
 - `gremion-services wire <slug>` takes a customer registered on a listed secondary
   host through its own, narrower branch (see "A customer on a secondary host"
   under the wire steps), and refuses a customer whose registered host is neither
-  `PILOT_TENANT_HOST` nor an entry of `SECONDARY_TENANT_HOSTS`, before it copies
-  a secret, writes a key or starts a container: the shared chat and file
-  services stay bound to the primary customer.
+  `PILOT_TENANT_HOST` nor an entry of `SECONDARY_TENANT_HOSTS`, before it copies a
+  secret, writes a key or starts a container.
 
-**Evidence still owed.** Isolation evidence for two customers on the shared
-Nextcloud and Synapse has not been produced, which is why those modules stay off
-for a secondary host. Until it exists, do not lift the refusals. Also owed after
-the deploy that first uses it: the realm's discovery document at the secondary
-host names that host as issuer; a login on it; the customer's edge router listed
-and enabled in `gremion-verify`; a CD run with `CD_PROBE_HOST` set to it.
-Decommission a secondary-host customer before removing its host from the list.
+### What a secondary customer gets per opted-in module
+
+`SECONDARY_TENANT_MODULES` is a space-separated list of catalogue ids from a
+**fixed set**: `files`, `votes`, `messaging`. An id outside the set is refused by
+`gremion-validate-env` and never allowed, whatever the key says; so is a
+duplicate. `publishing` and `content` are outside the set (see the table). The
+list is read from `state.env` when a customer is created and when a module is
+enabled for it: the create leaves the listed modules out of the customer's
+switches and out of `pinned_off_modules`, and the module guard lets them through.
+A refused list is handled differently by its two readers. The **create** of a
+customer on a secondary host stops at once with "nothing was created", even for a
+customer that wants board only, because the list is judged before anything is
+made. The **module enable** (the guard in the host's customer operations) opts
+nothing in: a refused list leaves the core modules and lets a first customer's
+enable through unchanged, and a refusal for a secondary customer then names the
+list. The create of the first customer never reads the list.
+
+| Module | What the customer gets | What stays shared or is not given |
+|---|---|---|
+| board (core) | its own board, in its own kernel or board database as its location flag says (`t_<hex32>__board` once the board lives in the board module's database) | nothing shared |
+| calendar (core) | its own calendar leaf database; the CalDAV mirror goes to the customer's own collection (`gremion-<slug>`) of the leaf's shared Nextcloud account, created by `wire` step 6b | the Nextcloud account that owns the collections is the one install-wide account |
+| files | one group folder per org unit on the shared Nextcloud, with its own group `ou-<unit id>`; a folder is adopted on a retry only when it carries that unit's own group (the mount point alone proves nothing on a shared instance); the editor URL is built on the request's own host, which Nextcloud trusts and Collabora names; the retained-records folder and its groups are named per tenant | one Nextcloud, one Collabora, one `richdocuments` configuration; the Nextcloud accounts are the open point named in the operating limits |
+| votes | polls on the shared Nextcloud Polls: every poll is created by the install's one Nextcloud admin account and bound to the customer by a leading marker `[gt:<tenant id>]` in its title; every list and by-id read checks it, and another customer's poll answers 404; the poll pages and routes read and vote with the acting member's own bearer when the request has one (Karenz and retained copies use the admin account) | the Polls app and its database are shared; the binding is the app's marker, not a Nextcloud group |
+| messaging | its own Matrix accounts `<slug>.<escaped username>`, its own unit rooms (alias `#stura.<slug>.<unit>`), archive aliases (`#stura-archiv.<slug>.<unit>-<time>`) and meeting rooms (`#meeting.<slug>.<event>`); every room carries a tenant marker state event written by the admin bot, and a room found behind an alias is adopted only when that marker names the customer; video calls: the call frame's config names the requesting host's own token service, and the participants' names drop the customer prefix | one Synapse and one LiveKit; the alias directory is global; see the switch-over below, the three switches it needs, and the operating limits |
+| publishing, content | refused for a secondary host: the module id is not in the fixed set | the leaves now ask the kernel for the sending customer's own link base on every send (`/api/internal/newsletter/link-base`, `/api/internal/content/link-base`), but the set is fixed in `infra/host/lib/common.sh`: widening it is a code change, not a key. The refusal text of `gremion-validate-env` for `publishing` still gives the older reason (the mail links), and the content news editor still keeps its drafts in the shared Nextcloud and opens them in the shared Collabora |
+
+`messaging` needs three switches before the list is accepted, and the validator
+names only the ones that are missing: `SYNAPSE_JWT_LOGIN=off` in `state.env` and
+`MATRIX_IDENTITY=namespaced` in `app-blue.env` and in `app-green.env`. They are the
+chat switch-over below. The check reads those env files and nothing else: neither
+the create nor `gremion-validate-env` asks the running `matrix` or `gremion-ui`. So
+the three lines being written is not the switch-over being done. With the lines
+written but not applied, the create passes while `matrix` still offers the JWT
+login and the running `gremion-ui` is still on the legacy identity, which builds
+chat without the namespaced accounts. Apply the switch-over and read it back first
+(the login flows read back from the running `matrix`, then the wire of the first
+customer, which recreates `gremion-ui`), and only then list `messaging`.
+
+### Order for a second customer
+
+1. DNS for the second host, pointing at the host's edge address. The realm must
+   answer publicly on it, with a certificate the install trusts: the secondary
+   wire stops at its first step otherwise (an ACME staging certificate fails
+   there).
+2. `SECONDARY_TENANT_HOSTS` in `state.env` and both app files; `gremion-validate-env`;
+   apply it (Nextcloud and Collabora recreate, see the switches).
+3. Only for messaging: steps 1 to 5 of the chat switch-over below, applied and read
+   back from the running services (the next step's check reads only the env files),
+   before the next step.
+4. `SECONDARY_TENANT_MODULES` in `state.env` and both app files (`gremion-validate-env`
+   again; it names a missing chat switch).
+5. Create the customer from the panel with the secondary host. Add the host to
+   `etc/tenant-hosts.txt` (certificate and DNS checks), and point `CD_PROBE_HOST` at
+   it if it is to be the CD canary. A customer that exists already keeps the pins
+   it was created with (there is no unpin verb): to give it a module that was
+   outside the list at its creation, it is deleted and a new customer is created
+   under a new slug (a deleted slug stays reserved).
+6. The first customer must be wired before the second: `gremion-services wire <primary
+   slug>`, then `gremion-services wire <slug>` for the second (its secondary branch).
+   The secondary wire reads the first customer's provider and the bot token the
+   running app carries, and stops before writing anything when either is missing.
+7. The probe's fixture, made by hand in both customers (header of
+   `infra/host/bin/gremion-isolation-live`): an org unit named `isoprobe` with its
+   chat room and files folder, a member `isoprobe` in it, a file
+   `isoprobe-<slug>.odt` in the folder, a poll and a calendar event titled
+   `isoprobe-<slug>`.
+8. `gremion-isolation-live <slugA> <slugB>`, and read every section. It is
+   report-only and does not feed the enable gate; what its verdicts prove is on
+   [isolation-evidence.md](isolation-evidence.md). A customer that opted in only to
+   files and votes has no chat: the chat and call sections read NOT-ENABLED and the
+   run exits 3, which is not a pass.
+
+Decommission a secondary-host customer before removing its host from the list, and
+remove its objects on the shared services by hand
+([../runbooks/tenant-lifecycle.md](../runbooks/tenant-lifecycle.md), "A customer on
+the shared Nextcloud and Synapse").
+
+### Chat switch-over runbook
+
+Chat on a homeserver that several customers share needs the chat service to offer
+no login of its own and the app to name every account by customer. Both are
+deployment switches, and they are one change: chat is down for every customer,
+the first included, between the first step and the last. Plan a window.
+
+- With `SYNAPSE_JWT_LOGIN=off` and `MATRIX_IDENTITY=legacy`, the app's login (by
+  JWT) has no flow to use and chat is broken.
+- With `MATRIX_IDENTITY=namespaced` and the JWT or single sign-on login still
+  offered, chat refuses with the German 503 (the app asks the homeserver's login
+  flows and remembers a clean answer for a minute): in that mode the app is the
+  only party that decides which Matrix account a login is.
+- `MATRIX_IDENTITY=namespaced` renames every chat identity: `@max:<server>` becomes
+  `@<slug>.max:<server>`, and new unit rooms get `#stura.<slug>.<unit>` aliases.
+  Existing legacy accounts are not renamed or merged: members get new accounts.
+
+**The decision.** The operator decides, and records it, between two ways:
+
+- **a wipe**, only while chat holds test data. It removes every account, room,
+  message and media file of every customer on that homeserver, and the admin
+  bot's registration. The data is two volumes of the state project:
+  `messaging-pg-data` (the Synapse database) and `synapse-data` (media and the
+  homeserver's signing key), which compose names `<project>_<volume>`: read the
+  full names from `docker volume ls`. Stop `matrix` and `messaging-postgres`, remove
+  those two containers by name (`docker volume rm` refuses a volume that even a
+  stopped container still references), then remove the two volumes by name. Never
+  the project's other volumes and never with `down -v`. Applying the state project
+  in step 3 creates the containers and empty volumes again;
+- **a migration of the existing accounts** to the namespaced names. It is **not
+  built**: nothing in this repository renames accounts or moves rooms. A homeserver
+  that holds a real customer's chat is not wiped, and until a migration exists it
+  does not take the switch-over.
+
+One more fact belongs to the decision. A unit whose chat room was provisioned
+before keeps its room id in the customer's provisioning ledger as a finished
+resource, and the app reuses a finished row as it is. After a wipe those room ids
+no longer exist, and the committee page's "Erneut provisionieren" and the retry in
+`wire` step 8 (which only puts failed rows back) do not create the room again. No
+verb in this repository clears those rows: settle how before wiping, or the
+first customer's existing units stay without a room.
+
+**The steps.**
+
+1. Stop chat: announce the window and stop `matrix` (state project).
+2. Wipe or migrate, as decided above. A migration has no step here.
+3. `SYNAPSE_JWT_LOGIN=off` in `etc/env/state.env`; `gremion-validate-env`. Applying
+   it recreates `matrix`: the render then has no JWT login and no single sign-on
+   provider (no realm key fetch, no issuer needed), and the container's health
+   check reads unhealthy while either flow is offered. Read the flows back from the
+   running service: `GET /_matrix/client/v3/login` through the edge lists exactly
+   `m.login.application_service`.
+4. `MATRIX_IDENTITY=namespaced` in **both** `app-blue.env` and `app-green.env`. With
+   `SYNAPSE_JWT_LOGIN=off` a colour left on `legacy` has no login flow to use, so
+   chat is broken as soon as that colour is switched to (the first bullet above),
+   and it would provision accounts under the legacy identity. Applying it recreates `gremion-ui` of the colour: `wire` step 7 recreates the
+   active one in the next step, the other colour carries it when it is next
+   deployed or switched to.
+5. Re-wire the first customer: `gremion-services wire <primary slug>`. With the
+   switch off it copies no Synapse client secret, writes no issuer or fetch URL,
+   recreates `matrix` out of bootstrap mode, keeps the admin bot's recorded token
+   when it still verifies, registers the bot only when its account is absent (after
+   a wipe it is registered afresh; on a homeserver that still holds the bot account
+   with a token that no longer verifies the bootstrap fails and the wire stops, and
+   the token is restored by hand), asserts the
+   login flows are exactly the expected set, and recreates `gremion-ui`.
+6. For a second customer with chat: list `messaging` in `SECONDARY_TENANT_MODULES`
+   (the validator now accepts it), create the customer, and `gremion-services wire
+   <slug>`. The secondary wire does not touch `matrix`: that customer's accounts are
+   made by the app on first use and its rooms by provisioning.
+7. Probe: log in as a member of each customer and open a room (the app mints the
+   token itself), then `gremion-isolation-live`. Both customers need messaging
+   for the chat and call sections to judge anything.
+
+### Operating limits of two customers on one install
+
+What is shared or not available, named so that nobody reads more into the setup
+than it gives:
+
+- **One TURN relay name.** The video relay on 443 is `turn.<PILOT_TENANT_HOST>`
+  with one certificate, one LiveKit key pair and one signalling endpoint
+  (`/livekit-sfu` on the platform host) for every customer; its 50 relay ports are
+  shared. A second customer's calls use the first customer's relay name.
+- **Shared Synapse and Nextcloud databases and backups.** All customers' chat is
+  in one Synapse database and media volume and all customers' files and polls in
+  one Nextcloud database and data volume. The install's backups of them are
+  per install: there is no per-customer restore, and a deleted customer's data
+  stays in those backups until they rotate out. Teardown on the shared services
+  is manual.
+- **No unpin verb.** A secondary customer keeps the `pinned_off_modules` it was
+  created with. Changing the opt-in does not change an existing customer; a
+  customer that needs another module is created again under a new slug.
+- **Device continuity is lost under app-minted Matrix logins.** The login the app
+  mints for a namespaced account belongs to no device and ends at a time the app
+  sets; a device id the client presents is ignored. The admin login takes no device
+  id, so a client that needs a device, for end-to-end encryption keys, cannot use
+  it: it gets no device at all, not a new one per login.
+- **`MESSAGES_BACKEND=service` is held.** The service backend still logs in by JWT.
+  With `MATRIX_IDENTITY=namespaced` chat refuses (the German 503) in that mode;
+  the pilot compose sets no such key.
+- **Nextcloud account addressing (open).** The secondary wire registers the
+  customer's provider `Keycloak-<slug>` with `--unique-uid=1`, so an account
+  created for its members by a bearer carries an id that `user_oidc` derives from
+  the provider and the Keycloak id. The files module creates the accounts it
+  provisions under the provider named by `NEXTCLOUD_OIDC_PROVIDER_ID` (the first
+  customer's, raw Keycloak ids), or, with `NC_PROVIDER_PER_CUSTOMER=on`, under the
+  customer's own provider id, and in both cases names the account by the raw
+  Keycloak id in group, file and erasure calls. Whether a secondary customer's
+  member then reaches its group folders is not shown by anything in this
+  repository. The switch is **off** and says it is not safe: leave it off and treat
+  files for a secondary customer as unproven. The probe's files section does not
+  settle it: it addresses the fixture user's Nextcloud account by the Keycloak
+  subject (WebDAV path and `occ user:info`), so for accounts under derived ids it
+  does not PASS (a failed positive control reads FAIL, a missing account
+  NOT-READY): read that as a finding about the setup. The votes code does not name
+  Nextcloud accounts by id: it acts with the member's bearer or the admin account.
+- **Content and publishing** are not available to a secondary customer (table above).
+
+### Evidence for two customers
+
+What exists: the recorded cross-customer cases at the app layer against recording
+fakes of one shared Nextcloud and one shared Synapse, including two customers on
+one homeserver in the namespaced identity (see
+[isolation-evidence.md](isolation-evidence.md)); and `gremion-isolation-live`, the
+host program that probes the running stack in both directions. What is owed:
+one host run of that program on the install that uses this, with its output kept
+beside the run; nothing in this repository records one. Do not cite the app-layer
+cases as a statement about Nextcloud's or Synapse's own authorisation.
+
+Also owed after the deploy that first uses it: the realm's discovery document at
+the secondary host names that host as issuer; a login on it; the customer's edge
+router listed and enabled in `gremion-verify`; a CD run with `CD_PROBE_HOST` set to
+it; a document of each customer opened by hand on its own host, with save and
+close (the probe leaves them unproven); with messaging, one message and one call
+between two members of each customer.
 
 **Operating notes.**
 
 - A secondary-host customer's tenant config file carries its `pinned_off_modules`
   list: back it up and restore it as a whole.
 - The CD canary: with `CD_PROBE_HOST` set to the secondary host, the public probe
-  asks only that core-only customer's `/readyz` and login page. A canary on this
-  host cannot catch a regression in chat, files, office editing or video, which
-  stay bound to the primary customer; those still need the primary host's own
-  checks.
+  asks only that customer's `/readyz` and login page. It catches nothing about
+  chat, files, office editing or video, which run on the shared services whatever
+  the canary's modules; those need their own checks.
+
 
 ## Named residuals
 
@@ -430,11 +672,13 @@ Decommission a secondary-host customer before removing its host from the list.
   The panel refuses `disable_module` for these three (`DISABLE_LOCKED`); only the
   host break-glass request is not refused by code, so that stays an operator rule.
 - **Isolation evidence.** The case table behind the enable gate covers the
-  backends this install runs. Board's recorded case is the in-process one over
-  the kernel tables; a customer whose board lives in its own database is served
-  by the leaf, so the case through the router and the leaf is owed before a
-  second customer relies on that path. Votes, files and messaging are proven at
-  the app layer against a shared Nextcloud and Synapse.
+  backends this install runs, at the app layer: votes, files and messaging
+  against recording fakes of a shared Nextcloud and Synapse, board through the
+  router and the board service. For two customers on one install the app-layer
+  cases are not enough: `gremion-isolation-live` probes the running stack, and one
+  host run of it, kept with the install's records, is owed (nothing in this
+  repository records one). See "Evidence for two customers" and
+  [isolation-evidence.md](isolation-evidence.md).
 - **Office router.** The `.office` router is emitted for every routed host
   whether or not Collabora runs; on a host without it traefik lists that router
   as not enabled, and `gremion-verify` reports it as not live. Making it
@@ -449,6 +693,13 @@ Decommission a secondary-host customer before removing its host from the list.
   do not yet list step 6c, and no verify yet fails when the tenant row has no
   `smtp` entry or the tenant's `config.json` is not `smtp.configured`. Both live
   outside this repository's host tooling and are a named follow-up.
+- **Two customers on one install.** The shared TURN relay name, the shared
+  Synapse and Nextcloud databases and backups (no per-customer restore), the
+  missing unpin verb, the device continuity lost under app-minted Matrix logins,
+  the held `MESSAGES_BACKEND=service`, and the open Nextcloud account addressing
+  are named under "Operating limits of two customers on one install"; the
+  control panel's note on "Neuer Mandant" stays the core-only one because the app
+  compose does not pass `SECONDARY_TENANT_MODULES` on.
 - **Platform pins.** Only the apex host pin is declared on the `traefik`
   service; the `www`, `control` and `sales` pins belong to the static routers
   that are not part of this install.
@@ -465,4 +716,6 @@ table layout is not yet seen against a running Nextcloud); a video call between 
 from a network that blocks UDP. With the relay transport: after `wire`, one
 invitation or newsletter test mail sent from the running app arrives (the relay
 accepts the login and signs the From domain), and the Settings page's mail step
-shows the relay as configured without a hand edit.
+shows the relay as configured without a hand edit. On an install with a second
+customer: the items under "Evidence for two customers", and, after a chat
+switch-over, the login flows read back from the running `matrix`.
