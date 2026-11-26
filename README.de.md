@@ -1,4 +1,4 @@
-<!-- i18n-sync: source=README.md sha256=6ca3daee99bf382f11d9e8502c06f0bed345d4197a85c680e6f53d76006b38cf -->
+<!-- i18n-sync: source=README.md sha256=f951d1ce35088f14ddaaacf6037a7101471b2cfc35ca6d111d9e05465e905486 -->
 [English](./README.md) | **Deutsch**
 
 # Gremion
@@ -27,7 +27,7 @@ Ein Funktionsmodul ist alles, was der Kernel über dieses SDK entdeckt; der Kern
 
 Das sollte man wissen, bevor man Planungen auf dieses Repository stützt, nicht erst danach:
 
-- **Nicht das vollständige Schema des Produkts.** Hier werden 39 Data-Plane-Migrationen ausgeliefert: 31 der 58 im Referenzprodukt sowie die reinen Kernel-Migrationen `0059`, `0060`, `0061`, `0062`, `0063`, `0064`, `0065` und `0066`; **27 fehlen** somit. Jede davon gehört einem Modul (Finanzen, Inhalte) oder wird nicht ausgeliefert (Übergabe). Die Lücken in den Dateinamen stammen aus dieser größeren Kette und sind keine Beschädigung; siehe [`gremion-ui/migrations/README.md`](./gremion-ui/migrations/README.md) (englisch), das auflistet, was hier vorhanden ist, und benennt, was nicht.
+- **Nicht das vollständige Schema des Produkts.** Hier werden 40 Data-Plane-Migrationen ausgeliefert: 31 der 58 im Referenzprodukt sowie die reinen Kernel-Migrationen `0059`, `0060`, `0061`, `0062`, `0063`, `0064`, `0065`, `0066` und `0067`; **26 fehlen** somit. Jede davon gehört einem Modul (Finanzen, Inhalte) oder wird nicht ausgeliefert (Übergabe). Die Lücken in den Dateinamen stammen aus dieser größeren Kette und sind keine Beschädigung; siehe [`gremion-ui/migrations/README.md`](./gremion-ui/migrations/README.md) (englisch), das auflistet, was hier vorhanden ist, und benennt, was nicht.
 - **Nicht der volle Funktionsumfang der Governance.** Das **Schema** für Anfechtbarkeit und Abberufung (Contestability / Recall) wird hier ausgeliefert (`055`, `056`); seine Anwendungshälfte (Routen, Services, Oberfläche) und das Second-Locus-Modell sind im Produkt umgesetzt und **fehlen hier**, obwohl die Charta Rechenschaft und Anfechtbarkeit als gleichrangige Grundbestandteile behandelt.
 - **Der Vertrag des Laufzeit-Registers im Modul-SDK ist nicht eingefroren.** Die Form des Manifests und `runtime-registry.ts` können sich weiterhin ohne Auslauffrist ändern. Statt `main` zu verfolgen, sollte ein SHA fixiert werden.
 - **`gremion-ui` und `gremion-public` sind eine nicht normative Referenz-Shell.** Sie sind die Shell, mit der der Kernel herausgelöst wurde, kein ratifizierter UI-Vertrag. Wer sie ersetzt, verletzt keine Garantie des Kernels.
