@@ -564,20 +564,14 @@ resolve_control_panel_host() {
 # modules that live on the shared Synapse and Nextcloud). The list is read from
 # state.env only, never from a request.
 
-# The modules a customer on a secondary host may enable: the leaves that keep their
-# data in their own database and never reach the shared Synapse or Nextcloud for what
-# they are for, and never write the customer host into a link. DEFAULT DENY: a module
-# that is not named here (a new one included) is refused there. Left out on purpose:
-# files, messaging and votes (shared Nextcloud and Synapse, isolation evidence for two
-# customers is still owed); publishing (the newsletter's whole output is mail whose
-# unsubscribe links carry the leaf's public base URL, which is PILOT_TENANT_HOST's); and
-# content, for the same two reasons: its e-mail channel builds the unsubscribe link from
-# that one process-wide base URL (a secondary customer's subscribers would be sent to the
-# primary host, where their token is unknown), and its news editor stores drafts in the
-# shared Nextcloud and opens them in the shared Collabora. Calendar stays: its pages and
-# data are the customer's own; only the optional CalDAV mirror into the shared Nextcloud
-# has no collection there (created by `gremion-services wire`, which refuses such a
-# customer), so nothing is written to the shared service.
+# The modules a customer on a secondary host may enable with no further say-so: the
+# leaves that keep their data in their own database and never reach the shared Synapse
+# or Nextcloud for what they are for, and never write the customer host into a link.
+# DEFAULT DENY: a module that is not named here (a new one included) is refused there
+# unless the install opts it in (SECONDARY_TENANT_MODULES_SET below). Calendar stays:
+# its pages and data are the customer's own; only the optional CalDAV mirror into the
+# shared Nextcloud has no collection there (created by `gremion-services wire`, which
+# refuses such a customer), so nothing is written to the shared service.
 SECONDARY_HOST_MODULES="board calendar"
 
 # The same split in the app's own vocabulary: the manifest ids (config.modules keys) that a secondary-host
@@ -588,21 +582,28 @@ SECONDARY_HOST_MODULES="board calendar"
 # shellcheck disable=SC2034  # read by infra/host/lib/executor/handlers/create.sh, which sources this file
 SECONDARY_HOST_MODULES_OFF="content elections files messages newsletter vault votes"
 
-# OPT-IN (state.env SECONDARY_TENANT_MODULES, optional, space-separated catalogue ids): a shared-service module
-# a customer on a secondary host may have, once its isolation work exists. The set is FIXED here: an id outside
-# it is never allowed, whatever the key says. Left out on purpose: publishing (the newsletter's mail links still
-# name the install's customer host) and content, elections, vault. messaging is in the set but needs three
-# switches (secondary_tenant_modules_problem). The key absent or empty: exactly the default deny above.
+# OPT-IN (state.env SECONDARY_TENANT_MODULES, optional, space-separated catalogue ids): a module a customer on a
+# secondary host may have once the install names it. The set is FIXED here: an id outside it is never allowed,
+# whatever the key says. In it: files, votes and messaging (the shared Nextcloud and Synapse; messaging needs
+# three switches, secondary_tenant_modules_problem), and content and publishing. The mail links of content and
+# of the newsletter (the unsubscribe link) are built from the SENDING customer's own host, asked of the kernel
+# through the link-base callback, so they need no process-wide host. Their drafts live on the shared
+# Nextcloud: the news drafts are keyed per customer, and publishing is listed in the key only once its newsletter
+# drafts are keyed per customer too. Not in the set: elections and vault (no per-customer isolation yet). The key
+# absent or empty: exactly the default deny above.
 # shellcheck disable=SC2034  # read by scripts/check-panel-host-reserved.test.mjs, which pins it against the manifests
-SECONDARY_TENANT_MODULES_SET="files votes messaging"
+SECONDARY_TENANT_MODULES_SET="files votes messaging content publishing"
 
 # secondary_optin_manifest_id <catalogue id> -> prints the manifest id (the app's config.modules key) of an
-# opt-in id, the vocabulary of SECONDARY_HOST_MODULES_OFF; returns 1 for anything outside the fixed set.
+# opt-in id, the vocabulary of SECONDARY_HOST_MODULES_OFF (the catalogue ids messaging and publishing are the
+# manifest ids messages and newsletter); returns 1 for anything outside the fixed set.
 secondary_optin_manifest_id() {
     case "${1:-}" in
         files)     printf '%s' files ;;
         votes)     printf '%s' votes ;;
         messaging) printf '%s' messages ;;
+        content)   printf '%s' content ;;
+        publishing) printf '%s' newsletter ;;
         *) return 1 ;;
     esac
 }
@@ -659,11 +660,7 @@ secondary_tenant_modules_problem() {
     for e in "${entries[@]}"; do
         n=$((n + 1))
         if ! secondary_optin_manifest_id "$e" >/dev/null; then
-            if [[ "$e" == publishing ]]; then
-                printf 'entry %s: publishing stays out of the opt-in set: its mail links still name the install'"'"'s customer host' "$n"
-            else
-                printf 'entry %s: not an id of the opt-in set (%s; separate them with spaces, lower case)' "$n" "$SECONDARY_TENANT_MODULES_SET"
-            fi
+            printf 'entry %s: not an id of the opt-in set (%s; separate them with spaces, lower case)' "$n" "$SECONDARY_TENANT_MODULES_SET"
             return 1
         fi
         for (( k = 1; k < n; k++ )); do

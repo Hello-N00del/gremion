@@ -51,7 +51,7 @@ handle_create() {
                 || die "create ${id}: SECONDARY_TENANT_MODULES in state.env is refused (${SECONDARY_OPTIN_WHY}); nothing was created" "$GREMION_EXIT_ASSERT"
             while IFS= read -r mod; do
                 secondary_host_module_allowed "$mod" \
-                    || die "create ${id}: the module ${mod} cannot be enabled for a customer on the secondary host ${got_host}: it runs on the shared chat or file services or writes the customer host ${want_host} into its links, and those stay bound to that host; a secondary host is core-only (${SECONDARY_HOST_MODULES// /, })${SECONDARY_TENANT_MODULES:+; opted in by the install: ${SECONDARY_TENANT_MODULES}}; nothing was created" "$GREMION_EXIT_ASSERT"
+                    || die "create ${id}: the module ${mod} cannot be enabled for a customer on the secondary host ${got_host}: a secondary host is core-only unless the install opts a module in: the opt-in set is ${SECONDARY_TENANT_MODULES_SET// /, } and an id of it is allowed only when SECONDARY_TENANT_MODULES in state.env lists it (core modules: ${SECONDARY_HOST_MODULES// /, }${SECONDARY_TENANT_MODULES:+; opted in by the install: ${SECONDARY_TENANT_MODULES}}); nothing was created" "$GREMION_EXIT_ASSERT"
             done < <(jq -r '(.enable // [])[]' "$args")
             # a config reads every toggleable module as ON until it says otherwise: switch the others OFF
             # record them as pinned_off_modules too: the app pins those ids false on every read and write of the
