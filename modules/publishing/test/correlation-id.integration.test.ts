@@ -53,6 +53,7 @@ function makeFakeKernel(): KernelClient {
     async render(): Promise<string> { return '<html><body>Test</body></html>' },
     async resolveGroup(): Promise<{ email: string; name: string | null }[]> { return [] },
     async sendMail(msg): Promise<{ messageId: string }> { return { messageId: `<k-${msg.to}@test>` } },
+    async linkBase(): Promise<string | null> { return 'https://corrtest.example' },
   }
 }
 
@@ -117,7 +118,6 @@ describe('T16 — correlation-id wiring: dispatch → outbox → relay envelope'
       sql,
       kernel: makeFakeKernel(),
       transport: makeFakeTransport(),
-      origin: 'https://corrtest.example',
       correlationId: injectedCorrelationId,
     })
 

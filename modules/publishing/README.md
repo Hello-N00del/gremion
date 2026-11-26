@@ -69,9 +69,9 @@ Disabling the module for a tenant exports the database with `pg_dump` (retention
 | `INTERNAL_NEWSLETTER_SECRET` | both | Shared secret in `x-internal-auth`. |
 | `NEWSLETTER_PG_URL` | leaf | PostgreSQL server of the module; required, no default. |
 | `NATS_URL` | leaf | Enables the outbox relay. |
-| `KERNEL_BASE_URL` | leaf | Kernel base URL for the render, resolve-group and send-mail callbacks. |
-| `PUBLIC_BASE_URL`, `ORIGIN` | leaf, app | Public base URL used to build links. |
-| `NEWSLETTER_ALLOW_LOOPBACK_LINKS` | leaf | Permits loopback link bases (development). |
+| `KERNEL_BASE_URL` | leaf | Kernel base URL for the render, resolve-group, send-mail and link-base callbacks. |
+| `PUBLIC_BASE_URL`, `ORIGIN` | leaf, app | Public base URL. The leaf only logs it at boot: the origin of the links in a mail (the unsubscribe link) is the sending tenant's own host, which the leaf asks the kernel for on every send (`GET /api/internal/newsletter/link-base`). |
+| `NEWSLETTER_ALLOW_LOOPBACK_LINKS` | leaf | Permits a loopback link base in the kernel's answer (development). |
 | `NEWSLETTER_SCHEDULER_ENABLED`, `SCHEDULER_ENABLED` | leaf | Switch the send scheduler; the per-module variable wins when non-empty. |
 | `COLLABORA_INTERNAL_URL` | app | Internal Collabora URL for draft conversion. |
 | `SHUTDOWN_TIMEOUT_MS`, `PORT`, `TRACE_EXPORTER` | leaf, app | Shutdown limit, listen port, tracing. |

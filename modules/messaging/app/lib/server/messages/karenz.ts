@@ -6,7 +6,9 @@
 // archived through the same code path as the admin archive (read-only, restorable, the power levels
 // it overwrites are kept in the archive marker). Restore: the rooms come back exactly as they were.
 // Final day: the rooms the Karenz archived are deleted at the homeserver (block + purge), except the
-// meeting-linked rooms (alias localpart `meeting-<eventId>`, created by /api/video/meeting-room),
+// meeting-linked rooms (alias localpart `meeting-<eventId>`, `meeting.<slug>.<eventId>` when the chat
+// identity is namespaced, where a plain `meeting-<eventId>` room with this customer's marker is kept
+// as well; created by /api/video/meeting-room),
 // which stay until the end of the meeting retention (RC-MSG-LINK) and are never archived or deleted.
 //
 // Everything here is idempotent (the pass runs again after a crash) and processes ALL rooms before it
@@ -14,6 +16,7 @@
 // room name, a room id or an alias. A room an admin archived BEFORE the switch-off has no ledger row,
 // is never recorded and therefore never restored or deleted by the Karenz.
 import { getMatrixClient } from './matrix-client'
+import { currentMeetingAliasPrefix, matrixIdentityMode } from './matrix-namespace'
 import { getSynapseAdmin } from './synapse-admin'
 import {
   getRoomArchiveMarker, unarchiveRoom, archiveRoom, resolveMatrixError, MatrixUnavailableError, RoomNotFoundError,
@@ -21,7 +24,7 @@ import {
 import { getOrgUnit, listOrgUnits } from '$lib/server/governance/org-units-db'
 import { getResource } from '$lib/server/governance/provisioning/ledger'
 import { writeAuditEntry } from '$lib/server/audit-db'
-import { runWithTenant, type TenantContext } from '$lib/server/tenant/context'
+import { getTenant, runWithTenant, type TenantContext } from '$lib/server/tenant/context'
 import {
   KarenzPartialError,
   type DeletionItem, type KarenzContext, type KarenzParticipant, type RetainedItem,
@@ -38,10 +41,31 @@ const MEETING_LINK_CLASS = 'RC-MSG-LINK'
 const SWITCH_OFF_PENDING = new Set<string>(['recorded', 'lock_failed'])
 const RESTORE_DONE = new Set<string>(['kept', 'restored', 'gone', 'deleted'])
 
-/** `#meeting-<eventId>:server`: the alias of a room created for a calendar meeting. */
+/**
+ * Is this the alias of a room created for a calendar meeting? The rooms that answer true are never
+ * archived and never deleted. Legacy: `#meeting-<eventId>:server`, exactly as before. Namespaced: that
+ * form too (rooms from before the alias named the customer) and `#meeting.<slug>.<eventId>:server`,
+ * whatever the slug: a room is protected, never claimed, by this test. Which of them are this
+ * customer's to keep is decided in unownedMeetingRooms.
+ */
 function isMeetingAlias(alias: string | null | undefined): boolean {
+  if (typeof alias !== 'string') return false
+  return matrixIdentityMode() === 'namespaced' ? /^#meeting[.-][^:]+:/.test(alias) : /^#meeting-[^:]+:/.test(alias)
+}
+
+/** Is this a meeting room alias of the request's customer (the prefix it creates them under)? */
+function isOwnMeetingAlias(alias: string | null | undefined): boolean {
+  return isMeetingAlias(alias) && (alias as string).startsWith(currentMeetingAliasPrefix())
+}
+
+/** The plain `#meeting-<eventId>:server` form: the legacy alias, and in namespaced mode the one rooms
+ *  carried before the alias named the customer. Whose room it is, only the marker says. */
+function isPlainMeetingAlias(alias: string | null | undefined): boolean {
   return typeof alias === 'string' && /^#meeting-[^:]+:/.test(alias)
 }
+
+/** Marker reads in flight at once on a shared homeserver: more than one, never a burst. */
+const MARKER_READS_AT_ONCE = 8
 
 function unitOf(item: KarenzItemRow): string | null {
   const p = item.payload
@@ -111,15 +135,48 @@ async function trySetState(ctx: KarenzContext, item: KarenzItemRow, state: ItemS
   }
 }
 
-/** Meeting-linked rooms that no ledger row owns: rooms the admin bot created with a meeting alias. */
-function unownedMeetingRooms(rooms: Map<string, HomeserverRoom>, owned: Set<string>): string[] {
-  const bot = getMatrixClient().getAdminBotUserId()
-  const out: string[] = []
-  for (const r of rooms.values()) {
-    if (owned.has(r.room_id)) continue
-    if (isMeetingAlias(r.canonical_alias) && bot !== '' && r.creator === bot) out.push(r.room_id)
+/**
+ * Meeting-linked rooms that no ledger row owns: rooms the admin bot created with a meeting alias. On a
+ * homeserver shared by several customers (MATRIX_IDENTITY=namespaced) that list holds every customer's
+ * meeting rooms, so only a room under THIS customer's alias prefix AND carrying its org.gremion.tenant
+ * marker counts as its own.
+ * Legacy mode reads no marker and lists what it always listed.
+ */
+async function unownedMeetingRooms(rooms: Map<string, HomeserverRoom>, owned: Set<string>): Promise<string[]> {
+  const client = getMatrixClient()
+  const bot = client.getAdminBotUserId()
+  const namespaced = matrixIdentityMode() === 'namespaced'
+  // Legacy: what it always was, no marker is read. Namespaced: a bot-created room under this customer's
+  // alias prefix or under the plain `#meeting-<id>` alias; the marker decides for both.
+  const candidates = [...rooms.values()].filter(
+    (r) => !owned.has(r.room_id) && bot !== '' && r.creator === bot
+      && (namespaced ? isOwnMeetingAlias(r.canonical_alias) || isPlainMeetingAlias(r.canonical_alias) : isOwnMeetingAlias(r.canonical_alias)),
+  )
+  if (!namespaced) return candidates.map((r) => r.room_id)
+
+  const tenantId = getTenant().id
+  const verdicts: boolean[] = []
+  for (let i = 0; i < candidates.length; i += MARKER_READS_AT_ONCE) {
+    verdicts.push(...(await Promise.all(candidates.slice(i, i + MARKER_READS_AT_ONCE).map((r) => carriesOwnMarker(client, r, tenantId)))))
   }
-  return out
+  return candidates.filter((_, i) => verdicts[i]).map((r) => r.room_id)
+}
+
+/**
+ * Does this candidate carry this customer's trusted marker? A room under this customer's own prefix can
+ * only be this customer's, so a failing read there fails the step (it is retried; the room would
+ * otherwise be missing from the kept list). A room under the plain alias may be any customer's: a
+ * failing read means "not known to be ours", is logged with the room id (server log only) and does not
+ * stop the others.
+ */
+async function carriesOwnMarker(client: ReturnType<typeof getMatrixClient>, room: HomeserverRoom, tenantId: string): Promise<boolean> {
+  try {
+    return await client.roomBelongsToTenant(room.room_id, tenantId)
+  } catch (err) {
+    if (isOwnMeetingAlias(room.canonical_alias)) throw err // namespaced: this customer's prefix
+    console.warn('[karenz/messaging] the tenant marker of a meeting room could not be read, the room is not counted as this customer\'s', { roomId: room.room_id, err })
+    return false
+  }
 }
 
 async function switchOff(ctx: KarenzContext): Promise<void> {
@@ -135,7 +192,7 @@ async function switchOff(ctx: KarenzContext): Promise<void> {
       ...(meeting ? { detail: MEETING_LINK_CLASS } : {}),
     })
   }
-  for (const roomId of unownedMeetingRooms(rooms, new Set(candidates.map((c) => c.roomId)))) {
+  for (const roomId of await unownedMeetingRooms(rooms, new Set(candidates.map((c) => c.roomId)))) {
     await ctx.items.upsert({ kind: ROOM, externalId: roomId, state: 'kept', detail: MEETING_LINK_CLASS })
   }
 
@@ -306,7 +363,7 @@ async function describeForTenant(): Promise<{ deletes: DeletionItem[]; retained:
   const rooms = await homeserverRooms()
   const candidates = await ledgerRooms()
   const archivable = candidates.filter((c) => !isMeetingAlias(rooms.get(c.roomId)?.canonical_alias)).length
-  const meeting = candidates.length - archivable + unownedMeetingRooms(rooms, new Set(candidates.map((c) => c.roomId))).length
+  const meeting = candidates.length - archivable + (await unownedMeetingRooms(rooms, new Set(candidates.map((c) => c.roomId)))).length
   const deletes: DeletionItem[] = archivable > 0 ? [{ label: 'Chat-Räume', count: archivable }] : []
   const retained: RetainedItem[] = meeting > 0
     ? [{

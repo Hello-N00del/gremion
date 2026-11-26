@@ -776,7 +776,8 @@ services:
       SYNAPSE_DB_USER:              synapse
       SYNAPSE_DB_PASSWORD:          ${SYNAPSE_DB_PASSWORD}
       # Blank until the realm exists (TASK-028 contract); the shim refuses a
-      # blank issuer at boot. A blank fetch URL derives the in-network one.
+      # blank issuer at boot unless SYNAPSE_JWT_LOGIN=off (no issuer is rendered then).
+      # A blank fetch URL derives the in-network one.
       SYNAPSE_KEYCLOAK_ISSUER_URL:  ${SYNAPSE_KEYCLOAK_ISSUER_URL:-}
       SYNAPSE_KEYCLOAK_FETCH_URL:   ${SYNAPSE_KEYCLOAK_FETCH_URL:-}
       # Unused while the file below is named (the file wins, and a named unreadable file is a
@@ -792,6 +793,10 @@ services:
       SYNAPSE_ADMIN_BOT_USER_ID:    ${SYNAPSE_ADMIN_BOT_USER_ID:-@gremion-admin-bot:${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}}
       BOOTSTRAP_MODE:               ${SYNAPSE_BOOTSTRAP_MODE:-0}
       SYNAPSE_KC_MAX:               ${SYNAPSE_KC_MAX:-30}
+      # The login switch, on|off (state.env; default on, the render as before). off renders neither
+      # the JWT login nor the OIDC provider: no realm key fetch, and the probe reads UNHEALTHY while
+      # either login flow is offered. Anything else is refused by the image's own scripts.
+      SYNAPSE_JWT_LOGIN:            ${SYNAPSE_JWT_LOGIN:-on}
       # Every login reaches Synapse from the one app container address, so the render default
       # (burst 5, then one per ~5 min) locks the 6th user out of chat and video. The per-account
       # limit stays at the render default.
@@ -908,9 +913,13 @@ services:
       NEXTCLOUD_ADMIN_PASSWORD: ${NEXTCLOUD_ADMIN_PASSWORD}
       NEXTCLOUD_TRUSTED_DOMAINS: nextcloud
       NEXTCLOUD_OVERWRITECLIURL:   http://nextcloud
-      # The host the browser reaches the app on: the one editor origin Nextcloud may
-      # take from X-Forwarded-Host (trusted_domains), see pin-editor-origin.sh.
-      NEXTCLOUD_PUBLIC_HOSTS:      ${PILOT_TENANT_HOST:-}
+      # The hosts the browser reaches the app on: the editor origins Nextcloud may take
+      # from X-Forwarded-Host (trusted_domains), see pin-editor-origin.sh. The customer
+      # host and, when the install has them, every secondary customer host
+      # (SECONDARY_TENANT_HOSTS, comma-separated): a host Nextcloud does not trust gets
+      # HTTP 400, gremion-ui retries without the origin and the editor drops save and
+      # close. Without secondary hosts the value is PILOT_TENANT_HOST exactly.
+      NEXTCLOUD_PUBLIC_HOSTS:      ${PILOT_TENANT_HOST:-}${SECONDARY_TENANT_HOSTS:+,${SECONDARY_TENANT_HOSTS}}
       NEXTCLOUD_OVERWRITEWEBROOT:  ""
       # The state network's own subnets (the network is dual-stack): the only peers that
       # reach Nextcloud. A peer over IPv6 outside the list would have its X-Forwarded-Host
@@ -971,14 +980,22 @@ services:
       options:
         max-size: "50m"
         max-file: "5"
+    # A list, not a map: the NAME of the server_name entry depends on SECONDARY_TENANT_HOSTS, and compose
+    # interpolates the text of a list entry but not a map key.
     environment:
       # The one WOPI host Collabora accepts: Nextcloud by its in-network name. A literal: the
       # value is a regex over the HOST only, so a wildcard would admit attacker-registered names.
-      aliasgroup1: "http://nextcloud:80"
-      server_name: ${PILOT_TENANT_HOST:-}
-      DONT_GEN_SSL_CERT: "YES"
-      dictionaries: de_DE en_GB en_US
-      extra_params: --o:ssl.enable=false --o:ssl.termination=true --o:net.service_root=/office
+      - aliasgroup1=http://nextcloud:80
+      # With one customer host Collabora is told it (server_name=<the customer host>). With secondary
+      # hosts that would make coolwsd tell a page on host B to use host A (the editor URL and the CSP
+      # frame-ancestors / connect-src name server_name), so the entry then gets another name, which
+      # coolwsd ignores: server_name stays empty and coolwsd uses the Host of each request, which
+      # Traefik keeps. The CSP then names that host, so net.frame_ancestors is not needed (the editor
+      # is same-origin with the customer host's page).
+      - ${SECONDARY_TENANT_HOSTS:+gremion_unset_}server_name=${PILOT_TENANT_HOST:-}
+      - DONT_GEN_SSL_CERT=YES
+      - dictionaries=de_DE en_GB en_US
+      - extra_params=--o:ssl.enable=false --o:ssl.termination=true --o:net.service_root=/office
     healthcheck:
       test: ["CMD", "/usr/bin/coolwsd", "--probe", "--use-env-vars"]
       interval: 30s

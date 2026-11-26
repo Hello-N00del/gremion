@@ -13,12 +13,14 @@
 //                  the room owner's, and archiving a room is not erasure (section 9)
 //
 // The Matrix localpart is the Keycloak username (Synapse jwt_config
-// subject_claim), so the hook resolves it from the subject's Keycloak account.
+// subject_claim; with MATRIX_IDENTITY=namespaced it is the customer's slug, a dot and the escaped
+// username), so the hook resolves it from the subject's Keycloak account.
 // If that account no longer exists the Matrix id cannot be derived and the module
 // reports `skipped` with that reason rather than guess.
 import type { ModuleErasureHook } from '@gremion/ports/erasure'
 import { getKeycloakAdminClientForCurrentTenant } from '$lib/server/keycloak-admin'
 import { getSynapseAdmin } from './synapse-admin'
+import { currentMatrixLocalpart } from './matrix-namespace'
 
 export interface MessagingErasureDeps {
   /** The Matrix localpart of a Keycloak user id, or null when the account is gone. */
@@ -48,7 +50,9 @@ export const messagingErasureHook = createMessagingErasureHook({
   async resolveLocalpart(subjectId) {
     try {
       const user = await getKeycloakAdminClientForCurrentTenant().getUser(subjectId)
-      return user.username || null
+      // legacy: the username itself; MATRIX_IDENTITY=namespaced: <slug>.<escaped username> of THIS customer,
+      // so one customer's erasure can never name another customer's account.
+      return user.username ? currentMatrixLocalpart(user.username) : null
     } catch (err) {
       // KeycloakAdminClient.getUser maps a 404 to exactly this message.
       if (err instanceof Error && err.message === 'User not found') return null

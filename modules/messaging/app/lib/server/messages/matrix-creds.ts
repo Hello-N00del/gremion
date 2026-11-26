@@ -10,9 +10,11 @@
 // strings rather than throwing, so /api/video/token can still mint a LiveKit
 // token and let element-call prompt for login. Callers that REQUIRE Matrix
 // membership (meeting-room) must check for an empty userId and reject (403).
+// The one exception is a deliberate refusal of the token exchange (see isChatRefusal).
 import { error } from '@sveltejs/kit'
 import type { RequestEvent } from '@sveltejs/kit'
 import { serviceEnv } from '$lib/server/env/service-env'
+import { isChatRefusal } from '$lib/server/messages/chat-identity-guard'
 import { getMatrixClient } from '$lib/server/messages/matrix-client'
 
 /** Extract the Keycloak access token from the Authorization header or session. */
@@ -48,7 +50,10 @@ export async function resolveMatrixCreds(event: RequestEvent): Promise<MatrixCre
       const data = (await res.json()) as { user_id?: string }
       if (data.user_id) return { userId: data.user_id, accessToken: matrixToken }
     }
-  } catch {
+  } catch (e) {
+    // A refusal made on purpose (MATRIX_IDENTITY=namespaced: chat not available, token not this
+    // customer's) is the caller's answer, not a missing identity. Legacy mode never throws one here.
+    if (isChatRefusal(e)) throw e
     // Fall through — Matrix creds unavailable, caller decides how to degrade.
   }
   return { userId: '', accessToken: '' }

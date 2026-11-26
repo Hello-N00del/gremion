@@ -6,19 +6,31 @@
 import type { KeycloakAdminClient } from '../../keycloak-admin'
 import type { OrgUnit } from '../../governance/org-units-db'
 import type { ProvisioningSubsystem } from '../../governance/provisioning/types'
+import { isShowableName } from '$lib/components/messaging/sender-label'
+import { matrixLocalpart, unitAliasLocalpart, unitNameSlug } from '../matrix-namespace'
 
 interface MatrixDeps {
   matrix: {
-    createRoom(name: string, topic: string, aliasLocalpart?: string): Promise<string>
+    createRoom(name: string, topic: string, aliasLocalpart?: string, opts?: { tenantId?: string }): Promise<string>
     getRoomIdByAlias(alias: string): Promise<string | null>
+    /** Namespaced identity only: does the room carry this customer's org.gremion.tenant marker? */
+    roomBelongsToTenant?(roomId: string, tenantId: string): Promise<boolean>
   }
   synapse: {
     createUser(localpart: string, displayName: string): Promise<void>
+    /** Namespaced identity only: creates a missing account, touches an existing one not at all. */
+    ensureUser?(localpart: string, displayName?: string): Promise<'ok' | 'deactivated'>
     forceJoinRoom(roomId: string, userId: string): Promise<void>
     kickFromRoom(roomId: string, userId: string, reason?: string): Promise<void>
     deleteRoom(roomId: string): Promise<void>
   }
   kc: Pick<KeycloakAdminClient, 'getUser'>
+}
+
+/** Present only in MATRIX_IDENTITY=namespaced mode: the customer whose rooms and accounts this adapter manages. */
+export interface MatrixIdentity {
+  readonly slug: string
+  readonly tenantId: string
 }
 
 interface MatrixUserInfo {
@@ -41,32 +53,50 @@ interface MatrixUserInfo {
  * avoid collisions with unrelated rooms.
  */
 export function aliasLocalpart(name: string): string {
-  const slug = name
-    .toLowerCase()
-    .replace(/ä/g, 'ae')
-    .replace(/ö/g, 'oe')
-    .replace(/ü/g, 'ue')
-    .replace(/ß/g, 'ss')
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '') // strip any remaining diacritics (é→e)
-    .replace(/[^a-z0-9]+/g, '-') // any non-alphanumeric run → single '-'
-    .replace(/^-+|-+$/g, '') // trim leading/trailing '-'
-  return `stura-${slug}`
+  return `stura-${unitNameSlug(name)}`
 }
 
 /**
  * Matrix adapter. `external_id` is the room id.
- * Matrix localpart = Keycloak username (Synapse jwt_config.subject_claim).
+ *
+ * Without `identity` (MATRIX_IDENTITY=legacy, the default) the Matrix localpart is the Keycloak
+ * username (Synapse jwt_config.subject_claim) and the alias is `stura-<unit>`.
+ *
+ * With `identity` (MATRIX_IDENTITY=namespaced, a homeserver shared by several customers) the localpart
+ * is `<slug>.<escaped username>` and the alias `stura.<slug>.<unit>` (matrix-namespace.ts), a created
+ * room carries the org.gremion.tenant marker, and a room found behind the alias is adopted only when
+ * that marker names this customer: a room that does not carry it is somebody else's, and the unit
+ * gets no room until the conflict is resolved (provisioning retries and reports the error).
  */
-export function createMatrixSubsystem(deps: MatrixDeps, serverName: string): ProvisioningSubsystem {
+export function createMatrixSubsystem(deps: MatrixDeps, serverName: string, identity?: MatrixIdentity): ProvisioningSubsystem {
   async function resolveUser(userKeycloakId: string): Promise<MatrixUserInfo> {
     const user = await deps.kc.getUser(userKeycloakId)
-    const localpart = user.username
+    const localpart = identity ? matrixLocalpart(identity.slug, user.username) : user.username
     const displayName =
       user.firstName && user.lastName
         ? `${user.firstName} ${user.lastName}`
-        : localpart
+        : user.username
     return { localpart, displayName, matrixId: `@${localpart}:${serverName}` }
+  }
+
+  /**
+   * Make sure the member's account exists and may be joined. Legacy: createUser's idempotent write, as
+   * it always was. Namespaced: ensureUser, which creates a missing account and leaves an existing one
+   * as it is, exactly like the login does: a deactivated (erased) account is not reactivated and keeps
+   * the display name it has. Returns false for an account that must not be joined.
+   */
+  async function ensureMember(info: MatrixUserInfo): Promise<boolean> {
+    if (!identity) {
+      await deps.synapse.createUser(info.localpart, info.displayName)
+      return true
+    }
+    if (!deps.synapse.ensureUser) throw new Error('the Synapse admin client cannot ensure an account without writing it')
+    const shown = isShowableName(info.displayName) ? info.displayName : undefined
+    if ((await deps.synapse.ensureUser(info.localpart, shown)) === 'deactivated') {
+      console.warn('[matrix-provisioning] a deactivated chat account is not brought back by a membership sync')
+      return false
+    }
+    return true
   }
 
   return {
@@ -76,14 +106,22 @@ export function createMatrixSubsystem(deps: MatrixDeps, serverName: string): Pro
       if (existing) return { externalId: existing } // ledger hit — reuse
       // The alias is derived once and used for BOTH the lookup and the create so
       // the adopted/created room are guaranteed to share the same canonical alias.
-      const localpart = aliasLocalpart(unit.name)
+      const localpart = identity ? unitAliasLocalpart(identity.slug, unit.name) : aliasLocalpart(unit.name)
       const alias = `#${localpart}:${serverName}`
       // Adopt a room a prior seed created before minting. A Postgres-only wipe
       // empties the ledger but leaves the Synapse room reachable by its alias;
       // adopting it instead of creating a new one is the cross-reseed dedupe.
       const adopted = await deps.matrix.getRoomIdByAlias(alias)
-      if (adopted) return { externalId: adopted }
-      const roomId = await deps.matrix.createRoom(unit.name, `Gruppenraum für ${unit.name}`, localpart)
+      if (adopted) {
+        if (identity && !(await deps.matrix.roomBelongsToTenant?.(adopted, identity.tenantId))) {
+          throw new Error(`Matrix room alias ${alias} is held by a room that does not belong to this tenant (${identity.tenantId}); not adopted`)
+        }
+        return { externalId: adopted }
+      }
+      const topic = `Gruppenraum für ${unit.name}`
+      const roomId = identity
+        ? await deps.matrix.createRoom(unit.name, topic, localpart, { tenantId: identity.tenantId })
+        : await deps.matrix.createRoom(unit.name, topic, localpart)
       return { externalId: roomId }
     },
 
@@ -92,9 +130,9 @@ export function createMatrixSubsystem(deps: MatrixDeps, serverName: string): Pro
     },
 
     async addMember(externalId: string, userKeycloakId: string) {
-      const { localpart, displayName, matrixId } = await resolveUser(userKeycloakId)
-      await deps.synapse.createUser(localpart, displayName)
-      await deps.synapse.forceJoinRoom(externalId, matrixId)
+      const info = await resolveUser(userKeycloakId)
+      if (!(await ensureMember(info))) return
+      await deps.synapse.forceJoinRoom(externalId, info.matrixId)
     },
 
     async removeMember(externalId: string, userKeycloakId: string) {
@@ -113,9 +151,9 @@ export function createMatrixSubsystem(deps: MatrixDeps, serverName: string): Pro
 
     async reconcileMembers(externalId: string, desiredUserIds: readonly string[]) {
       for (const id of desiredUserIds) {
-        const { localpart, displayName, matrixId } = await resolveUser(id)
-        await deps.synapse.createUser(localpart, displayName)
-        await deps.synapse.forceJoinRoom(externalId, matrixId)
+        const info = await resolveUser(id)
+        if (!(await ensureMember(info))) continue
+        await deps.synapse.forceJoinRoom(externalId, info.matrixId)
       }
     }
   }

@@ -14,6 +14,7 @@ import {
 import { registerKarenzParticipant } from '$lib/server/module-karenz/participants'
 import { registerNoRetention } from '$lib/server/module-karenz/retained/extractors'
 import { serviceEnv } from '$lib/server/env/service-env'
+import { getTenant } from '$lib/server/tenant/context'
 import { evictMatrixClient } from './matrix-client'
 import { getMatrixClient } from './matrix-client'
 import { evictSynapseAdmin } from './synapse-admin'
@@ -22,6 +23,7 @@ import { evictLivekitSettings } from './livekit-client'
 import { evictServiceMatrixTokenCache } from './backend/service-client'
 import { evictSenderNameResolver } from './sender-names'
 import { createMatrixSubsystem } from './provisioning/matrix-subsystem'
+import { matrixIdentityMode } from './matrix-namespace'
 import { messagingErasureHook } from './erasure'
 import { messagingKarenz } from './karenz'
 import { beginUnreadRead, getCachedUnread, setCachedUnread } from './unread-cache'
@@ -44,6 +46,8 @@ registerProvisioningSubsystem('matrix', (kc) =>
   createMatrixSubsystem(
     { matrix: getMatrixClient(), synapse: getSynapseAdmin(), kc },
     serviceEnv('SYNAPSE_SERVER_NAME') ?? 'localhost',
+    // MATRIX_IDENTITY=namespaced: this customer's slug and id; legacy passes nothing (and reads no tenant).
+    matrixIdentityMode() === 'namespaced' ? { slug: getTenant().slug, tenantId: getTenant().id } : undefined,
   ),
 )
 

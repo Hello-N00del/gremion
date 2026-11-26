@@ -561,3 +561,111 @@ enable_ran() { grep -q '^tc enable-module' "$ORDER"; }
     [[ "$output" == *"files"* && "$output" == *"core-only"* ]] || { echo "$output"; return 1; }
     if enable_ran; then echo "the container verb ran"; return 1; fi
 }
+
+# ---------------------------------------------------------------------------
+# SECONDARY_TENANT_MODULES (state.env, optional): the opted-in modules pass the guard for a secondary-host customer
+# ---------------------------------------------------------------------------
+
+# optin <ids> -- the opt-in key, appended to the state.env secondary_state wrote
+optin() { printf 'SECONDARY_TENANT_MODULES=%s\n' "$1" >> "${GREMION_ROOT}/etc/env/state.env"; }
+
+@test "secondary opt-in: enabling files for a customer on a secondary host passes only when files is opted in, without a registry read; votes and messaging stay refused" {
+    secondary_state
+    registered rat.alpha.example
+    # no key: refused (default deny)
+    : > "$ORDER"
+    module_args files
+    drive handle_enable_module
+    [ "$status" -ne 0 ] || { echo "files was enabled without the opt-in: ${output}"; return 1; }
+    [[ "$output" == *"core-only"* && "$output" == *"secondary host"* ]] || { echo "$output"; return 1; }
+    if enable_ran; then echo "the container verb ran without the opt-in"; return 1; fi
+    # the key names files: files passes, nothing else joins
+    rm -f "${GREMION_ROOT}/host-reads.log"
+    optin files
+    : > "$ORDER"
+    drive handle_enable_module
+    [ "$status" -eq 0 ] || { echo "files refused with the opt-in: ${output}"; return 1; }
+    enable_ran || { echo "the container verb did not run for files"; return 1; }
+    [ ! -e "${GREMION_ROOT}/host-reads.log" ]
+    local m
+    for m in votes messaging publishing newsletter content; do
+        : > "$ORDER"
+        module_args "$m"
+        drive handle_enable_module
+        [ "$status" -ne 0 ] || { echo "${m} was enabled with only files opted in: ${output}"; return 1; }
+        if enable_ran; then echo "the container verb ran for ${m}"; return 1; fi
+    done
+}
+
+@test "secondary opt-in: votes opted in passes for votes alone" {
+    secondary_state
+    registered rat.alpha.example
+    optin votes
+    : > "$ORDER"
+    module_args votes
+    drive handle_enable_module
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    enable_ran
+    : > "$ORDER"
+    module_args files
+    drive handle_enable_module
+    [ "$status" -ne 0 ] || { echo "files was enabled with only votes opted in"; return 1; }
+}
+
+@test "secondary opt-in: messaging opted in passes only with SYNAPSE_JWT_LOGIN=off and MATRIX_IDENTITY=namespaced on both colours, and names the missing switch otherwise" {
+    secondary_state
+    registered rat.alpha.example
+    optin messaging
+    module_args messaging
+    drive handle_enable_module
+    [ "$status" -ne 0 ] || { echo "messaging was enabled without its switches"; return 1; }
+    [[ "$output" == *"SYNAPSE_JWT_LOGIN"* ]] || { echo "$output"; return 1; }
+    if enable_ran; then echo "the container verb ran"; return 1; fi
+    printf 'SYNAPSE_JWT_LOGIN=off\n' >> "${GREMION_ROOT}/etc/env/state.env"
+    printf 'MATRIX_IDENTITY=namespaced\n' >> "${GREMION_ROOT}/etc/env/app-blue.env"
+    drive handle_enable_module
+    [ "$status" -ne 0 ] || { echo "messaging was enabled with one colour unswitched"; return 1; }
+    [[ "$output" == *"MATRIX_IDENTITY"* && "$output" == *"app-green.env"* ]] || { echo "$output"; return 1; }
+    printf 'MATRIX_IDENTITY=namespaced\n' >> "${GREMION_ROOT}/etc/env/app-green.env"
+    : > "$ORDER"
+    drive handle_enable_module
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    enable_ran
+}
+
+@test "secondary opt-in: a malformed opt-in refuses a non-core enable for a secondary customer, naming the key, while the core modules and the primary customer are untouched" {
+    secondary_state
+    optin bogus
+    registered rat.alpha.example
+    module_args files
+    drive handle_enable_module
+    [ "$status" -ne 0 ] || { echo "files was enabled under a malformed opt-in"; return 1; }
+    [[ "$output" == *"SECONDARY_TENANT_MODULES"* ]] || { echo "$output"; return 1; }
+    if enable_ran; then echo "the container verb ran"; return 1; fi
+    : > "$ORDER"
+    module_args board
+    drive handle_enable_module
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    enable_ran
+    registered rat.pilot.example
+    : > "$ORDER"
+    module_args files
+    drive handle_enable_module
+    [ "$status" -eq 0 ] || { echo "the primary customer was stopped: ${output}"; return 1; }
+    enable_ran
+}
+
+@test "secondary opt-in: the opt-in is read from state.env, never from the caller's environment (the break-glass function included)" {
+    secondary_state
+    registered rat.alpha.example
+    run bash -c '
+        set -euo pipefail
+        export SECONDARY_TENANT_MODULES="files votes"
+        . "$1/common.sh"; . "$1/customer-ops.sh"
+        . "$2/stubs.sh"
+        customer_enable_module alpha-rat files --operator "$3" 2>&1
+    ' _ "$SRC" "$GREMION_ROOT" "$OPERATOR"
+    [ "$status" -ne 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"files"* && "$output" == *"core-only"* ]] || { echo "$output"; return 1; }
+    if enable_ran; then echo "the container verb ran"; return 1; fi
+}

@@ -2,6 +2,8 @@ import { serviceEnv } from '$lib/server/env/service-env'
 import { getTenant } from '$lib/server/tenant/context'
 import { getMatrixClient } from './matrix-client'
 import { getSynapseAdmin } from './synapse-admin'
+import { identitySlug } from './matrix-namespace'
+import { stripTenantPrefix } from '$lib/components/messaging/sender-label'
 import { livekitRoomNamespace, livekitServerUrl, mintToken, roomNameFromMatrixId } from './livekit-client'
 
 export interface OpenIDToken {
@@ -97,6 +99,15 @@ async function resolveMatrixRoomId(room: string): Promise<string | null> {
 }
 
 /**
+ * The name a call participant is shown under: the localpart of the Matrix id. With
+ * MATRIX_IDENTITY=namespaced the request customer's slug in front of it is dropped (an id of another
+ * customer keeps its prefix); legacy ids such as max.mustermann are shown unchanged.
+ */
+export function livekitDisplayName(matrixUserId: string): string {
+  return stripTenantPrefix(matrixUserId.split(':')[0].replace('@', ''), identitySlug())
+}
+
+/**
  * Validates the OpenID token, verifies the caller is a MEMBER of the requested
  * Matrix room (#257-1), then mints a LiveKit JWT for the room. Throws
  * RoomMembershipError when the caller is not a confirmed member so any
@@ -123,7 +134,7 @@ export async function handleSfuRequest(body: SfuRequest): Promise<SfuResponse> {
   const jwt = await mintToken({
     roomName,
     identity: matrixUserId,
-    displayName: matrixUserId.split(':')[0].replace('@', ''),
+    displayName: livekitDisplayName(matrixUserId),
     canPublish: true,
   })
 

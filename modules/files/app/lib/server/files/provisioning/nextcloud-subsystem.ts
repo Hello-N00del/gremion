@@ -49,9 +49,34 @@ export function createNextcloudSubsystem(deps: NextcloudDeps, providerId: number
   return {
     name: 'nextcloud',
 
-    async ensureResource(unit: OrgUnit, _ctx, existing: string | null) {
-      if (existing) return { externalId: existing }
+    async ensureResource(unit: OrgUnit, ctx, existing: string | null) {
       const groupId = `ou-${unit.id}`
+
+      // A recorded id is either a finished folder whose member sync failed, or the folder an earlier
+      // attempt made and could not grant. Check it against Nextcloud and finish what is missing; it is
+      // never taken on trust, because a returned id is marked ok and nobody would grant it after that.
+      if (existing) {
+        const recorded = decodeRef(existing)
+        const folders = await nc.listGroupFolders()
+        const folder = folders.find((f) => f.id === recorded.folderId)
+        if (folder?.groups.includes(groupId)) {
+          // The group is on the folder, but an earlier grant may have stopped between adding it and setting
+          // its permissions. Finish that only when Nextcloud reports no bits at all: any other value is
+          // what the unit's folder has been set to since, and is left as it is.
+          if (folder.groupPermissions?.[groupId] === 0) await nc.setGroupFolderPermissions(folder.id, groupId, 31)
+          return { externalId: existing }
+        }
+        if (folder && folder.mountPoint === unit.name && folder.groups.length === 0) {
+          // made by an earlier attempt that stopped before the grant: it bears this unit's name and no
+          // group holds it
+          await nc.createGroup(groupId)
+          await nc.assignGroupFolderPermissions(folder.id, groupId, 31)
+          return { externalId: encodeRef(folder.id, groupId) }
+        }
+        // The recorded folder is gone, belongs to another name, or carries only other groups (so it is not
+        // this unit's): fall through and make a folder of its own.
+      }
+
       await nc.createGroup(groupId)
 
       // Adopt an existing folder to prevent orphan folders on retry (e.g. folder
@@ -73,6 +98,17 @@ export function createNextcloudSubsystem(deps: NextcloudDeps, providerId: number
       } else {
         const folder = await nc.createGroupFolder(unit.name)
         folderId = folder.id
+        // Record the new folder before it is granted: if the grant fails, the retry finds this folder
+        // by its id and grants it instead of making another one of the same name.
+        if (ctx.recordExternalId) {
+          try {
+            await ctx.recordExternalId(encodeRef(folderId, groupId))
+          } catch (err) {
+            // the id is not kept, so nothing would ever find this folder again: take it away
+            await nc.deleteGroupFolder(folderId).catch(() => undefined)
+            throw err
+          }
+        }
       }
 
       await nc.assignGroupFolderPermissions(folderId, groupId, 31)

@@ -36,6 +36,7 @@ vi.mock('$env/dynamic/private', () => ({
 const EVT = '0b7c6f1e-4a8e-4c51-9f3a-2d1e8c7b6a50'
 const EVT9 = '1c8d7a2f-5b9f-4d62-8a4b-3e2f9d8c7b61'
 const EVT_ALIAS = 'meeting-0b7c6f1e-4a8e-4c51-9f3a-2d1e8c7b6a50'
+const EVT_ALIAS_ACME = 'meeting.acme.0b7c6f1e-4a8e-4c51-9f3a-2d1e8c7b6a50'
 
 function makeEvent(opts: { authed: boolean; role?: Role; body?: unknown }) {
   const { authed, role = Role.Member, body } = opts
@@ -127,6 +128,37 @@ describe('POST /api/video/meeting-room', () => {
   it('falls back to "Besprechung" when no title is supplied', async () => {
     await POST(makeEvent({ authed: true, body: { eventId: EVT } }))
     expect(mockCreateRoom).toHaveBeenCalledWith('Besprechung', `Videobesprechung – ${EVT}`, EVT_ALIAS)
+  })
+
+  it('namespaced identity: the alias carries the customer slug and the room the customer marker (a taken alias is adopted only with it); legacy passes none and keeps meeting-<uuid>', async () => {
+    const { runWithTenant } = await import('$lib/server/tenant/context')
+    const acme = { id: 'tid-acme', slug: 'acme', issuer: 'https://id.example.org/realms/acme' } as never
+    process.env.MATRIX_IDENTITY = 'namespaced'
+    try {
+      const res = await runWithTenant(acme, () => POST(makeEvent({ authed: true, body: { eventId: EVT } })))
+      expect(res.status).toBe(200)
+    } finally {
+      delete process.env.MATRIX_IDENTITY
+    }
+    expect(mockCreateRoom).toHaveBeenCalledWith('Besprechung', `Videobesprechung – ${EVT}`, EVT_ALIAS_ACME, { tenantId: 'tid-acme' })
+    mockCreateRoom.mockClear()
+    await POST(makeEvent({ authed: true, body: { eventId: EVT } }))
+    expect(mockCreateRoom.mock.calls[0]).toEqual(['Besprechung', `Videobesprechung – ${EVT}`, EVT_ALIAS])
+  })
+
+  it('namespaced identity: two customers opening the same event get two different aliases', async () => {
+    const { runWithTenant } = await import('$lib/server/tenant/context')
+    const mk = (slug: string) => ({ id: `tid-${slug}`, slug, issuer: `https://id.example.org/realms/${slug}` }) as never
+    process.env.MATRIX_IDENTITY = 'namespaced'
+    try {
+      for (const slug of ['acme', 'beta']) {
+        const res = await runWithTenant(mk(slug), () => POST(makeEvent({ authed: true, body: { eventId: EVT } })))
+        expect(res.status).toBe(200)
+      }
+    } finally {
+      delete process.env.MATRIX_IDENTITY
+    }
+    expect(mockCreateRoom.mock.calls.map((c) => (c as unknown[])[2])).toEqual([EVT_ALIAS_ACME, 'meeting.beta.0b7c6f1e-4a8e-4c51-9f3a-2d1e8c7b6a50'])
   })
 
   it('returns 401 when unauthenticated and never touches Matrix', async () => {

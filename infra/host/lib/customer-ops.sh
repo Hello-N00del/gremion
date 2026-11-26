@@ -532,13 +532,16 @@ customer_registered_host() {
 # SECONDARY_TENANT_HOSTS) is core-only: a module outside secondary_host_module_allowed lives on the shared
 # Synapse or Nextcloud, which stay bound to PILOT_TENANT_HOST, and is refused for it BEFORE the container
 # verb runs (the break-glass path, the executor and a council admin's request all pass through here).
-# Inert, and reading nothing from the registry, while no secondary host is configured or for a core module:
-# a primary customer's enable is exactly what it was.
+# Inert, and reading nothing from the registry, while no secondary host is configured, for a core module or for
+# a module the install opted in (state.env SECONDARY_TENANT_MODULES, read by secondary_optin_load: never the
+# caller's environment): a primary customer's enable is exactly what it was. A refused opt-in opts nothing in
+# and never stops a primary customer; a secondary customer's refusal then names it.
 secondary_host_module_guard() {
-    local verb="$1" slug="$2" module="$3" state="${ROOT}/etc/env/state.env" secondary pilot reg rc=0
+    local verb="$1" slug="$2" module="$3" state="${ROOT}/etc/env/state.env" secondary pilot reg rc=0 optin_note=""
     [[ -f "$state" ]] || return 0
     secondary="$(control_panel_key_of "$state" SECONDARY_TENANT_HOSTS)" || exit $?
     [[ -n "$secondary" ]] || return 0
+    secondary_optin_load "$state" || optin_note="; SECONDARY_TENANT_MODULES in state.env is refused (${SECONDARY_OPTIN_WHY}), so no module is opted in"
     secondary_host_module_allowed "$module" && return 0
     pilot="$(control_panel_key_of "$state" PILOT_TENANT_HOST)" || exit $?
     reg="$(customer_registered_host "$slug")" || rc=$?
@@ -547,7 +550,7 @@ secondary_host_module_guard() {
         die "${verb}: the module ${module} is refused for ${slug}: the registry has no customer row for it, so its host cannot be checked against the secondary hosts (SECONDARY_TENANT_HOSTS)" "$GREMION_EXIT_ASSERT"
     fi
     if [[ -n "$pilot" && "$reg" == "${pilot,,}" ]]; then return 0; fi
-    die "${verb}: the module ${module} cannot be enabled for ${slug}: its host is ${reg:-not registered} and not the install's customer host ${pilot:-(unset)} (PILOT_TENANT_HOST), so it is a core-only customer on a secondary host; ${module} runs on the shared chat or file services or writes the install's customer host into its links, and those stay bound to that host (core modules: ${SECONDARY_HOST_MODULES// /, })" "$GREMION_EXIT_ASSERT"
+    die "${verb}: the module ${module} cannot be enabled for ${slug}: its host is ${reg:-not registered} and not the install's customer host ${pilot:-(unset)} (PILOT_TENANT_HOST), so it is a core-only customer on a secondary host; ${module} runs on the shared chat or file services or writes the install's customer host into its links, and those stay bound to that host (core modules: ${SECONDARY_HOST_MODULES// /, }${SECONDARY_TENANT_MODULES:+; opted in by the install: ${SECONDARY_TENANT_MODULES}})${optin_note}" "$GREMION_EXIT_ASSERT"
 }
 
 customer_enable_module() {   # <slug> <module> --operator <uuid> [--actor-kind operator|person] [--dpia-json <file>]

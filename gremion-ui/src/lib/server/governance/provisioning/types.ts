@@ -23,6 +23,14 @@ export interface MemberOp {
 export interface ProvisionContext {
   /** The parent org-unit's Keycloak group id, or null for a top-level node. */
   readonly parentKeycloakGroupId: string | null
+  /**
+   * Writes an external id onto this resource's ledger row WITHOUT marking it ok. An adapter whose
+   * provisioning takes more than one external step calls it as soon as the first step has produced
+   * something that must not be created twice, so a failure in a later step leaves the id behind and
+   * the retry (which receives it as `existing`) continues with that resource. Optional: callers
+   * outside the orchestrator may omit it.
+   */
+  readonly recordExternalId?: (externalId: string) => Promise<void>
 }
 
 /**
@@ -31,7 +39,10 @@ export interface ProvisionContext {
  */
 export interface ProvisioningSubsystem {
   readonly name: Subsystem
-  /** Create (or verify+reuse `existing`) this node's resource. Returns its external id. */
+  /** Create (or verify+reuse `existing`) this node's resource. Returns its external id.
+   *  `existing` is whatever the ledger row holds: the id of a finished resource whose later step
+   *  (member sync) failed, or one recorded through `ctx.recordExternalId` by an attempt that stopped
+   *  half way. */
   ensureResource(unit: OrgUnit, ctx: ProvisionContext, existing: string | null): Promise<{ externalId: string }>
   /** Tear the resource down. */
   removeResource(externalId: string): Promise<void>

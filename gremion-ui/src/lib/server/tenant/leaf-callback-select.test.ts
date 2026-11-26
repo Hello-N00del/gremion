@@ -99,14 +99,17 @@ const { tenantResolveHandle } = await import('./resolve')
 
 const RENDER = '/api/internal/newsletter/render'
 const PUBLISH = '/api/internal/content/portal-publish'
+const NL_LINK_BASE = '/api/internal/newsletter/link-base'
+const CONTENT_LINK_BASE = '/api/internal/content/link-base'
 
 /** Drive the REAL element-0 handle and report what it selected. */
 async function receive(
   path: string,
   h: Record<string, string>,
+  method = 'POST',
 ): Promise<{ status: number; tenant: Ctx | undefined; inner: boolean }> {
   const url = new URL(`http://gremion-ui:3000${path}`)
-  const request = new Request(url, { method: 'POST', headers: new Headers(h) })
+  const request = new Request(url, { method, headers: new Headers(h) })
   const locals: Record<string, unknown> = {}
   let inner = false
   const res = (await tenantResolveHandle({
@@ -179,6 +182,31 @@ describe('a leaf callback needs no host', () => {
     const got = await receive(PUBLISH, newLeaf(MUSTERSTADT, CONTENT_SECRET))
     expect(got.status).toBe(200)
     expect(got.tenant?.id).toBe(MUSTERSTADT.id)
+  })
+
+  it('the newsletter link-base callback (a GET) selects its tenant from the id alone, each tenant its own', async () => {
+    const a = await receive(NL_LINK_BASE, newLeaf(MUSTERSTADT), 'GET')
+    expect(a.status).toBe(200)
+    expect(a.inner).toBe(true)
+    expect(a.tenant?.primaryHost).toBe('rat-musterstadt.de')
+    const b = await receive(NL_LINK_BASE, newLeaf(DEFAULT), 'GET')
+    expect(b.tenant?.primaryHost).toBe('gremion.example')
+    expect(resolveTenantByHost).not.toHaveBeenCalled()
+  })
+
+  it('the content link-base callback (a GET) selects its tenant from the id alone, on the content secret', async () => {
+    const got = await receive(CONTENT_LINK_BASE, newLeaf(MUSTERSTADT, CONTENT_SECRET), 'GET')
+    expect(got.status).toBe(200)
+    expect(got.inner).toBe(true)
+    expect(got.tenant?.id).toBe(MUSTERSTADT.id)
+    expect(resolveTenantByHost).not.toHaveBeenCalled()
+  })
+
+  it('a link-base callback under the OTHER leaf’s secret selects nothing', async () => {
+    const got = await receive(CONTENT_LINK_BASE, newLeaf(MUSTERSTADT, NL_SECRET), 'GET')
+    expect(got.status).toBe(403)
+    expect(got.inner).toBe(false)
+    expect(resolveTenantById).not.toHaveBeenCalled()
   })
 
   it('two tenants’ callbacks never cross — the id is doing the work', async () => {

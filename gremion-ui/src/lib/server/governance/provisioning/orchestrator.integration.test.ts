@@ -83,6 +83,62 @@ describe('orchestrator.provisionOrgUnit', () => {
     expect(calls).toBe(0)
   })
 
+  it('an id the adapter recorded before it failed is kept on the failed row and passed back on the retry', async () => {
+    const u = await unit({ wantsMatrixRoom: false })
+    const seen: Array<string | null> = []
+    let attempt = 0
+    const twoStep: ProvisioningSubsystem = {
+      ...okAdapter('nextcloud', 'unused'),
+      async ensureResource(_unit, ctx, existing) {
+        seen.push(existing)
+        if (existing) return { externalId: existing }
+        await ctx.recordExternalId?.('12:ou-x')
+        attempt++
+        throw new Error('second step refused')
+      }
+    }
+    const adapters: Adapters = { ...allOk(), nextcloud: twoStep }
+
+    const first = await provisionOrgUnit(u.id, adapters)
+    expect(first.subsystems.find((s) => s.subsystem === 'nextcloud')?.status).toBe('failed')
+    const failedRow = await getResource(u.id, 'nextcloud')
+    expect(failedRow?.status).toBe('failed')
+    expect(failedRow?.external_id).toBe('12:ou-x') // survived the failure
+    expect(failedRow?.attempts).toBe(1)
+
+    await getDb()`UPDATE provisioning_resources SET next_attempt_at = now() - interval '1 second' WHERE org_unit_id = ${u.id} AND subsystem = 'nextcloud'`
+    const second = await provisionOrgUnit(u.id, adapters)
+    expect(second.subsystems.find((s) => s.subsystem === 'nextcloud')?.status).toBe('ok')
+    expect(seen).toEqual([null, '12:ou-x']) // the retry got the recorded id
+    expect(attempt).toBe(1)
+    expect((await getResource(u.id, 'nextcloud'))?.external_id).toBe('12:ou-x')
+  })
+
+  it('recording an id does not mark the resource ok or touch another unit', async () => {
+    const u = await unit({ wantsMatrixRoom: false })
+    const other = await unit({ name: 'V', wantsMatrixRoom: false })
+    await ensureResourceRow(other.id, 'nextcloud')
+    let statusRightAfterRecording: string | undefined
+    const recorder: ProvisioningSubsystem = {
+      ...okAdapter('nextcloud', 'unused'),
+      async ensureResource(_unit, ctx) {
+        await ctx.recordExternalId?.('13:ou-y')
+        // read at the moment of recording: the failure handler has not run yet, so a status written
+        // by the recorder itself cannot be hidden by it
+        statusRightAfterRecording = (await getResource(u.id, 'nextcloud'))?.status
+        throw new Error('stop here')
+      }
+    }
+    await provisionOrgUnit(u.id, { ...allOk(), nextcloud: recorder })
+    expect(statusRightAfterRecording).toBe('pending')
+    // the unit's own row holds the recorded id, and recording it did not finish the resource
+    const own = await getResource(u.id, 'nextcloud')
+    expect(own?.external_id).toBe('13:ou-y')
+    expect(own?.status).toBe('failed')
+    expect((await getResource(other.id, 'nextcloud'))?.external_id).toBeNull()
+    expect((await getResource(u.id, 'keycloak'))?.external_id).toBe('kc1')
+  })
+
   it('deprovisionOrgUnit tears down every provisioned resource', async () => {
     const u = await unit()
     await provisionOrgUnit(u.id, allOk())

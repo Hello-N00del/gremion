@@ -1,4 +1,4 @@
-<!-- i18n-sync: source=README.md sha256=c7ddf09fbd91729e16c1b5bb238015e3caf17bd7580814af7ad9b2b003455f06 -->
+<!-- i18n-sync: source=README.md sha256=915d234a6a11b7cda88a6d0147a2c35c9a5325671640a18e100c949fe2860b8c -->
 [English](./README.md) | **Deutsch**
 
 # messaging
@@ -84,8 +84,11 @@ Synapse-Container (`docker-compose.yml`, Dienst `matrix`): `SYNAPSE_SERVER_NAME`
 `MATRIX_PUBLIC_URL` (beide aus `PLATFORM_DOMAIN` abgeleitet), `SYNAPSE_DB_*`,
 `SYNAPSE_KEYCLOAK_ISSUER_URL`, `SYNAPSE_KEYCLOAK_FETCH_URL`, `SYNAPSE_OIDC_CLIENT_SECRET`,
 `SYNAPSE_REGISTRATION_SHARED_SECRET` (wird nur bei einem Bootstrap-Start gerendert),
-`SYNAPSE_ADMIN_BOT_USER_ID`, `SYNAPSE_BOOTSTRAP_MODE`, `SYNAPSE_KC_MAX`. Der Render-Schritt
-lehnt einen leeren Issuer und jede andere Datenbank als PostgreSQL ab.
+`SYNAPSE_ADMIN_BOT_USER_ID`, `SYNAPSE_BOOTSTRAP_MODE`, `SYNAPSE_KC_MAX`, `SYNAPSE_JWT_LOGIN`.
+Der Render-Schritt lehnt einen leeren Issuer und jede andere Datenbank als PostgreSQL ab.
+`SYNAPSE_JWT_LOGIN` ist `on` (Standard) oder `off`: Mit `off` rendert der Homeserver weder die
+JWT-Anmeldung noch den OIDC-Provider, ein Issuer wird nicht gebraucht, und der Health-Check
+meldet unhealthy, solange eine der beiden Anmeldearten angeboten wird.
 
 Der PostgreSQL-Server des Moduls ist `messaging-postgres`, der Homeserver ist `matrix`; beide
 laufen unter dem Compose-Profil `messaging` (`MESSAGING_PG_USER`, `MESSAGING_PG_PASSWORD`,

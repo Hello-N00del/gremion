@@ -3,7 +3,7 @@ import { getDb } from '../../db'
 import { createOrgUnit } from '../org-units-db'
 import {
   ensureResourceRow, getResource, getResources, detachResource,
-  markResourceOk, markResourceFailed, listDueOrgUnitIds,
+  markResourceOk, markResourceFailed, recordResourceExternalId, listDueOrgUnitIds,
   GIVE_UP_AFTER_SECONDS
 } from './ledger'
 
@@ -51,6 +51,34 @@ describe('provisioning ledger', () => {
     expect(r?.attempts).toBe(1)
     expect(r?.last_error).toBe('boom')
     expect(r?.next_attempt_at).not.toBeNull()
+  })
+
+  it('recordResourceExternalId stores the id and leaves status and retry state alone', async () => {
+    const u = await freshUnit()
+    await ensureResourceRow(u.id, 'nextcloud')
+    await markResourceFailed(u.id, 'nextcloud', 'boom')
+    const before = await getResource(u.id, 'nextcloud')
+    await recordResourceExternalId(u.id, 'nextcloud', '5:ou-a')
+    const after = await getResource(u.id, 'nextcloud')
+    expect(after?.external_id).toBe('5:ou-a')
+    expect(after?.status).toBe('failed')
+    expect(after?.attempts).toBe(before?.attempts)
+    expect(after?.last_error).toBe('boom')
+    expect(after?.next_attempt_at).toEqual(before?.next_attempt_at)
+    // a row that does not exist is not created by it
+    await detachResource(undefined, u.id, 'nextcloud')
+    await recordResourceExternalId(u.id, 'nextcloud', '6:ou-a')
+    expect(await getResource(u.id, 'nextcloud')).toBeNull()
+  })
+
+  it('recordResourceExternalId joins the caller transaction: a rollback takes the id with it', async () => {
+    const u = await freshUnit()
+    await ensureResourceRow(u.id, 'nextcloud')
+    await expect(getDb().begin(async (tx) => {
+      await recordResourceExternalId(u.id, 'nextcloud', '5:ou-a', tx)
+      throw new Error('abort')
+    })).rejects.toThrow('abort')
+    expect((await getResource(u.id, 'nextcloud'))?.external_id).toBeNull()
   })
 
   it('listDueOrgUnitIds returns units with a non-ok, due resource', async () => {

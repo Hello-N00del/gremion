@@ -68,6 +68,7 @@ beforeEach(() => {
   submitCreate.mockClear()
   delete ENV.PILOT_TENANT_HOST
   delete ENV.SECONDARY_TENANT_HOSTS
+  delete ENV.SECONDARY_TENANT_MODULES
   delete ENV.PLATFORM_DOMAIN
   delete ENV.CONTROL_PANEL_HOST
 })
@@ -263,5 +264,35 @@ describe('Neuer Mandant: the secondary customer hosts (SECONDARY_TENANT_HOSTS, p
     const run = (load as unknown as (e: unknown) => Promise<{ secondaryHosts: string[] }>)
     const r = await run({ url: new URL('http://127.0.0.1:3043/customers/new?SECONDARY_TENANT_HOSTS=evil.example.org') })
     expect(r.secondaryHosts).toEqual([])
+  })
+})
+
+describe('Neuer Mandant: the opted-in modules of a secondary host (SECONDARY_TENANT_MODULES, passed in like SECONDARY_TENANT_HOSTS)', () => {
+  const modules = async () => (await (load as unknown as (e: unknown) => Promise<{ secondaryModules: string[] }>)({})).secondaryModules
+
+  it('M1: unset or empty: no opted-in modules', async () => {
+    expect(await modules()).toEqual([])
+    ENV.SECONDARY_TENANT_MODULES = ''
+    expect(await modules()).toEqual([])
+    ENV.SECONDARY_TENANT_MODULES = '   '
+    expect(await modules()).toEqual([])
+  })
+
+  it('M2: the load names the opted-in ids of the fixed set, in the order of the list', async () => {
+    ENV.SECONDARY_TENANT_MODULES = 'votes files'
+    expect(await modules()).toEqual(['votes', 'files'])
+    ENV.SECONDARY_TENANT_MODULES = '  messaging   files '
+    expect(await modules()).toEqual(['messaging', 'files'])
+  })
+
+  it('M3: an id outside the set (publishing, content, an unknown or upper-case one) and a repeat are not shown', async () => {
+    ENV.SECONDARY_TENANT_MODULES = 'publishing files content files Votes some-new-module messages'
+    expect(await modules()).toEqual(['files'])
+  })
+
+  it('M4: the opt-in is read from the panel environment only, never from the posted form or the URL', async () => {
+    const run = (load as unknown as (e: unknown) => Promise<{ secondaryModules: string[] }>)
+    const r = await run({ url: new URL('http://127.0.0.1:3043/customers/new?SECONDARY_TENANT_MODULES=files') })
+    expect(r.secondaryModules).toEqual([])
   })
 })

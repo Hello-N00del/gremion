@@ -110,6 +110,9 @@ case " $* " in
     echo "{\"user_id\":\"@gremion-admin-bot:guard.example.org\"}"; exit 0 ;;
   *" exec "*"printenv SYNAPSE_KEYCLOAK_ISSUER_URL"*) echo "https://pilot.guard.example.org/auth/realms/'"$SLUG"'"; exit 0 ;;
   *" exec "*"printenv BOOTSTRAP_MODE"*)              echo 0; exit 0 ;;
+  *" exec "*"printenv SYNAPSE_JWT_LOGIN"*)
+    # the running matrix carries the switch the recreate handed it (a stale one is a switch file away)
+    if [ -f "$GREMION_ROOT/matrix-switch-stale" ]; then echo on; else echo off; fi; exit 0 ;;
   *" exec "*"printenv SYNAPSE_OIDC_CLIENT_SECRET_FILE"*) echo /run/secrets/synapse/oidc_client_secret; exit 0 ;;
   *" exec "*"printenv SYNAPSE_ADMIN_TOKEN"*)
     if [ -f "$GREMION_ROOT/ui-stale-token" ]; then echo placeholder-not-the-token; else printf "%s\n" "'"$TOKEN"'"; fi; exit 0 ;;
@@ -214,6 +217,17 @@ case "$url" in
     exit 0 ;;
   */_matrix/client/versions) echo "{\"versions\":[\"v1.5\"]}"; exit 0 ;;
   */_matrix/client/v3/login)
+    # state.env says off: the off render offers no JWT and no SSO login, only the application-service flow
+    # (read from Synapse 1.160 with password login off); the switch files make it offer more or less
+    if grep -q "^SYNAPSE_JWT_LOGIN=off$" "$GREMION_ROOT/etc/env/state.env"; then
+      if [ -f "$GREMION_ROOT/off-flows-jwt" ]; then echo "{\"flows\":[{\"type\":\"org.matrix.login.jwt\"},{\"type\":\"m.login.application_service\"}]}"
+      elif [ -f "$GREMION_ROOT/off-flows-sso" ]; then echo "{\"flows\":[{\"type\":\"m.login.sso\",\"identity_providers\":[{\"id\":\"oidc-keycloak\"}]},{\"type\":\"m.login.application_service\"}]}"
+      elif [ -f "$GREMION_ROOT/off-flows-password" ]; then echo "{\"flows\":[{\"type\":\"m.login.password\"},{\"type\":\"m.login.application_service\"}]}"
+      elif [ -f "$GREMION_ROOT/off-flows-empty" ]; then echo "{\"flows\":[]}"
+      elif [ -f "$GREMION_ROOT/off-flows-garbage" ]; then echo "not json"
+      else echo "{\"flows\":[{\"type\":\"m.login.application_service\"}]}"; fi
+      exit 0
+    fi
     if [ -f "$GREMION_ROOT/no-jwt" ]; then echo "{\"flows\":[{\"type\":\"m.login.sso\"}]}"; else echo "{\"flows\":[{\"type\":\"m.login.sso\"},{\"type\":\"org.matrix.login.jwt\"}]}"; fi
     exit 0 ;;
 esac
@@ -1192,4 +1206,214 @@ env_files_untouched() {
     [ "$status" -eq 2 ] || { echo "no nextcloud secret: status=$status $output"; return 1; }
     [[ "$output" == *"nextcloud client secret is absent"* ]] || { echo "$output"; return 1; }
     assert_absent 'user_oidc:provider|dav:|^docker compose ' "$SHIM_LOG" "something ran after a failed precondition"
+}
+
+# SYNAPSE_JWT_LOGIN (state.env; absent = on): the shared chat service's own JWT and SSO login. off: the wire copies no
+# synapse client secret and writes no issuer or fetch URL, and step 5 reads the login flows back and asserts they are
+# exactly the set a homeserver without either login offers. on or absent: the wire as it always was.
+jwt_switch() {
+    printf 'SYNAPSE_JWT_LOGIN=%s\n' "$1" >> "${GREMION_ROOT}/etc/env/state.env"
+}
+
+@test "wire, SYNAPSE_JWT_LOGIN=off: no synapse secret is copied, no issuer or fetch URL is written, the messaging profile is kept, and the off flow set is asserted" {
+    jwt_switch off
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"WIRE: ok ${SLUG}"* ]]
+    [ ! -e "${GREMION_ROOT}/etc/secrets/synapse/oidc_client_secret" ]
+    local st="${GREMION_ROOT}/etc/env/state.env"
+    [ -z "$(sed -n 's/^SYNAPSE_KEYCLOAK_ISSUER_URL=//p' "$st")" ]
+    [ -z "$(sed -n 's/^SYNAPSE_KEYCLOAK_FETCH_URL=//p' "$st")" ]
+    [ "$(sed -n 's/^COMPOSE_PROFILES=//p' "$st")" = "production,calendar,collabora,content,newsletter,nextcloud,video,messaging" ]
+    [[ "$output" == *"m.login.application_service"* ]] || { echo "the flow set is not reported: ${output}"; return 1; }
+    # the running matrix is asked for the switch, and the bot is still registered through the shared secret
+    grep -q '^docker exec c-matrix printenv SYNAPSE_JWT_LOGIN' "$SHIM_LOG"
+    grep -q '^bootstrap$' "$ORDER"
+}
+
+@test "wire, SYNAPSE_JWT_LOGIN=off: the mount's host directory exists without a secret in it (matrix refuses to start on a missing bind source)" {
+    jwt_switch off
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [ -d "${GREMION_ROOT}/etc/secrets/synapse" ]
+    [ -z "$(ls -A "${GREMION_ROOT}/etc/secrets/synapse")" ]
+}
+
+@test "wire, SYNAPSE_JWT_LOGIN=off: the realm's synapse client secret is no precondition" {
+    jwt_switch off
+    rm -f "${GREMION_ROOT}/tenant-secrets/tenant_${SLUG}_client_synapse"
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"WIRE: ok ${SLUG}"* ]]
+}
+
+@test "wire, SYNAPSE_JWT_LOGIN=off: a login list that offers JWT, SSO, a password or nothing at all fails the wire naming the flows it read" {
+    jwt_switch off
+    local f want
+    for f in jwt:org.matrix.login.jwt sso:m.login.sso password:m.login.password empty:expected; do
+        : > "${GREMION_ROOT}/off-flows-${f%%:*}"
+        wire
+        [ "$status" -eq 1 ] || { echo "${f%%:*}: status=$status $output"; return 1; }
+        want="${f#*:}"
+        [[ "$output" == *"$want"* ]] || { echo "${f%%:*}: the flows are not named: ${output}"; return 1; }
+        [[ "$output" == *"m.login.application_service"* ]] || { echo "${f%%:*}: the expected set is not named: ${output}"; return 1; }
+        rm -f "${GREMION_ROOT}/off-flows-${f%%:*}"
+    done
+}
+
+@test "wire, SYNAPSE_JWT_LOGIN=off: a login endpoint that does not answer a flows document fails the wire" {
+    jwt_switch off
+    : > "${GREMION_ROOT}/off-flows-garbage"
+    wire
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"login"* ]]
+}
+
+@test "wire, SYNAPSE_JWT_LOGIN=off: a matrix that does not carry the switch after the recreate fails the wire" {
+    jwt_switch off
+    : > "${GREMION_ROOT}/matrix-switch-stale"
+    wire
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"SYNAPSE_JWT_LOGIN"* ]]
+}
+
+@test "wire: a SYNAPSE_JWT_LOGIN other than on or off is refused (exit 2) before anything is written or started" {
+    local bad
+    for bad in ON maybe true 1; do
+        sed -i '/^SYNAPSE_JWT_LOGIN=/d' "${GREMION_ROOT}/etc/env/state.env"
+        jwt_switch "$bad"
+        : > "$SHIM_LOG"
+        wire
+        [ "$status" -eq 2 ] || { echo "'${bad}': status=$status $output"; return 1; }
+        [[ "$output" == *"SYNAPSE_JWT_LOGIN"* ]] || { echo "'${bad}': the key is not named: ${output}"; return 1; }
+        assert_absent '^docker compose |/bootstrap\.sh' "$SHIM_LOG" "something ran after a refused switch"
+    done
+    [ ! -e "${GREMION_ROOT}/etc/secrets/synapse" ]
+}
+
+@test "wire, SYNAPSE_JWT_LOGIN=on: the same as no switch at all -- the secret is copied, the issuer written, the JWT arm asserted, and the docker argv equals the golden" {
+    jwt_switch on
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    local st="${GREMION_ROOT}/etc/env/state.env"
+    [ "$(cat "${GREMION_ROOT}/etc/secrets/synapse/oidc_client_secret")" = "$SYN_SECRET" ]
+    [ "$(sed -n 's/^SYNAPSE_KEYCLOAK_ISSUER_URL=//p' "$st")" = "https://pilot.guard.example.org/auth/realms/${SLUG}" ]
+    local got="${GREMION_ROOT}/docker-argv.got"
+    grep '^docker ' "$SHIM_LOG" | sed "s#${GREMION_ROOT}#<ROOT>#g" > "$got"
+    diff "${HOST_TEST_DIR}/fixtures/services-wire/primary-wire-docker-argv.golden" "$got"
+}
+
+@test "wire, SYNAPSE_JWT_LOGIN=on: a login list without the JWT arm still fails the wire naming it" {
+    jwt_switch on
+    : > "${GREMION_ROOT}/no-jwt"
+    wire
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"org.matrix.login.jwt"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# the customer's own user_oidc provider id (tenant row nc_target.providerId)
+# ---------------------------------------------------------------------------
+# One process-wide NEXTCLOUD_OIDC_PROVIDER_ID used to name the provider of EVERY customer's Nextcloud accounts, so a
+# secondary customer's members were created under the primary's provider. A provider of the customer's own would
+# create its accounts under ids user_oidc derives for it, and the app still addresses accounts by the raw Keycloak id
+# (group membership, file access, erasure). So the switch (NC_PROVIDER_PER_CUSTOMER in state.env) accepts off only
+# for now: with it on the wire refuses before anything is written, and nothing records a provider id in a row.
+
+# per_customer_provider <value> -- the switch in state.env, and the byte-identity baseline refreshed to include it
+per_customer_provider() {
+    local f=state
+    sed -i '/^NC_PROVIDER_PER_CUSTOMER=/d' "${GREMION_ROOT}/etc/env/${f}.env"
+    printf 'NC_PROVIDER_PER_CUSTOMER=%s\n' "$1" >>"${GREMION_ROOT}/etc/env/${f}.env"
+    cp "${GREMION_ROOT}/etc/env/${f}.env" "${GREMION_ROOT}/etc/env/${f}.env.before"
+}
+
+@test "wire, secondary host: with the switch on the wire is refused before anything is read or written, saying why and naming the key" {
+    secondary_customer
+    per_customer_provider on
+    wire
+    [ "$status" -ne 0 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"NC_PROVIDER_PER_CUSTOMER"* ]] || { echo "$output"; return 1; }
+    [[ "$output" == *"derived"* && "$output" == *"erasure"* ]] || { echo "$output"; return 1; }
+    [[ "$output" == *"Nothing was written"* ]] || { echo "$output"; return 1; }
+    local hit
+    hit="$(grep -c 'user_oidc:provider\|dav:create' "$SHIM_LOG" || true)"
+    [ "${hit:-0}" = 0 ] || { cat "$SHIM_LOG"; return 1; }
+    [ ! -e "${GREMION_ROOT}/nc-target.json" ]
+    hit="$(grep -c 'nc_target' "${GREMION_ROOT}/psql-sql.log" 2>/dev/null || true)"
+    [ "${hit:-0}" = 0 ] || { cat "${GREMION_ROOT}/psql-sql.log"; return 1; }
+    env_files_untouched
+}
+
+@test "wire, secondary host, switch off: the wire prints no refusal and no notice" {
+    secondary_customer
+    per_customer_provider off
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" != *"NOT YET SAFE"* && "$output" != *"NC_PROVIDER_PER_CUSTOMER"* ]] || { echo "$output"; return 1; }
+}
+
+@test "wire, PRIMARY customer: nothing is written to nc_target and the provider id is not read (the primary keeps NEXTCLOUD_OIDC_PROVIDER_ID)" {
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    assert_absent 'nc_target' "${GREMION_ROOT}/psql-sql.log" "the primary wire touched nc_target"
+    [ ! -e "${GREMION_ROOT}/nc-target.json" ]
+    assert_absent 'nc-target' "$ORDER" "the primary wire ran a provider id step"
+}
+
+@test "wire, secondary host, switch unset: nothing is recorded in the registry row and the provider id is not read (the wire is what it was before the switch existed)" {
+    secondary_customer
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"WIRE: ok ${SLUG}"* ]] || { echo "$output"; return 1; }
+    [ ! -e "${GREMION_ROOT}/nc-target.json" ]
+    local hit
+    hit="$(grep -c 'nc_target' "${GREMION_ROOT}/psql-sql.log" 2>/dev/null || true)"
+    [ "${hit:-0}" = 0 ] || { cat "${GREMION_ROOT}/psql-sql.log"; return 1; }
+    hit="$(grep -c 'nc-target' "$ORDER" || true)"
+    [ "${hit:-0}" = 0 ] || { cat "$ORDER"; return 1; }
+    [[ "$output" != *"nc_target.providerId"* ]] || { echo "$output"; return 1; }
+    env_files_untouched
+}
+
+@test "wire, secondary host, switch empty or off: nothing is recorded in the registry row either" {
+    secondary_customer
+    per_customer_provider off
+    wire
+    [ "$status" -eq 0 ] || { echo "off: status=$status $output"; return 1; }
+    [ ! -e "${GREMION_ROOT}/nc-target.json" ]
+    local hit
+    hit="$(grep -c 'nc_target' "${GREMION_ROOT}/psql-sql.log" 2>/dev/null || true)"
+    [ "${hit:-0}" = 0 ] || { echo "off: the registry row was written"; cat "${GREMION_ROOT}/psql-sql.log"; return 1; }
+    : >"${GREMION_ROOT}/psql-sql.log"
+    per_customer_provider ''
+    wire
+    [ "$status" -eq 0 ] || { echo "empty: status=$status $output"; return 1; }
+    [ ! -e "${GREMION_ROOT}/nc-target.json" ]
+    hit="$(grep -c 'nc_target' "${GREMION_ROOT}/psql-sql.log" 2>/dev/null || true)"
+    [ "${hit:-0}" = 0 ] || { echo "empty: the registry row was written"; cat "${GREMION_ROOT}/psql-sql.log"; return 1; }
+    hit="$(grep -c 'nc-target' "$ORDER" || true)"
+    [ "${hit:-0}" = 0 ] || { cat "$ORDER"; return 1; }
+}
+
+@test "wire, secondary host: a switch value other than off (empty or absent means off) is refused before anything is written, naming the key" {
+    secondary_customer
+    per_customer_provider maybe
+    wire
+    [ "$status" -ne 0 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"NC_PROVIDER_PER_CUSTOMER"* ]] || { echo "$output"; return 1; }
+    local hit
+    hit="$(grep -c 'user_oidc:provider\|dav:create' "$SHIM_LOG" || true)"
+    [ "${hit:-0}" = 0 ] || { cat "$SHIM_LOG"; return 1; }
+    env_files_untouched
+}
+
+@test "wire, PRIMARY customer: the switch on records nothing either (the primary keeps NEXTCLOUD_OIDC_PROVIDER_ID)" {
+    printf 'NC_PROVIDER_PER_CUSTOMER=on\n' >>"${GREMION_ROOT}/etc/env/state.env"
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [ ! -e "${GREMION_ROOT}/nc-target.json" ]
+    local hit
+    hit="$(grep -c 'nc_target' "${GREMION_ROOT}/psql-sql.log" 2>/dev/null || true)"
+    [ "${hit:-0}" = 0 ] || { cat "${GREMION_ROOT}/psql-sql.log"; return 1; }
 }

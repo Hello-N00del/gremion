@@ -179,9 +179,9 @@ function makeTenantDb() {
 }
 
 let nc: FakeNextcloud
-function makeTenant(id: string) {
+function makeTenant(id: string, ncProviderId?: number) {
   const tdb = makeTenantDb()
-  const tenant = { id, slug: id, db: tdb.db, configPath: `/cfg/${id}.json` } as unknown as TenantContext
+  const tenant = { id, slug: id, db: tdb.db, configPath: `/cfg/${id}.json`, services: { ncProviderId } } as unknown as TenantContext
   return { tenant, ...tdb }
 }
 const holder = (userId: string) => ({ userId, email: `${userId}@example.org`, displayName: userId, roles: ['vorstand'] })
@@ -409,6 +409,23 @@ describe('filesRetainedSink', () => {
     await publish(t, 'r1', 'a.ndjson', '1\n')
     const provision = nc.requests.find((r) => r.path.includes('/user_oidc/api/v1/user'))!
     expect(JSON.parse(provision.body)).toMatchObject({ providerId: 3, userId: 'u9', displayName: 'U Neun', email: 'u9@example.org' })
+  })
+
+  it('a holder is created under the user_oidc provider of ITS customer (the env value only where the row names none)', async () => {
+    const a = makeTenant('tenant-a', 7)
+    const b = makeTenant('tenant-b', 9)
+    const c = makeTenant('tenant-c') // the primary customer: no provider id in its row
+    h.holders['tenant-a'] = [holder('ua')]
+    h.holders['tenant-b'] = [holder('ub')]
+    h.holders['tenant-c'] = [holder('uc')]
+    await publish(a, 'ra', 'a.ndjson', '1\n')
+    await publish(b, 'rb', 'b.ndjson', '1\n')
+    await publish(c, 'rc', 'c.ndjson', '1\n')
+    const provisioned = nc.requests.filter((r) => r.path.includes('/user_oidc/api/v1/user')).map((r) => JSON.parse(r.body) as { userId: string; providerId: number })
+    const idOf = (userId: string) => provisioned.find((p) => p.userId === userId)?.providerId
+    expect(idOf('ua')).toBe(7)
+    expect(idOf('ub')).toBe(9)
+    expect(idOf('uc')).toBe(3)
   })
 
   it('a role lookup failure fails the publish before anything is uploaded (no document goes to an unknown audience)', async () => {

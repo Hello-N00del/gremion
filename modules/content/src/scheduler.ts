@@ -37,7 +37,7 @@ import type { KernelClient } from './kernel-client.js'
 import type { ChannelTransport } from './dispatch.js'
 import type { TracerPort } from '@gremion/ports/tracer'
 import { publishChannel, DELIVERY_NOT_RECORDED, type PublishResult } from './publish-channel.js'
-import { checkLinkBase } from './link-base.js'
+import { LINK_BASE_UNUSABLE_DETAIL } from './link-base.js'
 import {
   listDueScheduledChannels,
   resetStuckPublishing,
@@ -215,9 +215,11 @@ export interface DispatchDueDeps {
   kernel: KernelClient
   /** Email transport (the kernel send-mail adapter) — used by the email channel. */
   emailTransport: ChannelTransport
-  /** This tenant's external origin for unsubscribe links (no trailing slash). */
-  origin: string
-  /** Local development only: accept a loopback origin (K5#8). */
+  /**
+   * Local development only: accept a loopback origin (K5#8).
+   * The origin of the unsubscribe links is not a dependency: every email publish asks
+   * the kernel for the tenant's own host (publishChannel).
+   */
   allowLoopbackLinks?: boolean
   /**
    * Whether Instagram is configured (resolveInstagramCredentials() != null).
@@ -247,27 +249,12 @@ export async function dispatchDueChannels(
   deps: DispatchDueDeps,
 ): Promise<void> {
   const due = await listDueScheduledChannels(deps.sql)
-  // K5#8 (F1-FIX-07 r2): the link base is read once at boot. While it is
-  // unusable no email channel can publish before a restart, so a due email
-  // channel is parked as 'failed' (nobody claimed) instead of being re-polled
-  // every tick while it holds a slot in the LIMIT-50 due list.
-  const linkBase = checkLinkBase(deps.origin, { allowLoopback: deps.allowLoopbackLinks === true })
   for (const { post_id, channel } of due) {
     if (channel === 'instagram' && !deps.instagramConfigured) {
       // Disabled-by-default seam: leave the channel armed until IG is provisioned.
       continue
     }
     const where = `post ${post_id} channel ${channel} (${tenant.slug})`
-    if (channel === 'email' && !linkBase.usable) {
-      if (await failScheduledChannel(deps.sql, post_id, channel)) {
-        console.error(
-          `[${LABEL}] scheduled publish failed for ${where}: unusable public base URL ` +
-            `(${linkBase.reason}). Channel set to 'failed', nobody was mailed; fix the base, ` +
-            `restart the leaf and publish again.`,
-        )
-      }
-      continue
-    }
 
     let result: PublishResult
     try {
@@ -275,7 +262,6 @@ export async function dispatchDueChannels(
         sql: deps.sql,
         kernel: deps.kernel,
         emailTransport: deps.emailTransport,
-        origin: deps.origin,
         allowLoopbackLinks: deps.allowLoopbackLinks,
         // A scheduled tick has no inbound x-correlation-id header, so the scheduler
         // is the origin of this publish: correlate the co-committed outbox row (and
@@ -289,6 +275,23 @@ export async function dispatchDueChannels(
         `[${LABEL}] scheduled publish failed for ${where}:`,
         err instanceof Error ? err.message : String(err),
       )
+      continue
+    }
+    // K5#8 (F1-FIX-07 r2): the link base is the tenant's own host, asked of the kernel by
+    // publishChannel for each email publish. An ANSWER that cannot be mailed (the kernel has
+    // no host for the tenant, or a malformed or loopback one) parks the due email channel as
+    // 'failed' (nobody was claimed) instead of re-polling it every tick while it holds a slot
+    // in the LIMIT-50 due list. A kernel that could not be asked is no answer: publishChannel
+    // threw above, the channel stays scheduled, and the next tick asks again.
+    if (channel === 'email' && result.status === 'failed' && result.detail === LINK_BASE_UNUSABLE_DETAIL) {
+      if (await failScheduledChannel(deps.sql, post_id, channel)) {
+        const reasons = (result.operatorWarnings ?? []).join('; ')
+        console.error(
+          `[${LABEL}] scheduled publish failed for ${where}: ${LINK_BASE_UNUSABLE_DETAIL} ` +
+            `(${reasons}). Channel set to 'failed', nobody was mailed; fix the tenant's host ` +
+            `and publish again.`,
+        )
+      }
       continue
     }
     await reportScheduledResult(deps.sql, tenant, post_id, channel, where, result)

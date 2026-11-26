@@ -52,6 +52,7 @@ function makeFakeKernel(): KernelClient {
     async resolveGroup(): Promise<{ email: string; name: string | null }[]> { return [] },
     async sendMail(): Promise<{ messageId: string }> { return { messageId: '<k@test>' } },
     async portalPublish(): Promise<{ news_posts_id: string }> { return { news_posts_id: '1' } },
+    async linkBase(): Promise<string | null> { return 'https://corrtest.example' },
   }
 }
 
@@ -113,7 +114,6 @@ describe('T18 — correlation-id wiring: dispatch → outbox → relay envelope'
       channels: new Map<'email' | 'portal' | 'instagram', ChannelTransport>([
         ['email', makeFakeEmailTransport()],
       ]),
-      origin: 'https://corrtest.example',
       correlationId: injectedCorrelationId,
     })
 

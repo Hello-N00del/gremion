@@ -39,6 +39,17 @@ set -euo pipefail
 #                                     domain, a platform host, the control panel host or
 #                                     PILOT_TENANT_HOST (nor its turn. relay host); the list needs
 #                                     PILOT_TENANT_HOST. Empty or absent: nothing is judged: exit 1.
+#   7. secondary tenant modules    -- SECONDARY_TENANT_MODULES (optional; the shared-service
+#                                     modules a secondary-host customer may have), when a file
+#                                     declares it with a value: space-separated ids of the fixed
+#                                     set (files votes messaging), none twice, and the key needs
+#                                     SECONDARY_TENANT_HOSTS; messaging also needs
+#                                     SYNAPSE_JWT_LOGIN=off in state.env and MATRIX_IDENTITY=namespaced
+#                                     in app-blue.env and app-green.env (read from the directory
+#                                     of the judged file). Empty or absent: nothing is judged: exit 1.
+#   8. synapse login switch        -- SYNAPSE_JWT_LOGIN (optional; the chat service's JWT and SSO
+#                                     login switch), when a file declares it with a value: exactly
+#                                     on or off. Empty or absent: nothing is judged: exit 1.
 #
 # Alias equality is judged WITHIN one file. A pair split across files (e.g.
 # app-blue.env's AUTH_KEYCLOAK_SECRET against state.env's
@@ -255,6 +266,55 @@ check_secondary_tenant_hosts() {
     ok "SECONDARY_TENANT_HOSTS: ${n} host(s), each a lowercase DNS name distinct from the customer, platform and control hosts"
 }
 
+# SECONDARY_TENANT_MODULES is an OPTIONAL key too (space-separated ids of the fixed opt-in set; a comment in the
+# templates): judged only when a file declares it with a value. An unknown or not-yet-allowed id, a duplicate and
+# the key without SECONDARY_TENANT_HOSTS fail; messaging also needs SYNAPSE_JWT_LOGIN=off in state.env and
+# MATRIX_IDENTITY=namespaced in both app files, which are read from the directory of the judged file (the
+# judgement is the same whichever of the three files declares the key). Findings name the key and the entry's
+# position, never a value.
+check_secondary_tenant_modules() {
+    local list="${SECONDARY_TENANT_MODULES-}" dir why jwt blue green
+    local -a entries=()
+    [[ -n "${list//[[:space:]]/}" ]] || return 0
+    dir="$(dirname "$__gve_env_file")"
+    jwt="$(control_panel_key_of "${dir}/state.env" SYNAPSE_JWT_LOGIN)" || exit $?
+    blue="$(control_panel_key_of "${dir}/app-blue.env" MATRIX_IDENTITY)" || exit $?
+    green="$(control_panel_key_of "${dir}/app-green.env" MATRIX_IDENTITY)" || exit $?
+    if ! why="$(secondary_tenant_modules_problem "$list" "${SECONDARY_TENANT_HOSTS-}" "$jwt" "$blue" "$green")"; then
+        fail "SECONDARY_TENANT_MODULES is refused: ${why}"
+        return 0
+    fi
+    read -r -a entries <<< "$list"
+    ok "SECONDARY_TENANT_MODULES: ${#entries[@]} module(s) of the opt-in set, with SECONDARY_TENANT_HOSTS set"
+}
+
+# SYNAPSE_JWT_LOGIN is an OPTIONAL key (the chat service's JWT and SSO login switch; a comment in the state
+# template, so an older env file stays valid): judged only when a file declares it with a value, which must be
+# exactly on or off. Absent or empty = the default (on). The finding names the key, never the value.
+check_synapse_jwt_login() {
+    local v="${SYNAPSE_JWT_LOGIN-}"
+    [[ -n "$v" ]] || return 0
+    if [[ "$v" != on && "$v" != off ]]; then
+        fail "SYNAPSE_JWT_LOGIN is refused: it must be on or off (lower case); empty or absent means on"
+        return 0
+    fi
+    ok "Synapse login switch: ${v}"
+}
+
+# NC_PROVIDER_PER_CUSTOMER is an OPTIONAL key (a comment in the state template) that accepts off only for now: a
+# secondary customer's own Nextcloud provider creates accounts under derived ids and the app still addresses
+# accounts by the raw Keycloak id, so on is refused here and in the wire. Absent, empty and off are today's
+# behaviour. Judged only when a file declares it with a value. The finding names the key, never the value.
+check_nc_provider_per_customer() {
+    local v="${NC_PROVIDER_PER_CUSTOMER-}"
+    [[ -n "$v" ]] || return 0
+    if [[ "$v" != off ]]; then
+        fail "NC_PROVIDER_PER_CUSTOMER is refused: it is off for now (absent or empty means off); a customer's own provider creates accounts under derived ids that the app does not address yet"
+        return 0
+    fi
+    ok "NC_PROVIDER_PER_CUSTOMER: ${v}"
+}
+
 main() {
     parse_args "$@"
     need_cmd grep sed
@@ -280,6 +340,9 @@ main() {
     check_aliases
     check_board_app_password
     check_secondary_tenant_hosts
+    check_secondary_tenant_modules
+    check_synapse_jwt_login
+    check_nc_provider_per_customer
     if [[ "$__gve_failures" -gt 0 ]]; then
         die "VALIDATE-ENV: ${__gve_failures} problem(s) in $(basename "$__gve_env_file")" "$GREMION_EXIT_ASSERT"
     fi

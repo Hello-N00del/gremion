@@ -904,8 +904,10 @@ describe('authGuard publicPaths segment-boundary matching (netcup T03)', () => {
     { entry: '/api/internal/newsletter/render', path: '/api/internal/newsletter/render' },
     { entry: '/api/internal/newsletter/resolve-group', path: '/api/internal/newsletter/resolve-group' },
     { entry: '/api/internal/newsletter/send-mail', path: '/api/internal/newsletter/send-mail' },
+    { entry: '/api/internal/newsletter/link-base', path: '/api/internal/newsletter/link-base' },
     { entry: '/content/unsubscribe', path: '/content/unsubscribe' },
     { entry: '/api/internal/content/portal-publish', path: '/api/internal/content/portal-publish' },
+    { entry: '/api/internal/content/link-base', path: '/api/internal/content/link-base' },
     { entry: '/api/setup/seed', path: '/api/setup/seed' },
     { entry: '/api/health', path: '/api/health' },
     { entry: '/api/public/protocols/*/pdf', path: '/api/public/protocols/42/pdf' },
@@ -920,7 +922,9 @@ describe('authGuard publicPaths segment-boundary matching (netcup T03)', () => {
   // Content (wave 2 task 3): plus its opt-out page and its leaf callback, both exact.
   const FIVE = [
     '/api/health',
+    '/api/internal/content/link-base',
     '/api/internal/content/portal-publish',
+    '/api/internal/newsletter/link-base',
     '/api/internal/newsletter/render',
     '/api/internal/newsletter/resolve-group',
     '/api/internal/newsletter/send-mail',
@@ -979,6 +983,7 @@ describe('authGuard publicPaths segment-boundary matching (netcup T03)', () => {
     '/api/internal/newsletter/render',
     '/api/internal/newsletter/resolve-group',
     '/api/internal/newsletter/send-mail',
+    '/api/internal/newsletter/link-base',
   ]
   for (const entry of PUBLISHING_EXACT) {
     for (const path of nearMisses(entry)) {
@@ -1100,10 +1105,10 @@ describe('authGuard leaf callbacks (TASK-205c)', () => {
   })
 
   const tenant = { id: 't1', slug: 't1', issuer: 'https://kc/realms/t1' }
-  const NEWSLETTER_CALLBACKS = ['/api/internal/newsletter/render', '/api/internal/newsletter/resolve-group', '/api/internal/newsletter/send-mail']
+  const NEWSLETTER_CALLBACKS = ['/api/internal/newsletter/render', '/api/internal/newsletter/resolve-group', '/api/internal/newsletter/send-mail', '/api/internal/newsletter/link-base']
   // The content leaf's callback (guarded by INTERNAL_CONTENT_SECRET in its handler) and the e-mail footer's opt-out
   // page: a recipient has no session, and an external subscriber has no account at all.
-  const CONTENT_CALLBACKS = ['/api/internal/content/portal-publish']
+  const CONTENT_CALLBACKS = ['/api/internal/content/portal-publish', '/api/internal/content/link-base']
   const UNSUBSCRIBE_PAGES = ['/content/unsubscribe']
 
   async function guard(path: string): Promise<{ res: Response; resolved: boolean }> {
@@ -1156,6 +1161,8 @@ describe('authGuard leaf callbacks (TASK-205c)', () => {
     '/api/internal/newsletter/',
     '/api/internal/newsletter/other',
     '/api/internal/content/portal-publish/extra',
+    '/api/internal/content/link-base/extra',
+    '/api/internal/newsletter/link-base/extra',
     '/api/internal/content/other',
     '/api/internal/push',
   ]) {

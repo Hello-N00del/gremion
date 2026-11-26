@@ -69,8 +69,15 @@ function makeFakeKernel(opts: {
   html?: string
   groups?: Record<string, Recipient[]>
   renderThrows?: boolean
+  /** What the kernel's link-base callback answers: an origin, null (no public host) or an Error (unreachable). */
+  linkBase?: string | null | Error
 } = {}): KernelClient {
   return {
+    async linkBase(): Promise<string | null> {
+      const answer = opts.linkBase === undefined ? 'https://o' : opts.linkBase
+      if (answer instanceof Error) throw answer
+      return answer
+    },
     async render(): Promise<string> {
       if (opts.renderThrows) throw new Error('fake kernel render failure')
       return opts.html ?? '<html><body>Hi</body></html>'
@@ -150,10 +157,10 @@ describe('dispatch — happy path', () => {
   it('sends to every recipient, writes deliveries+tokens+status sent + one send.succeeded outbox row', async () => {
     const { nlId } = await makeNewsletterWithList(['alice@x.com', 'bob@x.com'])
     const transport = makeFakeTransport()
-    const kernel = makeFakeKernel()
+    const kernel = makeFakeKernel({ linkBase: 'https://disptest.example' })
 
     await dispatch(DISPATCH_TENANT, nlId, ACTOR, {
-      sql, kernel, transport, origin: 'https://disptest.example',
+      sql, kernel, transport,
     })
 
     expect(transport.sent).toHaveLength(2)
@@ -188,11 +195,83 @@ describe('dispatch — happy path', () => {
     const { nlId } = await makeNewsletterWithList(['alice@x.com'])
     const transport = makeFakeTransport()
     await dispatch(DISPATCH_TENANT, nlId, ACTOR, {
-      sql, kernel: makeFakeKernel({ html: '<html><body>Body</body></html>' }),
-      transport, origin: 'https://disptest.example',
+      sql, kernel: makeFakeKernel({ html: '<html><body>Body</body></html>', linkBase: 'https://disptest.example' }),
+      transport,
     })
     expect(transport.sent[0]!.html).toContain('unsubscribe?token=')
     expect(transport.sent[0]!.html).toContain('https://disptest.example')
+  })
+})
+
+// ── the link base is the sending tenant's, asked of the kernel per send ──────────
+describe('dispatch — the unsubscribe base comes from the kernel, per send', () => {
+  it('two customers get their own unsubscribe base: the link of each is rooted at its own host', async () => {
+    const a = await makeNewsletterWithList(['alice@x.com'])
+    const transportA = makeFakeTransport()
+    await dispatch(DISPATCH_TENANT, a.nlId, ACTOR, {
+      sql, kernel: makeFakeKernel({ linkBase: 'https://a.example.org' }), transport: transportA,
+    })
+
+    const b = await makeNewsletterWithList(['bob@x.com'])
+    const transportB = makeFakeTransport()
+    await dispatch(DISPATCH_TENANT, b.nlId, ACTOR, {
+      sql, kernel: makeFakeKernel({ linkBase: 'https://b.example.org' }), transport: transportB,
+    })
+
+    expect(transportA.sent[0]!.html).toContain('href="https://a.example.org/newsletter/unsubscribe?token=')
+    expect(transportA.sent[0]!.html).not.toContain('b.example.org')
+    expect(transportB.sent[0]!.html).toContain('href="https://b.example.org/newsletter/unsubscribe?token=')
+    expect(transportB.sent[0]!.html).not.toContain('a.example.org')
+  })
+
+  it('a single customer’s link is exactly the host origin plus the unsubscribe path and its token', async () => {
+    const { nlId } = await makeNewsletterWithList(['alice@x.com'])
+    const transport = makeFakeTransport()
+    await dispatch(DISPATCH_TENANT, nlId, ACTOR, {
+      sql, kernel: makeFakeKernel({ html: '<html><body>Body</body></html>', linkBase: 'https://a.example.org' }), transport,
+    })
+    const tokens = await sql<{ token: string }[]>`SELECT token FROM send_tokens WHERE newsletter_id = ${nlId}`
+    expect(tokens).toHaveLength(1)
+    expect(transport.sent[0]!.html).toBe(
+      `<html><body>Body<p style="font-size:12px;color:#888;"><a href="https://a.example.org/newsletter/unsubscribe?token=${tokens[0]!.token}">Abmelden</a></p></body></html>`,
+    )
+  })
+
+  it('a kernel that cannot be asked refuses the send before any recipient is claimed or the body rendered', async () => {
+    const { nlId } = await makeNewsletterWithList(['alice@x.com', 'bob@x.com'])
+    const transport = makeFakeTransport()
+    let rendered = 0
+    const kernel = {
+      ...makeFakeKernel({ linkBase: new Error('kernel link-base failed: 503') }),
+      async render(): Promise<string> {
+        rendered += 1
+        return '<html><body>x</body></html>'
+      },
+    }
+    await expect(dispatch(DISPATCH_TENANT, nlId, ACTOR, { sql, kernel, transport })).rejects.toThrow(/link-base failed: 503/)
+
+    expect(transport.sent).toHaveLength(0)
+    expect(rendered).toBe(0)
+    const claims = await sql<{ c: string }[]>`SELECT count(*) AS c FROM deliveries WHERE newsletter_id = ${nlId}`
+    expect(Number(claims[0]!.c)).toBe(0)
+    const toks = await sql<{ c: string }[]>`SELECT count(*) AS c FROM send_tokens WHERE newsletter_id = ${nlId}`
+    expect(Number(toks[0]!.c)).toBe(0)
+    // Untouched, so the next attempt asks the kernel again and goes out.
+    expect((await getNewsletter(sql, nlId))!.status).toBe('draft')
+    const retry = makeFakeTransport()
+    await dispatch(DISPATCH_TENANT, nlId, ACTOR, { sql, kernel: makeFakeKernel({ linkBase: 'https://a.example.org' }), transport: retry })
+    expect(retry.sent).toHaveLength(2)
+  })
+
+  it('a tenant the kernel has no host for is refused the same way, nobody claimed', async () => {
+    const { nlId } = await makeNewsletterWithList(['alice@x.com'])
+    const transport = makeFakeTransport()
+    await expect(
+      dispatch(DISPATCH_TENANT, nlId, ACTOR, { sql, kernel: makeFakeKernel({ linkBase: null }), transport }),
+    ).rejects.toThrow(/no public host/)
+    expect(transport.sent).toHaveLength(0)
+    const claims = await sql<{ c: string }[]>`SELECT count(*) AS c FROM deliveries WHERE newsletter_id = ${nlId}`
+    expect(Number(claims[0]!.c)).toBe(0)
   })
 })
 
@@ -221,7 +300,7 @@ describe('dispatch — recipient assembly', () => {
     })
 
     await dispatch(DISPATCH_TENANT, nl.id, ACTOR, {
-      sql, kernel, transport, origin: 'https://o',
+      sql, kernel, transport,
     })
 
     const tos = transport.sent.map((m) => m.to).sort()
@@ -238,7 +317,7 @@ describe('dispatch — kernel render failure', () => {
     const kernel = makeFakeKernel({ renderThrows: true })
 
     await expect(
-      dispatch(DISPATCH_TENANT, nlId, ACTOR, { sql, kernel, transport, origin: 'https://o' }),
+      dispatch(DISPATCH_TENANT, nlId, ACTOR, { sql, kernel, transport }),
     ).rejects.toThrow()
 
     expect(transport.sent).toHaveLength(0)
@@ -266,7 +345,7 @@ describe('dispatch — per-recipient SMTP failure', () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
     try {
       const thrown = await dispatch(DISPATCH_TENANT, nlId, ACTOR, {
-        sql, kernel: makeFakeKernel(), transport, origin: 'https://o',
+        sql, kernel: makeFakeKernel(), transport,
       }).then(() => null, (e: unknown) => e)
       expect(thrown).toBeInstanceOf(Error)
       // the callers log this message, so it carries the cause fields only
@@ -295,7 +374,7 @@ describe('dispatch — per-recipient SMTP failure', () => {
 
     await expect(
       dispatch(DISPATCH_TENANT, nlId, ACTOR, {
-        sql, kernel: makeFakeKernel(), transport, origin: 'https://o',
+        sql, kernel: makeFakeKernel(), transport,
       }),
     ).rejects.toThrow()
 
@@ -337,7 +416,7 @@ describe('dispatch — the mail server refuses the login (EAUTH)', () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
     try {
       await expect(
-        dispatch(DISPATCH_TENANT, nlId, ACTOR, { sql, kernel: makeFakeKernel(), transport, origin: 'https://o' }),
+        dispatch(DISPATCH_TENANT, nlId, ACTOR, { sql, kernel: makeFakeKernel(), transport }),
       ).rejects.toThrow(/SMTP login refused, send stopped after the first attempt/)
     } finally {
       spy.mockRestore()
@@ -366,7 +445,7 @@ describe('dispatch — the mail server refuses the login (EAUTH)', () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
     try {
       await expect(
-        dispatch(DISPATCH_TENANT, nlId, ACTOR, { sql, kernel: makeFakeKernel(), transport, origin: 'https://o' }),
+        dispatch(DISPATCH_TENANT, nlId, ACTOR, { sql, kernel: makeFakeKernel(), transport }),
       ).rejects.toThrow(/SMTP login refused/)
     } finally {
       spy.mockRestore()
@@ -389,7 +468,7 @@ describe('dispatch — the mail server refuses the login (EAUTH)', () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
     try {
       await expect(
-        dispatch(DISPATCH_TENANT, nlId, ACTOR, { sql, kernel: makeFakeKernel(), transport: refusing, origin: 'https://o' }),
+        dispatch(DISPATCH_TENANT, nlId, ACTOR, { sql, kernel: makeFakeKernel(), transport: refusing }),
       ).rejects.toThrow(/SMTP login refused/)
     } finally {
       spy.mockRestore()
@@ -398,7 +477,7 @@ describe('dispatch — the mail server refuses the login (EAUTH)', () => {
 
     // Login corrected; the operator sends again at once (well inside the 15-minute stale window).
     const healthy = makeFakeTransport()
-    await dispatch(DISPATCH_TENANT, nlId, ACTOR, { sql, kernel: makeFakeKernel(), transport: healthy, origin: 'https://o' })
+    await dispatch(DISPATCH_TENANT, nlId, ACTOR, { sql, kernel: makeFakeKernel(), transport: healthy })
 
     expect(healthy.sent.map((m) => m.to).sort()).toEqual(['a@x.com', 'b@x.com', 'c@x.com'])
     const dels = await sql<{ email: string; status: string }[]>`
@@ -426,7 +505,7 @@ describe('dispatch — the mail server refuses the login (EAUTH)', () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
     try {
       await expect(
-        dispatch(DISPATCH_TENANT, nlId, ACTOR, { sql, kernel: makeFakeKernel(), transport, origin: 'https://o' }),
+        dispatch(DISPATCH_TENANT, nlId, ACTOR, { sql, kernel: makeFakeKernel(), transport }),
       ).rejects.toThrow(/SMTP login refused, send stopped after the first attempt/)
       // The DB failure is logged (cause fields only), not swallowed silently.
       expect(spy.mock.calls.some((c) => String(c[0]).includes('release of the claim'))).toBe(true)
@@ -459,7 +538,7 @@ describe('dispatch — kernel send-mail unconfigured (Option B2)', () => {
 
     await expect(
       dispatch(DISPATCH_TENANT, nlId, ACTOR, {
-        sql, kernel: makeFakeKernel(), transport, origin: 'https://o',
+        sql, kernel: makeFakeKernel(), transport,
       }),
     ).rejects.toThrow() // surfaced to the caller, but as a clean 'failed', not an unhandled crash
 
@@ -488,7 +567,7 @@ describe('DoD-c — duplicate-send prevention', () => {
     const transport = makeFakeTransport()
     const run = () =>
       dispatch(DISPATCH_TENANT, nlId, ACTOR, {
-        sql, kernel: makeFakeKernel(), transport, origin: 'https://o',
+        sql, kernel: makeFakeKernel(), transport,
       }).catch(() => {/* a loser of the newsletter-level claim is a no-op */})
 
     // CONCURRENT: fire two dispatches of the SAME newsletter at once.
@@ -511,7 +590,7 @@ describe('DoD-c — duplicate-send prevention', () => {
     // so bob's claim is left 'claimed' (no markSent).
     const t1 = makeFakeTransport({ failFor: new Set(['bob@x.com']) })
     await dispatch(DISPATCH_TENANT, nlId, ACTOR, {
-      sql, kernel: makeFakeKernel(), transport: t1, origin: 'https://o',
+      sql, kernel: makeFakeKernel(), transport: t1,
     }).catch(() => {})
     expect(t1.countFor('alice@x.com')).toBe(1)
     expect(t1.countFor('carol@x.com')).toBe(1)
@@ -526,7 +605,7 @@ describe('DoD-c — duplicate-send prevention', () => {
     // Re-dispatch with a fresh transport: only bob should be re-sent.
     const t2 = makeFakeTransport()
     await dispatch(DISPATCH_TENANT, nlId, ACTOR, {
-      sql, kernel: makeFakeKernel(), transport: t2, origin: 'https://o',
+      sql, kernel: makeFakeKernel(), transport: t2,
     })
     expect(t2.countFor('bob@x.com')).toBe(1)
     expect(t2.countFor('alice@x.com')).toBe(0)

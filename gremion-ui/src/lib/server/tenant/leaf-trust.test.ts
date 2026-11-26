@@ -76,6 +76,22 @@ describe('leafCallbackClaim — accepts a proven leaf callback', () => {
     ).toBeNull()
   })
 
+  it('the newsletter link-base route selects its tenant under the newsletter secret', () => {
+    const claim = leafCallbackClaim('/api/internal/newsletter/link-base', leafHeaders())
+    expect(claim?.tenantId).toBe(TENANT)
+    expect(claim?.secretName).toBe('INTERNAL_NEWSLETTER_SECRET')
+  })
+
+  it('the content link-base route selects its tenant under the content secret, and not under the newsletter one', () => {
+    const claim = leafCallbackClaim(
+      '/api/internal/content/link-base',
+      leafHeaders({ 'x-internal-auth': CONTENT_SECRET }),
+    )
+    expect(claim?.tenantId).toBe(TENANT)
+    expect(claim?.secretName).toBe('INTERNAL_CONTENT_SECRET')
+    expect(leafCallbackClaim('/api/internal/content/link-base', leafHeaders())).toBeNull()
+  })
+
   it('tolerates exactly one trailing slash (same route, not a new one)', () => {
     expect(leafCallbackClaim('/api/internal/newsletter/render/', leafHeaders())?.route).toBe(
       '/api/internal/newsletter/render',

@@ -661,3 +661,165 @@ secondary_fixture() {
     run grep -cE '^# SECONDARY_TENANT_HOSTS=' "${HOST_SRC}/templates/env/app.env.tmpl"
     [ "$output" = 1 ]
 }
+
+# SECONDARY_TENANT_MODULES (optional, space-separated catalogue ids): the opt-in for shared-service modules of a
+# secondary-host customer. Judged in any file that declares it with a value; absent or empty is today's behaviour.
+@test "SECONDARY_TENANT_MODULES: absent and empty validate exactly as before, and a clean files/votes opt-in validates (state and app files)" {
+    secondary_fixture
+    printf 'SECONDARY_TENANT_HOSTS=canary.example.org\n' >> "${ENV_DIR}/state.env"
+    run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" != *"SECONDARY_TENANT_MODULES"* ]] || { echo "$output"; return 1; }
+    printf 'SECONDARY_TENANT_MODULES=\n' >> "${ENV_DIR}/state.env"
+    run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" != *"SECONDARY_TENANT_MODULES"* ]] || { echo "$output"; return 1; }
+    sed -i 's/^SECONDARY_TENANT_MODULES=.*/SECONDARY_TENANT_MODULES=files votes/' "${ENV_DIR}/state.env"
+    run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"SECONDARY_TENANT_MODULES: 2 module(s)"* ]] || { echo "$output"; return 1; }
+    printf 'SECONDARY_TENANT_HOSTS=canary.example.org\nSECONDARY_TENANT_MODULES="files votes"\n' >> "${ENV_DIR}/app-blue.env"
+    run "$VALIDATE" --env-file "${ENV_DIR}/app-blue.env" --release "$RELEASE"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"SECONDARY_TENANT_MODULES: 2 module(s)"* ]] || { echo "$output"; return 1; }
+}
+
+@test "SECONDARY_TENANT_MODULES: an unknown id, publishing and other ids not yet allowed, a duplicate, a comma list and upper case each fail the validation (exit 1) naming the key by position, without printing the value" {
+    secondary_fixture
+    printf 'SECONDARY_TENANT_HOSTS=canary.example.org\n' >> "${ENV_DIR}/state.env"
+    local bad
+    for bad in 'some-new-module' 'publishing' 'newsletter' 'content' 'messages' 'board' 'files files' 'files,votes' 'Files' 'files some-new-module'; do
+        printf 'SECONDARY_TENANT_MODULES=%s\n' "$bad" >> "${ENV_DIR}/state.env"
+        run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
+        [ "$status" -eq 1 ] || { echo "accepted '${bad}': status=${status} ${output}"; return 1; }
+        [[ "$output" == *"SECONDARY_TENANT_MODULES"* && "$output" == *"entry "* ]] || { echo "no key or position for '${bad}': ${output}"; return 1; }
+        [[ "$output" != *"canary.example.org"* && "$output" != *"some-new-module"* ]] || { echo "a value was printed for '${bad}': ${output}"; return 1; }
+        sed -i '/^SECONDARY_TENANT_MODULES=/d' "${ENV_DIR}/state.env"
+    done
+}
+
+@test "SECONDARY_TENANT_MODULES: the key without SECONDARY_TENANT_HOSTS fails the validation, in the file that declares it" {
+    secondary_fixture
+    printf 'SECONDARY_TENANT_MODULES=files\n' >> "${ENV_DIR}/state.env"
+    run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
+    [ "$status" -eq 1 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"SECONDARY_TENANT_MODULES"* && "$output" == *"SECONDARY_TENANT_HOSTS"* ]] || { echo "$output"; return 1; }
+    printf 'SECONDARY_TENANT_MODULES=votes\n' >> "${ENV_DIR}/app-green.env"
+    run "$VALIDATE" --env-file "${ENV_DIR}/app-green.env" --release "$RELEASE"
+    [ "$status" -eq 1 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"SECONDARY_TENANT_HOSTS"* ]] || { echo "$output"; return 1; }
+}
+
+@test "SECONDARY_TENANT_MODULES: messaging fails without SYNAPSE_JWT_LOGIN=off in state.env or without MATRIX_IDENTITY=namespaced in BOTH app files, naming the missing switch, and passes with all three" {
+    secondary_fixture
+    printf 'SECONDARY_TENANT_HOSTS=canary.example.org\nSECONDARY_TENANT_MODULES=messaging\n' >> "${ENV_DIR}/state.env"
+    run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
+    [ "$status" -eq 1 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"SYNAPSE_JWT_LOGIN"* && "$output" == *"MATRIX_IDENTITY"* ]] || { echo "$output"; return 1; }
+    printf 'SYNAPSE_JWT_LOGIN=off\n' >> "${ENV_DIR}/state.env"
+    printf 'MATRIX_IDENTITY=namespaced\n' >> "${ENV_DIR}/app-blue.env"
+    run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
+    [ "$status" -eq 1 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"MATRIX_IDENTITY"* && "$output" == *"app-green.env"* && "$output" != *"SYNAPSE_JWT_LOGIN"* ]] || { echo "$output"; return 1; }
+    printf 'MATRIX_IDENTITY=namespaced\n' >> "${ENV_DIR}/app-green.env"
+    run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"SECONDARY_TENANT_MODULES: 1 module(s)"* ]] || { echo "$output"; return 1; }
+    # an app file that declares the opt-in is judged against the same three switches
+    printf 'SECONDARY_TENANT_HOSTS=canary.example.org\nSECONDARY_TENANT_MODULES=messaging\n' >> "${ENV_DIR}/app-blue.env"
+    run "$VALIDATE" --env-file "${ENV_DIR}/app-blue.env" --release "$RELEASE"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    sed -i 's/^SYNAPSE_JWT_LOGIN=.*/SYNAPSE_JWT_LOGIN=on/' "${ENV_DIR}/state.env"
+    run "$VALIDATE" --env-file "${ENV_DIR}/app-blue.env" --release "$RELEASE"
+    [ "$status" -eq 1 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"SYNAPSE_JWT_LOGIN"* ]] || { echo "$output"; return 1; }
+}
+
+@test "SECONDARY_TENANT_MODULES is an optional key: the templates carry it only as a comment, and the state template says an existing secondary customer must be re-created" {
+    run grep -cE '^SECONDARY_TENANT_MODULES=' "${HOST_SRC}/templates/env/state.env.tmpl"
+    [ "$output" = 0 ]
+    run grep -cE '^# SECONDARY_TENANT_MODULES=' "${HOST_SRC}/templates/env/state.env.tmpl"
+    [ "$output" = 1 ]
+    run grep -cE '^# SECONDARY_TENANT_MODULES=' "${HOST_SRC}/templates/env/app.env.tmpl"
+    [ "$output" = 1 ]
+    run grep -ciE 're-created' "${HOST_SRC}/templates/env/state.env.tmpl"
+    [ "$output" -ge 1 ]
+}
+
+# SYNAPSE_JWT_LOGIN (optional, on|off): the chat service's JWT and SSO login switch. Judged in any file that
+# declares it with a value; absent or empty is today's behaviour (compose defaults an empty value to on).
+@test "SYNAPSE_JWT_LOGIN: absent and empty validate exactly as before; on and off validate and say so" {
+    render_filled
+    run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" != *"SYNAPSE_JWT_LOGIN"* ]] || { echo "$output"; return 1; }
+    printf 'SYNAPSE_JWT_LOGIN=\n' >> "${ENV_DIR}/state.env"
+    run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" != *"SYNAPSE_JWT_LOGIN"* ]] || { echo "$output"; return 1; }
+    local v
+    for v in on off; do
+        sed -i "s/^SYNAPSE_JWT_LOGIN=.*/SYNAPSE_JWT_LOGIN=${v}/" "${ENV_DIR}/state.env"
+        run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
+        [ "$status" -eq 0 ] || { echo "refused '${v}': ${output}"; return 1; }
+        [[ "$output" == *"Synapse login switch: ${v}"* ]] || { echo "no line for '${v}': ${output}"; return 1; }
+    done
+}
+
+@test "SYNAPSE_JWT_LOGIN: any value other than on or off fails the validation (exit 1) naming the key, without printing the value" {
+    render_filled
+    local bad
+    for bad in ON Off true false 1 0 maybe yes; do
+        printf 'SYNAPSE_JWT_LOGIN=%s\n' "$bad" >> "${ENV_DIR}/state.env"
+        run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
+        [ "$status" -eq 1 ] || { echo "accepted '${bad}': status=${status} ${output}"; return 1; }
+        [[ "$output" == *"SYNAPSE_JWT_LOGIN"* ]] || { echo "the key is not named for '${bad}': ${output}"; return 1; }
+        [[ "$output" != *"=${bad}"* && "$output" != *"'${bad}'"* ]] || { echo "the value was printed for '${bad}': ${output}"; return 1; }
+        sed -i '/^SYNAPSE_JWT_LOGIN=/d' "${ENV_DIR}/state.env"
+    done
+}
+
+@test "SYNAPSE_JWT_LOGIN is an optional key: the state template carries it only as a comment, so an existing state.env stays valid" {
+    run grep -cE '^SYNAPSE_JWT_LOGIN=' "${HOST_SRC}/templates/env/state.env.tmpl"
+    [ "$output" = 0 ]
+    run grep -cE '^# SYNAPSE_JWT_LOGIN=' "${HOST_SRC}/templates/env/state.env.tmpl"
+    [ "$output" = 1 ]
+}
+
+# NC_PROVIDER_PER_CUSTOMER (optional, off only for now): a secondary customer's own user_oidc provider would create
+# accounts under derived ids the app does not address yet, so `on` is refused here and in the wire. Judged in any
+# file that declares it; absent, empty and off are today's behaviour.
+@test "NC_PROVIDER_PER_CUSTOMER: absent, empty and off validate, and any other value (on included) fails naming the key" {
+    secondary_fixture
+    run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" != *"NC_PROVIDER_PER_CUSTOMER"* ]] || { echo "$output"; return 1; }
+    local v
+    for v in '' off; do
+        sed -i '/^NC_PROVIDER_PER_CUSTOMER=/d' "${ENV_DIR}/state.env"
+        printf 'NC_PROVIDER_PER_CUSTOMER=%s\n' "$v" >> "${ENV_DIR}/state.env"
+        run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
+        [ "$status" -eq 0 ] || { echo "'${v}': ${output}"; return 1; }
+    done
+    for v in on yes true 1 ON maybe; do
+        sed -i '/^NC_PROVIDER_PER_CUSTOMER=/d' "${ENV_DIR}/state.env"
+        printf 'NC_PROVIDER_PER_CUSTOMER=%s\n' "$v" >> "${ENV_DIR}/state.env"
+        run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
+        [ "$status" -eq 1 ] || { echo "'${v}' was accepted: ${output}"; return 1; }
+        [[ "$output" == *"NC_PROVIDER_PER_CUSTOMER"* ]] || { echo "no key named for '${v}': ${output}"; return 1; }
+    done
+}
+
+@test "NC_PROVIDER_PER_CUSTOMER is an optional key: the state template carries it only as a comment, so an older state.env stays valid" {
+    run grep -cE '^NC_PROVIDER_PER_CUSTOMER=' "${HOST_SRC}/templates/env/state.env.tmpl"
+    [ "$output" = 0 ]
+    run grep -cE '^# NC_PROVIDER_PER_CUSTOMER=' "${HOST_SRC}/templates/env/state.env.tmpl"
+    [ "$output" = 1 ]
+}
+
+@test "NC_PROVIDER_PER_CUSTOMER: the state template says plainly that the switch is not for use yet (the app does not address derived-uid accounts)" {
+    run grep -cE 'NOT YET SAFE' "${HOST_SRC}/templates/env/state.env.tmpl"
+    [ "$output" -ge 1 ] || { echo "$output"; return 1; }
+    run grep -cE 'does not address' "${HOST_SRC}/templates/env/state.env.tmpl"
+    [ "$output" -ge 1 ] || { echo "$output"; return 1; }
+}

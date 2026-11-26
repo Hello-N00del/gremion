@@ -54,7 +54,7 @@ export interface MatrixClientPort {
   /** Download media (admin token) → bytes + content type. */
   downloadMedia(mxcUri: string): Promise<{ data: ArrayBuffer; contentType: string }>
   /** Create (or idempotently adopt by alias) a room as the admin bot → roomId. */
-  createRoom(name: string, topic: string, aliasLocalpart?: string): Promise<string>
+  createRoom(name: string, topic: string, aliasLocalpart?: string, opts?: { tenantId?: string }): Promise<string>
   /** Invite a user to a room as the admin bot (idempotent). */
   inviteUser(roomId: string, userId: string): Promise<void>
   /** Join a room with the user's own token (idempotent). */

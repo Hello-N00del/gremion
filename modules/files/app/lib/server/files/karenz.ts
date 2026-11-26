@@ -7,7 +7,8 @@
 // the row and the flag go, the external id is recorded in the Karenz item, and the Nextcloud folder, its
 // group and every file stay untouched (the teardown handed to releaseSubsystem is a no-op). Restore puts
 // the SAME external id back, so the unit is provisioned again by reusing the folder (ensureResource gets
-// it as `existing`). The final day deletes nothing in Nextcloud. The only Nextcloud operations in this
+// it as `existing`). A row that had reached ok comes back as ok; a row that had not (its folder was made
+// but the grant may be missing) comes back pending with the id, so the provisioning pass checks the folder. The final day deletes nothing in Nextcloud. The only Nextcloud operations in this
 // file are reading the member list of ONE unit group and removing a person from that group (see
 // "membership" below); it deletes no folder, no group, no account and no file.
 //
@@ -24,7 +25,7 @@
 // a failure is a KarenzPartialError whose labels carry the org unit id only, never a folder or group id
 // or a unit name.
 import { getOrgUnit, listOrgUnitMembers, listOrgUnits, setSubsystemWanted } from '$lib/server/governance/org-units-db'
-import { enqueueResources, getResource, markResourceOk } from '$lib/server/governance/provisioning/ledger'
+import { enqueueResources, getResource, markResourceOk, recordResourceExternalId } from '$lib/server/governance/provisioning/ledger'
 import { withUnitLock } from '$lib/server/governance/provisioning/mutex'
 import { provisionOrgUnit, releaseSubsystem } from '$lib/server/governance/provisioning/orchestrator'
 import { getDb } from '$lib/server/db'
@@ -56,6 +57,13 @@ function unitOf(item: KarenzItemRow): string | null {
 function wasBound(item: KarenzItemRow): boolean {
   const p = item.payload
   return !(p && typeof p === 'object' && !Array.isArray(p) && (p as { bound?: unknown }).bound === false)
+}
+
+/** False when the row had not reached ok at switch-off (its folder may still lack the unit group). An item
+ *  written before the flag existed has none: it was bound as before, and restore treats it as finished. */
+function wasFinished(item: KarenzItemRow): boolean {
+  const p = item.payload
+  return !(p && typeof p === 'object' && !Array.isArray(p) && (p as { finished?: unknown }).finished === false)
 }
 
 /** A label for the operator log that names the unit, never the folder or the group. */
@@ -144,7 +152,9 @@ async function switchOff(ctx: KarenzContext): Promise<void> {
       // a unit without a folder yet has no external id: its own id keeps the item unique per unit
       externalId: bound ? row.external_id! : `unit:${unit.id}`,
       state: 'recorded',
-      payload: { unitId: unit.id, bound },
+      // `finished`: the row had reached ok. A failed or pending row can hold the id of a folder that was made
+      // but not yet granted; restore must hand that one back to the provisioning pass, not call it done.
+      payload: { unitId: unit.id, bound, finished: row.status === 'ok' },
     })
   }
 
@@ -204,11 +214,15 @@ async function restore(ctx: KarenzContext): Promise<void> {
       const attached = bound ? row?.external_id === item.externalId : row !== null
       if (!attached) {
         // One transaction: the flag, the row and its external id come together or not at all. The row is
-        // written last, so an interrupted restore is simply run again.
+        // written last, so an interrupted restore is simply run again. A row that had finished is put back
+        // as ok; one that had not keeps its id on a pending row, so the provisioning pass below checks the
+        // folder and grants it (an ok row is never looked at again).
+        const finished = wasFinished(item)
         await getDb().begin(async (tx) => {
           await enqueueResources(tx, unitId, ['nextcloud'])
           await setSubsystemWanted(tx, unitId, 'nextcloud', true)
-          if (bound) await markResourceOk(unitId, 'nextcloud', item.externalId, tx)
+          if (bound && finished) await markResourceOk(unitId, 'nextcloud', item.externalId, tx)
+          else if (bound) await recordResourceExternalId(unitId, 'nextcloud', item.externalId, tx)
         })
       }
       // Also for a unit that was attached by an earlier, interrupted pass: the group is brought up to date

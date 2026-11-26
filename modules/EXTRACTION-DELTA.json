@@ -525,7 +525,7 @@
       "path": "modules/publishing/test/origin.test.ts",
       "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion",
       "owner": "TASK-200",
-      "blob": "383e7a45ce7258560c65ddad58156b1cc1833277"
+      "blob": "21408762238da5b8dd33a14f760b675e1a4f724f"
     },
     {
       "path": "modules/publishing/test/support/pg-test-guard.ts",
@@ -829,9 +829,9 @@
     },
     {
       "path": "modules/files/app/lib/server/files/nextcloud-client.ts",
-      "reason": "TASK-205a: Nextcloud endpoint through serviceEnv (the deleted default-tenant env reader); Karenz p2 t16: listGroupMembers for the retained sink membership sync",
+      "reason": "TASK-205a: Nextcloud endpoint through serviceEnv (the deleted default-tenant env reader); Karenz p2 t16: listGroupMembers for the retained sink membership sync; provisionOidcUser takes the provider id of the customer (oidcProviderIdFor)",
       "owner": "TASK-205",
-      "blob": "26fa3e6d114cd3e83f158464e05f3c1a9c500844"
+      "blob": "17cfcc7344ef5245ad511aaa3c9c2d382e490e53"
     },
     {
       "path": "modules/files/app/lib/server/files/protocol-documents.ts",
@@ -841,9 +841,15 @@
     },
     {
       "path": "modules/files/app/lib/server/files/register.server.ts",
-      "reason": "TASK-205a: NEXTCLOUD_OIDC_PROVIDER_ID through serviceEnv (the deleted default-tenant env reader); Karenz p2 t16: registers the files Karenz participant, its retains-nothing declaration and the files retained sink",
+      "reason": "TASK-205a: NEXTCLOUD_OIDC_PROVIDER_ID through serviceEnv (the deleted default-tenant env reader), now read by oidcProviderIdFor (the customer's own provider id from its registry row, else that env value); Karenz p2 t16: registers the files Karenz participant, its retains-nothing declaration and the files retained sink",
       "owner": "TASK-205",
-      "blob": "264d160be5ec9295b78b587dd13d1551a25702be"
+      "blob": "c41d5a3368d37964b89379e5a593819edf4c2df3"
+    },
+    {
+      "path": "modules/files/app/lib/server/files/oidc-provider.ts",
+      "reason": "the user_oidc provider id of a customer's Nextcloud accounts: the customer's own (registry row nc_target.providerId, via the tenant context; nothing writes it for now) else NEXTCLOUD_OIDC_PROVIDER_ID; new kernel-side file with no counterpart at the tag",
+      "owner": "TASK-205",
+      "blob": "f6ff764f87b831f946feb143b955b459abf6a6d4"
     },
     {
       "path": "modules/files/app/routes/api/files/upload-chunk/upload-chunk.test.ts",
@@ -2199,7 +2205,7 @@
       "path": "modules/publishing/src/index.ts",
       "reason": "RELAY-ISOLATION: the relay tick isolates each tenant (a store that refuses, e.g. TenantIdentityMismatchError, is logged by tenant id and the tick moves on to the next tenant); the same change in the content, calendar and newsletter leaves",
       "owner": "TASK-205",
-      "blob": "a8f1dcfb8ca950afa83abda90890f6372e20a3b8"
+      "blob": "bff4d06c2aacccb8964e5b24136e832ea2d6088f"
     },
     {
       "path": "modules/elections/app/lib/components/elections-notice/ElectionsNotice.svelte",
@@ -2329,9 +2335,9 @@
     },
     {
       "path": "modules/files/app/lib/server/files/register.server.test.ts",
-      "reason": "Karenz p2 t16: asserts the participant, declaration and sink registrations",
+      "reason": "Karenz p2 t16: asserts the participant, declaration and sink registrations, and the provider id the sink creates accounts under (the customer's own, else the env value)",
       "owner": "TASK-205",
-      "blob": "420de53389d1fe75f4566afe1e909d1dac898805"
+      "blob": "78aa741bcf5d2fc766efd77618ac299208f26f86"
     },
     {
       "path": "modules/files/app/lib/server/files/karenz.ts",
@@ -2347,15 +2353,15 @@
     },
     {
       "path": "modules/files/app/lib/server/files/retained-sink.ts",
-      "reason": "Karenz p2 t16: the files retained sink (per-tenant group folder and groups, never adopted by name); new kernel-side file with no counterpart at the tag",
+      "reason": "Karenz p2 t16: the files retained sink (per-tenant group folder and groups, never adopted by name; accounts are created under the customer's provider id, oidcProviderIdFor); new kernel-side file with no counterpart at the tag",
       "owner": "TASK-205",
-      "blob": "a4707c88892225b9a43984786ecec2b29201c834"
+      "blob": "a1cb077821993f3bcde7592856c43a93b59aea78"
     },
     {
       "path": "modules/files/app/lib/server/files/retained-sink.test.ts",
       "reason": "Karenz p2 t16: tests of the files retained sink incl. the two-tenant case against one shared Nextcloud fake; new kernel-side file with no counterpart at the tag",
       "owner": "TASK-205",
-      "blob": "07b460a9bfac5515d4312073f6c5c6239c74cf7c"
+      "blob": "1fcae7fce65a62143da0772aa1d70797472ff677"
     },
     {
       "path": "modules/elections/app/routes/elections/+page.server.ts",
@@ -2380,6 +2386,60 @@
       "reason": "Karenz p2 t19: the votes page lists the sealed poll tallies after a finalized Karenz and a fresh enable; new kernel-side file with no counterpart at the tag",
       "owner": "TASK-205",
       "blob": "6753f146487ac8e5f5cedce75d5f701c378c1ba8"
+    },
+    {
+      "path": "modules/messaging/app/routes/element-call/[...path]/+server.ts",
+      "reason": "multi-tenant video: config.json and room/config.json name the requesting host's LiveKit token service (tenant primary host, 503 without one); every other asset unchanged",
+      "owner": "TASK-205",
+      "blob": "7abe7509633bbe03fdda54b022c535b319f71eb1"
+    },
+    {
+      "path": "modules/messaging/app/routes/element-call/[...path]/server.test.ts",
+      "reason": "multi-tenant video: tests for the per-host token service URL in the proxied Element Call config",
+      "owner": "TASK-205",
+      "blob": "89d9d7c9cd05115679bd10ba35e50796fe49698e"
+    },
+    {
+      "path": "modules/messaging/app/lib/components/VideoCallPip.svelte",
+      "reason": "multi-tenant video: in the browser the frame URL, parent URL and accepted message origin come from the page origin; the process env is the server-render fallback",
+      "owner": "TASK-205",
+      "blob": "55763563c6e592c342a9601ffd9c5448ea9f5d6f"
+    },
+    {
+      "path": "modules/messaging/app/lib/components/VideoCallPip.test.ts",
+      "reason": "multi-tenant video: the call frame on a secondary customer host; new kernel-side file with no counterpart at the tag",
+      "owner": "TASK-205",
+      "blob": "0da6f6928a99609f9a438c768553b692fb855454"
+    },
+    {
+      "path": "modules/messaging/app/lib/components/VideoCallPip.primary-host.test.ts",
+      "reason": "multi-tenant video: the call frame on the primary host equals the process env values; new kernel-side file with no counterpart at the tag",
+      "owner": "TASK-205",
+      "blob": "3e3276bd909d5c7c6fb486d90974005e83295b09"
+    },
+    {
+      "path": "modules/votes/app/lib/components/ballot/BallotStepper.svelte",
+      "reason": "multi-tenant video: in the browser the Helios return origin comes from the page origin; the process env is the server-render fallback",
+      "owner": "TASK-205",
+      "blob": "5a4166dc158841575c873fb8214ab7af9ddd5a15"
+    },
+    {
+      "path": "modules/votes/app/lib/components/ballot/BallotStepper.test.ts",
+      "reason": "multi-tenant video: the ballot stepper on a secondary customer host; new kernel-side file with no counterpart at the tag",
+      "owner": "TASK-205",
+      "blob": "54510aec47a465fbe16e5e5bfe5e06724f6aa8d8"
+    },
+    {
+      "path": "modules/elections/app/routes/elections/[id]/helios-cb/+page.svelte",
+      "reason": "multi-tenant video: the sign-in message to the embedding page is addressed to the page origin, not the process env host",
+      "owner": "TASK-205",
+      "blob": "662c972967a9bb8a2da8411336c0f35e9a36b906"
+    },
+    {
+      "path": "modules/elections/app/routes/elections/[id]/helios-cb/helios-cb.test.ts",
+      "reason": "multi-tenant video: the Helios callback on a secondary customer host; new kernel-side file with no counterpart at the tag",
+      "owner": "TASK-205",
+      "blob": "c55493f3da7dff2c28043fd8efb7505492452baf"
     }
   ]
 }

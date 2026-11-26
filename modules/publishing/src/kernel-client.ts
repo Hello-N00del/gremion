@@ -2,7 +2,7 @@
 //
 // Task 8: callback HTTP client FROM the newsletter leaf TO the kernel (gremion-ui).
 //
-// The leaf owns the send pipeline (dispatch.ts) but three privileged operations
+// The leaf owns the send pipeline (dispatch.ts) but four operations
 // still live in the kernel and are reached over HTTP at send time:
 //   1. render(odtPath)        → the rendered newsletter HTML (kernel pulls the
 //                               .odt from Nextcloud + converts via Collabora —
@@ -17,6 +17,15 @@
 //                               owns ZERO transport resolution. The kernel
 //                               resolves per-tenant from-fields itself, so the
 //                               leaf does NOT send `from`.
+//   4. linkBase()             → the origin THIS tenant's mail links are built from
+//                               (GET /api/internal/newsletter/link-base: the kernel
+//                               answers `https://<primary host>` of the tenant the call
+//                               is for, 404 when it has none). Asked at the start of
+//                               EVERY send and used for that send only: never kept, never
+//                               cached, never sent back as a host and never a tenant
+//                               selector. It is what the unsubscribe link in the mail is
+//                               rooted at, so a second customer's recipients are linked to
+//                               their own host and not to the one the leaf booted with.
 //
 // EVERY request forwards:
 //   - x-internal-auth : the shared INTERNAL_NEWSLETTER_SECRET (same secret the
@@ -142,6 +151,14 @@ export interface KernelClient {
    * other non-ok status (retryable infra failure).
    */
   sendMail(msg: OutgoingMail): Promise<SentMail>
+  /**
+   * The origin (`https://<primary host>`) this tenant's mail links are built from, as the
+   * kernel answers it, or `null` when the kernel answers that the tenant has no public host.
+   * Not checked here: dispatch runs it through requireUsableLinkBase. Throws on any other
+   * failure, because a kernel that is down is not a tenant without a host. Asked on every
+   * call; the leaf keeps no copy.
+   */
+  linkBase(): Promise<string | null>
 }
 
 /** Minimal fetch shape so we can inject a fake without pulling in DOM libs. */
@@ -189,6 +206,15 @@ function buildHeaders(opts: KernelClientOptions): Record<string, string> {
     'x-tenant-id': opts.tenant.id,
     'x-tenant-slug': opts.tenant.slug,
     'x-correlation-id': opts.correlationId,
+  }
+}
+
+/** The body of the kernel's 404 for a tenant that has no public host (link-base route). */
+function noPublicHost(text: string): boolean {
+  try {
+    return (JSON.parse(text) as { error?: unknown }).error === 'No public host'
+  } catch {
+    return false
   }
 }
 
@@ -247,6 +273,26 @@ export function createKernelClient(opts: KernelClientOptions): KernelClient {
           return { email, name: typeof name === 'string' ? name : null }
         })
         .filter((r): r is Recipient => r !== null)
+    },
+
+    async linkBase(): Promise<string | null> {
+      const res = await fetchImpl(`${base}/api/internal/newsletter/link-base`, {
+        method: 'GET',
+        headers,
+      })
+      if (!res.ok) {
+        const snippet = await res.text().catch(() => '')
+        // The kernel's own answer "this tenant has no public host" is a 404 carrying THIS body.
+        // Any other 404 (a kernel that predates the route, a tenant the kernel could not select)
+        // is a failure to ask, not an answer: it throws, so nothing is sent and the next attempt asks again.
+        if (res.status === 404 && noPublicHost(snippet)) return null
+        throw new Error(`kernel link-base failed: ${res.status} ${snippet.slice(0, 200)}`)
+      }
+      const data = (await res.json().catch(() => ({}))) as { origin?: unknown }
+      if (typeof data.origin !== 'string') {
+        throw new Error('kernel link-base returned no origin')
+      }
+      return data.origin
     },
 
     async sendMail(msg: OutgoingMail): Promise<SentMail> {

@@ -88,7 +88,7 @@ active colour only.
 | `CONTENT_PG_URL` | leaf | PostgreSQL server of the module; required, no default. |
 | `NATS_URL` | leaf | Enables the outbox relay. |
 | `KERNEL_BASE_URL` | leaf | Kernel base URL for the portal-publish, mail-send and group-resolution callbacks. |
-| `PUBLIC_BASE_URL` | leaf | Used to build public links and slide URLs. |
+| `PUBLIC_BASE_URL` | leaf | Used for Instagram slide URLs. The leaf only logs it at boot: the origin of the links in an e-mail (the unsubscribe link) is the sending tenant's own host, which the leaf asks the kernel for on every e-mail send (`GET /api/internal/content/link-base`). |
 | `CONTENT_ALLOW_LOOPBACK_LINKS` | leaf | Permits loopback link bases (development). |
 | `CONTENT_SCHEDULER_ENABLED`, `SCHEDULER_ENABLED` | leaf | Switch the publish scheduler; the per-module variable wins when non-empty. |
 | `CONTENT_INSTAGRAM_IG_USER_ID`, `CONTENT_INSTAGRAM_TOKEN_REF` | kernel app | Instagram account id and a reference to the token. |

@@ -1,4 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest'
+import { runWithTenant, type TenantContext } from '$lib/server/tenant/context'
 
 // The route pins its upstream to ELEMENT_CALL_INTERNAL_URL at module load, so the
 // env mock must be hoisted above the dynamic import of the handler.
@@ -272,5 +273,223 @@ describe('GET /element-call/[...path] — a 300 carrying a Location', () => {
 
     expect(res.status).toBe(502)
     expect(res.headers.get('location')).toBeNull()
+  })
+})
+
+// One element-call container and one rendered config serve every customer host. The config names ONE
+// LiveKit token service, so customer B's call fetched its token from host A, was resolved there as tenant A
+// and was minted under A's namespace. The proxy therefore answers the two config paths itself with the
+// token-service URL of the host the request arrived on (the tenant context, which the edge pins to the Host
+// header; never a client-supplied header).
+describe('GET /element-call/[...path] — config.json names the requesting host', () => {
+  const tenant = (primaryHost: string | null) => ({ id: 'tid', slug: 'x', primaryHost }) as unknown as TenantContext
+
+  /** What the rendered config on the primary host looks like: the token service of host A. */
+  const rendered = (livekitUrl = 'https://a.example.org/livekit/jwt') =>
+    JSON.stringify(
+      {
+        default_server_config: { 'm.homeserver': { base_url: 'https://platform.example.org', server_name: 'platform.example.org' } },
+        livekit: { livekit_service_url: livekitUrl },
+        skipLobby: true,
+        perParticipantE2EE: false,
+      },
+      null,
+      2,
+    ) + '\n'
+
+  const upstreamConfig = (body = rendered()) =>
+    new Response(body, { status: 200, headers: { 'content-type': 'application/json' } })
+
+  async function callAs(host: string | null | undefined, path: string, extra: { headers?: Record<string, string> } = {}) {
+    const { GET } = await import('./+server')
+    const event = {
+      params: { path },
+      url: new URL('http://localhost/element-call/' + path),
+      request: new Request('http://localhost/element-call/' + path, { headers: extra.headers }),
+    } as never
+    if (host === undefined) return GET(event)
+    return runWithTenant(tenant(host), () => GET(event))
+  }
+
+  const served = async (res: Response) =>
+    (await res.json()) as { livekit: { livekit_service_url: string }; skipLobby: boolean; default_server_config: unknown }
+
+  for (const path of ['config.json', 'room/config.json']) {
+    it(`${path} on host A names host A`, async () => {
+      fetchMock.mockResolvedValue(upstreamConfig(rendered('https://other.example.org/livekit/jwt')))
+      const res = await callAs('a.example.org', path)
+      expect(res.status).toBe(200)
+      expect((await served(res)).livekit.livekit_service_url).toBe('https://a.example.org/livekit/jwt')
+    })
+
+    it(`${path} on host B names host B, not the host the file was rendered for`, async () => {
+      fetchMock.mockResolvedValue(upstreamConfig())
+      const res = await callAs('b.example.org', path)
+      expect(res.status).toBe(200)
+      expect((await served(res)).livekit.livekit_service_url).toBe('https://b.example.org/livekit/jwt')
+    })
+
+    it(`${path} keeps every other key of the rendered config`, async () => {
+      fetchMock.mockResolvedValue(upstreamConfig())
+      const body = await served(await callAs('b.example.org', path))
+      expect(body.skipLobby).toBe(true)
+      expect(body.default_server_config).toEqual(JSON.parse(rendered()).default_server_config)
+    })
+
+    it(`${path} with no tenant context answers 503 and never another host`, async () => {
+      fetchMock.mockResolvedValue(upstreamConfig())
+      const res = await callAs(undefined, path)
+      expect(res.status).toBe(503)
+      expect(await res.text()).not.toContain('example.org')
+    })
+
+    it(`${path} for a tenant without a primary host answers 503`, async () => {
+      fetchMock.mockResolvedValue(upstreamConfig())
+      const res = await callAs(null, path)
+      expect(res.status).toBe(503)
+      expect(await res.text()).not.toContain('a.example.org')
+    })
+  }
+
+  it('refuses a primary host that is not a bare host', async () => {
+    for (const bad of ['', 'b.example.org/evil', 'user@b.example.org', 'b.example.org?x=1', ' b.example.org']) {
+      fetchMock.mockResolvedValue(upstreamConfig())
+      const res = await callAs(bad, 'config.json')
+      expect(res.status, JSON.stringify(bad)).toBe(503)
+    }
+  })
+
+  it('takes the host from the tenant, never from a client-supplied header', async () => {
+    fetchMock.mockResolvedValue(upstreamConfig())
+    const res = await callAs('b.example.org', 'config.json', {
+      headers: { host: 'evil.example.org', 'x-forwarded-host': 'evil.example.org', 'x-tenant-host': 'evil.example.org' },
+    })
+    expect((await served(res)).livekit.livekit_service_url).toBe('https://b.example.org/livekit/jwt')
+  })
+
+  it('answers the primary host byte-identical to the rendered file when it already names that host', async () => {
+    const body = rendered('https://a.example.org/livekit/jwt')
+    fetchMock.mockResolvedValue(upstreamConfig(body))
+    const res = await callAs('a.example.org', 'config.json')
+    expect(await res.text()).toBe(body)
+  })
+
+  it('adds the livekit section when the rendered config has none', async () => {
+    fetchMock.mockResolvedValue(upstreamConfig(JSON.stringify({ skipLobby: true })))
+    const body = await served(await callAs('b.example.org', 'config.json'))
+    expect(body.livekit.livekit_service_url).toBe('https://b.example.org/livekit/jwt')
+    expect(body.skipLobby).toBe(true)
+  })
+
+  it('never serves the rendered host when the upstream config cannot be parsed', async () => {
+    for (const bad of ['not json', '[]', 'null', '"x"']) {
+      fetchMock.mockResolvedValue(upstreamConfig(bad))
+      const res = await callAs('b.example.org', 'config.json')
+      expect(res.status, bad).toBe(502)
+      expect(await res.text()).not.toContain('a.example.org')
+    }
+  })
+
+  it('does not let a shared cache hand one host the answer meant for another', async () => {
+    fetchMock.mockResolvedValue(upstreamConfig())
+    const res = await callAs('b.example.org', 'config.json')
+    expect(res.headers.get('cache-control')).toBe('no-store')
+  })
+
+  it('passes an upstream error for the config path through unchanged', async () => {
+    fetchMock.mockResolvedValue(new Response('missing', { status: 404, headers: { 'content-type': 'text/plain' } }))
+    const res = await callAs('b.example.org', 'config.json')
+    expect(res.status).toBe(404)
+    expect(await res.text()).toBe('missing')
+  })
+
+  it('leaves every other asset byte-identical, JSON ones included, on any host', async () => {
+    const json = '{"livekit":{"livekit_service_url":"https://a.example.org/livekit/jwt"}}'
+    for (const [path, ct, body] of [
+      ['assets/locales/de.json', 'application/json', json],
+      ['assets/other/config.json', 'application/json', json],
+      ['config.json.bak', 'application/json', json],
+      ['assets/sound.ogg', 'audio/ogg', 'OggS\u0000\u0001'],
+    ] as const) {
+      fetchMock.mockResolvedValue(new Response(body, { status: 200, headers: { 'content-type': ct } }))
+      const res = await callAs('b.example.org', path)
+      expect(res.status, path).toBe(200)
+      expect(await res.text(), path).toBe(body)
+    }
+  })
+
+  it('still fetches only the pinned upstream for the config paths', async () => {
+    fetchMock.mockResolvedValue(upstreamConfig())
+    await callAs('b.example.org', 'room/config.json')
+    expect(fetchedUrls()).toEqual([`${UPSTREAM}/room/config.json`])
+  })
+})
+
+// A refusal of the config path must leave a trace: the call page fails with a bare 503 or 502, and the
+// operator only has the server log to tell which check said no, for which customer and for which request.
+describe('GET /element-call/[...path] — a refused config path is logged', () => {
+  const tenant = (primaryHost: string | null) => ({ id: 'tid', slug: 'x', primaryHost }) as unknown as TenantContext
+  const CORRELATION = '0b9f6f8e-6f0e-4b53-9d41-6a1f3c2d5e77'
+  let warn: MockInstance<typeof console.warn>
+
+  beforeEach(() => {
+    warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+  afterEach(() => {
+    warn.mockRestore()
+  })
+
+  async function callAs(host: string | null | undefined, path = 'config.json', correlationId?: string) {
+    const { GET } = await import('./+server')
+    const event = {
+      params: { path },
+      url: new URL('http://localhost/element-call/' + path),
+      locals: correlationId ? { correlationId } : {},
+    } as never
+    if (host === undefined) return GET(event)
+    return runWithTenant(tenant(host), () => GET(event))
+  }
+  const logged = () => warn.mock.calls.map((c) => ({ message: String(c[0]), fields: c[1] as Record<string, unknown> }))
+  const config = (body: string) => new Response(body, { status: 200, headers: { 'content-type': 'application/json' } })
+
+  it('no tenant: the 503 is logged with the reason, no tenant and the correlation id', async () => {
+    expect((await callAs(undefined, 'config.json', CORRELATION)).status).toBe(503)
+    expect(logged()).toEqual([
+      { message: expect.stringContaining('[element-call]'), fields: { reason: 'no_tenant', tenantId: null, tenantSlug: null, correlationId: CORRELATION } },
+    ])
+  })
+
+  it('a tenant without a primary host: the 503 is logged with the tenant', async () => {
+    expect((await callAs(null, 'room/config.json', CORRELATION)).status).toBe(503)
+    expect(logged().map((l) => l.fields)).toEqual([{ reason: 'no_primary_host', tenantId: 'tid', tenantSlug: 'x', correlationId: CORRELATION }])
+  })
+
+  it('a primary host that is not a bare host: the 503 says so', async () => {
+    for (const bad of ['b.example.org/evil', 'user@b.example.org']) {
+      warn.mockClear()
+      expect((await callAs(bad, 'config.json', CORRELATION)).status).toBe(503)
+      expect(logged().map((l) => l.fields.reason)).toEqual(['host_not_bare'])
+    }
+  })
+
+  it('an upstream config that is not JSON, or not an object: the 502 says which, and never logs the body', async () => {
+    fetchMock.mockResolvedValue(config('SECRET-UPSTREAM-BODY <html>'))
+    expect((await callAs('b.example.org', 'config.json', CORRELATION)).status).toBe(502)
+    fetchMock.mockResolvedValue(config('["SECRET-UPSTREAM-BODY"]'))
+    expect((await callAs('b.example.org', 'config.json', CORRELATION)).status).toBe(502)
+    expect(logged().map((l) => l.fields.reason)).toEqual(['config_not_json', 'config_not_object'])
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('SECRET-UPSTREAM-BODY')
+  })
+
+  it('a request without a correlation id is still logged', async () => {
+    expect((await callAs(null)).status).toBe(503)
+    expect(logged()[0]?.fields).toMatchObject({ reason: 'no_primary_host', correlationId: null })
+  })
+
+  it('a served config logs nothing, and neither does any other path', async () => {
+    fetchMock.mockImplementation(async () => config(JSON.stringify({ skipLobby: true })))
+    expect((await callAs('b.example.org', 'config.json', CORRELATION)).status).toBe(200)
+    expect((await callAs('b.example.org', 'assets/app.js', CORRELATION)).status).toBe(200)
+    expect(logged()).toEqual([])
   })
 })

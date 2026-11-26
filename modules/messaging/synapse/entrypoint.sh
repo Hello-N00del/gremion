@@ -8,6 +8,16 @@ TEMPLATE=/config/homeserver.yaml.tpl
 OUTPUT=/data/homeserver.yaml
 RENDER_SHIM=/render-homeserver.sh
 
+# SYNAPSE_JWT_LOGIN=on|off (default on). off: the render has no jwt_config and no
+# oidc_providers, so there is no realm key to fetch and nothing to inject -- the
+# fetch and inject-jwt-key.py below are skipped (the injector would put a
+# jwt_config block back into the rendered file).
+JWT_LOGIN="${SYNAPSE_JWT_LOGIN-on}"
+case "$JWT_LOGIN" in
+  on|off) ;;
+  *) echo "[gremion-synapse] ERROR: SYNAPSE_JWT_LOGIN must be 'on' or 'off'" >&2; exit 1 ;;
+esac
+
 # Make sure /data is owned by the synapse user (UID/GID 991 — see the upstream
 # matrixdotorg/synapse image's /start.py). The upstream start.py only chowns
 # /data in `generate`/`migrate_config` modes, NOT in `run` mode. On Docker
@@ -55,23 +65,27 @@ SYNAPSE_TEMPLATE="$TEMPLATE" SYNAPSE_CONFIG="$OUTPUT" "$RENDER_SHIM" true
 # about 7 s each), the Python step disables jwt_config so Synapse still
 # starts -- degrade-and-boot, made VISIBLE by /synapse-healthcheck.sh, which
 # reads unhealthy while the JWT login flow is missing.
-KC_FETCH_URL="$("$RENDER_SHIM" --fetch-url)"
-KC_MAX="${SYNAPSE_KC_MAX:-30}"
-case "$KC_MAX" in
-  ''|*[!0-9]*|0) echo "[gremion-synapse] ERROR: SYNAPSE_KC_MAX must be a positive integer" >&2; exit 1 ;;
-esac
-echo "[gremion-synapse] Waiting for the identity provider realm at ${KC_FETCH_URL}..."
-KC_TRIES=0
-until curl -sf --max-time 5 "${KC_FETCH_URL}" >/dev/null 2>&1; do
-  KC_TRIES=$((KC_TRIES + 1))
-  if [ "$KC_TRIES" -ge "$KC_MAX" ]; then
-    echo "[gremion-synapse] WARNING: identity provider unreachable after ${KC_MAX} attempts — jwt_config will be disabled." >&2
-    break
-  fi
-  sleep 2
-done
+if [ "$JWT_LOGIN" = "off" ]; then
+  echo "[gremion-synapse] SYNAPSE_JWT_LOGIN=off: jwt_config and oidc_providers are not rendered; the realm key fetch and the key injection are skipped."
+else
+  KC_FETCH_URL="$("$RENDER_SHIM" --fetch-url)"
+  KC_MAX="${SYNAPSE_KC_MAX:-30}"
+  case "$KC_MAX" in
+    ''|*[!0-9]*|0) echo "[gremion-synapse] ERROR: SYNAPSE_KC_MAX must be a positive integer" >&2; exit 1 ;;
+  esac
+  echo "[gremion-synapse] Waiting for the identity provider realm at ${KC_FETCH_URL}..."
+  KC_TRIES=0
+  until curl -sf --max-time 5 "${KC_FETCH_URL}" >/dev/null 2>&1; do
+    KC_TRIES=$((KC_TRIES + 1))
+    if [ "$KC_TRIES" -ge "$KC_MAX" ]; then
+      echo "[gremion-synapse] WARNING: identity provider unreachable after ${KC_MAX} attempts — jwt_config will be disabled." >&2
+      break
+    fi
+    sleep 2
+  done
 
-KEYCLOAK_FETCH_URL="${KC_FETCH_URL}" python3 /inject-jwt-key.py "$OUTPUT"
+  KEYCLOAK_FETCH_URL="${KC_FETCH_URL}" python3 /inject-jwt-key.py "$OUTPUT"
+fi
 
 # Rendered file must be readable/writable by the synapse user.
 if [ "$(id -u)" = "0" ]; then

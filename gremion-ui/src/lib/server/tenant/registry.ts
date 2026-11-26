@@ -422,6 +422,12 @@ export async function contextForProvisioningTenant(row: Tenant, opts: { dbUrl?: 
   return buildTenantContext(row, opts.dbUrl)
 }
 
+/** nc_target.providerId when it is a positive integer, else undefined (a malformed value is no provider id). */
+function ncProviderIdOf(ncTarget: Record<string, unknown>): number | undefined {
+  const v = ncTarget.providerId
+  return typeof v === 'number' && Number.isInteger(v) && v > 0 ? v : undefined
+}
+
 /** The context of one registry row (no cache write, no status check). */
 async function buildTenantContext(row: Tenant, dbUrlOverride?: string): Promise<TenantContext> {
   const dbUrl = dbUrlOverride ?? resolveSecret(row.dbConnRef)
@@ -518,6 +524,7 @@ async function buildTenantContext(row: Tenant, dbUrlOverride?: string): Promise<
       livekitUrl: domainProfile.livekit?.url,
       livekitApiKeyRef: domainProfile.livekit?.apiKeyRef,
       livekitApiSecretRef: domainProfile.livekit?.apiSecretRef,
+      ncProviderId: ncProviderIdOf(row.ncTarget),
       // SP-2 (O-2): per-tenant SMTP from domain_profile.smtp. Absent ⇒
       // undefined ⇒ tenant-mail falls back to config.smtp + auth-less.
       smtp: domainProfile.smtp,

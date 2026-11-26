@@ -861,6 +861,162 @@ describe('messagingKarenz', () => {
       expect(runWithTenant).toHaveBeenCalledWith(tenant, expect.any(Function))
     })
 
+    describe('MATRIX_IDENTITY=namespaced on a homeserver shared with other customers', () => {
+      // Bot-created meeting rooms no ledger row owns, on one homeserver with one alias directory: this
+      // customer's (its prefix and its marker), another customer's, one without a marker, and the
+      // look-alikes that carry only one of the two: this customer's marker behind another customer's
+      // prefix and behind a prefix that merely starts like this customer's slug. The first is this
+      // customer's to keep, and so is `!old`: a room the namespaced mode itself created under the plain
+      // `#meeting-<id>` alias before the alias carried the customer, which has the customer's marker.
+      function seedSharedMeetingRooms() {
+        const own = { tenant_id: 'default' }
+        addRoom('!mine:matrix.test', { alias: '#meeting.default.mine:matrix.test' }).state.set('org.gremion.tenant', own)
+        addRoom('!theirs:matrix.test', { alias: '#meeting.other.theirs:matrix.test' }).state.set('org.gremion.tenant', { tenant_id: 'other' })
+        addRoom('!bare:matrix.test', { alias: '#meeting.default.bare:matrix.test' })
+        addRoom('!borrowed:matrix.test', { alias: '#meeting.other.borrowed:matrix.test' }).state.set('org.gremion.tenant', own)
+        addRoom('!longer:matrix.test', { alias: '#meeting.default-2.longer:matrix.test' }).state.set('org.gremion.tenant', own)
+        addRoom('!old:matrix.test', { alias: '#meeting-old:matrix.test' }).state.set('org.gremion.tenant', own)
+      }
+      beforeEach(() => {
+        process.env.MATRIX_IDENTITY = 'namespaced'
+      })
+      afterEach(() => {
+        delete process.env.MATRIX_IDENTITY
+      })
+
+      it('the switch-off keeps only the meeting rooms of this customer: its prefix or the plain alias, and always its marker', async () => {
+        seedSharedMeetingRooms()
+        await karenz.messagingKarenz.switchOff(ctx)
+        expect([...store.rows.values()].map((r) => r.externalId)).toEqual(['!mine:matrix.test', '!old:matrix.test'])
+        expect([...store.rows.values()].every((r) => r.state === 'kept')).toBe(true)
+      })
+
+      it('describe counts only the meeting rooms of this customer', async () => {
+        seedSharedMeetingRooms()
+        const d = await karenz.messagingKarenz.describe!({ id: 'default', slug: 'default' } as never)
+        expect(d.retained).toHaveLength(1)
+        expect(d.retained[0]).toMatchObject({ count: 2 })
+      })
+
+      // The plain `#meeting-<id>` alias: another customer's, an unmarked or a member-made room behind it is not ours.
+      function seedPlainAliasRooms() {
+        addRoom('!p-mine:matrix.test', { alias: '#meeting-mine:matrix.test' }).state.set('org.gremion.tenant', { tenant_id: 'default' })
+        addRoom('!p-theirs:matrix.test', { alias: '#meeting-theirs:matrix.test' }).state.set('org.gremion.tenant', { tenant_id: 'other' })
+        addRoom('!p-bare:matrix.test', { alias: '#meeting-bare:matrix.test' })
+        addRoom('!p-member:matrix.test', { alias: '#meeting-member:matrix.test', creator: '@someone:matrix.test' }).state.set('org.gremion.tenant', { tenant_id: 'default' })
+      }
+
+      it('a room under the plain alias is kept only with this customer\'s marker, set by the admin bot', async () => {
+        seedPlainAliasRooms()
+        await karenz.messagingKarenz.switchOff(ctx)
+        expect([...store.rows.values()].map((r) => r.externalId)).toEqual(['!p-mine:matrix.test'])
+        const d = await karenz.messagingKarenz.describe!({ id: 'default', slug: 'default' } as never)
+        expect(d.retained[0]).toMatchObject({ count: 1 })
+      })
+
+      it('a retained room under the plain alias is never archived, never deleted on the final day, and has no unit to restore to', async () => {
+        seedPlainAliasRooms()
+        await karenz.messagingKarenz.switchOff(ctx)
+        await karenz.messagingKarenz.restore(ctx)
+        const r = await karenz.messagingKarenz.finalize(ctx, { dryRun: false })
+        expect(r).toEqual({ deleted: { rooms: 0 } })
+        expect(rooms.has('!p-mine:matrix.test')).toBe(true)
+        expect(markerOf('!p-mine:matrix.test')).toBeUndefined()
+        expect(writes).toEqual([])
+      })
+
+      // Reading the marker of a room costs one request. On a shared homeserver the list holds every
+      // customer's rooms, so a read is made only where the answer can still make the room ours.
+      const markerReads = () => fetchMock.mock.calls.map(([u]) => decodeURIComponent(String(u))).filter((u) => u.includes('/state/org.gremion.tenant'))
+
+      it('a room under another customer\'s prefix is never read: its prefix already says it is not ours', async () => {
+        seedSharedMeetingRooms()
+        await karenz.messagingKarenz.switchOff(ctx)
+        const reads = markerReads()
+        expect(reads.length).toBeGreaterThan(0)
+        for (const u of reads) expect(u).not.toMatch(/!(theirs|borrowed|longer):/)
+      })
+
+      it('the markers of many rooms are read a few at a time, not one by one and not all at once, and the result keeps the order', async () => {
+        const own = { tenant_id: 'default' }
+        for (let i = 0; i < 20; i++) addRoom(`!m${String(i).padStart(2, '0')}:matrix.test`, { alias: `#meeting.default.e${i}:matrix.test` }).state.set('org.gremion.tenant', own)
+        let inflight = 0
+        let peak = 0
+        fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+          const reading = url.includes('org.gremion.tenant')
+          if (reading) {
+            inflight++
+            peak = Math.max(peak, inflight)
+            await new Promise((resolve) => setTimeout(resolve, 2))
+          }
+          try {
+            return await homeserver(url, init)
+          } finally {
+            if (reading) inflight--
+          }
+        })
+        await karenz.messagingKarenz.switchOff(ctx)
+        expect([...store.rows.values()].map((r) => r.externalId)).toEqual(Array.from({ length: 20 }, (_, i) => `!m${String(i).padStart(2, '0')}:matrix.test`))
+        expect(peak).toBeGreaterThan(1)
+        expect(peak).toBeLessThanOrEqual(8)
+      })
+
+      it('a room under the plain alias whose marker cannot be read is not ours: the step and the preview go on, the room id goes to the server log only', async () => {
+        seedSharedMeetingRooms()
+        seedPlainAliasRooms()
+        faults.push({ match: (url, m) => m === 'GET' && decodeURIComponent(url).includes('!p-bare:') && url.includes('org.gremion.tenant'), once: false, status: 403 })
+        await expect(karenz.messagingKarenz.switchOff(ctx)).resolves.toBeUndefined()
+        expect([...store.rows.values()].map((r) => r.externalId)).toEqual(['!mine:matrix.test', '!old:matrix.test', '!p-mine:matrix.test'])
+        await expect(karenz.messagingKarenz.describe!({ id: 'default', slug: 'default' } as never)).resolves.toMatchObject({ retained: [{ count: 3 }] })
+        const logged = vi.mocked(console.warn).mock.calls.flat().map((a) => JSON.stringify(a)).join('\n')
+        expect(logged).toContain('!p-bare:matrix.test')
+        expect(vi.mocked(ctx.log).mock.calls.flat().join('\n')).not.toContain('!p-bare')
+      })
+
+      it('a room under this customer\'s own prefix whose marker cannot be read still fails the step: it would be a room we do not record', async () => {
+        addRoom('!mine:matrix.test', { alias: '#meeting.default.mine:matrix.test' }).state.set('org.gremion.tenant', { tenant_id: 'default' })
+        faults.push({ match: (url, m) => m === 'GET' && decodeURIComponent(url).includes('!mine:') && url.includes('org.gremion.tenant'), once: false, status: 503 })
+        await expect(karenz.messagingKarenz.switchOff(ctx)).rejects.toThrow(/503/)
+      })
+
+      it('a ledger room with a meeting alias stays kept and is never archived, whichever alias form it carries', async () => {
+        addUnitRoom({ id: 'u8', name: 'Neu' }, '!m8:matrix.test', '#meeting.default.evt8:matrix.test')
+        addUnitRoom({ id: 'u9', name: 'Alt' }, '!m9:matrix.test', '#meeting-evt9:matrix.test')
+        await karenz.messagingKarenz.switchOff(ctx)
+        for (const id of ['!m8:matrix.test', '!m9:matrix.test']) {
+          expect(stateOf({ externalId: id })).toBe('kept')
+          expect(markerOf(id)).toBeUndefined()
+        }
+      })
+
+      it('the final day never deletes a room with a meeting alias of either form, even when an item points at it', async () => {
+        for (const [id, alias] of [['!m8:matrix.test', '#meeting.default.evt8:matrix.test'], ['!m9:matrix.test', '#meeting-evt9:matrix.test']] as const) {
+          addRoom(id, { alias }).state.set('org.gremion.room.archived', { org_unit_id: 'u1', tenant_id: 'default', archived_at: '2026-11-01T00:00:00Z' })
+          await store.items.upsert({ kind: 'room', externalId: id, state: 'locked', payload: { unitId: 'u1' } })
+        }
+        const r = await karenz.messagingKarenz.finalize(ctx, { dryRun: false })
+        expect(r).toEqual({ deleted: { rooms: 0 } })
+        expect(rooms.has('!m8:matrix.test') && rooms.has('!m9:matrix.test')).toBe(true)
+      })
+
+      it('legacy mode is unchanged: every bot-created #meeting-<id> room is kept, marker or not, and no other alias form counts', async () => {
+        delete process.env.MATRIX_IDENTITY
+        seedSharedMeetingRooms()
+        addRoom('!legacy:matrix.test', { alias: '#meeting-plain:matrix.test' })
+        await karenz.messagingKarenz.switchOff(ctx)
+        expect([...store.rows.values()].map((r) => r.externalId).sort((a, b) => a.localeCompare(b))).toEqual(['!legacy:matrix.test', '!old:matrix.test'])
+      })
+
+      it('legacy mode reads no marker at all', async () => {
+        delete process.env.MATRIX_IDENTITY
+        seedSharedMeetingRooms()
+        seedPlainAliasRooms()
+        await karenz.messagingKarenz.switchOff(ctx)
+        await karenz.messagingKarenz.describe!({ id: 'default', slug: 'default' } as never)
+        expect(markerReads()).toEqual([])
+      })
+    })
+
     it('counts the rooms a switch-off would archive and delete, and the meeting-linked rooms that stay', async () => {
       seed()
       const d = await karenz.messagingKarenz.describe!({ id: 'default', slug: 'default' } as never)

@@ -1,5 +1,6 @@
 import type { RequestHandler } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
+import { getTenantOrNull } from '$lib/server/tenant/context'
 
 // Internal Docker hostname for element-call. Set ELEMENT_CALL_INTERNAL_URL in
 // docker-compose.override.yml; falls back to localhost:8085 for bare local dev.
@@ -24,11 +25,98 @@ function isSafeProxyPath(decoded: string): boolean {
   return true
 }
 
-export const GET: RequestHandler = async ({ params, url }) => {
+// The two upstream paths the Element Call SPA reads its config from: the root
+// page and the room pages (`config.json` resolves relative to the page URL).
+const CONFIG_PATHS: ReadonlySet<string> = new Set(['config.json', 'room/config.json'])
+
+/**
+ * The LiveKit token service of the host this request arrived on. The rendered
+ * config file names ONE host, but one element-call serves every customer host:
+ * a call on host B must fetch its token from host B, or it is resolved there as
+ * the file's host and minted under that tenant's namespace.
+ *
+ * The host is the tenant context's primary host (the edge pins the tenant to the
+ * Host header; no client-supplied header is read). No tenant, no primary host or
+ * a value that is not a bare host: null, and the caller answers 503. It never
+ * falls back to the host the file was rendered for.
+ */
+function livekitServiceUrlForRequest(): { url: string } | { refusal: 'no_tenant' | 'no_primary_host' | 'host_not_bare' } {
+  const tenant = getTenantOrNull()
+  if (!tenant) return { refusal: 'no_tenant' }
+  const host = tenant.primaryHost
+  if (!host) return { refusal: 'no_primary_host' }
+  try {
+    const parsed = new URL(`https://${host}`)
+    if (parsed.host !== host.toLowerCase() || parsed.pathname !== '/' || parsed.search || parsed.hash) return { refusal: 'host_not_bare' }
+  } catch {
+    return { refusal: 'host_not_bare' }
+  }
+  return { url: `https://${host.toLowerCase()}/livekit/jwt` }
+}
+
+/**
+ * One structured line for a refused config path: which check said no, for which customer, for which
+ * request. The reason is a fixed word; the upstream body and the host value are never logged.
+ */
+function logConfigRefusal(reason: string, correlationId: string | undefined): void {
+  const tenant = getTenantOrNull()
+  console.warn('[element-call] config.json refused', {
+    reason,
+    tenantId: tenant?.id ?? null,
+    tenantSlug: tenant?.slug ?? null,
+    correlationId: correlationId ?? null,
+  })
+}
+
+/**
+ * Answer a config.json with this request's token-service URL. A config that is
+ * already right is returned byte-for-byte (a single-customer install changes
+ * nothing); one that cannot be read is refused rather than served unrewritten.
+ */
+async function respondWithHostConfig(res: Response, livekitServiceUrl: string, correlationId: string | undefined): Promise<Response> {
+  const headers = { 'content-type': 'application/json', 'cache-control': 'no-store' }
+  const text = await res.text()
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    logConfigRefusal('config_not_json', correlationId)
+    return new Response('element-call config unreadable', { status: 502 })
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    logConfigRefusal('config_not_object', correlationId)
+    return new Response('element-call config unreadable', { status: 502 })
+  }
+  const config = parsed as { livekit?: unknown }
+  const livekit =
+    config.livekit !== null && typeof config.livekit === 'object' && !Array.isArray(config.livekit)
+      ? (config.livekit as Record<string, unknown>)
+      : {}
+  if (livekit.livekit_service_url === livekitServiceUrl) return new Response(text, { status: res.status, headers })
+  return new Response(JSON.stringify({ ...config, livekit: { ...livekit, livekit_service_url: livekitServiceUrl } }), {
+    status: res.status,
+    headers,
+  })
+}
+
+export const GET: RequestHandler = async ({ params, url, locals }) => {
   const path = params.path ?? ''
+  // Only read for the log line of a refusal; set by the leading hook, absent when this handler runs bare.
+  const correlationId = (locals as { correlationId?: string } | undefined)?.correlationId
 
   if (!isSafeProxyPath(path)) {
     return new Response('invalid path', { status: 400 })
+  }
+
+  // Resolved before the upstream is contacted: no host to name, nothing to serve.
+  let livekitServiceUrl: string | null = null
+  if (CONFIG_PATHS.has(path)) {
+    const resolved = livekitServiceUrlForRequest()
+    if ('refusal' in resolved) {
+      logConfigRefusal(resolved.refusal, correlationId)
+      return new Response('video is not available on this host', { status: 503 })
+    }
+    livekitServiceUrl = resolved.url
   }
 
   // Build upstream URL, strip any /element-call prefix and re-attach query params.
@@ -112,6 +200,10 @@ export const GET: RequestHandler = async ({ params, url }) => {
     }
     return new Response(null, { status: res.status, headers: { location: rewritten } })
   }
+
+  // A successful config.json is rewritten per host. Any other status (a 404 from
+  // an upstream without the file) takes the ordinary path below, unchanged.
+  if (livekitServiceUrl && res.status === 200) return respondWithHostConfig(res, livekitServiceUrl, correlationId)
 
   const ct = res.headers.get('content-type') ?? ''
 

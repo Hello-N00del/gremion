@@ -165,6 +165,24 @@ describe('T8 — short-TTL resolution cache in resolveTenantBySlug', () => {
   })
 })
 
+describe('the context carries the own user_oidc provider id of a customer (nc_target.providerId)', () => {
+  it('a row whose nc_target names a provider id gives services.ncProviderId, the other keys of nc_target untouched', async () => {
+    selectRows = [tenantRow({ nc_target: { url: 'https://nc.example.org', providerId: 7 } })]
+    const ctx = await resolveTenantBySlug('alpha')
+    expect(ctx?.services?.ncProviderId).toBe(7)
+  })
+
+  it('a row without one (the primary customer, or one not wired since) gives none: the consumer keeps its env fallback', async () => {
+    selectRows = [tenantRow({ nc_target: {} })]
+    expect((await resolveTenantBySlug('alpha'))?.services?.ncProviderId).toBeUndefined()
+  })
+
+  it.each([0, -1, 1.5, '3', null, true, {}, Number.NaN])('a providerId of %j is no provider id (only a positive integer is)', async (bad) => {
+    selectRows = [tenantRow({ nc_target: { providerId: bad } })]
+    expect((await resolveTenantBySlug('alpha'))?.services?.ncProviderId).toBeUndefined()
+  })
+})
+
 describe('T8 — evictTenantRuntime(tenantId)', () => {
   it('drops the cached resolution for that tenant id (keyed by slug internally)', async () => {
     await resolveTenantBySlug('alpha')

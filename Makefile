@@ -815,7 +815,7 @@ lint-migration-register:
 	@node scripts/migrations/register.mjs check
 
 # TASK-198: the chat module's Synapse. lint-synapse runs the module suites
-# (render, refusal, probe, preflight, inject: modules/messaging/synapse/test/) and the
+# (render, refusal, probe, preflight, inject, jwt-switch, entrypoint: modules/messaging/synapse/test/) and the
 # kernel's static half (scripts/check-synapse-stack.test.mjs: the
 # messaging-postgres and matrix render, .env.example with the profile off,
 # this wiring), each with its collected count asserted against its declared
@@ -832,6 +832,7 @@ lint-synapse:
 	@for suite in modules/messaging/synapse/test/inject.test.mjs modules/messaging/synapse/test/preflight.test.mjs \
 	             modules/messaging/synapse/test/probe.test.mjs modules/messaging/synapse/test/refusal.test.mjs \
 	             modules/messaging/synapse/test/render.test.mjs \
+	             modules/messaging/synapse/test/jwt-switch.test.mjs modules/messaging/synapse/test/entrypoint.test.mjs \
 	             scripts/check-synapse-stack.test.mjs; do \
 	   declared=$$(grep -c '^test(' "$$suite"); \
 	   out=$$(node --test --test-reporter=tap "$$suite" 2>&1); \
