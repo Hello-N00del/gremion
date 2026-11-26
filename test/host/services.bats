@@ -1242,6 +1242,23 @@ per_customer_provider() {
     [[ "$output" == *"nc_target.providerId"*"2"* ]] || { echo "$output"; return 1; }
 }
 
+@test "wire, secondary host: with the switch on the wire says plainly that the app does not yet address derived-uid accounts (group membership, files, erasure), so the switch is not for use yet" {
+    secondary_customer
+    per_customer_provider on
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"NOT YET SAFE"* ]] || { echo "$output"; return 1; }
+    [[ "$output" == *"derived"* && "$output" == *"erasure"* ]] || { echo "$output"; return 1; }
+}
+
+@test "wire, secondary host, switch off: the wire prints no such notice" {
+    secondary_customer
+    per_customer_provider off
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" != *"NOT YET SAFE"* ]] || { echo "$output"; return 1; }
+}
+
 @test "wire, secondary host: the provider id is MERGED into nc_target (the keys it holds stay) and a second run leaves one provider id" {
     secondary_customer
     per_customer_provider on

@@ -775,3 +775,10 @@ secondary_fixture() {
     run grep -cE '^# NC_PROVIDER_PER_CUSTOMER=' "${HOST_SRC}/templates/env/state.env.tmpl"
     [ "$output" = 1 ]
 }
+
+@test "NC_PROVIDER_PER_CUSTOMER: the state template says plainly that the switch is not for use yet (the app does not address derived-uid accounts)" {
+    run grep -cE 'NOT YET SAFE' "${HOST_SRC}/templates/env/state.env.tmpl"
+    [ "$output" -ge 1 ] || { echo "$output"; return 1; }
+    run grep -cE 'does not address' "${HOST_SRC}/templates/env/state.env.tmpl"
+    [ "$output" -ge 1 ] || { echo "$output"; return 1; }
+}

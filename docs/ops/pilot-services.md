@@ -198,8 +198,9 @@ the primary customer's Nextcloud provider `Keycloak` is never set, so:
   primary customer keeps the env value in every case, and switching the key off
   again does not remove an id already recorded. Accounts under such a provider
   carry the ids user_oidc derives for it (see `--unique-uid=1` above), not the
-  raw Keycloak id, so turn the switch on only for an install whose app
-  addresses them that way; 6b creates the customer's CalDAV collection and 6c
+  raw Keycloak id, and the app does not address them that way yet (group
+  membership, file access and erasure use the raw Keycloak id). The switch is
+  NOT YET SAFE: leave it off until the app addresses derived ids; 6b creates the customer's CalDAV collection and 6c
   the mail login;
 - step 7 does not recreate `gremion-ui`: the mail login writes the customer's
   registry row and `config.json`, which the app re-reads within about a minute,
