@@ -9,7 +9,7 @@ import { sanitizeRichHtml } from '$lib/server/security/html-sanitize';
 import { parseNewsId } from '$lib/server/content/news-id';
 import { internalFetch } from '$lib/server/internal-fetch';
 import { getTenant } from '$lib/server/tenant/context';
-import { ensureNewsDraft, newsDraftPath, NEWS_DRAFT_USER as ADMIN_USER } from '$lib/server/news/draft-file';
+import { ensureNewsDraft, newsDraftPath, newsDraftUser } from '$lib/server/news/draft-file';
 
 // F1-FIX-07 H09 (K5#28): the draft lives under the CURRENT tenant's folder on
 // the shared Nextcloud (news_posts.id is a per-tenant SERIAL), and S3#9: the
@@ -37,8 +37,8 @@ export const load: PageServerLoad = async ({ params, locals, url }) => {
   try {
     const filePath = await ensureDraftFile(id);
     const nc = createNextcloudClient();
-    const fileId = await nc.getFileId(filePath, ADMIN_USER);
-    ({ editorUrl, tokenTtl } = await nc.getCollaboraEditorUrl(fileId, ADMIN_USER, { publicOrigin: url.origin }));
+    const fileId = await nc.getFileId(filePath, newsDraftUser());
+    ({ editorUrl, tokenTtl } = await nc.getCollaboraEditorUrl(fileId, newsDraftUser(), { publicOrigin: url.origin }));
   } catch {
     // Nextcloud/Collabora unavailable — page renders without editor
   }
@@ -62,7 +62,7 @@ export const actions: Actions = {
     // Fetch the .odt from Nextcloud and convert to HTML
     const nc = createNextcloudClient();
     const filePath = newsDraftPath(getTenant().id, id);
-    const response = await nc.download(filePath, ADMIN_USER);
+    const response = await nc.download(filePath, newsDraftUser());
     if (!response.ok) throw error(502, 'Could not fetch ODT from Nextcloud');
 
     const odtBuffer = await response.arrayBuffer();

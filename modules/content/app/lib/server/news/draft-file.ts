@@ -12,8 +12,16 @@
 // rethrown — it used to be read as "missing" and an empty ODT was uploaded OVER
 // the existing draft.
 
-/** The Nextcloud account the news drafts live under (unchanged from the page). */
-export const NEWS_DRAFT_USER = 'admin'
+import { serviceEnv } from '$lib/server/env/service-env'
+
+/**
+ * The Nextcloud account the news drafts live under: the deployment's Nextcloud admin
+ * user, resolved like the newsletter drafts and the editor token routes do. Read at
+ * call time so a changed setting is picked up without a re-import.
+ */
+export function newsDraftUser(): string {
+	return serviceEnv('NEXTCLOUD_ADMIN_USER') ?? 'admin'
+}
 
 /** The subset of the Nextcloud client the draft helpers need (injected). */
 export interface DraftNextcloud {
@@ -38,7 +46,7 @@ function postSegment(postId: number): string {
 
 /** The tenant's drafts folder. */
 export function newsDraftFolder(tenantId: string): string {
-	return `/remote.php/dav/files/${NEWS_DRAFT_USER}/news-posts/${tenantSegment(tenantId)}/drafts`
+	return `/remote.php/dav/files/${newsDraftUser()}/news-posts/${tenantSegment(tenantId)}/drafts`
 }
 
 /** The draft ODT path for one tenant's news post. */
@@ -54,7 +62,7 @@ function isNotFound(err: unknown): boolean {
 /** MKCOL that tolerates "already exists" (405) and nothing else. */
 async function mkcolIfMissing(nc: DraftNextcloud, path: string): Promise<void> {
 	try {
-		await nc.mkcol(path, NEWS_DRAFT_USER)
+		await nc.mkcol(path, newsDraftUser())
 	} catch (err) {
 		const status = (err as { status?: unknown } | null)?.status
 		if (status === 405) return // the collection already exists
@@ -82,7 +90,7 @@ export async function ensureNewsDraft(
 	await mkcolIfMissing(nc, folder)
 
 	try {
-		await nc.getFileId(filePath, NEWS_DRAFT_USER)
+		await nc.getFileId(filePath, newsDraftUser())
 		return filePath // exists: never overwrite
 	} catch (err) {
 		if (!isNotFound(err)) throw err
@@ -90,7 +98,7 @@ export async function ensureNewsDraft(
 
 	await nc.upload(
 		filePath,
-		NEWS_DRAFT_USER,
+		newsDraftUser(),
 		await createEmptyOdt(),
 		'application/vnd.oasis.opendocument.text',
 	)
