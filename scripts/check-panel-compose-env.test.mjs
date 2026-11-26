@@ -37,7 +37,7 @@ function variablesRead() {
   for (const file of sourceFiles(PANEL_SRC)) {
     for (const m of readFileSync(file, 'utf8').matchAll(/\benv\.(SECONDARY_TENANT_[A-Z0-9_]+)\b/g)) names.add(m[1])
   }
-  return [...names].sort()
+  return [...names].sort((a, b) => a.localeCompare(b))
 }
 
 /** The environment of the control-panel service as a plain map (compose accepts a map or KEY=value lines). */
