@@ -47,6 +47,10 @@ describe('GET /api/internal/newsletter/link-base', () => {
     const res = await call(NO_HOST, { 'x-internal-auth': SECRET })
     expect(res.status).toBe(404)
     const text = await res.text()
+    // The leaf reads this exact body as "the tenant has no host" (modules/publishing/src/kernel-client.ts, pinned by
+    // modules/publishing/test/kernel-client.link-base.test.ts with the same literal): a reworded answer would turn
+    // a hostless tenant into a kernel failure there, so the body is pinned on this side too.
+    expect(JSON.parse(text)).toEqual({ success: false, error: 'No public host' })
     expect(text).not.toContain('rat-c')
     expect(text).not.toContain('https://')
   })
