@@ -573,8 +573,11 @@ first customer's existing units stay without a room.
    deployed or switched to.
 5. Re-wire the first customer: `gremion-services wire <primary slug>`. With the
    switch off it copies no Synapse client secret, writes no issuer or fetch URL,
-   recreates `matrix` out of bootstrap mode, registers the admin bot again if its
-   token no longer verifies (after a wipe it is registered afresh), asserts the
+   recreates `matrix` out of bootstrap mode, keeps the admin bot's recorded token
+   when it still verifies, registers the bot only when its account is absent (after
+   a wipe it is registered afresh; on a homeserver that still holds the bot account
+   with a token that no longer verifies the bootstrap fails and the wire stops, and
+   the token is restored by hand), asserts the
    login flows are exactly the expected set, and recreates `gremion-ui`.
 6. For a second customer with chat: list `messaging` in `SECONDARY_TENANT_MODULES`
    (the validator now accepts it), create the customer, and `gremion-services wire
@@ -604,8 +607,9 @@ than it gives:
   customer that needs another module is created again under a new slug.
 - **Device continuity is lost under app-minted Matrix logins.** The login the app
   mints for a namespaced account belongs to no device and ends at a time the app
-  sets; a device id the client presents is ignored. Clients that keep device-bound
-  keys start a new device on each login.
+  sets; a device id the client presents is ignored. The admin login takes no device
+  id, so a client that needs a device, for end-to-end encryption keys, cannot use
+  it: it gets no device at all, not a new one per login.
 - **`MESSAGES_BACKEND=service` is held.** The service backend still logs in by JWT.
   With `MATRIX_IDENTITY=namespaced` chat refuses (the German 503) in that mode;
   the pilot compose sets no such key.
