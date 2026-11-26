@@ -176,9 +176,11 @@ a refusal.
 **Verdicts.** Per section PASS, FAIL, NOT-READY or NOT-ENABLED. A FAIL is a
 finding and outranks the rest. NOT-READY means a fixture part or a token or host
 precondition is missing (for example the fixture user has no Nextcloud account
-under the id the probe looks it up by, which is the Keycloak subject; a secondary
-customer whose accounts carry derived ids is expected to read NOT-READY here, see
-"Nextcloud account addressing" in [pilot-services.md](pilot-services.md)).
+under the id the probe looks it up by, which is the Keycloak subject). For a
+secondary customer whose accounts carry derived ids the files section does not
+PASS: a failed positive control on the own folder reads FAIL, a missing account
+NOT-READY (see "Nextcloud account addressing" in
+[pilot-services.md](pilot-services.md)).
 NOT-ENABLED means the section's module is off for a customer, a route takes no
 Bearer on this release, or the Matrix client API is not reachable through the edge.
 **NOT-ENABLED and NOT-READY are not a pass**: nothing was probed for that

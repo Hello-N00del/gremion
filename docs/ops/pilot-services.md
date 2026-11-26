@@ -52,7 +52,7 @@ profiles it needs and why. `gremion-init-secrets` renders
 Board has a database of its own on `board-postgres`, created and exported by the module lifecycle.
 Finance, vault, elections and handover render no profile. `messaging`
 (`messaging-postgres` and `matrix`) is post-realm: Synapse refuses a blank
-issuer at boot, so `gremion-services wire` adds the profile once the
+issuer at boot (unless `SYNAPSE_JWT_LOGIN=off`), so `gremion-services wire` adds the profile once the
 customer's realm exists. The messaging module has no database of its own, so a
 create with messaging ticked never connects to `messaging-postgres`.
 `scripts/check-module-profiles.test.mjs` pins the map against
@@ -450,10 +450,10 @@ customer's refusal then names it.
 
 | Module | What the customer gets | What stays shared or is not given |
 |---|---|---|
-| board (core) | its own board in its own database (`t_<hex32>__board`), served by the board leaf | nothing shared |
+| board (core) | its own board, in its own kernel or board database as its location flag says (`t_<hex32>__board` once the board lives in the board module's database) | nothing shared |
 | calendar (core) | its own calendar leaf database; the CalDAV mirror goes to the customer's own collection (`gremion-<slug>`) of the leaf's shared Nextcloud account, created by `wire` step 6b | the Nextcloud account that owns the collections is the one install-wide account |
 | files | one group folder per org unit on the shared Nextcloud, with its own group `ou-<unit id>`; a folder is adopted on a retry only when it carries that unit's own group (the mount point alone proves nothing on a shared instance); the editor URL is built on the request's own host, which Nextcloud trusts and Collabora names; the retained-records folder and its groups are named per tenant | one Nextcloud, one Collabora, one `richdocuments` configuration; the Nextcloud accounts are the open point named in the operating limits |
-| votes | polls on the shared Nextcloud Polls: every poll is created by the install's one Nextcloud admin account and bound to the customer by a leading marker `[gt:<tenant id>]` in its title; every list and by-id read checks it, and another customer's poll answers 404; a vote is cast with the member's own bearer | the Polls app and its database are shared; the binding is the app's marker, not a Nextcloud group |
+| votes | polls on the shared Nextcloud Polls: every poll is created by the install's one Nextcloud admin account and bound to the customer by a leading marker `[gt:<tenant id>]` in its title; every list and by-id read checks it, and another customer's poll answers 404; the poll pages and routes read and vote with the acting member's own bearer when the request has one (Karenz and retained copies use the admin account) | the Polls app and its database are shared; the binding is the app's marker, not a Nextcloud group |
 | messaging | its own Matrix accounts `<slug>.<escaped username>`, its own unit rooms (alias `#stura.<slug>.<unit>`), archive aliases (`#stura-archiv.<slug>.<unit>-<time>`) and meeting rooms (`#meeting.<slug>.<event>`); every room carries a tenant marker state event written by the admin bot, and a room found behind an alias is adopted only when that marker names the customer; video calls: the call frame's config names the requesting host's own token service, and the participants' names drop the customer prefix | one Synapse and one LiveKit; the alias directory is global; see the switch-over below, the three switches it needs, and the operating limits |
 | publishing, content | refused for a secondary host: the module id is not in the fixed set | the leaves now ask the kernel for the sending customer's own link base on every send (`/api/internal/newsletter/link-base`, `/api/internal/content/link-base`), but the set is fixed in `infra/host/lib/common.sh`: widening it is a code change, not a key. The refusal text of `gremion-validate-env` for `publishing` still gives the older reason (the mail links), and the content news editor still keeps its drafts in the shared Nextcloud and opens them in the shared Collabora |
 
@@ -472,14 +472,16 @@ still logs in by JWT.
    there).
 2. `SECONDARY_TENANT_HOSTS` in `state.env` and both app files; `gremion-validate-env`;
    apply it (Nextcloud and Collabora recreate, see the switches).
-3. Only for messaging: the chat switch-over below, complete, before the next step.
+3. Only for messaging: steps 1 to 5 of the chat switch-over below, complete, before
+   the next step.
 4. `SECONDARY_TENANT_MODULES` in `state.env` and both app files (`gremion-validate-env`
    again; it names a missing chat switch).
 5. Create the customer from the panel with the secondary host. Add the host to
    `etc/tenant-hosts.txt` (certificate and DNS checks), and point `CD_PROBE_HOST` at
    it if it is to be the CD canary. A customer that exists already keeps the pins
    it was created with (there is no unpin verb): to give it a module that was
-   outside the list at its creation, it is re-created.
+   outside the list at its creation, it is deleted and a new customer is created
+   under a new slug (a deleted slug stays reserved).
 6. The first customer must be wired before the second: `gremion-services wire <primary
    slug>`, then `gremion-services wire <slug>` for the second (its secondary branch).
    The secondary wire reads the first customer's provider and the bot token the
@@ -521,11 +523,12 @@ the first included, between the first step and the last. Plan a window.
 
 - **a wipe**, only while chat holds test data. It removes every account, room,
   message and media file of every customer on that homeserver, and the admin
-  bot's registration. The data is the state project's two named volumes
-  `<stack>-state_messaging-pg-data` (the Synapse database) and
-  `<stack>-state_synapse-data` (media and the homeserver's signing key). Remove
-  those two by name after stopping `matrix` and `messaging-postgres`, never the
-  project's other volumes and never with `down -v`;
+  bot's registration. The data is two volumes of the state project:
+  `messaging-pg-data` (the Synapse database) and `synapse-data` (media and the
+  homeserver's signing key), which compose names `<project>_<volume>`: read the
+  full names from `docker volume ls`. Remove those two by name after stopping
+  `matrix` and `messaging-postgres`, never the project's other volumes and never
+  with `down -v`;
 - **a migration of the existing accounts** to the namespaced names. It is **not
   built**: nothing in this repository renames accounts or moves rooms. A homeserver
   that holds a real customer's chat is not wiped, and until a migration exists it
@@ -583,7 +586,8 @@ than it gives:
   stays in those backups until they rotate out. Teardown on the shared services
   is manual.
 - **No unpin verb.** A secondary customer keeps the `pinned_off_modules` it was
-  created with. Changing the opt-in does not change an existing customer.
+  created with. Changing the opt-in does not change an existing customer; a
+  customer that needs another module is created again under a new slug.
 - **Device continuity is lost under app-minted Matrix logins.** The login the app
   mints for a namespaced account belongs to no device and ends at a time the app
   sets; a device id the client presents is ignored. Clients that keep device-bound
@@ -600,11 +604,13 @@ than it gives:
   customer's own provider id, and in both cases names the account by the raw
   Keycloak id in group, file and erasure calls. Whether a secondary customer's
   member then reaches its group folders is not shown by anything in this
-  repository. The switch is **off** and says it is not safe: leave it off, treat
-  files for a secondary customer as unproven, and read the probe's files section
-  first (it looks the fixture user up by its Keycloak id and reads NOT-READY
-  when Nextcloud has no such account). The votes path uses the member's bearer
-  only and does not depend on it.
+  repository. The switch is **off** and says it is not safe: leave it off and treat
+  files for a secondary customer as unproven. The probe's files section does not
+  settle it: it addresses the fixture user's Nextcloud account by the Keycloak
+  subject (WebDAV path and `occ user:info`), so for accounts under derived ids it
+  does not PASS (a failed positive control reads FAIL, a missing account
+  NOT-READY): read that as a finding about the setup. The votes code does not name
+  Nextcloud accounts by id: it acts with the member's bearer or the admin account.
 - **Content and publishing** are not available to a secondary customer (table above).
 
 ### Evidence for two customers
@@ -669,6 +675,13 @@ between two members of each customer.
   do not yet list step 6c, and no verify yet fails when the tenant row has no
   `smtp` entry or the tenant's `config.json` is not `smtp.configured`. Both live
   outside this repository's host tooling and are a named follow-up.
+- **Two customers on one install.** The shared TURN relay name, the shared
+  Synapse and Nextcloud databases and backups (no per-customer restore), the
+  missing unpin verb, the device continuity lost under app-minted Matrix logins,
+  the held `MESSAGES_BACKEND=service`, and the open Nextcloud account addressing
+  are named under "Operating limits of two customers on one install"; the
+  control panel's note on "Neuer Mandant" stays the core-only one because the app
+  compose does not pass `SECONDARY_TENANT_MODULES` on.
 - **Platform pins.** Only the apex host pin is declared on the `traefik`
   service; the `www`, `control` and `sales` pins belong to the static routers
   that are not part of this install.
