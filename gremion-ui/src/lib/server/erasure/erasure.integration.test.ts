@@ -247,6 +247,23 @@ describe('MED-3: what the kernel step deliberately leaves is reported per column
     expect(JSON.stringify(residuals)).not.toContain(SUBJECT)
   })
 
+  it('names who submitted and who approved a protocol as kept register columns, like its creator', async () => {
+    const { unitId } = await seed()
+    const sql = getDb()
+    await sql`INSERT INTO protocols (committee_id, title, meeting_date, created_by, status, submitted_by, submitted_at, approved_by, approved_at)
+              VALUES (${unitId}, 'Sitzung 2', '2026-10-02', ${OTHER}, 'published', ${SUBJECT}, now(), ${OTHER}, now()),
+                     (${unitId}, 'Sitzung 3', '2026-10-03', ${OTHER}, 'published', ${OTHER}, now(), ${SUBJECT}, now())`
+
+    const res = await kernelErasureHook.erase({ tenantId: TENANT_A, subjectId: SUBJECT, db: sql })
+    const residuals = (res as { residuals?: { table: string; column: string; rows: number; reason: string }[] }).residuals ?? []
+    const byCol = Object.fromEntries(residuals.map((r) => [`${r.table}.${r.column}`, r]))
+    expect(byCol['protocols.submitted_by']).toMatchObject({ rows: 1, reason: expect.stringMatching(/TRD-160/) })
+    expect(byCol['protocols.approved_by']).toMatchObject({ rows: 1, reason: expect.stringMatching(/TRD-160/) })
+    // kept like the creator: the record of who submitted and approved is part of the minutes
+    expect(await sql`SELECT 1 FROM protocols WHERE submitted_by = ${SUBJECT} OR approved_by = ${SUBJECT}`).toHaveLength(2)
+    expect(JSON.stringify(residuals)).not.toContain(SUBJECT)
+  })
+
   it('residuals are persisted with the module row of the report', async () => {
     const { unitId } = await seed()
     const sql = getDb()

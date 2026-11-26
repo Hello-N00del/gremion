@@ -108,7 +108,7 @@ export const load: PageServerLoad = async ({ params, fetch, locals, parent }) =>
       // hasRole() counts an IT admin as a council admin too, so both roles' holders may approve.
       const [council, it] = await Promise.all([
         kc.listRealmRoleMembers(Role.CouncilAdmin),
-        kc.listRealmRoleMembers(Role.ITAdmin).catch(() => []),
+        kc.listRealmRoleMembers(Role.ITAdmin),
       ])
       otherEligibleCount = countOtherEligible(
         protocol,

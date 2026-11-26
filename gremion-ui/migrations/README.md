@@ -447,7 +447,7 @@ imposes on a pre-existing database are in
 ### Migrations that exist in the product and not here
 
 The reference product chain has **58** data-plane files; 31 of them ship
-here (the 32nd to 40th files here, `0059`, `0060`, `0061`, `0062`, `0063`, `0064`, `0065`, `0066` and `0067`, are kernel-only), so **26 are absent**. Every one of them is module-owned or unshipped — finance
+here (the 32nd to 40th files here, `0059`, `0060`, `0061`, `0062`, `0063`, `0064`, `0065`, `0066` and `0067`, are kernel-only), so **27 are absent**. Every one of them is module-owned or unshipped — finance
 (`013`–`017`, `019`–`023`, `025`–`032`, `035`, `036`) and content (`044`–`047`)
 belong to their modules, which now carry their own chains under
 `modules/finance/migrations` and `modules/content/migrations` (own databases,

@@ -34,7 +34,7 @@
 //     module or its hook is absent; the board hook then finds nothing left.
 //   committee_elections.created_by is the elections module hook's (nil uuid).
 //   Register records -- KEPT, reported as residuals (table, column, rows, reason):
-//     protocols.created_by, protocol_attendance.user_keycloak_id,
+//     protocols.created_by/submitted_by/approved_by, protocol_attendance.user_keycloak_id,
 //     protocol_action_items.assignee_keycloak_id (RC-GOV-PROT: the protocol
 //     record, action items included), resolution_challenges.raised_by/resolved_by
 //     (Beschluss register), audit_log.user_id (hash chain), erasure_report.requested_by (the
@@ -78,6 +78,8 @@ const REGISTER_RECORD = "Beschluss register (record period): redaction is TRD-16
 /** Subject-id columns the kernel step deliberately leaves, and why. */
 export const KERNEL_RESIDUAL_COLUMNS: readonly Omit<ErasureResidual, 'rows'>[] = [
   { table: 'protocols', column: 'created_by', reason: PROTOCOL_RECORD },
+  { table: 'protocols', column: 'submitted_by', reason: PROTOCOL_RECORD },
+  { table: 'protocols', column: 'approved_by', reason: PROTOCOL_RECORD },
   { table: 'protocol_attendance', column: 'user_keycloak_id', reason: PROTOCOL_RECORD },
   { table: 'protocol_action_items', column: 'assignee_keycloak_id', reason: PROTOCOL_RECORD },
   { table: 'resolution_challenges', column: 'raised_by', reason: REGISTER_RECORD },
