@@ -85,6 +85,12 @@ export interface Protocol {
   created_by: string
   created_at: string
   updated_at: string
+  // Two-person publish: who submitted and who approved, with the times. NULL for a
+  // protocol that was submitted / published before these were recorded.
+  submitted_by: string | null
+  submitted_at: string | null
+  approved_by: string | null
+  approved_at: string | null
 }
 
 export interface ProtocolAttendance {
@@ -270,12 +276,18 @@ export async function deleteProtocol(
 export async function setProtocolStatus(
   id: string,
   newStatus: ProtocolStatus,
-  opts?: { appendRevisionNote?: string; tx?: PgTransaction }
+  // actorId: the person who performs the change. On 'submitted' it is recorded as the
+  // submitter, on 'published' as the approver (each with now()); other changes ignore it.
+  opts?: { appendRevisionNote?: string; tx?: PgTransaction; actorId?: string }
 ): Promise<Protocol> {
   const sql = getRunner(opts?.tx)
   const current = await sql<{ status: string }[]>`SELECT status FROM protocols WHERE id = ${id}`
   if (!current[0]) throw new Error(`Protocol ${id} not found`)
   if (current[0].status === 'published') throw new Error(`Cannot change status of published protocol`)
+
+  const actorId = opts?.actorId ?? null
+  const submitting = newStatus === 'submitted' && actorId !== null
+  const approving = newStatus === 'published' && actorId !== null
 
   const rows = await sql<Protocol[]>`
     UPDATE protocols SET
@@ -285,11 +297,27 @@ export async function setProtocolStatus(
         THEN COALESCE(revision_notes || E'\n', '') || ${opts?.appendRevisionNote ?? ''}
         ELSE revision_notes
       END,
+      submitted_by = CASE WHEN ${submitting}::boolean THEN ${actorId}::text ELSE submitted_by END,
+      submitted_at = CASE WHEN ${submitting}::boolean THEN now() ELSE submitted_at END,
+      approved_by  = CASE WHEN ${approving}::boolean THEN ${actorId}::text ELSE approved_by END,
+      approved_at  = CASE WHEN ${approving}::boolean THEN now() ELSE approved_at END,
       updated_at = now()
     WHERE id = ${id}
     RETURNING *
   `
   return rows[0]
+}
+
+/**
+ * Is this person a voting member of the body (sachkundige Buerger sit without a
+ * vote and do not count)? One of the two groups that may approve minutes.
+ */
+export async function isVotingMemberOfBody(committeeId: string, userId: string): Promise<boolean> {
+  const rows = await getDb()`
+    SELECT 1 FROM org_unit_members
+    WHERE org_unit_id = ${committeeId} AND user_keycloak_id = ${userId} AND voting
+    LIMIT 1`
+  return rows.length > 0
 }
 
 // ─── Attendance ───────────────────────────────────────────────────────────────

@@ -55,7 +55,8 @@ export async function POST(event: RequestEvent) {
     // module, not part of the governance kernel; approval is gated natively at
     // publish via the INV-5 quorum context. Beyond the vote check above, submit
     // flips the status.
-    const updated = await setProtocolStatus(protocol.id, 'submitted')
+    // The submitter is recorded: a second person has to approve (see publish).
+    const updated = await setProtocolStatus(protocol.id, 'submitted', { actorId: user.id })
     return json({ protocol: updated })
   } catch (e) {
     const err = e as { status?: number; body?: { message?: string } }

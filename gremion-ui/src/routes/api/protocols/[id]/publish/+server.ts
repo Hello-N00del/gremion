@@ -4,10 +4,11 @@ import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth'
 import {
   getProtocol, setProtocolStatus, updateProtocol,
-  listResolutions, assignGlobalNrs, recordResolutionAdoptions,
+  listResolutions, assignGlobalNrs, recordResolutionAdoptions, isVotingMemberOfBody,
   type ProtocolResolution,
 } from '$lib/server/protocols/protocol-db'
 import { requireUuidParams } from '$lib/server/protocols/route-ids'
+import { evaluateApprover, APPROVAL_MESSAGES } from '$lib/governance/protocol-approval'
 import { convertOdtToHtml, convertOdtToPdf } from '$lib/server/documents/collabora-convert'
 import { getTenantProtocolDocumentPort } from '$lib/server/protocols/document-port'
 import { getDb } from '$lib/server/db'
@@ -72,11 +73,22 @@ async function assertAdoptable(
 
 export async function POST(event: RequestEvent) {
   const user = requireAuth(event)
-  if (!hasRole(user.roles, Role.CouncilAdmin)) throw error(403, 'Nur Admins können veröffentlichen')
   requireUuidParams(event, 'id')
+  const isAdmin = hasRole(user.roles, Role.CouncilAdmin)
 
   const protocol = await getProtocol(event.params.id!)
-  if (!protocol) throw error(404, 'Protokoll nicht gefunden')
+  // Someone who may not approve at all gets the same answer whether or not the protocol exists.
+  if (!protocol) throw error(isAdmin ? 404 : 403, isAdmin ? 'Protokoll nicht gefunden' : APPROVAL_MESSAGES['not-eligible'])
+
+  // Publishing needs a second person: an admin or a voting member of the body who is neither the
+  // person who submitted the protocol nor the one who created it (governance/protocol-approval).
+  // Decided here, before any file is moved, so a direct POST is refused exactly like the page's button.
+  const verdict = evaluateApprover(protocol, {
+    userId: user.id,
+    isAdmin,
+    isVotingMember: isAdmin ? false : await isVotingMemberOfBody(protocol.committee_id, user.id),
+  })
+  if (!verdict.ok) throw error(403, verdict.message)
   if (protocol.status !== 'submitted') throw error(400, 'Nur eingereichte Protokolle können veröffentlicht werden')
 
   // Governance Core INV-5 — quorum gates ADOPTION (publish), not draft
@@ -175,7 +187,8 @@ export async function POST(event: RequestEvent) {
       // skipped inside the helper (not a vote → no decision).
       await recordResolutionAdoptions(user.id, current, tx)
       // Returned last so `updated` reflects the final published row.
-      const published = await setProtocolStatus(protocol.id, 'published', { tx })
+      // The approver is recorded with the time, on the same transaction as the flip.
+      const published = await setProtocolStatus(protocol.id, 'published', { tx, actorId: user.id })
       stmtsDone = true
       return published
     })

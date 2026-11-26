@@ -51,7 +51,7 @@ describe('POST /api/protocols/[id]/submit', () => {
     // @ts-expect-error partial mock
     const res = await POST({ locals: { user: { id: 'u1', roles: ['council-admin'] } }, params: { id: '123e4567-e89b-12d3-a456-426614174001' } })
     expect(res.status).toBe(200)
-    expect(mockSetProtocolStatus).toHaveBeenCalledWith('p1', 'submitted')
+    expect(mockSetProtocolStatus).toHaveBeenCalledWith('p1', 'submitted', { actorId: 'u1' })
   })
 
   it('returns 400 if protocol is not in draft status', async () => {
@@ -101,7 +101,7 @@ describe('POST /api/protocols/[id]/submit: every counted resolution needs a vote
     mockListResolutions.mockResolvedValue([resolution(), resolution({ id: 'r2', votes_yes: 0, votes_no: 4, result: 'rejected' })])
     const res = await POST(event())
     expect(res.status).toBe(200)
-    expect(mockSetProtocolStatus).toHaveBeenCalledWith('p1', 'submitted')
+    expect(mockSetProtocolStatus).toHaveBeenCalledWith('p1', 'submitted', { actorId: 'u1' })
   })
 
   it('submits with a withdrawn, a consent and an acclamation resolution that carry no count', async () => {
@@ -112,7 +112,7 @@ describe('POST /api/protocols/[id]/submit: every counted resolution needs a vote
     ])
     const res = await POST(event())
     expect(res.status).toBe(200)
-    expect(mockSetProtocolStatus).toHaveBeenCalledWith('p1', 'submitted')
+    expect(mockSetProtocolStatus).toHaveBeenCalledWith('p1', 'submitted', { actorId: 'u1' })
   })
 
   it('submits a protocol without resolutions', async () => {
@@ -168,7 +168,7 @@ describe('POST /api/protocols/[id]/submit: the decisions have to fit the meeting
   it('submits a decision that fits the attendance', async () => {
     mockListResolutions.mockResolvedValue([resolution({ votes_yes: 2, votes_no: 0, votes_abstain: 0 })])
     expect((await POST(event())).status).toBe(200)
-    expect(mockSetProtocolStatus).toHaveBeenCalledWith('p1', 'submitted')
+    expect(mockSetProtocolStatus).toHaveBeenCalledWith('p1', 'submitted', { actorId: 'u1' })
   })
 
   it('a withdrawn resolution with an implausible stored count does not block, and needs no attendance lookup', async () => {
