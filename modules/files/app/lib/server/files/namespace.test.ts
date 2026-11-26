@@ -19,7 +19,7 @@ describe('files namespace', () => {
   })
 
   it('refuses an empty tenant id: an unnamed customer must never get a key', () => {
-    expect(() => tenantKey('')).toThrow()
+    expect(() => tenantKey('')).toThrow('empty tenant id')
   })
 
   it('builds the mount point as "<unit name> (<key>)": the plain name stays readable, the key makes it unique', () => {
