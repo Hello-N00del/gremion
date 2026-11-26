@@ -445,8 +445,13 @@ duplicate. `publishing` and `content` are outside the set (see the table). The
 list is read from `state.env` when a customer is created and when a module is
 enabled for it: the create leaves the listed modules out of the customer's
 switches and out of `pinned_off_modules`, and the module guard lets them through.
-A refused list opts nothing in and never stops the first customer; a secondary
-customer's refusal then names it.
+A refused list is handled differently by its two readers. The **create** of a
+customer on a secondary host stops at once with "nothing was created", even for a
+customer that wants board only, because the list is judged before anything is
+made. The **module enable** (the guard in the host's customer operations) opts
+nothing in: a refused list leaves the core modules and lets a first customer's
+enable through unchanged, and a refusal for a secondary customer then names the
+list. The create of the first customer never reads the list.
 
 | Module | What the customer gets | What stays shared or is not given |
 |---|---|---|
@@ -460,9 +465,14 @@ customer's refusal then names it.
 `messaging` needs three switches before the list is accepted, and the validator
 names only the ones that are missing: `SYNAPSE_JWT_LOGIN=off` in `state.env` and
 `MATRIX_IDENTITY=namespaced` in `app-blue.env` and in `app-green.env`. They are the
-chat switch-over below. Until they are in place, listing `messaging` is refused,
-so there is no state in which a customer is created with chat on a homeserver that
-still logs in by JWT.
+chat switch-over below. The check reads those env files and nothing else: neither
+the create nor `gremion-validate-env` asks the running `matrix` or `gremion-ui`. So
+the three lines being written is not the switch-over being done. With the lines
+written but not applied, the create passes while `matrix` still offers the JWT
+login and the running `gremion-ui` is still on the legacy identity, which builds
+chat without the namespaced accounts. Apply the switch-over and read it back first
+(the login flows read back from the running `matrix`, then the wire of the first
+customer, which recreates `gremion-ui`), and only then list `messaging`.
 
 ### Order for a second customer
 
@@ -472,8 +482,9 @@ still logs in by JWT.
    there).
 2. `SECONDARY_TENANT_HOSTS` in `state.env` and both app files; `gremion-validate-env`;
    apply it (Nextcloud and Collabora recreate, see the switches).
-3. Only for messaging: steps 1 to 5 of the chat switch-over below, complete, before
-   the next step.
+3. Only for messaging: steps 1 to 5 of the chat switch-over below, applied and read
+   back from the running services (the next step's check reads only the env files),
+   before the next step.
 4. `SECONDARY_TENANT_MODULES` in `state.env` and both app files (`gremion-validate-env`
    again; it names a missing chat switch).
 5. Create the customer from the panel with the secondary host. Add the host to
@@ -526,9 +537,11 @@ the first included, between the first step and the last. Plan a window.
   bot's registration. The data is two volumes of the state project:
   `messaging-pg-data` (the Synapse database) and `synapse-data` (media and the
   homeserver's signing key), which compose names `<project>_<volume>`: read the
-  full names from `docker volume ls`. Remove those two by name after stopping
-  `matrix` and `messaging-postgres`, never the project's other volumes and never
-  with `down -v`;
+  full names from `docker volume ls`. Stop `matrix` and `messaging-postgres`, remove
+  those two containers by name (`docker volume rm` refuses a volume that even a
+  stopped container still references), then remove the two volumes by name. Never
+  the project's other volumes and never with `down -v`. Applying the state project
+  in step 3 creates the containers and empty volumes again;
 - **a migration of the existing accounts** to the namespaced names. It is **not
   built**: nothing in this repository renames accounts or moves rooms. A homeserver
   that holds a real customer's chat is not wiped, and until a migration exists it
@@ -552,9 +565,10 @@ first customer's existing units stay without a room.
    check reads unhealthy while either flow is offered. Read the flows back from the
    running service: `GET /_matrix/client/v3/login` through the edge lists exactly
    `m.login.application_service`.
-4. `MATRIX_IDENTITY=namespaced` in **both** `app-blue.env` and `app-green.env`; a
-   colour left on `legacy` would bring the JWT login path back when it is switched
-   to. Applying it recreates `gremion-ui` of the colour: `wire` step 7 recreates the
+4. `MATRIX_IDENTITY=namespaced` in **both** `app-blue.env` and `app-green.env`. With
+   `SYNAPSE_JWT_LOGIN=off` a colour left on `legacy` has no login flow to use, so
+   chat is broken as soon as that colour is switched to (the first bullet above),
+   and it would provision accounts under the legacy identity. Applying it recreates `gremion-ui` of the colour: `wire` step 7 recreates the
    active one in the next step, the other colour carries it when it is next
    deployed or switched to.
 5. Re-wire the first customer: `gremion-services wire <primary slug>`. With the
