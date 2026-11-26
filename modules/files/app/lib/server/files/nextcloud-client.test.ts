@@ -53,8 +53,8 @@ describe('NextcloudClient groupfolders methods', () => {
     ]
     const answer = (data: unknown) => (async () => new Response(JSON.stringify({ ocs: { data } }), { status: 200 })) as unknown as typeof fetch
     const expected = [
-      { id: 1, mountPoint: 'Vorstand', groups: ['ou-a', 'ou-b'] },
-      { id: 2, mountPoint: 'Leer', groups: [] }
+      { id: 1, mountPoint: 'Vorstand', groups: ['ou-a', 'ou-b'], groupPermissions: { 'ou-a': 31, 'ou-b': 1 } },
+      { id: 2, mountPoint: 'Leer', groups: [], groupPermissions: {} }
     ]
     expect(await clientWithFetch(answer(rows)).listGroupFolders()).toEqual(expected)
     expect(await clientWithFetch(answer({ '1': rows[0], '2': rows[1] })).listGroupFolders()).toEqual(expected)
@@ -83,6 +83,18 @@ describe('NextcloudClient groupfolders methods', () => {
     // Neither should use the OCS v2 path
     expect(calls[0].url).not.toContain('/ocs/v2.php/apps/groupfolders/')
     expect(calls[1].url).not.toContain('/ocs/v2.php/apps/groupfolders/')
+  })
+
+  it('setGroupFolderPermissions sends only the permissions request for one group of a folder', async () => {
+    const calls: Array<{ url: string; body: string }> = []
+    const c = clientWithFetch((async (url: string, init: RequestInit) => {
+      calls.push({ url: String(url), body: String(init.body) })
+      return new Response(JSON.stringify({ ocs: { meta: { statuscode: 100 }, data: { success: true } } }), { status: 200 })
+    }) as typeof fetch)
+    await c.setGroupFolderPermissions(42, 'ou-finanzen', 31)
+    expect(calls).toHaveLength(1)
+    expect(calls[0].url).toContain('/index.php/apps/groupfolders/folders/42/groups/ou-finanzen')
+    expect(calls[0].body).toContain('permissions=31')
   })
 
   it('deleteGroupFolder sends DELETE to index.php groupfolders route', async () => {

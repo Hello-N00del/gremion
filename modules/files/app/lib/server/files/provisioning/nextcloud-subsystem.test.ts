@@ -9,7 +9,7 @@ const unit: OrgUnit = {
   wants_matrix_room: true, wants_nextcloud_folder: true, created_at: new Date()
 }
 
-type FakeFolder = { id: number; mountPoint: string; groups: string[] }
+type FakeFolder = { id: number; mountPoint: string; groups: string[]; groupPermissions?: Record<string, number> }
 
 function fakeNc(existingFolders: FakeFolder[] = []) {
   return {
@@ -25,11 +25,20 @@ function fakeNc(existingFolders: FakeFolder[] = []) {
     _nextId: 77,
     /** number of upcoming grants that fail before anything is granted */
     failGrants: 0,
+    /** number of upcoming grants that add the group and then fail to set its permissions */
+    failPermissionStep: 0,
+    /** what a group is given when it is added, before its permissions are set */
+    addedGroupPermissions: 0,
+    permissionSets: [] as Array<[number, string, number]>,
     /** runs at the start of every grant, to observe what the caller had recorded by then */
     onGrant: undefined as undefined | (() => void),
     async createGroup(g: string) { this.groups.add(g) },
     async deleteGroup(g: string) { this.groups.delete(g) },
-    async listGroupFolders() { return this._existingFolders.map((f) => ({ ...f, groups: [...f.groups] })) },
+    async listGroupFolders() {
+      return this._existingFolders.map((f) => ({
+        ...f, groups: [...f.groups], ...(f.groupPermissions ? { groupPermissions: { ...f.groupPermissions } } : {})
+      }))
+    },
     async createGroupFolder(mp: string) {
       this.folders.push(mp)
       const id = this._nextId++
@@ -43,6 +52,15 @@ function fakeNc(existingFolders: FakeFolder[] = []) {
       const folder = this._existingFolders.find((f) => f.id === folderId)
       if (!folder) throw new Error('no such folder')
       if (!folder.groups.includes(groupId)) folder.groups.push(groupId)
+      folder.groupPermissions = { ...folder.groupPermissions, [groupId]: this.addedGroupPermissions }
+      if (this.failPermissionStep > 0) { this.failPermissionStep--; throw new Error('groupfolders: set permissions refused') }
+      folder.groupPermissions[groupId] = 31
+    },
+    async setGroupFolderPermissions(folderId: number, groupId: string, permissions: number) {
+      this.permissionSets.push([folderId, groupId, permissions])
+      const folder = this._existingFolders.find((f) => f.id === folderId)
+      if (!folder) throw new Error('no such folder')
+      folder.groupPermissions = { ...folder.groupPermissions, [groupId]: permissions }
     },
     async deleteGroupFolder(id: number) {
       this.deleted.push(id)
@@ -187,6 +205,31 @@ describe('nextcloud subsystem', () => {
       const r = await subsystem(nc).ensureResource(unit, ctx, row.externalId)
       expect(r.externalId).toBe('41:ou-abc')
       expect(nc.folders).toHaveLength(0)
+      expect(nc.grants).toHaveLength(0)
+    })
+
+    it('a grant that added the group but could not set its permissions is finished on the retry, on the same folder', async () => {
+      const nc = fakeNc()
+      nc.failPermissionStep = 1
+      const { row, ctx } = ledgerRow()
+      const sub = subsystem(nc)
+
+      await expect(sub.ensureResource(unit, ctx, row.externalId)).rejects.toThrow('set permissions refused')
+      expect(row.externalId).toBe('77:ou-abc')
+
+      const r = await sub.ensureResource(unit, ctx, row.externalId)
+      expect(r.externalId).toBe('77:ou-abc')
+      expect(nc.folders).toEqual(['Vorstand']) // still exactly one folder
+      expect(nc.grants).toHaveLength(1) // the group is not added a second time
+      expect(nc.permissionSets).toEqual([[77, 'ou-abc', 31]])
+    })
+
+    it('leaves the permissions alone when Nextcloud already reports them as set', async () => {
+      const nc = fakeNc([{ id: 41, mountPoint: 'Vorstand', groups: ['ou-abc'], groupPermissions: { 'ou-abc': 31 } }])
+      const { row, ctx } = ledgerRow()
+      row.externalId = '41:ou-abc'
+      await subsystem(nc).ensureResource(unit, ctx, row.externalId)
+      expect(nc.permissionSets).toHaveLength(0)
       expect(nc.grants).toHaveLength(0)
     })
 

@@ -73,6 +73,12 @@ vi.mock('$lib/server/governance/provisioning/ledger', () => ({
     ledger.set(unitId, { status: 'ok', external_id: externalId })
     order.push(`ok:${unitId}:${externalId}`)
   },
+  // writes the id and leaves the status alone, like the real ledger function
+  recordResourceExternalId: async (unitId: string, _s: string, externalId: string) => {
+    const row = ledger.get(unitId)
+    if (row) ledger.set(unitId, { ...row, external_id: externalId })
+    order.push(`record:${unitId}:${externalId}`)
+  },
 }))
 vi.mock('$lib/server/governance/provisioning/mutex', () => ({
   withUnitLock: async <T>(_key: string, fn: () => Promise<T>) => fn(),
@@ -299,6 +305,36 @@ describe('filesKarenz', () => {
     expect(nc.createGroupFolder).not.toHaveBeenCalled()
     expect(nc.createGroup).not.toHaveBeenCalled()
     expect(nc.assignGroupFolderPermissions).not.toHaveBeenCalled()
+  })
+
+  it('restore does not mark a folder ok that was recorded but never granted: the provisioning pass still grants it', async () => {
+    // an earlier attempt made folder 77 and recorded it, the grant failed, and the switch-off came before the retry
+    units.push({ id: 'x', name: 'Gremium x' })
+    ledger.set('x', { status: 'failed', external_id: '77:ou-x' })
+    wanted.set('x', true)
+    members.set('x', [])
+    ncGroups.set('ou-x', new Set())
+
+    await karenz.filesKarenz.switchOff(ctx)
+    expect(ledger.has('x')).toBe(false)
+    await karenz.filesKarenz.restore(ctx)
+
+    // the id is back on the row, but the row is not finished: the orchestrator runs the adapter for it
+    expect(ledger.get('x')).toEqual({ status: 'pending', external_id: '77:ou-x' })
+    expect(order).not.toContain('ok:x:77:ou-x')
+    expect(itemOf('77:ou-x')?.state).toBe('restored')
+
+    // The REAL adapter, given the restored row's id as `existing`, finds folder 77 without a group and grants it.
+    const { createNextcloudSubsystem } = await import('./provisioning/nextcloud-subsystem')
+    const nc = {
+      createGroup: vi.fn(), createGroupFolder: vi.fn(), assignGroupFolderPermissions: vi.fn(),
+      listGroupFolders: vi.fn(async () => [{ id: 77, mountPoint: 'Gremium x', groups: [] as string[] }]),
+    }
+    const subsystem = createNextcloudSubsystem({ nc: nc as never, kc: { getUser: vi.fn() } as never }, 1)
+    const result = await subsystem.ensureResource(units[0]! as never, {} as never, ledger.get('x')!.external_id)
+    expect(result).toEqual({ externalId: '77:ou-x' })
+    expect(nc.createGroupFolder).not.toHaveBeenCalled()
+    expect(nc.assignGroupFolderPermissions).toHaveBeenCalledWith(77, 'ou-x', 31)
   })
 
   it('restore attaches the row and the flag in one step, the row last (an interrupted restore is run again)', async () => {

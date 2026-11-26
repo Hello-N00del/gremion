@@ -59,7 +59,13 @@ export function createNextcloudSubsystem(deps: NextcloudDeps, providerId: number
         const recorded = decodeRef(existing)
         const folders = await nc.listGroupFolders()
         const folder = folders.find((f) => f.id === recorded.folderId)
-        if (folder?.groups.includes(groupId)) return { externalId: existing }
+        if (folder?.groups.includes(groupId)) {
+          // The group is on the folder, but an earlier grant may have stopped between adding it and setting
+          // its permissions. Set them again only when Nextcloud reports bits other than the ones we grant.
+          const bits = folder.groupPermissions?.[groupId]
+          if (bits !== undefined && bits !== 31) await nc.setGroupFolderPermissions(folder.id, groupId, 31)
+          return { externalId: existing }
+        }
         if (folder && folder.groups.length === 0) {
           // made by an earlier attempt that stopped before the grant: no other group holds it
           await nc.createGroup(groupId)

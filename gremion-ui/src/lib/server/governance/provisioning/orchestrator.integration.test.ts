@@ -126,6 +126,10 @@ describe('orchestrator.provisionOrgUnit', () => {
       }
     }
     await provisionOrgUnit(u.id, { ...allOk(), nextcloud: recorder })
+    // the unit's own row holds the recorded id, and recording it did not finish the resource
+    const own = await getResource(u.id, 'nextcloud')
+    expect(own?.external_id).toBe('13:ou-y')
+    expect(own?.status).toBe('failed')
     expect((await getResource(other.id, 'nextcloud'))?.external_id).toBeNull()
     expect((await getResource(u.id, 'keycloak'))?.external_id).toBe('kc1')
   })

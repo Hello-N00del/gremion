@@ -71,6 +71,16 @@ describe('provisioning ledger', () => {
     expect(await getResource(u.id, 'nextcloud')).toBeNull()
   })
 
+  it('recordResourceExternalId joins the caller transaction: a rollback takes the id with it', async () => {
+    const u = await freshUnit()
+    await ensureResourceRow(u.id, 'nextcloud')
+    await expect(getDb().begin(async (tx) => {
+      await recordResourceExternalId(u.id, 'nextcloud', '5:ou-a', tx)
+      throw new Error('abort')
+    })).rejects.toThrow('abort')
+    expect((await getResource(u.id, 'nextcloud'))?.external_id).toBeNull()
+  })
+
   it('listDueOrgUnitIds returns units with a non-ok, due resource', async () => {
     const u = await freshUnit()
     await ensureResourceRow(u.id, 'keycloak') // pending, next_attempt_at NULL -> due

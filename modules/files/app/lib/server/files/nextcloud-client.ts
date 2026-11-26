@@ -33,6 +33,8 @@ export interface GroupFolderResult {
 /** A group folder as the instance-wide list reports it: the ids of the groups that may open it. */
 export interface GroupFolderListing extends GroupFolderResult {
   groups: string[]
+  /** group id -> the permission bits Nextcloud reports for it; a group the list gave without bits is absent */
+  groupPermissions?: Record<string, number>
 }
 
 /**
@@ -325,7 +327,9 @@ export class NextcloudClient {
     const entries: Array<{ id: number; mount_point: string; groups?: unknown }> = Array.isArray(data)
       ? data
       : Object.values(data)
-    return entries.map((e) => ({ id: Number(e.id), mountPoint: e.mount_point, groups: groupIdsOf(e.groups) }))
+    return entries.map((e) => ({
+      id: Number(e.id), mountPoint: e.mount_point, groups: groupIdsOf(e.groups), groupPermissions: groupPermissionsOf(e.groups)
+    }))
   }
 
   async createGroupFolder(mountPoint: string): Promise<GroupFolderResult> {
@@ -358,7 +362,12 @@ export class NextcloudClient {
         body: `group=${encodeURIComponent(groupId)}`
       }
     )
-    // 2. Set its permission level (groupfolders Folder#setPermissions route).
+    // 2. Set its permission level.
+    await this.setGroupFolderPermissions(folderId, groupId, permissions)
+  }
+
+  /** Set the permission level of a group that is already on the folder (groupfolders Folder#setPermissions route). */
+  async setGroupFolderPermissions(folderId: number, groupId: string, permissions = 31): Promise<void> {
     await this.request(
       'POST',
       `/index.php/apps/groupfolders/folders/${folderId}/groups/${encodeURIComponent(groupId)}`,
@@ -739,6 +748,18 @@ export class NextcloudClient {
     }
     return { doc, callbackUrl }
   }
+}
+
+/** The permission bits of a group folder's `groups` field when it is an id -> permissions object; none otherwise. */
+function groupPermissionsOf(groups: unknown): Record<string, number> {
+  const out: Record<string, number> = {}
+  if (groups && typeof groups === 'object' && !Array.isArray(groups)) {
+    for (const [id, bits] of Object.entries(groups)) {
+      const n = typeof bits === 'number' ? bits : typeof bits === 'string' && bits.trim() !== '' ? Number(bits) : NaN
+      if (Number.isFinite(n)) out[id] = n
+    }
+  }
+  return out
 }
 
 /** The group ids of a group folder's `groups` field: the keys of the id -> permissions object, or the
