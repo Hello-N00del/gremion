@@ -437,6 +437,8 @@ services:
       # "Neuer Mandant" with the note that such a customer has no chat, files, office editing, video, votes, content or newsletter. A hint only:
       # the host-side create reads the list from state.env and decides. Empty: no secondary host.
       SECONDARY_TENANT_HOSTS: ${SECONDARY_TENANT_HOSTS:-}
+      # The modules the install opts in for those customers (SECONDARY_TENANT_MODULES, space-separated); "Neuer Mandant" lists them in the same note.
+      SECONDARY_TENANT_MODULES: ${SECONDARY_TENANT_MODULES:-}
       # "Neuer Mandant" refuses the platform's reserved names and the panel's own host (CONTROL_PANEL_HOST, else
       # control.<PLATFORM_DOMAIN>) as a customer host, before a request is written.
       PLATFORM_DOMAIN: ${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}
