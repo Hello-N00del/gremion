@@ -212,6 +212,12 @@
     }
   }
 
+  // Two-person publish: the record of who submitted and who approved, shown from submission on.
+  const approval = $derived(data.approval)
+  const stamp = (at: string | null | undefined) =>
+    at ? new Date(at).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' }) : ''
+  const waitingForSecondPerson = $derived(data.protocol.status === 'submitted' && !approval.canApprove)
+
   async function submitForVote() {
     submitError = null
     const res = await fetch(`/api/protocols/${data.protocol.id}/submit`, { method: 'POST' })
@@ -386,6 +392,23 @@
     {/if}
   </section>
 
+  {#if approval.submitted || approval.approved}
+    <dl class="rounded-lg border px-4 py-3 text-sm space-y-1" data-testid="approval-record">
+      {#if approval.submitted}
+        <div class="flex flex-wrap gap-x-2">
+          <dt class="text-ink-muted">Eingereicht von</dt>
+          <dd>{approval.submitted.name}{#if approval.submitted.at}, {stamp(approval.submitted.at)}{/if}</dd>
+        </div>
+      {/if}
+      {#if approval.approved}
+        <div class="flex flex-wrap gap-x-2">
+          <dt class="text-ink-muted">Freigegeben und veröffentlicht von</dt>
+          <dd>{approval.approved.name}{#if approval.approved.at}, {stamp(approval.approved.at)}{/if}</dd>
+        </div>
+      {/if}
+    </dl>
+  {/if}
+
   {#if data.pendingApprovals.length > 0}
     <section class="space-y-2">
       <h3 class="font-medium">Protokollgenehmigung</h3>
@@ -395,7 +418,7 @@
     </section>
   {/if}
 
-  {#if isAdmin}
+  {#if isAdmin || approval.canApprove}
     {#if publishError}
       <!-- (4) inline, actionable 422 banner — the real server quorum body, with a
            scroll affordance to where the admin fixes it, instead of an alert(). -->
@@ -417,11 +440,22 @@
       </div>
     {/if}
     <div class="flex gap-2 pt-2 border-t">
-      {#if data.protocol.status === 'draft'}
+      {#if isAdmin && data.protocol.status === 'draft'}
         <Button onclick={submitForVote}>Zur Abstimmung einreichen</Button>
       {/if}
-      {#if data.protocol.status === 'submitted'}
-        <Button onclick={publish}>Veröffentlichen</Button>
+      {#if approval.canApprove}
+        <Button onclick={publish}>Freigeben und veröffentlichen</Button>
+      {/if}
+    </div>
+  {/if}
+  {#if waitingForSecondPerson}
+    <div class="rounded-md border p-3 text-sm" data-testid="waiting-for-approval">
+      <div class="font-medium">Wartet auf Freigabe durch eine zweite Person</div>
+      {#if approval.otherEligibleCount === 0}
+        <p class="mt-1 text-ink-muted" data-testid="no-second-approver">
+          In diesem Gremium gibt es keine zweite Person, die freigeben darf. Ohne sie kann das Protokoll nicht
+          veröffentlicht werden.
+        </p>
       {/if}
     </div>
   {/if}

@@ -37,6 +37,7 @@ const pageData = (status: 'draft' | 'submitted') => ({
   resolutions: [untallied, consent],
   actionItems: [],
   wopiToken: null,
+  approval: { canApprove: status === 'submitted', refusal: null, otherEligibleCount: null, submitted: null, approved: null },
   pendingApprovals: [],
   committee: { id: 'c1', name: 'Finanzausschuss' },
   committeeId: 'c1',
@@ -88,7 +89,7 @@ describe('protocol page: a resolution nobody voted on', () => {
   it('shows the refusal of a publish without the attendance shortcut', async () => {
     answer = { status: 422, body: { message, code: UNTALLIED_RESOLUTION_CODE } }
     render(Page, { props: { data: pageData('submitted') as never } })
-    await fireEvent.click(screen.getByRole('button', { name: 'Veröffentlichen' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Freigeben und veröffentlichen' }))
 
     const alert = await screen.findByRole('alert')
     expect(requested).toEqual(['POST /api/protocols/p1/publish'])
@@ -100,7 +101,7 @@ describe('protocol page: a resolution nobody voted on', () => {
   it('keeps the attendance shortcut for a missing quorum', async () => {
     answer = { status: 422, body: { message: 'Nicht beschlussfähig: 1/3 stimmberechtigte Mitglieder anwesend' } }
     render(Page, { props: { data: pageData('submitted') as never } })
-    await fireEvent.click(screen.getByRole('button', { name: 'Veröffentlichen' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Freigeben und veröffentlichen' }))
 
     await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('Nicht beschlussfähig'))
     expect(screen.getByRole('button', { name: 'Anwesenheit erfassen' })).toBeTruthy()

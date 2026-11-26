@@ -2,6 +2,8 @@ import { error } from '@sveltejs/kit'
 import type { PageServerLoad } from './$types'
 import { listOrgUnitMembers } from '$lib/server/governance/org-units-db'
 import { getKeycloakAdminClient } from '$lib/server/keycloak-admin'
+import { hasRole, Role } from '$lib/auth'
+import { evaluateApprover, countOtherEligible } from '$lib/governance/protocol-approval'
 
 type AttendanceStatus = 'present' | 'absent' | 'excused'
 
@@ -79,6 +81,57 @@ export const load: PageServerLoad = async ({ params, fetch, locals, parent }) =>
     quorate: eligibleVotingCount > 0 && presentVotingCount * 2 > eligibleVotingCount,
   }
 
+  // Two-person publish: who submitted and who approved (names live from Keycloak, never
+  // stored), whether THIS viewer may approve, and whether anybody else could. The publish
+  // route decides with the same function; the page only reflects the answer.
+  const kc = getKeycloakAdminClient(locals.tenant)
+  const nameOf = async (id: string | null | undefined): Promise<string | null> => {
+    if (!id) return null
+    if (nameMap[id]) return nameMap[id]
+    try {
+      const u = await kc.getUser(id)
+      return [u.firstName, u.lastName].filter(Boolean).join(' ') || u.username
+    } catch {
+      return 'Unbekannt'
+    }
+  }
+  const isAdmin = hasRole(user.roles, Role.CouncilAdmin)
+  const votingMemberIds = members.filter((m) => m.voting).map((m) => m.user_keycloak_id)
+  const verdict = evaluateApprover(protocol, {
+    userId: user.id,
+    isAdmin,
+    isVotingMember: votingMemberIds.includes(user.id),
+  })
+  let otherEligibleCount: number | null = null
+  if (protocol.status === 'submitted') {
+    try {
+      // hasRole() counts an IT admin as a council admin too, so both roles' holders may approve.
+      const [council, it] = await Promise.all([
+        kc.listRealmRoleMembers(Role.CouncilAdmin),
+        kc.listRealmRoleMembers(Role.ITAdmin).catch(() => []),
+      ])
+      otherEligibleCount = countOtherEligible(
+        protocol,
+        [...council, ...it].filter((a) => a.enabled).map((a) => a.id),
+        votingMemberIds,
+      )
+    } catch {
+      // Keycloak unreachable: the page makes no claim about other approvers.
+      otherEligibleCount = null
+    }
+  }
+  const approval = {
+    canApprove: protocol.status === 'submitted' && verdict.ok,
+    refusal: verdict.ok ? null : verdict.reason,
+    otherEligibleCount,
+    submitted: protocol.submitted_by
+      ? { name: await nameOf(protocol.submitted_by), at: protocol.submitted_at as string | null }
+      : null,
+    approved: protocol.approved_by
+      ? { name: await nameOf(protocol.approved_by), at: protocol.approved_at as string | null }
+      : null,
+  }
+
   let wopiToken: { editorUrl: string; tokenTtl: number } | null = null
   if (protocol.status === 'draft') {
     const tokenRes = await fetch(`/api/protocols/${params.protocolId}/wopi-token`)
@@ -97,6 +150,7 @@ export const load: PageServerLoad = async ({ params, fetch, locals, parent }) =>
     resolutions,
     actionItems,
     wopiToken,
+    approval,
     pendingApprovals,
     committeeId: params.id,
   }
