@@ -871,8 +871,36 @@ _cd_colour_tip() {
 
 _cd_colour_evidence_dir() { printf '%s' "$(_cd_colour_root)/data/isolation-evidence"; }
 
+# _cd_colour_tree_prog TREE NAME - the path of the program NAME of the RELEASE TREE
+# (TREE/infra/host/bin/NAME), printed. gremion-isolation sources the release's own libraries
+# (lib/customer-ops.sh and what it pulls in), which the cd stage does not install, so it runs from
+# the tree it is about to judge: program, libraries and the code under test are then one commit
+# (the pipeline already runs gremion-tenant from the tree the same way). TRUST: the tree is the
+# candidate the pipeline fetched and builds its images from, the deploy user's own checkout, and
+# the program runs as the deploy user, never as root. What THIS function checks is the program's
+# path only: a program that is not a plain executable file inside the tree (a link out of it, a
+# directory in its place) is refused. The libraries the program sources are read from the same tree
+# by the program itself, and the bytes of the working tree are not compared with the commit here:
+# that the tree is the commit is what the fetch step establishes (at the commit, clean; see
+# prepare.sh). 2 when the program is not such a file.
+_cd_colour_tree_prog() {
+    local tree="$1" name="$2" prog real
+    prog="${tree}/infra/host/bin/${name}"
+    if [[ -L "$prog" || ! -f "$prog" || ! -x "$prog" ]]; then
+        _cd_colour_err "the release tree has no executable ${name} of its own (a link or a missing file is refused)"
+        return 2
+    fi
+    real="$(realpath -e -- "$prog" 2>/dev/null)" || real=''
+    tree="$(realpath -e -- "$tree" 2>/dev/null)" || tree=''
+    if [[ -z "$real" || -z "$tree" || "$real" != "${tree}/"* ]]; then
+        _cd_colour_err "${name} does not lie inside the release tree"
+        return 2
+    fi
+    printf '%s' "$prog"
+}
+
 # cd_colour_isolation_run TREE - produce the cross-customer isolation evidence for the
-# tip of TREE (gremion-isolation run, GREMION_RELEASE_DIR = TREE) and require the
+# tip of TREE (the gremion-isolation OF TREE, run with GREMION_RELEASE_DIR = TREE) and require the
 # evidence file for that tip. Prints the evidence path. 1 when the run fails or leaves
 # no evidence for the tip; 2 when the program or the tip is missing; 3 and 4 as in
 # _cd_colour_child_rc. The run is bounded by CD_COLOUR_ISOLATION_TIMEOUT_S (2400: the
@@ -883,12 +911,11 @@ cd_colour_isolation_run() {
     local tree="${1:-}" prog tip out log rc=0 ev
     [[ "$#" -eq 1 ]] || { _cd_colour_err "cd_colour_isolation_run: usage: TREE"; return 2; }
     [[ -d "$tree" ]] || { _cd_colour_err "cd_colour_isolation_run: no release tree directory"; return 2; }
-    prog="$(_cd_colour_root)/bin/gremion-isolation"
-    [[ -x "$prog" ]] || { _cd_colour_err "cd_colour_isolation_run: gremion-isolation is not installed"; return 2; }
     tip="$(_cd_colour_tip "$tree")" || { _cd_colour_err "cd_colour_isolation_run: the release tree has no release tip"; return 2; }
+    prog="$(_cd_colour_tree_prog "$tree" gremion-isolation)" || return 2
     out="$(_cd_colour_evidence_dir)"
     log="$(_cd_colour_logfile isolation)" || return 2
-    GREMION_RELEASE_DIR="$tree" timeout -k 10 "$(_cd_colour_int "${CD_COLOUR_ISOLATION_TIMEOUT_S:-}" 2400)" "$prog" run --out "$out" >"$log" 2>&1 </dev/null || rc=$?
+    GREMION_ROOT="$(_cd_colour_root)" GREMION_RELEASE_DIR="$tree" timeout -k 10 "$(_cd_colour_int "${CD_COLOUR_ISOLATION_TIMEOUT_S:-}" 2400)" "$prog" run --out "$out" >"$log" 2>&1 </dev/null || rc=$?
     if [[ "$rc" -ne 0 ]]; then
         _cd_colour_child_rc isolation_run "$rc" "isolation run failed (exit ${rc}); output in logs/${log##*/}"
         return $?
@@ -899,20 +926,19 @@ cd_colour_isolation_run() {
 }
 
 # cd_colour_isolation_record TREE - record the evidence of the tip of TREE
-# (gremion-isolation record, GREMION_RELEASE_DIR = TREE). It is separate from the run:
+# (the gremion-isolation of TREE, record, GREMION_RELEASE_DIR = TREE). It is separate from the run:
 # the commit point calls it, the gates do not. 1 when the evidence file for the
 # tip is absent or the record fails.
 cd_colour_isolation_record() {
     local tree="${1:-}" prog tip ev log rc=0
     [[ "$#" -eq 1 ]] || { _cd_colour_err "cd_colour_isolation_record: usage: TREE"; return 2; }
     [[ -d "$tree" ]] || { _cd_colour_err "cd_colour_isolation_record: no release tree directory"; return 2; }
-    prog="$(_cd_colour_root)/bin/gremion-isolation"
-    [[ -x "$prog" ]] || { _cd_colour_err "cd_colour_isolation_record: gremion-isolation is not installed"; return 2; }
     tip="$(_cd_colour_tip "$tree")" || { _cd_colour_err "cd_colour_isolation_record: the release tree has no release tip"; return 2; }
+    prog="$(_cd_colour_tree_prog "$tree" gremion-isolation)" || return 2
     ev="$(_cd_colour_evidence_dir)/${tip}.json"
     [[ -s "$ev" ]] || { _cd_colour_fail isolation_record 1 "isolation record: no evidence file for the tip"; return 1; }
     log="$(_cd_colour_logfile isolation-record)" || return 2
-    GREMION_RELEASE_DIR="$tree" timeout -k 10 "$(_cd_colour_int "${CD_COLOUR_ISOLATION_RECORD_TIMEOUT_S:-}" 600)" "$prog" record "$ev" >"$log" 2>&1 </dev/null || rc=$?
+    GREMION_ROOT="$(_cd_colour_root)" GREMION_RELEASE_DIR="$tree" timeout -k 10 "$(_cd_colour_int "${CD_COLOUR_ISOLATION_RECORD_TIMEOUT_S:-}" 600)" "$prog" record "$ev" >"$log" 2>&1 </dev/null || rc=$?
     if [[ "$rc" -ne 0 ]]; then
         _cd_colour_child_rc isolation_record "$rc" "isolation record failed (exit ${rc}); output in logs/${log##*/}"
         return $?

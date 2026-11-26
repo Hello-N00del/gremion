@@ -53,12 +53,24 @@ describe('NextcloudClient groupfolders methods', () => {
     ]
     const answer = (data: unknown) => (async () => new Response(JSON.stringify({ ocs: { data } }), { status: 200 })) as unknown as typeof fetch
     const expected = [
-      { id: 1, mountPoint: 'Vorstand', groups: ['ou-a', 'ou-b'] },
-      { id: 2, mountPoint: 'Leer', groups: [] }
+      { id: 1, mountPoint: 'Vorstand', groups: ['ou-a', 'ou-b'], groupPermissions: { 'ou-a': 31, 'ou-b': 1 } },
+      { id: 2, mountPoint: 'Leer', groups: [], groupPermissions: {} }
     ]
     expect(await clientWithFetch(answer(rows)).listGroupFolders()).toEqual(expected)
     expect(await clientWithFetch(answer({ '1': rows[0], '2': rows[1] })).listGroupFolders()).toEqual(expected)
-    expect(await clientWithFetch(answer(false)).listGroupFolders()).toEqual([])
+    // a list that was read and is empty, in either shape, is a genuinely empty install
+    expect(await clientWithFetch(answer([])).listGroupFolders()).toEqual([])
+    expect(await clientWithFetch(answer({})).listGroupFolders()).toEqual([])
+  })
+
+  it('listGroupFolders throws when the answer carries no readable list, instead of reporting no folders', async () => {
+    const reply = (body: unknown) => (async () => new Response(JSON.stringify(body), { status: 200 })) as unknown as typeof fetch
+    const failure = { ocs: { meta: { status: 'failure', statuscode: 997, message: 'Not authorised' }, data: [] } }
+    await expect(clientWithFetch(reply(failure)).listGroupFolders()).rejects.toThrow('997')
+    await expect(clientWithFetch(reply({ ocs: { meta: { statuscode: 100 }, data: null } })).listGroupFolders()).rejects.toThrow('no folder list')
+    await expect(clientWithFetch(reply({ ocs: { meta: { statuscode: 100 }, data: false } })).listGroupFolders()).rejects.toThrow('no folder list')
+    await expect(clientWithFetch(reply({ ocs: { meta: { statuscode: 100 } } })).listGroupFolders()).rejects.toThrow('no folder list')
+    await expect(clientWithFetch(reply({})).listGroupFolders()).rejects.toThrow('no folder list')
   })
 
   it('assignGroupFolderPermissions first addGroup then setPermissions (two POST requests)', async () => {
@@ -83,6 +95,18 @@ describe('NextcloudClient groupfolders methods', () => {
     // Neither should use the OCS v2 path
     expect(calls[0].url).not.toContain('/ocs/v2.php/apps/groupfolders/')
     expect(calls[1].url).not.toContain('/ocs/v2.php/apps/groupfolders/')
+  })
+
+  it('setGroupFolderPermissions sends only the permissions request for one group of a folder', async () => {
+    const calls: Array<{ url: string; body: string }> = []
+    const c = clientWithFetch((async (url: string, init: RequestInit) => {
+      calls.push({ url: String(url), body: String(init.body) })
+      return new Response(JSON.stringify({ ocs: { meta: { statuscode: 100 }, data: { success: true } } }), { status: 200 })
+    }) as typeof fetch)
+    await c.setGroupFolderPermissions(42, 'ou-finanzen', 31)
+    expect(calls).toHaveLength(1)
+    expect(calls[0].url).toContain('/index.php/apps/groupfolders/folders/42/groups/ou-finanzen')
+    expect(calls[0].body).toContain('permissions=31')
   })
 
   it('deleteGroupFolder sends DELETE to index.php groupfolders route', async () => {
