@@ -18,6 +18,22 @@ case "$JWT_LOGIN" in
   *) echo "[gremion-synapse] ERROR: SYNAPSE_JWT_LOGIN must be 'on' or 'off'" >&2; exit 1 ;;
 esac
 
+# The realm key wait (below, only with the JWT login on) is judged here, before any step runs.
+if [ "$JWT_LOGIN" = "on" ]; then
+  KC_MAX="${SYNAPSE_KC_MAX:-30}"
+  case "$KC_MAX" in
+    ''|*[!0-9]*|0) echo "[gremion-synapse] ERROR: SYNAPSE_KC_MAX must be a positive integer" >&2; exit 1 ;;
+  esac
+  KC_BUDGET="${SYNAPSE_KC_WAIT_S:-$((KC_MAX * 7))}"
+  case "$KC_BUDGET" in
+    ''|*[!0-9]*|0) echo "[gremion-synapse] ERROR: SYNAPSE_KC_WAIT_S must be a positive integer (seconds)" >&2; exit 1 ;;
+  esac
+  KC_INTERVAL="${SYNAPSE_KC_INTERVAL:-2}"
+  case "$KC_INTERVAL" in
+    ''|*[!0-9]*) echo "[gremion-synapse] ERROR: SYNAPSE_KC_INTERVAL must be a non-negative integer (seconds)" >&2; exit 1 ;;
+  esac
+fi
+
 # Make sure /data is owned by the synapse user (UID/GID 991 — see the upstream
 # matrixdotorg/synapse image's /start.py). The upstream start.py only chowns
 # /data in `generate`/`migrate_config` modes, NOT in `run` mode. On Docker
@@ -61,30 +77,41 @@ SYNAPSE_TEMPLATE="$TEMPLATE" SYNAPSE_CONFIG="$OUTPUT" "$RENDER_SHIM" true
 #                                   http://keycloak:8080/auth/realms/<realm>
 #                                   (render-homeserver.sh --fetch-url).
 #
-# If the realm cannot be reached after SYNAPSE_KC_MAX attempts (default 30,
-# about 7 s each), the Python step disables jwt_config so Synapse still
-# starts -- degrade-and-boot, made VISIBLE by /synapse-healthcheck.sh, which
-# reads unhealthy while the JWT login flow is missing.
+# The key is fetched until the realm serves a usable key set: a refused
+# connection, an HTTP error page (the edge answers one while the identity provider
+# is still starting), a body that is not JSON and a document without a usable
+# public_key all count as "not yet" (inject-jwt-key.py exits 3). The wait is bounded
+# by SYNAPSE_KC_MAX x 7 s (default 30 x 7 = 210 s), which fits inside the
+# healthcheck start_period and the deploy tool's wait for the state tier;
+# SYNAPSE_KC_WAIT_S overrides the budget in seconds and SYNAPSE_KC_INTERVAL the
+# pause between attempts (both for the tests). When the budget is spent the
+# container EXITS non-zero (the restart policy tries again): with the JWT login on,
+# Synapse never boots without its jwt_config. /synapse-healthcheck.sh remains the
+# check of what is actually offered.
 if [ "$JWT_LOGIN" = "off" ]; then
   echo "[gremion-synapse] SYNAPSE_JWT_LOGIN=off: jwt_config and oidc_providers are not rendered; the realm key fetch and the key injection are skipped."
 else
   KC_FETCH_URL="$("$RENDER_SHIM" --fetch-url)"
-  KC_MAX="${SYNAPSE_KC_MAX:-30}"
-  case "$KC_MAX" in
-    ''|*[!0-9]*|0) echo "[gremion-synapse] ERROR: SYNAPSE_KC_MAX must be a positive integer" >&2; exit 1 ;;
-  esac
-  echo "[gremion-synapse] Waiting for the identity provider realm at ${KC_FETCH_URL}..."
+  echo "[gremion-synapse] Waiting for the identity provider realm key at ${KC_FETCH_URL} (up to ${KC_BUDGET} s)..."
   KC_TRIES=0
-  until curl -sf --max-time 5 "${KC_FETCH_URL}" >/dev/null 2>&1; do
-    KC_TRIES=$((KC_TRIES + 1))
-    if [ "$KC_TRIES" -ge "$KC_MAX" ]; then
-      echo "[gremion-synapse] WARNING: identity provider unreachable after ${KC_MAX} attempts — jwt_config will be disabled." >&2
-      break
+  KC_START=$SECONDS
+  while :; do
+    KC_RC=0
+    KEYCLOAK_FETCH_URL="${KC_FETCH_URL}" python3 /inject-jwt-key.py "$OUTPUT" || KC_RC=$?
+    [ "$KC_RC" -eq 0 ] && break
+    if [ "$KC_RC" -ne 3 ]; then
+      echo "[gremion-synapse] ERROR: the realm key injection failed (exit ${KC_RC}); the container ends." >&2
+      exit "$KC_RC"
     fi
-    sleep 2
+    KC_TRIES=$((KC_TRIES + 1))
+    KC_ELAPSED=$((SECONDS - KC_START))
+    if [ "$KC_ELAPSED" -ge "$KC_BUDGET" ]; then
+      echo "[gremion-synapse] ERROR: no realm key from the identity provider after ${KC_TRIES} attempts in ${KC_ELAPSED} s; the container ends instead of starting without jwt_config." >&2
+      exit 1
+    fi
+    echo "[gremion-synapse] realm key not available yet (attempt ${KC_TRIES}, ${KC_ELAPSED} of ${KC_BUDGET} s); retrying in ${KC_INTERVAL} s"
+    sleep "$KC_INTERVAL"
   done
-
-  KEYCLOAK_FETCH_URL="${KC_FETCH_URL}" python3 /inject-jwt-key.py "$OUTPUT"
 fi
 
 # Rendered file must be readable/writable by the synapse user.

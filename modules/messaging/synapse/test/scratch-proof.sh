@@ -25,12 +25,13 @@
 #   b         IdP stub up, matrix up: healthy; the rendered config reads
 #             psycopg2, the server name and synapse, names no SQLite;
 #             public.users exists; first-boot seconds and RSS recorded
-#   c1        stub stopped, matrix restarted: "jwt_config disabled" in the
-#             log; the restart time is recorded for c2
-#   c2        unhealthy after start_period (240 s + 3 x 15 s from c1), while
-#             the old probe (/versions) still exits 0. Polls at most 100 s
-#             per call: before the deadline it exits 3 with PENDING -- run it
-#             again; it never reads healthy (that is a FAIL)
+#   c1        stub stopped, matrix restarted: the entrypoint waits for the
+#             realm key, spends its budget and ENDS ("no realm key" in the
+#             log); the restart time is recorded for c2
+#   c2        the restart policy brings the container back (RestartCount > 0)
+#             and it never reads healthy and never logs a listener while the
+#             IdP is down: Synapse does not boot without its jwt_config.
+#             Polls at most 100 s per call
 #   d1        the synapse database recreated bare (en_US.utf8): the preflight
 #             names en_US.utf8 and Synapse never starts; matrix left stopped
 #   d2        the synapse database restored C|C (libc), matrix stays stopped
@@ -300,45 +301,36 @@ phase_c1() {
   since="$(date -u +%Y-%m-%dT%H:%M:%SZ)"; t0="$(date +%s)"
   docker restart "$c" >/dev/null
   printf '%s %s\n' "$since" "$t0" > "$OUT/c.since"
-  # SYNAPSE_KC_MAX=3 fetch attempts of ~7 s, then the entrypoint degrades.
-  wait_log "$c" "$since" 'jwt_config disabled' 150 || die "7c1: no 'jwt_config disabled' in the log within 150 s of the restart"
-  printf '%s c1: stub stopped, matrix restarted at %s -> "jwt_config disabled"; health=%s\n' "$(now)" "$since" "$(health "$c")" | ledger c.log
-  ok "7c1: 'jwt_config disabled' after the restart at ${since}; run PHASE=c2 (unhealthy only after start_period 240 s + 3 x 15 s)"
+  # SYNAPSE_KC_MAX=3: a realm key wait of 3 x 7 s, then the entrypoint ends the container.
+  wait_log "$c" "$since" 'no realm key from the identity provider' 150 || die "7c1: no 'no realm key' line in the log within 150 s of the restart"
+  printf '%s c1: stub stopped, matrix restarted at %s -> "no realm key from the identity provider"; health=%s\n' "$(now)" "$since" "$(health "$c")" | ledger c.log
+  ok "7c1: the entrypoint ended without a realm key after the restart at ${since}; run PHASE=c2"
 }
 
 phase_c2() {
   need_names
-  local c since t0 s='' end elapsed old new
+  local c since t0 s='' end elapsed rc=0 logs
   c="$(cid matrix)"; [[ -n "$c" ]] || die "no matrix container (PHASE=b first)"
   [[ -f "$OUT/c.since" ]] || die "run PHASE=c1 first"
   read -r since t0 < "$OUT/c.since"
   # 100 s of polling: on the loaded Windows gate box one docker call has cost
-  # up to ~30 s and the phase's other calls ~60 s, and a 170 s poll ran the
-  # call to 245 s (measured, round 2).
+  # up to ~30 s (measured, round 2).
   end=$((SECONDS + 100))
   while (( SECONDS < end )); do
     s="$(health "$c")"
-    [[ "$s" == unhealthy ]] && break
-    [[ "$s" == healthy ]] && die "7c2: matrix reads healthy with the IdP down -- the probe does not see the missing JWT flow"
+    [[ "$s" == healthy ]] && die "7c2: matrix reads healthy with the IdP down -- it booted without its realm key"
+    rc="$(docker inspect -f '{{.RestartCount}}' "$c" | tr -d '\r')"
+    (( rc > 0 )) && break
     sleep 5
   done
   elapsed=$(( $(date +%s) - t0 ))
-  if [[ "$s" != unhealthy ]]; then
-    (( elapsed < 900 )) || die "7c2: matrix is ${s} ${elapsed} s after the restart, want unhealthy (start_period 240 s + 3 x 15 s)"
-    echo "[synapse-proof] PENDING: 7c2: matrix is ${s} ${elapsed} s after the restart at ${since}; unhealthy needs start_period 240 s + 3 x 15 s -- run PHASE=c2 again" >&2
-    exit 3
-  fi
-  grep -q 'jwt_config disabled' <<< "$(docker logs --since "$since" "$c" 2>&1)" || die "7c2: no 'jwt_config disabled' in the log since the restart"
-  set +e
-  docker exec "$c" curl -sf --max-time 5 http://127.0.0.1:8008/_matrix/client/versions >/dev/null; old=$?
-  docker exec "$c" /synapse-healthcheck.sh > "$OUT/c-probe.txt" 2>&1; new=$?
-  set -e
-  printf '%s c2: stub stopped -> "jwt_config disabled"; health=%s %ss after the restart; old probe (/versions) exit %s; new probe exit %s: %s\n' \
-    "$(now)" "$(health "$c")" "$elapsed" "$old" "$new" "$(tr '\r\n' '  ' < "$OUT/c-probe.txt")" | ledger c.log
-  [[ "$old" == 0 ]] || die "7c2: the old probe did not exit 0 (exit $old) -- the RED comparison is void"
-  [[ "$new" != 0 ]] || die "7c2: the new probe exited 0 with jwt_config disabled"
-  grep -q 'org.matrix.login.jwt is not offered' "$OUT/c-probe.txt" || die "7c2: the probe failed for another reason than the missing JWT flow"
-  ok "7c2: unhealthy ${elapsed} s after the restart with the IdP down, while the old /versions probe exits 0"
+  (( rc > 0 )) || die "7c2: the restart policy did not bring the container back within the 100 s poll (RestartCount $rc, health $s)"
+  logs="$(docker logs --since "$since" "$c" 2>&1)"
+  grep -q 'no realm key from the identity provider' <<< "$logs" || die "7c2: no 'no realm key' line in the log since the restart"
+  ! grep -q 'Synapse now listening' <<< "$logs" || die "7c2: Synapse listened with the IdP down"
+  printf '%s c2: stub stopped -> the entrypoint ends and restarts (RestartCount %s), health=%s %ss after the restart; no listener logged\n' \
+    "$(now)" "$rc" "$s" "$elapsed" | ledger c.log
+  ok "7c2: with the IdP down the container ends and restarts (RestartCount $rc) and never boots without its realm key"
 }
 
 phase_d1() {

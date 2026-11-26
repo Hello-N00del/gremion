@@ -42,8 +42,8 @@ RUN chmod 0644 /config/homeserver.yaml.tpl \
 # provider are both offered. With SYNAPSE_JWT_LOGIN=off it is the inverse:
 # neither the JWT flow nor an SSO flow may be offered. Replaces the upstream
 # /health probe, which reads healthy with jwt_config disabled. start-period:
-# SYNAPSE_KC_MAX (30) key-fetch attempts of ~7 s each, plus the measured first
-# boot; compose repeats it.
+# the realm key wait (SYNAPSE_KC_MAX = 30, x 7 s = 210 s at most; the container ends
+# when it is spent), plus the measured first boot; compose repeats it.
 HEALTHCHECK --interval=15s --timeout=10s --start-period=240s --retries=3 CMD ["/synapse-healthcheck.sh"]
 
 ENTRYPOINT ["/gremion-synapse-entrypoint.sh"]
