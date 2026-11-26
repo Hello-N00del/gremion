@@ -114,7 +114,7 @@ export function getTenantMailContext(): TenantMailContext {
 
   const baseOptions = {
     port,
-    name: smtpEhloName(),
+    name: smtpEhloName(tenant.primaryHost),
     // O-5: implicit TLS only on 465; on every other port nodemailer upgrades
     // with STARTTLS when the server offers it.
     secure: port === 465,

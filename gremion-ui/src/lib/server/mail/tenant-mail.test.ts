@@ -118,6 +118,24 @@ describe('tenant-mail seam (SP-2 §2)', () => {
     }
   })
 
+  it('two customers on two hosts each introduce themselves with their own host name, not the install-wide one', () => {
+    process.env.PUBLIC_BASE_URL = 'https://rat.musterstadt.example'
+    try {
+      const smtp = { host: 'smtp.ehlo.de', port: 587, user: 'u', passwordRef: 'env:X' }
+      const withHost = (id: string, primaryHost: string | null) =>
+        ({ id, slug: id, primaryHost, services: { smtp } }) as unknown as TenantContext
+      runWithTenant(withHost('tid-ehlo-a', 'a.example.org'), () => getTenantMailContext())
+      runWithTenant(withHost('tid-ehlo-b', 'b.example.net'), () => getTenantMailContext())
+      runWithTenant(withHost('tid-ehlo-none', null), () => getTenantMailContext())
+      expect(createTransport.mock.calls[0][0]).toMatchObject({ name: 'a.example.org' })
+      expect(createTransport.mock.calls[1][0]).toMatchObject({ name: 'b.example.net' })
+      // a customer without a host keeps the install-wide name
+      expect(createTransport.mock.calls[2][0]).toMatchObject({ name: 'rat.musterstadt.example' })
+    } finally {
+      delete process.env.PUBLIC_BASE_URL
+    }
+  })
+
   it('port 465 resolves to an implicit-TLS (secure) transport', () => {
     runWithTenant(
       ctx('tid-tls', 'tls', { smtp: { host: 'smtp.tls.de', port: 465, user: 'u', passwordRef: 'env:X' } }),

@@ -63,6 +63,10 @@ export const actions: Actions = {
     }
 
     const uuid = params.id
+    // Only an election tracked for this customer (committee_elections) may be frozen, as the page loads check
+    const row = await ElectionDb.findByHeliosUuid(uuid)
+    if (!row) error(404, 'Wahl nicht gefunden')
+
     try {
       await HeliosClient.freeze(uuid)
     } catch (e) {

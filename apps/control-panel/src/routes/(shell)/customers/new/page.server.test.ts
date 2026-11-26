@@ -285,9 +285,14 @@ describe('Neuer Mandant: the opted-in modules of a secondary host (SECONDARY_TEN
     expect(await modules()).toEqual(['messaging', 'files'])
   })
 
-  it('M3: an id outside the set (publishing, content, an unknown or upper-case one) and a repeat are not shown', async () => {
-    ENV.SECONDARY_TENANT_MODULES = 'publishing files content files Votes some-new-module messages'
+  it('M3: an id outside the set (elections, vault, finance, handover, an unknown or upper-case one) and a repeat are not shown', async () => {
+    ENV.SECONDARY_TENANT_MODULES = 'elections files vault files Votes some-new-module messages finance handover'
     expect(await modules()).toEqual(['files'])
+  })
+
+  it('M3b: content and publishing are in the set, in the order of the list', async () => {
+    ENV.SECONDARY_TENANT_MODULES = 'publishing files content files'
+    expect(await modules()).toEqual(['publishing', 'files', 'content'])
   })
 
   it('M4: the opt-in is read from the panel environment only, never from the posted form or the URL', async () => {

@@ -44,6 +44,8 @@ const hoisted = vi.hoisted(() => ({
   tenantSmtp: undefined as
     | { host?: string; port?: number; user?: string; passwordRef?: string }
     | undefined,
+  /** The customer host getTenant() answers with; undefined = the tenant has none. */
+  primaryHost: undefined as string | undefined,
   /** What resolveSecret() returns, or throws when set to an Error. */
   secret: 'stored-relay-secret' as string | Error,
   resolveSecret: vi.fn(),
@@ -76,7 +78,7 @@ vi.mock('$lib/server/config', () => ({ readConfig: hoisted.readConfig }))
 // so the ALS-backed canonical tenant id used by the rate limiter is stubbed.
 vi.mock('$lib/server/tenant/context', () => ({
   currentTenantId: () => 'default',
-  getTenant: () => ({ id: 'default', services: { smtp: hoisted.tenantSmtp } }),
+  getTenant: () => ({ id: 'default', primaryHost: hoisted.primaryHost, services: { smtp: hoisted.tenantSmtp } }),
 }))
 vi.mock('$lib/server/tenant/secrets', () => ({ resolveSecret: hoisted.resolveSecret }))
 
@@ -115,6 +117,7 @@ beforeEach(() => {
   hoisted.readConfig.mockReturnValue({ setup_complete: false, smtp: { host: '' } })
   hoisted.user = IT_ADMIN
   hoisted.tenantSmtp = undefined
+  hoisted.primaryHost = undefined
   hoisted.secret = 'stored-relay-secret'
   hoisted.resolveSecret.mockClear()
   for (const k of Object.keys(hoisted.env)) delete hoisted.env[k]
@@ -166,6 +169,20 @@ describe('POST /api/setup/test-smtp -- session + IT-admin gate (TASK-042 Q1)', (
       const res = await call('smtp.example.com')
       expect(res.status).toBe(200)
       expect(hoisted.createTransport.mock.calls[0][0]).toMatchObject({ name: 'rat.musterstadt.example' })
+    } finally {
+      delete process.env.PUBLIC_BASE_URL
+    }
+  })
+
+  // One install serves several customer hosts: the probe announces the customer's own host, exactly
+  // as the tenant mail transport does, even when it differs from PUBLIC_BASE_URL.
+  it("introduces itself with the tenant's own host when it has one", async () => {
+    process.env.PUBLIC_BASE_URL = 'https://rat.musterstadt.example'
+    hoisted.primaryHost = 'a.example.org'
+    try {
+      const res = await call('smtp.example.com')
+      expect(res.status).toBe(200)
+      expect(hoisted.createTransport.mock.calls[0][0]).toMatchObject({ name: 'a.example.org' })
     } finally {
       delete process.env.PUBLIC_BASE_URL
     }
