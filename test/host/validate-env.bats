@@ -786,21 +786,22 @@ secondary_fixture() {
     [ "$output" = 1 ]
 }
 
-# NC_PROVIDER_PER_CUSTOMER (optional, on|off): records a secondary customer's own user_oidc provider id when its
-# customer is wired. Judged in any file that declares it; absent, empty and off are today's behaviour.
-@test "NC_PROVIDER_PER_CUSTOMER: absent, empty, off and on validate, and any other value fails naming the key" {
+# NC_PROVIDER_PER_CUSTOMER (optional, off only for now): a secondary customer's own user_oidc provider would create
+# accounts under derived ids the app does not address yet, so `on` is refused here and in the wire. Judged in any
+# file that declares it; absent, empty and off are today's behaviour.
+@test "NC_PROVIDER_PER_CUSTOMER: absent, empty and off validate, and any other value (on included) fails naming the key" {
     secondary_fixture
     run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     [[ "$output" != *"NC_PROVIDER_PER_CUSTOMER"* ]] || { echo "$output"; return 1; }
     local v
-    for v in '' off on; do
+    for v in '' off; do
         sed -i '/^NC_PROVIDER_PER_CUSTOMER=/d' "${ENV_DIR}/state.env"
         printf 'NC_PROVIDER_PER_CUSTOMER=%s\n' "$v" >> "${ENV_DIR}/state.env"
         run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
         [ "$status" -eq 0 ] || { echo "'${v}': ${output}"; return 1; }
     done
-    for v in yes true 1 ON maybe; do
+    for v in on yes true 1 ON maybe; do
         sed -i '/^NC_PROVIDER_PER_CUSTOMER=/d' "${ENV_DIR}/state.env"
         printf 'NC_PROVIDER_PER_CUSTOMER=%s\n' "$v" >> "${ENV_DIR}/state.env"
         run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
