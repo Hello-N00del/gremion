@@ -313,17 +313,24 @@ export class NextcloudClient {
 
   /** List all group folders known to this NC instance.
    *  NC returns an id-keyed object on older versions and an array on newer ones —
-   *  both shapes are normalised.  A `null`/`false` data field (empty install)
-   *  is treated as an empty list.  Every folder carries the ids of its groups:
+   *  both shapes are normalised; an empty install answers with an empty one of them.
+   *  An answer that carries no list (a `null`/`false`/missing data field) or an OCS
+   *  status other than 100/200 THROWS: an empty list means "there are no folders", and
+   *  a caller that reads that from an answer it could not read would replace or adopt
+   *  folders on a wrong premise (as listGroupMembers does for its answer). Every folder carries the ids of its groups:
    *  NC reports them as an object keyed by group id (group id -> permissions), or
    *  as an empty array for a folder nobody was granted on yet. The list spans the
    *  whole instance, so a caller that adopts a folder must check the groups too:
    *  the mount point alone does not tell whose folder it is. */
   async listGroupFolders(): Promise<GroupFolderListing[]> {
     const res = await this.request('GET', '/index.php/apps/groupfolders/folders?format=json')
-    const json = await res.json()
-    const data = json?.ocs?.data ?? null
-    if (!data) return []
+    const json = (await res.json()) as { ocs?: { meta?: { statuscode?: number; message?: string }; data?: unknown } } | null
+    const code = json?.ocs?.meta?.statuscode
+    if (code !== undefined && code !== 100 && code !== 200) {
+      throw new Error(`Nextcloud group folders → OCS status ${code}: ${json?.ocs?.meta?.message ?? ''}`.trim())
+    }
+    const data = json?.ocs?.data
+    if (data === null || typeof data !== 'object') throw new Error('Nextcloud group folders → the answer has no folder list')
     const entries: Array<{ id: number; mount_point: string; groups?: unknown }> = Array.isArray(data)
       ? data
       : Object.values(data)

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { createNextcloudSubsystem } from './nextcloud-subsystem'
+import { NextcloudClient } from '../nextcloud-client'
 import type { OrgUnit } from '../../governance/org-units-db'
 
 const unit: OrgUnit = {
@@ -90,7 +91,7 @@ function subsystem(nc: ReturnType<typeof fakeNc>, kc = fakeKc(), providerId = 1)
 }
 
 describe('nextcloud subsystem', () => {
-  afterEach(() => { vi.restoreAllMocks() })
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
   it('creates the group + folder and returns the composite external id', async () => {
     const nc = fakeNc()
@@ -189,7 +190,7 @@ describe('nextcloud subsystem', () => {
       expect(nc.grants).toEqual([[77, 'ou-abc']])
     })
 
-    it('creates a new folder when the recorded one is gone and Nextcloud lists no folder at all', async () => {
+    it('creates a new folder when the recorded one is gone and Nextcloud reads an empty folder list', async () => {
       const nc = fakeNc([])
       const { row, ctx } = ledgerRow()
       row.externalId = '41:ou-abc'
@@ -198,6 +199,21 @@ describe('nextcloud subsystem', () => {
       expect(r.externalId).toBe('77:ou-abc')
       expect(row.externalId).toBe('77:ou-abc')
       expect(nc.grants).toEqual([[77, 'ou-abc']])
+    })
+
+    it('makes nothing and keeps the recorded id when the folder list cannot be read (real client, failure envelope)', async () => {
+      const nc = fakeNc([{ id: 41, mountPoint: 'Vorstand', groups: ['ou-abc'] }])
+      const { row, ctx } = ledgerRow()
+      row.externalId = '41:ou-abc'
+      const failure = { ocs: { meta: { status: 'failure', statuscode: 997, message: 'Not authorised' }, data: null } }
+      vi.stubGlobal('fetch', (async () => new Response(JSON.stringify(failure), { status: 200 })) as unknown as typeof fetch)
+      const real = new NextcloudClient('http://nc', 'admin', 'pw')
+      nc.listGroupFolders = () => real.listGroupFolders() as never
+      await expect(subsystem(nc).ensureResource(unit, ctx, row.externalId)).rejects.toThrow('997')
+      expect(nc.folders).toEqual([])
+      expect(nc.grants).toEqual([])
+      expect(nc.deleted).toEqual([])
+      expect(row.externalId).toBe('41:ou-abc')
     })
 
     it('keeps a recorded folder that already carries the unit group, without granting again', async () => {

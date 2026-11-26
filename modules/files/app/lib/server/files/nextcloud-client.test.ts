@@ -58,7 +58,19 @@ describe('NextcloudClient groupfolders methods', () => {
     ]
     expect(await clientWithFetch(answer(rows)).listGroupFolders()).toEqual(expected)
     expect(await clientWithFetch(answer({ '1': rows[0], '2': rows[1] })).listGroupFolders()).toEqual(expected)
-    expect(await clientWithFetch(answer(false)).listGroupFolders()).toEqual([])
+    // a list that was read and is empty, in either shape, is a genuinely empty install
+    expect(await clientWithFetch(answer([])).listGroupFolders()).toEqual([])
+    expect(await clientWithFetch(answer({})).listGroupFolders()).toEqual([])
+  })
+
+  it('listGroupFolders throws when the answer carries no readable list, instead of reporting no folders', async () => {
+    const reply = (body: unknown) => (async () => new Response(JSON.stringify(body), { status: 200 })) as unknown as typeof fetch
+    const failure = { ocs: { meta: { status: 'failure', statuscode: 997, message: 'Not authorised' }, data: [] } }
+    await expect(clientWithFetch(reply(failure)).listGroupFolders()).rejects.toThrow('997')
+    await expect(clientWithFetch(reply({ ocs: { meta: { statuscode: 100 }, data: null } })).listGroupFolders()).rejects.toThrow('no folder list')
+    await expect(clientWithFetch(reply({ ocs: { meta: { statuscode: 100 }, data: false } })).listGroupFolders()).rejects.toThrow('no folder list')
+    await expect(clientWithFetch(reply({ ocs: { meta: { statuscode: 100 } } })).listGroupFolders()).rejects.toThrow('no folder list')
+    await expect(clientWithFetch(reply({})).listGroupFolders()).rejects.toThrow('no folder list')
   })
 
   it('assignGroupFolderPermissions first addGroup then setPermissions (two POST requests)', async () => {
