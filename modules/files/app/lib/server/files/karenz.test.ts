@@ -285,18 +285,20 @@ describe('filesKarenz', () => {
     // the only Nextcloud call of a restore is reading the unit's group: nothing is created, nothing is deleted
     expect(ncCalls().every((c) => c.startsWith('GET ') && c.includes('/cloud/groups/ou-a'))).toBe(true)
 
-    // The REAL adapter: the provisioning worker's ensureResource gets the restored external id as `existing`
-    // and must hand it back without creating a group folder or a group.
+    // The REAL adapter: the provisioning worker's ensureResource gets the restored external id as `existing`.
+    // It checks that folder in Nextcloud (it carries the unit group) and hands the id back without creating
+    // a group folder or a group, and without granting anything again.
     const { createNextcloudSubsystem } = await import('./provisioning/nextcloud-subsystem')
     const nc = {
-      createGroup: vi.fn(), listGroupFolders: vi.fn(), createGroupFolder: vi.fn(), assignGroupFolderPermissions: vi.fn(),
+      createGroup: vi.fn(), createGroupFolder: vi.fn(), assignGroupFolderPermissions: vi.fn(),
+      listGroupFolders: vi.fn(async () => [{ id: 7, mountPoint: 'a', groups: ['ou-a'] }]),
     }
     const subsystem = createNextcloudSubsystem({ nc: nc as never, kc: { getUser: vi.fn() } as never }, 1)
     const result = await subsystem.ensureResource(units[0]! as never, {} as never, ledger.get('a')!.external_id)
     expect(result).toEqual({ externalId: a })
     expect(nc.createGroupFolder).not.toHaveBeenCalled()
     expect(nc.createGroup).not.toHaveBeenCalled()
-    expect(nc.listGroupFolders).not.toHaveBeenCalled()
+    expect(nc.assignGroupFolderPermissions).not.toHaveBeenCalled()
   })
 
   it('restore attaches the row and the flag in one step, the row last (an interrupted restore is run again)', async () => {

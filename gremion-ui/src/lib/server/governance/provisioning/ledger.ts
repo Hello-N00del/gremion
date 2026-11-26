@@ -86,6 +86,18 @@ export async function markResourceOk(
     WHERE org_unit_id = ${orgUnitId} AND subsystem = ${subsystem}`
 }
 
+/** Records an external id on the row and leaves status and retry state alone. For an adapter that has
+ *  made part of its resource and must not make it again if a later step fails: the row keeps the id while
+ *  it is still pending or failed, the next attempt receives it as `existing`, and the removal paths
+ *  (which treat any non-null external id as a live resource) reach it. */
+export async function recordResourceExternalId(
+  orgUnitId: string, subsystem: Subsystem, externalId: string
+): Promise<void> {
+  await getDb()`
+    UPDATE provisioning_resources SET external_id = ${externalId}, updated_at = now()
+    WHERE org_unit_id = ${orgUnitId} AND subsystem = ${subsystem}`
+}
+
 /** Mark failed, increment attempts, and schedule the next retry with capped backoff. */
 export async function markResourceFailed(
   orgUnitId: string, subsystem: Subsystem, error: string

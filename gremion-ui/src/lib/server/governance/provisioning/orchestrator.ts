@@ -10,7 +10,7 @@ import {
 import type { MembershipType, OrgUnit } from '../org-units-db'
 import {
   ensureResourceRow, enqueueResources, getResource, getResources, detachResource,
-  markResourceOk, markResourceFailed
+  markResourceOk, markResourceFailed, recordResourceExternalId
 } from './ledger'
 import type { ProvisioningResource } from './ledger'
 import { enqueueMemberRemoveOps } from './member-ops'
@@ -94,9 +94,15 @@ async function ensureOne(
     return { subsystem, status: 'ok', willRetry: false }
   }
   const unit = (await getOrgUnit(unitId))!
+  // The adapter may record what it has made so far (see ProvisionContext.recordExternalId); the
+  // recorder is bound to this unit and subsystem, the shared ctx is not changed.
+  const unitCtx: ProvisionContext = {
+    ...ctx,
+    recordExternalId: (externalId) => recordResourceExternalId(unitId, subsystem, externalId)
+  }
   try {
     const { externalId } = await adapters[subsystem].ensureResource(
-      unit, ctx, existing?.external_id ?? null
+      unit, unitCtx, existing?.external_id ?? null
     )
     await markResourceOk(unitId, subsystem, externalId)
     return { subsystem, status: 'ok', willRetry: false }
