@@ -60,14 +60,25 @@ function markerSql(): Sql {
 }
 
 let sent: number
-function deps(origin: string): DispatchDeps {
+let linkBaseAsked: number
+/**
+ * `answer` is what the kernel's link-base callback gives for this send: an origin string, null (the
+ * tenant has no public host) or an Error (the kernel could not be asked).
+ */
+function deps(answer: string | null | Error): DispatchDeps {
   sent = 0
+  linkBaseAsked = 0
   return {
     sql: markerSql(),
     kernel: {
       render: async () => '<html><body>x</body></html>',
       resolveGroup: async () => [],
       sendMail: async () => ({ messageId: 'never' }),
+      linkBase: async () => {
+        linkBaseAsked += 1
+        if (answer instanceof Error) throw answer
+        return answer
+      },
     } as unknown as KernelClient,
     transport: {
       sendMail: async () => {
@@ -75,7 +86,6 @@ function deps(origin: string): DispatchDeps {
         return { messageId: 'never' }
       },
     },
-    origin,
   }
 }
 
@@ -251,7 +261,7 @@ describe('boot — the leaf starts only with an absolute link base', () => {
 
 describe('dispatch — refuses a non-absolute unsubscribe URL', () => {
   it('refuses an empty origin before anything is claimed or mailed', async () => {
-    await expect(dispatch(TENANT, 42, 'actor', deps(''))).rejects.toThrow(/ORIGIN must be/)
+    await expect(dispatch(TENANT, 42, 'actor', deps(''))).rejects.toThrow(/link-base answer must be/)
     expect(sent, 'not one recipient may be mailed a host-relative unsubscribe link').toBe(0)
   })
 
@@ -271,6 +281,49 @@ describe('dispatch — refuses a non-absolute unsubscribe URL', () => {
     ).toBeDefined()
     expect(refusal, 'the log must name the newsletter').toContain('#42')
     expect(refusal, 'the log must name the tenant').toContain('demo')
+  })
+
+  it('refuses when the kernel has no public host for the tenant, mailing nobody', async () => {
+    await expect(dispatch(TENANT, 42, 'actor', deps(null))).rejects.toBeInstanceOf(
+      dispatchModule.LinkBaseUnusableError,
+    )
+    expect(sent).toBe(0)
+    const messages = errorSpy.mock.calls.map((c: unknown[]) => c.map(String).join(' '))
+    expect(messages.find((m: string) => m.includes('REFUSING') && m.includes('#42'))).toBeDefined()
+  })
+
+  it('refuses, naming the tenant and the newsletter, when the kernel cannot be asked', async () => {
+    await expect(
+      dispatch(TENANT, 42, 'actor', deps(new Error('kernel link-base failed: 503'))),
+    ).rejects.toThrow(/link-base failed: 503/)
+    expect(sent).toBe(0)
+    const messages = errorSpy.mock.calls.map((c: unknown[]) => c.map(String).join(' '))
+    const refusal = messages.find((m: string) => m.includes('REFUSING'))
+    expect(refusal, `saw ${JSON.stringify(messages)}`).toBeDefined()
+    expect(refusal).toContain('#42')
+    expect(refusal).toContain('demo')
+  })
+
+  it('asks the kernel on every dispatch and never falls back to a boot-time value', async () => {
+    const saved = { origin: process.env.ORIGIN, base: process.env.PUBLIC_BASE_URL }
+    process.env.ORIGIN = 'https://boot.example.org'
+    process.env.PUBLIC_BASE_URL = 'https://boot.example.org'
+    try {
+      const d = deps(null)
+      await expect(dispatch(TENANT, 42, 'actor', d)).rejects.toBeInstanceOf(
+        dispatchModule.LinkBaseUnusableError,
+      )
+      await expect(dispatch(TENANT, 43, 'actor', d)).rejects.toBeInstanceOf(
+        dispatchModule.LinkBaseUnusableError,
+      )
+      expect(linkBaseAsked, 'one question per send, none answered from the environment').toBe(2)
+      expect(sent).toBe(0)
+    } finally {
+      if (saved.origin === undefined) delete process.env.ORIGIN
+      else process.env.ORIGIN = saved.origin
+      if (saved.base === undefined) delete process.env.PUBLIC_BASE_URL
+      else process.env.PUBLIC_BASE_URL = saved.base
+    }
   })
 
   it('does NOT refuse a valid absolute origin', async () => {

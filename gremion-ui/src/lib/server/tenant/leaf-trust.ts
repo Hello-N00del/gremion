@@ -46,7 +46,7 @@
 // selector — an external client would simply send `x-tenant-id: <victim>`. The
 // per-leaf internal secret is the opposite: the edge never injects it, no client
 // can obtain it, and the kernel already treats presenting it as "you are that
-// leaf" on these exact four routes.
+// leaf" on these exact six routes.
 //
 // Authority check — does the id path let a leaf do anything it could not do
 // before? No. A leaf holding `INTERNAL_NEWSLETTER_SECRET` could already invoke
@@ -57,7 +57,7 @@
 // it removes is real: a stale or moved host can no longer aim a callback at the
 // wrong tenant, because the host is no longer an input.
 //
-// Condition (1) is what keeps the blast radius at four routes: the leaf secret
+// Condition (1) is what keeps the blast radius at six routes: the leaf secret
 // selects a tenant ONLY on the callbacks it is the secret for. It cannot be used
 // to browse that tenant's app, because no other path consults this function.
 //
@@ -83,7 +83,10 @@ export const LEAF_CALLBACK_ROUTES: Readonly<Record<string, string>> = Object.fre
   '/api/internal/newsletter/render': 'INTERNAL_NEWSLETTER_SECRET',
   '/api/internal/newsletter/resolve-group': 'INTERNAL_NEWSLETTER_SECRET',
   '/api/internal/newsletter/send-mail': 'INTERNAL_NEWSLETTER_SECRET',
+  // The origin a leaf builds its mail links from, asked per send (a GET: the method is not part of the trust).
+  '/api/internal/newsletter/link-base': 'INTERNAL_NEWSLETTER_SECRET',
   '/api/internal/content/portal-publish': 'INTERNAL_CONTENT_SECRET',
+  '/api/internal/content/link-base': 'INTERNAL_CONTENT_SECRET',
 })
 
 /** uuid shape — the same format-only regex the callback bodies use for ids. */
@@ -93,7 +96,7 @@ const TENANT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9
  * Read a leaf secret from `process.env` and NOWHERE else.
  *
  * Deliberately NOT the `$env/dynamic/private`-first `readEnv` used elsewhere in
- * this trust family: the four handlers read `process.env.INTERNAL_*_SECRET`
+ * this trust family: the six handlers read `process.env.INTERNAL_*_SECRET`
  * directly, and the whole point of condition (2) is that element-0's acceptance
  * is EXACTLY the handler's acceptance. Reading a second source could accept a
  * request the handler then rejects. (Under the Node adapter the two are the same

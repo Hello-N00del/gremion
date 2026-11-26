@@ -1,4 +1,4 @@
-<!-- i18n-sync: source=README.md sha256=75f0658af595f3e21351bc1c4077fcbdcbfa9e013985451230af07ba4e4efd08 -->
+<!-- i18n-sync: source=README.md sha256=882ab5ef4808bf3e4c8359d2c79a3a016128a75cd926a7c677cab1bc9f3af147 -->
 [English](./README.md) | **Deutsch**
 
 # publishing
@@ -71,7 +71,7 @@ exportiert (Aufbewahrungsprofil `rp-nws-module-data`), unter Auslassung von
 | `NEWSLETTER_PG_URL` | Leaf | PostgreSQL-Server des Moduls; Pflicht, kein Standardwert. |
 | `NATS_URL` | Leaf | Aktiviert das Outbox-Relay. |
 | `KERNEL_BASE_URL` | Leaf | Basis-URL des Kernels für die Callbacks render, resolve-group und send-mail. |
-| `PUBLIC_BASE_URL`, `ORIGIN` | Leaf, App | Öffentliche Basis-URL, aus der Links gebaut werden. |
+| `PUBLIC_BASE_URL`, `ORIGIN` | Leaf, App | Öffentliche Basis-URL. Der Leaf protokolliert sie nur beim Start: die Basis der Links in einer Mail (der Abmelde-Link) ist der eigene Host des sendenden Mandanten, den der Leaf bei jedem Versand beim Kernel erfragt (`GET /api/internal/newsletter/link-base`). |
 | `NEWSLETTER_ALLOW_LOOPBACK_LINKS` | Leaf | Erlaubt Loopback-Basen für Links (Entwicklung). |
 | `NEWSLETTER_SCHEDULER_ENABLED`, `SCHEDULER_ENABLED` | Leaf | Schalten den Versand-Scheduler; die modulspezifische Variable hat Vorrang, wenn sie nicht leer ist. |
 | `COLLABORA_INTERNAL_URL` | App | Interne Collabora-URL für die Konvertierung von Entwürfen. |

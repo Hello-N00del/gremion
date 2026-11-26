@@ -119,8 +119,10 @@ function isRepointRefusal(err: unknown): boolean {
 // send no longer depends on some earlier request having taught this process a
 // control-plane fact.
 //
-// PUBLIC_BASE_URL is still read below for `origin` — that is a rendering
-// concern (link building), not a tenant selector, and is unchanged.
+// PUBLIC_BASE_URL is still read below, for the boot log ONLY. The origin of the links in
+// a mail is the sending tenant's own host, asked of the kernel at the start of every
+// email send (KernelClient.linkBase): one boot-time value would link every customer's
+// subscribers to one host.
 
 async function main(): Promise<void> {
   const secret = process.env.INTERNAL_CONTENT_SECRET
@@ -141,18 +143,19 @@ async function main(): Promise<void> {
     console.warn('[content] KERNEL_BASE_URL is unset — dispatch will fail at publish step')
   }
 
-  // K5#8 / K5#33: the unsubscribe link base. No localhost default any more: an
-  // unusable value is reported ONCE at boot and every email publish then fails
-  // closed (publishChannel/dispatch re-check it) instead of mailing dead links.
-  const linkBaseRaw = process.env.PUBLIC_BASE_URL ?? ''
+  // K5#8 / K5#33: the unsubscribe link base. No localhost default, and no boot-time value
+  // in a mail any more: every email publish asks the kernel for the sending tenant's own
+  // host and fails closed (publishChannel/dispatch check the answer) instead of mailing
+  // dead links. PUBLIC_BASE_URL is only reported here, for the operator.
   const allowLoopbackLinks = process.env.CONTENT_ALLOW_LOOPBACK_LINKS === '1'
   const linkBase = resolveContentLinkBase(process.env)
   if (linkBase.usable) {
-    console.log(`[content] unsubscribe links use ${linkBase.base}`)
+    console.log(
+      `[content] PUBLIC_BASE_URL is ${linkBase.base} (informational only: each email publish uses the tenant host the kernel reports)`,
+    )
   } else {
-    console.error(
-      `[content] ${linkBase.reason} — every EMAIL publish will fail until PUBLIC_BASE_URL is this ` +
-        `deployment's public origin (e.g. https://example.org). Portal and Instagram are unaffected.`,
+    console.warn(
+      `[content] ${linkBase.reason} (informational only: each email publish uses the tenant host the kernel reports)`,
     )
   }
 
@@ -188,7 +191,6 @@ async function main(): Promise<void> {
           sql,
           kernel,
           channels,
-          origin: linkBaseRaw,
           allowLoopbackLinks,
           correlationId,
           tracer: makeTracer(correlationId),
@@ -252,7 +254,6 @@ async function main(): Promise<void> {
           sql,
           kernel,
           emailTransport: kernelEmailTransport(kernel),
-          origin: linkBaseRaw,
           allowLoopbackLinks,
           instagramConfigured: resolveInstagramCredentials() != null,
           tracer: makeTracer(corrId),

@@ -45,7 +45,7 @@ import {
   createPublishOp,
 } from './store/index.js'
 import { enqueueOutbox } from './outbox.js'
-import { checkLinkBase } from './link-base.js'
+import { askLinkBase } from './link-base.js'
 import { isLoginRefused, mailCauseText, mailErrorFields } from './mail-error.js'
 
 // ── injected transport ──────────────────────────────────────────────────────
@@ -77,11 +77,12 @@ export interface DispatchDeps {
    */
   channels: Map<'email' | 'portal' | 'instagram', ChannelTransport>
   /**
-   * This tenant's external origin for unsubscribe links (no trailing slash).
-   * An unusable value fails the email channel before any claim (K5#8).
+   * Local development only: accept a loopback origin (CONTENT_ALLOW_LOOPBACK_LINKS=1).
+   *
+   * The origin of the unsubscribe links is NOT a dependency: the email channel asks
+   * `kernel.linkBase()` at the start of every send (the sending tenant's own host), and
+   * an unusable answer fails the channel before any claim (K5#8).
    */
-  origin: string
-  /** Local development only: accept a loopback origin (CONTENT_ALLOW_LOOPBACK_LINKS=1). */
   allowLoopbackLinks?: boolean
   /**
    * The correlation id for this dispatch. Injected by the HTTP send-route from
@@ -149,7 +150,7 @@ export function injectUnsubscribeFooter(html: string, unsubscribeUrl: string): s
  * @param tenant   Tenant identity (id + slug).
  * @param postId   The content post UUID to publish.
  * @param actor    The sub responsible for the publish (audit + outbox payload).
- * @param deps     Injected sql / kernel / channels / origin.
+ * @param deps     Injected sql / kernel / channels.
  */
 export async function dispatch(
   tenant: TenantRef,
@@ -157,7 +158,7 @@ export async function dispatch(
   actor: string,
   deps: DispatchDeps,
 ): Promise<void> {
-  const { sql, kernel, channels, origin } = deps
+  const { sql, kernel, channels } = deps
   const correlationId = deps.correlationId ?? postId
   const tracer = deps.tracer ?? noopTracer
   const span = tracer.startSpan('content.dispatch', { postId, tenant: tenant.slug })
@@ -191,7 +192,6 @@ export async function dispatch(
         emailTransport,
         postId,
         post,
-        origin,
         deps.allowLoopbackLinks === true,
         correlationId,
         channelEvents,
@@ -255,14 +255,15 @@ async function dispatchEmail(
   transport: ChannelTransport,
   postId: string,
   post: { title: string; body_html: string },
-  origin: string,
   allowLoopback: boolean,
   _correlationId: string,
   channelEvents: Array<{ event: 'channel.email.sent' | 'channel.portal.sent' | 'channel.instagram.enqueued'; payload: unknown }>,
 ): Promise<void> {
   // K5#8: refuse an unusable unsubscribe link base BEFORE claiming anyone (the
-  // throw fails the whole-post dispatch; nothing was claimed or sent).
-  const linkBase = checkLinkBase(origin, { allowLoopback })
+  // throw fails the whole-post dispatch; nothing was claimed or sent). The base is
+  // the sending tenant's own host, asked of the kernel for THIS send; a kernel that
+  // cannot be asked throws here as well, with nothing claimed.
+  const linkBase = await askLinkBase(kernel, { allowLoopback })
   if (!linkBase.usable) throw new Error(`unsubscribe link base unusable: ${linkBase.reason}`)
   const base = linkBase.base
 

@@ -68,9 +68,14 @@ function makeFakeEmailTransport(): ChannelTransport & { sent: Array<{ to: string
   }
 }
 
-function makeFakeKernel(): KernelClient {
+/** `linkBase`: what the kernel's link-base callback answers: an origin, null (no public host) or an Error (unreachable). */
+function makeFakeKernel(linkBase: string | null | Error = 'https://a1.example'): KernelClient {
   let portalSeq = 0
   return {
+    async linkBase(): Promise<string | null> {
+      if (linkBase instanceof Error) throw linkBase
+      return linkBase
+    },
     async resolveGroup(): Promise<Recipient[]> {
       return []
     },
@@ -211,7 +216,6 @@ function dueDeps(overrides: Partial<Parameters<typeof dispatchDueChannels>[1]> =
     sql,
     kernel: makeFakeKernel(),
     emailTransport: makeFakeEmailTransport(),
-    origin: 'https://a1.example',
     instagramConfigured: false,
     ...overrides,
   }
@@ -453,7 +457,7 @@ describe('dispatchDueChannels — a failed scheduled publish is logged, never si
     await armChannelViaApi(portalPost, 'portal', pastIso())
     const transport = failingTransport({})
 
-    await dispatchDueChannels(TENANT, dueDeps({ origin: 'http://localhost:3000', emailTransport: transport }))
+    await dispatchDueChannels(TENANT, dueDeps({ kernel: makeFakeKernel('http://localhost:3000'), emailTransport: transport }))
 
     // Parked: no longer 'scheduled', so it leaves the due list instead of being
     // re-polled every tick; nobody was mailed or claimed, so a manual publish once
@@ -467,12 +471,57 @@ describe('dispatchDueChannels — a failed scheduled publish is logged, never si
     expect(line).toContain('unusable public base URL')
     expect(line).toContain(TENANT.slug)
     // The exact fault stays in the log: it is the operator's only summary here.
-    expect(line).toContain('PUBLIC_BASE_URL')
+    expect(line).toContain('loopback')
 
     // The next tick finds nothing due for it and says nothing more about it.
     errSpy.mockClear()
-    await dispatchDueChannels(TENANT, dueDeps({ origin: 'http://localhost:3000', emailTransport: transport }))
+    await dispatchDueChannels(TENANT, dueDeps({ kernel: makeFakeKernel('http://localhost:3000'), emailTransport: transport }))
     expect(logLines().filter((l) => l.includes(emailPost))).toHaveLength(0)
+  })
+
+  it('a tenant the kernel has no host for is parked the same way: failed, nobody claimed, logged once', async () => {
+    const emailPost = await makePost()
+    await addEmailRecipients(emailPost, ['alice@x.com'])
+    await armChannelViaApi(emailPost, 'email', pastIso())
+    const transport = failingTransport({})
+
+    await dispatchDueChannels(TENANT, dueDeps({ kernel: makeFakeKernel(null), emailTransport: transport }))
+
+    expect((await getChannelRow(sql, emailPost, 'email'))!.status).toBe('failed')
+    expect(transport.sent).toHaveLength(0)
+    const dels = await sql<{ c: number }[]>`SELECT count(*)::int AS c FROM content.deliveries WHERE post_id = ${emailPost}`
+    expect(dels[0]!.c).toBe(0)
+    const line = logLines().find((l) => l.includes(emailPost))
+    expect(line).toContain('unusable public base URL')
+    expect(line).toContain('no public host')
+  })
+
+  it('a kernel that cannot be asked leaves the due email channel armed and claims nobody; the next tick, kernel back, delivers', async () => {
+    const emailPost = await makePost()
+    await addEmailRecipients(emailPost, ['alice@x.com'])
+    await armChannelViaApi(emailPost, 'email', pastIso())
+    const portalPost = await makePost()
+    await armChannelViaApi(portalPost, 'portal', pastIso())
+    const transport = failingTransport({})
+
+    await dispatchDueChannels(
+      TENANT,
+      dueDeps({ kernel: makeFakeKernel(new Error('kernel link-base failed: 503')), emailTransport: transport }),
+    )
+
+    // Not parked: a kernel that is down says nothing about the tenant, so the channel stays
+    // 'scheduled' and the next tick asks again. Nobody was mailed or claimed.
+    expect((await getChannelRow(sql, emailPost, 'email'))!.status).toBe('scheduled')
+    expect(transport.sent).toHaveLength(0)
+    const dels = await sql<{ c: number }[]>`SELECT count(*)::int AS c FROM content.deliveries WHERE post_id = ${emailPost}`
+    expect(dels[0]!.c).toBe(0)
+    // One channel's failure never aborts the rest.
+    expect((await getChannelRow(sql, portalPost, 'portal'))!.status).toBe('published')
+    expect(logLines().find((l) => l.includes(emailPost))).toContain('link-base failed: 503')
+
+    await dispatchDueChannels(TENANT, dueDeps({ emailTransport: transport }))
+    expect((await getChannelRow(sql, emailPost, 'email'))!.status).toBe('sent')
+    expect(transport.sent).toHaveLength(1)
   })
 
   it('a delivered mail whose ledger write failed is logged as "do not re-publish", with no address, and never as "publish again"', async () => {

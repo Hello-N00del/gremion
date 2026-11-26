@@ -67,10 +67,20 @@ function makeFakeEmailTransport(
 }
 
 function makeFakeKernel(
-  opts: { groups?: Record<string, Recipient[]>; portalCalls?: string[] } = {},
+  opts: {
+    groups?: Record<string, Recipient[]>
+    portalCalls?: string[]
+    /** What the kernel's link-base callback answers: an origin, null (no public host) or an Error (unreachable). */
+    linkBase?: string | null | Error
+  } = {},
 ): KernelClient {
   let portalSeq = 0
   return {
+    async linkBase(): Promise<string | null> {
+      const answer = opts.linkBase === undefined ? 'https://pubchan.example' : opts.linkBase
+      if (answer instanceof Error) throw answer
+      return answer
+    },
     async resolveGroup(groupId: string): Promise<Recipient[]> {
       return opts.groups?.[groupId] ?? []
     },
@@ -88,7 +98,7 @@ function makeFakeKernel(
 }
 
 function deps(sql: Awaited<ReturnType<typeof storeFor>>, kernel: KernelClient, transport: ChannelTransport) {
-  return { sql, kernel, emailTransport: transport, origin: 'https://pubchan.example' }
+  return { sql, kernel, emailTransport: transport }
 }
 
 // ── PG lifecycle ──────────────────────────────────────────────────────────────
@@ -332,7 +342,8 @@ describe('publishChannel — email, the mail server refuses the login (EAUTH)', 
 })
 
 // ── F1-FIX-07 K5#8 / K5#33: an unusable link base fails closed ───────────────────
-// Every email carries an unsubscribe link built from deps.origin. A missing or
+// Every email carries an unsubscribe link built from the origin the kernel reports for
+// the sending tenant. A missing or
 // loopback base (the old http://localhost:3000 default) must send NOTHING and
 // claim nothing, so a retry once the base is fixed sees every recipient fresh.
 
@@ -343,10 +354,9 @@ describe('publishChannel — email refuses an unusable unsubscribe link base', (
     await addEmailRecipients(postId, ['alice@x.com'])
     const transport = makeFakeEmailTransport()
 
-    const result = await publishChannel(TENANT, postId, 'email', {
-      ...deps(sql, makeFakeKernel(), transport),
-      origin,
-    })
+    const result = await publishChannel(
+      TENANT, postId, 'email', deps(sql, makeFakeKernel({ linkBase: origin }), transport),
+    )
 
     expect(result).toMatchObject({ channel: 'email', status: 'failed', detail: 'unusable public base URL' })
     expect(transport.sent).toHaveLength(0)
@@ -369,6 +379,78 @@ describe('publishChannel — email refuses an unusable unsubscribe link base', (
     await publishChannel(TENANT, postId, 'email', deps(sql, makeFakeKernel(), transport))
 
     expect(sentHtml[0]).toMatch(/href="https:\/\/pubchan\.example\/content\/unsubscribe\?token=[^"]+"/)
+  })
+
+  it('a tenant the kernel has no host for is refused the same way, naming the missing host', async () => {
+    const postId = await makePost()
+    await enableChannel(postId, 'email')
+    await addEmailRecipients(postId, ['alice@x.com'])
+    const transport = makeFakeEmailTransport()
+
+    const result = await publishChannel(
+      TENANT, postId, 'email', deps(sql, makeFakeKernel({ linkBase: null }), transport),
+    )
+
+    expect(result).toMatchObject({ channel: 'email', status: 'failed', detail: 'unusable public base URL' })
+    expect(result.warnings.some((w) => /no public host/.test(w))).toBe(true)
+    expect(transport.sent).toHaveLength(0)
+  })
+})
+
+// ── the link base is the sending tenant's, asked of the kernel per send ──────────────
+describe('publishChannel — the unsubscribe base comes from the kernel, per send', () => {
+  async function publishWithBase(linkBase: string, recipient: string): Promise<string> {
+    const postId = await makePost('<html><body><p>Hi</p></body></html>')
+    await enableChannel(postId, 'email')
+    await addEmailRecipients(postId, [recipient])
+    const sentHtml: string[] = []
+    const transport = {
+      async send(msg: { html?: string }) {
+        sentHtml.push(msg.html ?? '')
+        return { id: '<x@test>' }
+      },
+    }
+    await publishChannel(TENANT, postId, 'email', deps(sql, makeFakeKernel({ linkBase }), transport))
+    return sentHtml[0]!
+  }
+
+  it('two customers get their own unsubscribe base: the link of each is rooted at its own host', async () => {
+    const a = await publishWithBase('https://a.example.org', 'alice@x.com')
+    const b = await publishWithBase('https://b.example.org', 'bob@x.com')
+    expect(a).toContain('href="https://a.example.org/content/unsubscribe?token=')
+    expect(a).not.toContain('b.example.org')
+    expect(b).toContain('href="https://b.example.org/content/unsubscribe?token=')
+    expect(b).not.toContain('a.example.org')
+  })
+
+  it('a single customer’s link is exactly the host origin plus the unsubscribe path and its token', async () => {
+    const html = await publishWithBase('https://a.example.org', 'alice@x.com')
+    const tokens = await sql<{ token: string }[]>`SELECT token FROM content.send_tokens`
+    expect(tokens.length).toBeGreaterThan(0)
+    const token = tokens[tokens.length - 1]!.token
+    expect(html).toBe(
+      `<html><body><p>Hi</p><p style="font-size:12px;color:#888;"><a href="https://a.example.org/content/unsubscribe?token=${encodeURIComponent(token)}">Abmelden</a></p></body></html>`,
+    )
+  })
+
+  it('a kernel that cannot be asked refuses before any recipient is claimed, and the channel is untouched', async () => {
+    const postId = await makePost()
+    await enableChannel(postId, 'email')
+    await addEmailRecipients(postId, ['alice@x.com'])
+    const transport = makeFakeEmailTransport()
+
+    await expect(
+      publishChannel(
+        TENANT, postId, 'email',
+        deps(sql, makeFakeKernel({ linkBase: new Error('kernel link-base failed: 503') }), transport),
+      ),
+    ).rejects.toThrow(/link-base failed: 503/)
+
+    expect(transport.sent).toHaveLength(0)
+    const dels = await sql<{ c: string }[]>`SELECT count(*) AS c FROM content.deliveries WHERE post_id = ${postId}`
+    expect(Number(dels[0]!.c)).toBe(0)
+    const toks = await sql<{ c: string }[]>`SELECT count(*) AS c FROM content.send_tokens WHERE post_id = ${postId}`
+    expect(Number(toks[0]!.c)).toBe(0)
   })
 })
 

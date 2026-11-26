@@ -171,7 +171,7 @@ export const tenantResolveHandle: Handle = async ({ event, resolve }) => {
   // topology alone. Computed once and reused for tenantSelectionTrusted below.
   const internalTrusted = isInternalTrustRequest(event.request)
 
-  // Spec B §T.1 HARDENING-3: is this one of the four kernel routes a LEAF
+  // Spec B §T.1 HARDENING-3: is this one of the six kernel routes a LEAF
   // service calls back into, presenting THAT route's own shared secret? If so
   // the leaf asserts its tenant by ID and no host is involved at all — see
   // leaf-trust.ts for why the host was the wrong thing to communicate, and why

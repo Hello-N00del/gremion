@@ -38,7 +38,7 @@ import type { Sql, TenantRef } from './tenant-store.js'
 import { MailUnconfiguredError, type KernelClient } from './kernel-client.js'
 import { enqueueOutbox } from './outbox.js'
 import { isLoginRefused, mailCauseText, mailErrorFields } from './mail-error.js'
-import { checkLinkBase } from './link-base.js'
+import { askLinkBase, LINK_BASE_UNUSABLE_DETAIL } from './link-base.js'
 import {
   getPost,
   getChannelRow,
@@ -110,12 +110,13 @@ export interface PublishChannelDeps {
   /** Email transport (the kernel send-mail adapter) — only used for email. */
   emailTransport: ChannelTransport
   /**
-   * This tenant's external origin for unsubscribe links (no trailing slash).
-   * Checked per email publish (checkLinkBase): unset/malformed/loopback fails
-   * the publish before any recipient is claimed (K5#8).
+   * Local development only: accept a loopback origin (CONTENT_ALLOW_LOOPBACK_LINKS=1).
+   *
+   * The origin of the unsubscribe links is NOT a dependency: every email publish asks
+   * `kernel.linkBase()` (the sending tenant's own host) and checks the answer
+   * (askLinkBase): none/malformed/loopback fails the publish before any recipient is
+   * claimed (K5#8), and a kernel that cannot be asked throws, also before any claim.
    */
-  origin: string
-  /** Local development only: accept a loopback origin (CONTENT_ALLOW_LOOPBACK_LINKS=1). */
   allowLoopbackLinks?: boolean
   /**
    * The correlation id for this publish. Injected by the HTTP publish route from
@@ -158,7 +159,7 @@ export async function publishChannel(
   channel: ChannelId,
   deps: PublishChannelDeps,
 ): Promise<PublishResult> {
-  const { sql, kernel, emailTransport, origin } = deps
+  const { sql, kernel, emailTransport } = deps
   const correlationId = deps.correlationId ?? postId
   const tracer = deps.tracer ?? noopTracer
   const span = tracer.startSpan('content.publish-channel', {
@@ -182,7 +183,6 @@ export async function publishChannel(
           sql,
           kernel,
           emailTransport,
-          origin,
           deps.allowLoopbackLinks === true,
           postId,
           post,
@@ -246,18 +246,19 @@ async function publishEmail(
   sql: Sql,
   kernel: KernelClient,
   transport: ChannelTransport,
-  origin: string,
   allowLoopback: boolean,
   postId: string,
   post: ContentPost,
 ): Promise<ChannelOutcome> {
   const warnings: string[] = []
 
-  // K5#8 / K5#33: every mail carries an unsubscribe link built from `origin`.
-  // An unusable base (unset, malformed, loopback) is a config gap: return a
-  // clean failed result BEFORE claiming anyone, channel status untouched (as
-  // for SMTP-unconfigured), so a retry once the base is fixed sees all fresh.
-  const linkBase = checkLinkBase(origin, { allowLoopback })
+  // K5#8 / K5#33: every mail carries an unsubscribe link built from the sending
+  // tenant's own host, asked of the kernel for THIS send (never kept). An unusable
+  // base (no host, malformed, loopback) is a config gap: return a clean failed
+  // result BEFORE claiming anyone, channel status untouched (as for
+  // SMTP-unconfigured), so a retry once the base is fixed sees all fresh. A kernel
+  // that cannot be asked is not that: it throws, and nobody was claimed either.
+  const linkBase = await askLinkBase(kernel, { allowLoopback })
   if (!linkBase.usable) {
     return {
       result: {
@@ -266,7 +267,7 @@ async function publishEmail(
         recipientCount: 0,
         warnings: [linkBase.reason],
         operatorWarnings: [linkBase.reason],
-        detail: 'unusable public base URL',
+        detail: LINK_BASE_UNUSABLE_DETAIL,
       },
     }
   }
