@@ -876,9 +876,9 @@ jobs:
           retention-days: 7
 
   # unit:modules, unit:node: the module vitest parts and every scripts/**/*.test.mjs. This
-  # leg and the two bats shard legs below REPLACE the old unit-test job; it is kept short
+  # leg and the three bats legs below REPLACE the old unit-test job; it is kept short
   # (about 3 minutes) so a failing script test turns the run red early (the fail-fast step).
-  # test/host/no-host-literals.bats fails if ci.yml stops running the bats shards through
+  # test/host/no-host-literals.bats fails if ci.yml stops running the bats parts through
   # verify or the shards' patterns drift from the Makefile's.
   verify-unit-host:
     name: "Verify: module and script units"
@@ -972,16 +972,19 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # unit:bats-1-of-2 and unit:bats-2-of-2: the bats suites (test/*.bats and test/host/*.bats,
-  # the set `make test-unit` collects) split into two shards that partition the sorted file
-  # list (suites/unit.mjs#batsShardFiles), one leg each: in one leg they took 10-12 minutes and
-  # were the long pole of every run. Both shard legs install exactly what the module and
+  # unit:bats-1-of-2, unit:bats-2-of-2 and unit:bats-cd-pipeline: the bats suites
+  # (test/*.bats and test/host/*.bats, the set `make test-unit` collects) split into three
+  # parts, one leg each: in one leg they took 10-12 minutes and were the long pole of every
+  # run. test/host/cd-pipeline.bats (65 end-to-end cases) runs alone in the third leg
+  # (suites/unit.mjs#BATS_PIPELINE_FILES), and the other two shards partition the rest of the
+  # sorted file list (suites/unit.mjs#batsShardFiles), so the shards keep their old length and
+  # a file is in exactly one part. All three legs install exactly what the module and
   # script leg installs, because a bats case whose tool is absent `skip`s, and
-  # test/host/no-host-literals.bats pins those installs in every job that runs a shard.
+  # test/host/no-host-literals.bats pins those installs in every job that runs a bats part.
   verify-unit-bats-1:
     name: "Verify: bats suites (shard 1 of 2)"
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -1073,7 +1076,7 @@ jobs:
   verify-unit-bats-2:
     name: "Verify: bats suites (shard 2 of 2)"
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -1158,6 +1161,98 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: record-verify-unit-bats-2
+          path: scripts/verify/out/*.json
+          if-no-files-found: error
+          retention-days: 7
+
+  verify-unit-bats-cd-pipeline:
+    name: "Verify: bats suites (CD pipeline)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115  # v6.1.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: 26
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # What the old unit-test job installed, minus nothing: envsubst is needed by
+      # legal.bats' template rendering tests, yamllint by the release-images.yml YAML
+      # assertion in test/host/deploy-workflow.bats (which `skip`s when it is absent, and
+      # a guard that skips is a guard that passes; that file now guards the keyless
+      # release pipeline: release-images.yml, cut-dist-tag.sh, release-tag-check.sh),
+      # bats is an EXTERNAL prerequisite from npm
+      # (not vendored). jq and openssl are preinstalled on the runner image;
+      # python3 too (test/configure-keycloak.bats validates JSON with it).
+      - name: Install BATS and test dependencies
+        run: |
+          sudo apt-get install -y gettext-base jq
+          pip install yamllint==1.38.0
+          sudo npm install -g bats@1.13.0
+
+      # Same pinned, checksummed install as the Lint job: the apt package on
+      # ubuntu-latest is 0.9.0 and raises notes the local gate (0.11.0) does not.
+      - name: Install shellcheck
+        run: |
+          curl --retry 5 --retry-all-errors -fsSLo /tmp/sc.tar.xz https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
+          echo "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  /tmp/sc.tar.xz" | sha256sum -c -
+          tar -xJf /tmp/sc.tar.xz -C /tmp
+          sudo install -m 0755 /tmp/shellcheck-v0.11.0/shellcheck /usr/local/bin/shellcheck
+          shellcheck --version
+
+      # unit:node runs EVERY scripts/**/*.test.mjs, and a few of them drive real
+      # release tooling that the old CI never ran. Each is a pinned release asset
+      # checked against its sha256 before it is installed (the pins for cosign are
+      # the ones scripts/release/lib/tools.mjs#COSIGN asserts; assertCosign refuses
+      # any other binary). sops and age were not on the runner image; their hashes
+      # are the release's own checksums (sops) and the asset's own (age publishes
+      # none beside a transparency-log proof, so that one was computed at pin time).
+      - name: Install the release toolchain the node suites drive (cosign, sops, age, gitleaks)
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          curl --retry 5 --retry-all-errors -fsSLo cosign https://github.com/sigstore/cosign/releases/download/v2.6.5/cosign-linux-amd64
+          echo "c3b4f5410e608af03a5eb0aaac84a4313d8da131248e08ff1759ac70c79d1644  cosign" | sha256sum -c -
+          sudo install -m 0755 cosign /usr/local/bin/cosign
+          curl --retry 5 --retry-all-errors -fsSLo sops https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.linux.amd64
+          echo "e5bec3346a873ae91d871550f3e698c1aad962aff462a080e40f25fde17fef6b  sops" | sha256sum -c -
+          sudo install -m 0755 sops /usr/local/bin/sops
+          curl --retry 5 --retry-all-errors -fsSLo age.tar.gz https://github.com/FiloSottile/age/releases/download/v1.3.2/age-v1.3.2-linux-amd64.tar.gz
+          echo "cbe24006683f8eb669266162894b9a522a1af52f2665fbc63a4bb032ed26ac10  age.tar.gz" | sha256sum -c -
+          tar -xzf age.tar.gz
+          sudo install -m 0755 age/age age/age-keygen /usr/local/bin/
+          curl --retry 5 --retry-all-errors -fsSLo gitleaks.tar.gz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz gitleaks
+          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
+          cosign version | head -n 3
+          sops --version
+          age --version
+          gitleaks version
+
+      - name: Run verify (unit:bats-cd-pipeline)
+        id: verify
+        run: node scripts/verify/verify.mjs --only unit:bats-cd-pipeline
+
+      # The record is the leg's whole product, so it is uploaded even when a suite
+      # failed (verify writes it either way) and a missing record is itself an
+      # error. `steps.verify.outcome` keeps that from firing when the leg never
+      # got as far as running verify (a failed install): that failure is reported
+      # by the step that failed, not buried under a second one.
+      - name: Upload verify record
+        if: ${{ always() && steps.verify.outcome != 'skipped' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: record-verify-unit-bats-cd-pipeline
           path: scripts/verify/out/*.json
           if-no-files-found: error
           retention-days: 7
@@ -2136,6 +2231,22 @@ jobs:
           REPO: ${{ github.repository }}
         run: /usr/bin/gh run cancel "$RUN_ID" --repo "$REPO"
 
+  fail-fast-verify-unit-bats-cd-pipeline:
+    name: "Fail fast: verify-unit-bats-cd-pipeline failed"
+    runs-on: ubuntu-latest
+    needs: verify-unit-bats-cd-pipeline
+    if: ${{ failure() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Cancel the rest of this pull-request run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+          REPO: ${{ github.repository }}
+        run: /usr/bin/gh run cancel "$RUN_ID" --repo "$REPO"
+
   fail-fast-verify-integration-db:
     name: "Fail fast: verify-integration-db failed"
     runs-on: ubuntu-latest
@@ -2223,6 +2334,7 @@ jobs:
       - verify-unit-host
       - verify-unit-bats-1
       - verify-unit-bats-2
+      - verify-unit-bats-cd-pipeline
       - verify-integration-db
       - verify-integration-brokers
       - verify-integration-events-alert

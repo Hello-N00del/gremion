@@ -57,7 +57,9 @@ There is no skip flag: the only argument is `--only <suite[,suite]>`, and
 CI (`.github/workflows/ci.yml`) splits the same suites over the legs
 `verify-static`, `verify-render-ops`, `verify-unit-ui`, `verify-unit-packages`,
 `verify-unit-host`, the two BATS shards (`verify-unit-bats-1`,
-`verify-unit-bats-2`), `verify-integration-db`, `verify-integration-brokers`,
+`verify-unit-bats-2`), the BATS leg that runs `test/host/cd-pipeline.bats`
+alone (`verify-unit-bats-cd-pipeline`, part `unit:bats-cd-pipeline`; the
+shards run every other bats file), `verify-integration-db`, `verify-integration-brokers`,
 `verify-integration-events-alert` and `verify-census`, and the `Lint` job fails when a
 required suite is run by none of them or by more than one
 (`scripts/check-ci-verify-coverage.mjs`). The `unit:node` part runs
