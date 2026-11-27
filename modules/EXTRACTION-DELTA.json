@@ -1965,7 +1965,7 @@
       "path": "modules/calendar/src/tenant-store.ts",
       "reason": "kernel-ahead of f2: fix(security) bind storeFor to the catalogued tenant identity; a changed slug is refused, not followed (audit #534); StuRaOS#534 hardening: typed InvalidTenantIdError and InvalidTenantSlugError, the reserved slug and the maintenance database refused, evictTenantPools for teardown; fu7 calendar lifecycle database: opens t_<hex32>__calendar as the module app role through @gremion/tenant-store behind the schema gate and never creates or migrates a customer database; the control database keeps only the id-to-slug binding and the tenant list; typed not-provisioned and unavailable refusals; pool registry and leaf runner removed",
       "owner": "TASK-205",
-      "blob": "f93ccc317224e5b0a5aa44f309727444459dad7a"
+      "blob": "b57319fc7c6900cf2ec3b033fef1268f3c359b11"
     },
     {
       "path": "modules/calendar/test/identity-mismatch-http.test.ts",
@@ -2457,7 +2457,7 @@
       "path": "modules/calendar/scripts/move-to-lifecycle-db.mjs",
       "reason": "added by fu7 calendar lifecycle database: the operator script that moves calendar_<slug> into t_<hex32>__calendar (dry run first, backup, one transaction, counts and checksums compared, retired mark)",
       "owner": "TASK-152",
-      "blob": "8744444d435840ecd37c7d5a90192d317fddf69d"
+      "blob": "2308b62902195ccfdd0e5b1cf9b6643ce1f3c780"
     },
     {
       "path": "modules/calendar/src/migrate-only.ts",
@@ -2487,7 +2487,7 @@
       "path": "modules/calendar/test/lifecycle.integration.test.ts",
       "reason": "added by fu7 calendar lifecycle database: test or helper for the lifecycle database seam",
       "owner": "TASK-152",
-      "blob": "23e9e01a828c4d1fd5a51baf89b454be48dd39c8"
+      "blob": "32222e2cb9e37e87a6603f54126d612bcf39913e"
     },
     {
       "path": "modules/calendar/test/migrate-only.integration.test.ts",
@@ -2505,7 +2505,7 @@
       "path": "modules/calendar/test/move-to-lifecycle-db.integration.test.ts",
       "reason": "added by fu7 calendar lifecycle database: test or helper for the lifecycle database seam",
       "owner": "TASK-152",
-      "blob": "4f1cf783f6c55c18255e1ac64f85d65c9a1d64a9"
+      "blob": "76ef541687267d46fe5c1fc7790c98103e65577f"
     },
     {
       "path": "modules/calendar/test/outbox.integration.test.ts",
@@ -2529,7 +2529,7 @@
       "path": "modules/calendar/test/support/fake-lifecycle-store.ts",
       "reason": "added by fu7 calendar lifecycle database: test or helper for the lifecycle database seam",
       "owner": "TASK-152",
-      "blob": "2d55fdd292da648ddb55fca7d1af68a274f7def2"
+      "blob": "bb53e4a8d90d6ebd42045db11a86f051ef9234da"
     },
     {
       "path": "modules/calendar/test/support/scratch-pg.ts",
@@ -2559,7 +2559,7 @@
       "path": "modules/calendar/test/tenant-store.lifecycle-db.test.ts",
       "reason": "added by fu7 calendar lifecycle database: test or helper for the lifecycle database seam",
       "owner": "TASK-152",
-      "blob": "91f2712b1a7451ee6ce643dcbed6a6936e2c7752"
+      "blob": "19cff488a9c0aaa3af257b44fd090f8aad1cc52f"
     },
     {
       "path": "modules/calendar/test/tenant-store.pool-registry.test.ts",
@@ -2572,6 +2572,18 @@
       "reason": "added by fu7 calendar lifecycle database: test or helper for the lifecycle database seam",
       "owner": "TASK-152",
       "blob": "b22b1dbf0ab4b12184e63ccd52859a955accc358"
+    },
+    {
+      "path": "modules/calendar/Dockerfile",
+      "reason": "fu7 calendar lifecycle database: copies the tenant store and its workspace dependencies into the build tree, like the board leaf",
+      "owner": "TASK-152",
+      "blob": "304cbbe978532c5df7dcc2844878de8c1221467d"
+    },
+    {
+      "path": "modules/calendar/test/no-phantom-stura-db.test.ts",
+      "reason": "fu7 calendar lifecycle database: the suite runs on the lifecycle database t_<hex32>__calendar (provisioned like enableModule does), UUIDv7 fixture ids",
+      "owner": "TASK-152",
+      "blob": "e7bc96ef52130a806de97267d9547cbe3cfbdb69"
     }
   ]
 }

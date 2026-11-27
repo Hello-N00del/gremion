@@ -166,8 +166,9 @@ done
    creates a `calendar_<slug>` database of its own, and `docker-compose.app.yml` marks one more value
    required, for both colours: `CALENDAR_APP_PASSWORD`. Add it the same way as the board password: the
    content of the module password file the role is set from.
-   Before starting the release that carries this leaf, move the data of every customer with the
-   operator script and follow its order (stop `calendar-service`, run the script, start the new release):
+   Move the data of every customer with the operator script and follow its order (stop
+   `calendar-service`, run the script, start the new release; a release that starts first answers
+   `503 move_pending` for each customer not yet moved, it never serves or writes an empty database):
    `docs/ops/pilot-services.md`, section "Calendar: move to the lifecycle database".
 
 ```bash

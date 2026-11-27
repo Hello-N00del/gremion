@@ -681,8 +681,13 @@ export, Karenz block, purge) acts on `t_<hex32>__calendar`, which stayed empty, 
 switch-off, an export or a purge acted on the wrong database. The leaf now opens the
 lifecycle database. A customer that already has data needs it copied once.
 
-**Order.** The leaf must not write to the old database while the data is copied, and the
-new leaf must not write to the new database before it. So:
+**Order.** The leaf must not write to the old database while the data is copied. A release
+that starts before the script ran is safe, not silent: the new leaf answers `503 move_pending`
+for every customer whose catalogue row still names `calendar_<slug>`, and serves nothing and
+writes nothing (into the empty lifecycle database) until the script has recorded the lifecycle
+name, which is its last step per customer. A customer without a catalogue row is new and is
+served at once. Even so, hold continuous deployment (or run the script before the release) so
+customers are not left on 503 longer than the move takes. So:
 
 1. Add `CALENDAR_APP_PASSWORD` to both `app-<colour>.env` files (upgrade runbook,
    step 2) and enable the calendar module for each customer that has calendar data
@@ -745,6 +750,12 @@ new leaf wrote since).
   date) and the panel's `DISABLE_LOCKED` for calendar stay in force on purpose: lift them
   only after the check owed below (a switch-off exports the moved rows and the next request
   answers 404) has been seen on the running install.
+- **Calendar move.** The calendar leaf stays in the CD leaf step's fixed list with a
+  `--migrate-only` entry that answers zero counts and opens no database, so the
+  retired `calendar_<slug>` databases and `calendar_control` stay in the dump set until
+  dropped by hand; removing calendar from the list is a follow-up that touches
+  `infra/host/lib/cd/leaves.sh` and its bats. The move itself is owed on the running
+  install (the script, then the check under "Owed after deploy").
 - **Isolation evidence.** The case table behind the enable gate covers the
   backends this install runs, at the app layer: votes, files and messaging
   against recording fakes of a shared Nextcloud and Synapse, board through the
