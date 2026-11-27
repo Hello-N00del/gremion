@@ -186,7 +186,7 @@ describe('MOVE: a customer not yet moved out of calendar_<slug> is refused until
     expect(h.catalog).toEqual([legacyRow()])
   })
 
-  it('it stays refused on every call, and is served the moment the catalogue names the lifecycle database', async () => {
+  it('stays refused on every call, and is served the moment the catalogue names the lifecycle database', async () => {
     h.databases.add(CONTROL_DB)
     h.catalog.push(legacyRow())
     await expect(storeFor(A, OPTS)).rejects.toMatchObject({ reason: 'move_pending' })
