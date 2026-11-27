@@ -203,8 +203,12 @@ let _closing = false
  */
 export const MIGRATIONS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'migrations')
 
-/** Customer pools kept open at once by the package store (the least recently used one is retired). */
-const MAX_TENANT_POOLS = 64
+/**
+ * Customer pools kept open at once by the package store (the least recently used one is retired). 16 as
+ * before the move to the package store: with its 3 connections per pool this stays far below the module
+ * server's max_connections.
+ */
+const MAX_TENANT_POOLS = 16
 
 /** Retry-After of a 503 (the schema gate's default). */
 const RETRY_AFTER_SECONDS = 30

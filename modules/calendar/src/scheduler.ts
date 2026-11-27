@@ -127,6 +127,12 @@ export async function runSchedulerTick(deps: SchedulerDeps): Promise<void> {
     try {
       await runTenantTick(deps.work, tenant)
     } catch (err) {
+      // A customer whose calendar module is switched off has no database on purpose (the lifecycle
+      // blocked or dropped it): not a fault, skipped until the module is switched on again.
+      if ((err as { code?: unknown } | null)?.code === 'TENANT_NOT_PROVISIONED') {
+        console.info(`[${LABEL}] tenant ${tenant.slug} is not provisioned (module off) — skipped`)
+        continue
+      }
       // One tenant's failure never stops the rest of the fleet.
       console.error(
         `[${LABEL}] tenant ${tenant.slug} tick failed:`,

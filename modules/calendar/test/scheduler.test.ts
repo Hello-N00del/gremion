@@ -87,6 +87,40 @@ describe('runSchedulerTick — per-tenant CalDAV drain', () => {
   })
 })
 
+describe('a customer whose calendar module is switched off', () => {
+  it('is skipped quietly (info, no error) and the next tenant is still drained', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { deps, calls } = makeDeps([T1, T2], {
+      drainCaldav: async (t) => {
+        calls2.push(t.slug)
+        if (t.slug === 'alpha') throw Object.assign(new Error('not provisioned'), { code: 'TENANT_NOT_PROVISIONED' })
+        return { succeeded: 0, failed: 0 }
+      },
+    })
+    const calls2: string[] = []
+    await runSchedulerTick(deps)
+    expect(calls2).toEqual(['alpha', 'beta'])
+    expect(calls.drain).toEqual([])
+    expect(error).not.toHaveBeenCalled()
+    expect(info.mock.calls.map((c) => String(c[0])).join(' ')).toContain('alpha')
+    info.mockRestore()
+    error.mockRestore()
+  })
+
+  it('any other failure of a tenant is still an error line', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { deps } = makeDeps([T1], {
+      drainCaldav: async () => {
+        throw new Error('boom')
+      },
+    })
+    await runSchedulerTick(deps)
+    expect(error).toHaveBeenCalledTimes(1)
+    error.mockRestore()
+  })
+})
+
 describe('per-tenant single-flight', () => {
   it('skips a tenant whose previous tick is still in flight', async () => {
     let resolveAlpha: () => void = () => {}
