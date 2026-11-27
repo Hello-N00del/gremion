@@ -68,7 +68,7 @@ function fakeSql(url: string) {
       const text = strings.join('?')
       if (text.includes('FROM protocols p')) {
         // The title match of the real statement: the pattern is the first parameter.
-        const needle = String(values[0]).replace(/^%|%$/g, '').toLowerCase()
+        const needle = (typeof values[0] === 'string' ? values[0] : '').replace(/^%|%$/g, '').toLowerCase()
         return data.protocols.filter((p) => p.title.toLowerCase().includes(needle)).map((p) => {
           const u = data.units.find((x) => x.id === p.unit)!
           return { id: p.id, title: p.title, meetingDate: '2026-05-12', status: 'published', committeeId: u.id, committeeName: u.name, visibility: u.visibility }
@@ -102,7 +102,7 @@ function fakeSql(url: string) {
       if (text.includes('FROM event_recurrence WHERE event_id')) return []
       if (text.includes('FROM org_units ORDER BY name')) return data.units
       if (text.includes('FROM org_unit_members WHERE user_keycloak_id')) {
-        return (data.memberships[String(values[0])] ?? []).map((id) => ({ org_unit_id: id }))
+        return (data.memberships[typeof values[0] === 'string' ? values[0] : ''] ?? []).map((id) => ({ org_unit_id: id }))
       }
       throw new Error(`unexpected statement: ${text}`)
     },

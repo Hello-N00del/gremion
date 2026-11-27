@@ -51,6 +51,7 @@ const MEMBERSHIPS: Record<string, string[]> = {
   'a-mira': ['u-fin'],
   'a-secret': ['u-closed'],
   'a-both': ['u-closed', 'u-fin'],
+  'a-off': ['u-fin'],
 }
 interface Proto { id: string; title: string; body: string; date: string; status: Status; unit: string }
 const PROTOCOLS: Proto[] = [
@@ -94,6 +95,7 @@ import {
   _resetRuntimeRegistryForTests,
 } from '$lib/server/modules/runtime-registry'
 import { searchProtocols } from '$lib/server/governance/protocols-db'
+import { getOrgUnitIdsForUser } from '$lib/server/governance/org-units-db'
 import { searchForPalette } from '$lib/server/search/palette-search'
 
 type FakeUser = { id: string; username: string; email: string; firstName: string; lastName: string; enabled: boolean }
@@ -471,6 +473,29 @@ describe('result cap', () => {
     } finally {
       PROTOCOLS.splice(-9)
       for (const id of unitIds) delete UNITS[id]
+    }
+  })
+})
+
+describe('a failed membership lookup', () => {
+  // The caller belongs to the committee_only unit, but asking which units they belong to fails.
+  // Every kind then answers as it would for a person with no unit: nothing committee_only.
+  it('shows only what needs no membership, in all three kinds', async () => {
+    const real = vi.mocked(getOrgUnitIdsForUser).getMockImplementation()!
+    vi.mocked(getOrgUnitIdsForUser).mockImplementation(async (id: string) => {
+      if (id === 'insider') throw new Error('lookup failed')
+      return real(id)
+    })
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      expect(ids((await search('haushalt', INSIDER)).minutes)).toEqual(['p1', 'p2'])
+      expect((await search('vorstandsklausur', INSIDER)).units).toEqual([])
+      expect(ids((await search('finanzen', INSIDER)).units)).toEqual(['u-fin'])
+      expect((await search('geheim', INSIDER)).people).toEqual([])
+      expect(ids((await search('beides', INSIDER)).people)).toEqual(['a-both'])
+    } finally {
+      vi.mocked(getOrgUnitIdsForUser).mockImplementation(real)
+      quiet.mockRestore()
     }
   })
 })
