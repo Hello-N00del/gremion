@@ -949,15 +949,15 @@
     },
     {
       "path": "modules/calendar/src/http/routes.ts",
-      "reason": "kernel-ahead of f2: d2cfe36c fix(calendar): validate RRULE BYDAY and fold ICS lines at 75 octets (F1-FIX-08-K K4#21); StuRaOS#534 hardening: the typed tenant id and slug refusals answer 400 (invalid_tenant_id, invalid_tenant_slug)",
+      "reason": "kernel-ahead of f2: d2cfe36c fix(calendar): validate RRULE BYDAY and fold ICS lines at 75 octets (F1-FIX-08-K K4#21); StuRaOS#534 hardening: the typed tenant id and slug refusals answer 400 (invalid_tenant_id, invalid_tenant_slug); fu7 calendar lifecycle database: 404 tenant_not_provisioned and 503 with Retry-After for the lifecycle refusals and for a query that fails because the database went away; /healthz/tenants does not count a switched-off customer as a failure",
       "owner": "TASK-205",
-      "blob": "cce8fefcc78c2727cd2195f2f3622d466f379242"
+      "blob": "50c086cd0f6c09fd5ad7e1bf96e06bb11272571a"
     },
     {
       "path": "modules/calendar/src/index.ts",
-      "reason": "kernel-ahead of f2: e291d8d1 fix(calendar): resolve the CalDAV target per tenant and refuse to drain without one (F1-FIX-08-K H06 ; RELAY-ISOLATION: the relay tick isolates each tenant (a store that refuses, e.g. TenantIdentityMismatchError, is logged by tenant id and the tick moves on to the next tenant); the same change in the content, calendar and newsletter leaves",
+      "reason": "kernel-ahead of f2: e291d8d1 fix(calendar): resolve the CalDAV target per tenant and refuse to drain without one (F1-FIX-08-K H06 ; RELAY-ISOLATION: the relay tick isolates each tenant (a store that refuses, e.g. TenantIdentityMismatchError, is logged by tenant id and the tick moves on to the next tenant); the same change in the content, calendar and newsletter leaves; fu7 calendar lifecycle database: --migrate-only takes no store opener (the entry opens no database)",
       "owner": "TASK-205",
-      "blob": "9ae4c3cd80ce5a1e6d67242a84965075eddda785"
+      "blob": "f53475d66218ead6bb985b39eb339d46022924bb"
     },
     {
       "path": "modules/calendar/src/store/events.ts",
@@ -973,9 +973,9 @@
     },
     {
       "path": "modules/calendar/test/store.integration.test.ts",
-      "reason": "kernel-ahead of f2: 30fb5dd9 test(calendar,votes): fold the F1-FIX-08-K integration guards into store.integration.test.ts and cle",
+      "reason": "kernel-ahead of f2: 30fb5dd9 test(calendar,votes): fold the F1-FIX-08-K integration guards into store.integration.test.ts and cle; fu7 calendar lifecycle database: the suite runs on the lifecycle database t_<hex32>__calendar (provisioned like enableModule does), UUIDv7 fixture ids",
       "owner": "TASK-205",
-      "blob": "a34ca045a968e11cd87c2fc64a9ad5c655b689e2"
+      "blob": "873109b03fe1efc76567e5d0f26b03e01ff5f3cc"
     },
     {
       "path": "modules/content/src/dispatch.ts",
@@ -1963,27 +1963,27 @@
     },
     {
       "path": "modules/calendar/src/tenant-store.ts",
-      "reason": "kernel-ahead of f2: fix(security) bind storeFor to the catalogued tenant identity; a changed slug is refused, not followed (audit #534); StuRaOS#534 hardening: typed InvalidTenantIdError and InvalidTenantSlugError, the reserved slug and the maintenance database refused, evictTenantPools for teardown",
+      "reason": "kernel-ahead of f2: fix(security) bind storeFor to the catalogued tenant identity; a changed slug is refused, not followed (audit #534); StuRaOS#534 hardening: typed InvalidTenantIdError and InvalidTenantSlugError, the reserved slug and the maintenance database refused, evictTenantPools for teardown; fu7 calendar lifecycle database: opens t_<hex32>__calendar as the module app role through @gremion/tenant-store behind the schema gate and never creates or migrates a customer database; the control database keeps only the id-to-slug binding and the tenant list; typed not-provisioned and unavailable refusals; pool registry and leaf runner removed",
       "owner": "TASK-205",
-      "blob": "e737c3a37d7704f5213e7bbcfd8486c0a57e8a17"
+      "blob": "f93ccc317224e5b0a5aa44f309727444459dad7a"
     },
     {
       "path": "modules/calendar/test/identity-mismatch-http.test.ts",
-      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test; StuRaOS#534 hardening: hardening tests",
+      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test; StuRaOS#534 hardening: hardening tests; fu7 calendar lifecycle database: the suite runs on the lifecycle database t_<hex32>__calendar (provisioned like enableModule does), UUIDv7 fixture ids",
       "owner": "TASK-205",
-      "blob": "d8705e6288bccd57e0ef3e27cd4e9b67740c1ef7"
+      "blob": "0a8aee11e5a244a66cf8ff1384a16654d5dc2ac2"
     },
     {
       "path": "modules/calendar/test/tenant-store.identity-binding.test.ts",
-      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test; StuRaOS#534 hardening: hardening tests",
+      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test; StuRaOS#534 hardening: hardening tests; fu7 calendar lifecycle database: the suite runs on the lifecycle database t_<hex32>__calendar (provisioned like enableModule does), UUIDv7 fixture ids",
       "owner": "TASK-205",
-      "blob": "0a77c68bedb74027b755cb7866e5b66f4c56c624"
+      "blob": "e07cf1f3f9d18cbf67c8480be53c9778e5ad915d"
     },
     {
       "path": "modules/calendar/test/tenant-store.identity-binding.integration.test.ts",
-      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test; StuRaOS#534 hardening: hardening tests",
+      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test; StuRaOS#534 hardening: hardening tests; fu7 calendar lifecycle database: the suite runs on the lifecycle database t_<hex32>__calendar (provisioned like enableModule does), UUIDv7 fixture ids",
       "owner": "TASK-205",
-      "blob": "9c0daf051e295199ceb70cf844f79aaa76267328"
+      "blob": "5ceda2401dea388c8d68fb5e1e241eee436cea1d"
     },
     {
       "path": "modules/calendar/src/http/guard.ts",
@@ -1993,9 +1993,9 @@
     },
     {
       "path": "modules/calendar/test/api.integration.test.ts",
-      "reason": "kernel-ahead of f2: StuRaOS#534 hardening: fixture tenant ids made canonical for the guard",
+      "reason": "kernel-ahead of f2: StuRaOS#534 hardening: fixture tenant ids made canonical for the guard; fu7 calendar lifecycle database: the suite runs on the lifecycle database t_<hex32>__calendar (provisioned like enableModule does), UUIDv7 fixture ids",
       "owner": "TASK-205",
-      "blob": "5eabb877c8a6cffedb973de010a94a7d2a1c3ce5"
+      "blob": "5ffc5ee4199f78dc33c002eeace182231f7ea710"
     },
     {
       "path": "modules/calendar/test/guard.test.ts",
@@ -2149,9 +2149,9 @@
     },
     {
       "path": "modules/calendar/test/tenant-isolation.integration.test.ts",
-      "reason": "TRD-060 isolation guard: two-tenant read/list/update/delete isolation and (id, slug) binding refusal against a real Postgres",
+      "reason": "TRD-060 isolation guard: two-tenant read/list/update/delete isolation and (id, slug) binding refusal against a real Postgres; fu7 calendar lifecycle database: the suite runs on the lifecycle database t_<hex32>__calendar (provisioned like enableModule does), UUIDv7 fixture ids",
       "owner": "TASK-205",
-      "blob": "f077543254793909c619302380ffcabb210514aa"
+      "blob": "73ab4320c867978cad14892dd8fbc02b9d9dd2e1"
     },
     {
       "path": "modules/publishing/test/tenant-isolation.integration.test.ts",
@@ -2440,6 +2440,138 @@
       "reason": "multi-tenant video: the Helios callback on a secondary customer host; new kernel-side file with no counterpart at the tag",
       "owner": "TASK-205",
       "blob": "c55493f3da7dff2c28043fd8efb7505492452baf"
+    },
+    {
+      "path": "modules/calendar/package.json",
+      "reason": "fu7 calendar lifecycle database: depends on @gremion/tenant-store (the leaf opens the lifecycle database through the package store behind the schema gate)",
+      "owner": "TASK-152",
+      "blob": "b34e68d766e79da191fac2fa337e82d2de4d8f26"
+    },
+    {
+      "path": "modules/calendar/scripts/backfill.ts",
+      "reason": "fu7 calendar lifecycle database: the target is the tenant lifecycle database, which must exist (never created here)",
+      "owner": "TASK-152",
+      "blob": "af7cbb14320d8ad7d07ee997df5a4f55a065b3f1"
+    },
+    {
+      "path": "modules/calendar/scripts/move-to-lifecycle-db.mjs",
+      "reason": "added by fu7 calendar lifecycle database: the operator script that moves calendar_<slug> into t_<hex32>__calendar (dry run first, backup, one transaction, counts and checksums compared, retired mark)",
+      "owner": "TASK-152",
+      "blob": "8744444d435840ecd37c7d5a90192d317fddf69d"
+    },
+    {
+      "path": "modules/calendar/src/migrate-only.ts",
+      "reason": "fu7 calendar lifecycle database: the CD leaf entry answers the counts contract with zero counts; the module step migrates the lifecycle databases",
+      "owner": "TASK-152",
+      "blob": "85723e2d51f600e2455245c079aeced224d3810e"
+    },
+    {
+      "path": "modules/calendar/src/scheduler.ts",
+      "reason": "fu7 calendar lifecycle database: a customer whose module is switched off is skipped quietly",
+      "owner": "TASK-152",
+      "blob": "9256dbd450e4110001c0c559e5fd4b2033eafd79"
+    },
+    {
+      "path": "modules/calendar/test/backfill.integration.test.ts",
+      "reason": "fu7 calendar lifecycle database: the suite runs on the lifecycle database t_<hex32>__calendar (provisioned like enableModule does), UUIDv7 fixture ids",
+      "owner": "TASK-152",
+      "blob": "912e81f2d470953296a58fa8e5bd4025aa8ec972"
+    },
+    {
+      "path": "modules/calendar/test/holiday-dedup.integration.test.ts",
+      "reason": "fu7 calendar lifecycle database: the suite runs on the lifecycle database t_<hex32>__calendar (provisioned like enableModule does), UUIDv7 fixture ids",
+      "owner": "TASK-152",
+      "blob": "0a839e2eab1e754e9c93de711b14f9bb0020d904"
+    },
+    {
+      "path": "modules/calendar/test/lifecycle.integration.test.ts",
+      "reason": "added by fu7 calendar lifecycle database: test or helper for the lifecycle database seam",
+      "owner": "TASK-152",
+      "blob": "23e9e01a828c4d1fd5a51baf89b454be48dd39c8"
+    },
+    {
+      "path": "modules/calendar/test/migrate-only.integration.test.ts",
+      "reason": "fu7 calendar lifecycle database: removed with the code it tested (the leaf pool registry, runner and migrate-only runner are gone)",
+      "owner": "TASK-152",
+      "blob": null
+    },
+    {
+      "path": "modules/calendar/test/migrate-only.test.ts",
+      "reason": "fu7 calendar lifecycle database: the suite runs on the lifecycle database t_<hex32>__calendar (provisioned like enableModule does), UUIDv7 fixture ids",
+      "owner": "TASK-152",
+      "blob": "6a8594f7a3ca5e795384021c0ea5f4e0cb23a2ee"
+    },
+    {
+      "path": "modules/calendar/test/move-to-lifecycle-db.integration.test.ts",
+      "reason": "added by fu7 calendar lifecycle database: test or helper for the lifecycle database seam",
+      "owner": "TASK-152",
+      "blob": "4f1cf783f6c55c18255e1ac64f85d65c9a1d64a9"
+    },
+    {
+      "path": "modules/calendar/test/outbox.integration.test.ts",
+      "reason": "fu7 calendar lifecycle database: the suite runs on the lifecycle database t_<hex32>__calendar (provisioned like enableModule does), UUIDv7 fixture ids",
+      "owner": "TASK-152",
+      "blob": "6adaa105d496d3ad178abe384894f68bd04cc162"
+    },
+    {
+      "path": "modules/calendar/test/relay.test.ts",
+      "reason": "fu7 calendar lifecycle database: the suite runs on the lifecycle database t_<hex32>__calendar (provisioned like enableModule does), UUIDv7 fixture ids",
+      "owner": "TASK-152",
+      "blob": "cea042f1d2ce5e4e695a8bd31dede729afe9ad4e"
+    },
+    {
+      "path": "modules/calendar/test/scheduler.test.ts",
+      "reason": "fu7 calendar lifecycle database: the suite runs on the lifecycle database t_<hex32>__calendar (provisioned like enableModule does), UUIDv7 fixture ids",
+      "owner": "TASK-152",
+      "blob": "1d9f6a03cd3283c6c31493423f075d01f3259302"
+    },
+    {
+      "path": "modules/calendar/test/support/fake-lifecycle-store.ts",
+      "reason": "added by fu7 calendar lifecycle database: test or helper for the lifecycle database seam",
+      "owner": "TASK-152",
+      "blob": "2d55fdd292da648ddb55fca7d1af68a274f7def2"
+    },
+    {
+      "path": "modules/calendar/test/support/scratch-pg.ts",
+      "reason": "added by fu7 calendar lifecycle database: test or helper for the lifecycle database seam",
+      "owner": "TASK-152",
+      "blob": "de631c985ef1ac99102f324718e6569ee51db98a"
+    },
+    {
+      "path": "modules/calendar/test/tenant-store.first-contact.integration.test.ts",
+      "reason": "fu7 calendar lifecycle database: the suite runs on the lifecycle database t_<hex32>__calendar (provisioned like enableModule does), UUIDv7 fixture ids",
+      "owner": "TASK-152",
+      "blob": "90bca27093a13e83265ec02f908b0f9c90beeb04"
+    },
+    {
+      "path": "modules/calendar/test/tenant-store.first-contact.test.ts",
+      "reason": "fu7 calendar lifecycle database: the suite runs on the lifecycle database t_<hex32>__calendar (provisioned like enableModule does), UUIDv7 fixture ids",
+      "owner": "TASK-152",
+      "blob": "4f40930bf41fc4e5c216deb24a2a124cd4340818"
+    },
+    {
+      "path": "modules/calendar/test/tenant-store.integration.test.ts",
+      "reason": "fu7 calendar lifecycle database: the suite runs on the lifecycle database t_<hex32>__calendar (provisioned like enableModule does), UUIDv7 fixture ids",
+      "owner": "TASK-152",
+      "blob": "713f97a91b32d73a63d5d0c38e694e6ab5e72d7c"
+    },
+    {
+      "path": "modules/calendar/test/tenant-store.lifecycle-db.test.ts",
+      "reason": "added by fu7 calendar lifecycle database: test or helper for the lifecycle database seam",
+      "owner": "TASK-152",
+      "blob": "91f2712b1a7451ee6ce643dcbed6a6936e2c7752"
+    },
+    {
+      "path": "modules/calendar/test/tenant-store.pool-registry.test.ts",
+      "reason": "fu7 calendar lifecycle database: removed with the code it tested (the leaf pool registry, runner and migrate-only runner are gone)",
+      "owner": "TASK-152",
+      "blob": null
+    },
+    {
+      "path": "modules/calendar/test/tenant-store.shutdown.test.ts",
+      "reason": "added by fu7 calendar lifecycle database: test or helper for the lifecycle database seam",
+      "owner": "TASK-152",
+      "blob": "b22b1dbf0ab4b12184e63ccd52859a955accc358"
     }
   ]
 }
