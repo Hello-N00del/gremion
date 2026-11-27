@@ -266,17 +266,22 @@ $verify$;
     dump.stderr.on('data', (c) => (dumpErr += c))
     psql.on('error', reject)
     dump.on('error', reject)
+    // psql may stop first (a statement failed and ON_ERROR_STOP ended it): the broken pipe is then the symptom,
+    // not the failure, and the dump has nothing left to write to.
+    psql.stdin.on('error', () => {})
+    psql.on('close', () => dump.kill())
     psql.stdin.write('DELETE FROM public.event_types WHERE is_system = true;\n')
     dump.stdout.pipe(psql.stdin, { end: false })
     let dumpCode
     dump.on('close', (code) => {
       dumpCode = code
       // A dump that did not end cleanly must not be committed: an error statement aborts the transaction.
-      psql.stdin.end(code === 0 ? verify : 'SELECT 1/0;\n')
+      if (!psql.stdin.destroyed && !psql.stdin.writableEnded) psql.stdin.end(code === 0 ? verify : 'SELECT 1/0;\n')
     })
     psql.on('close', (code) => {
       if (code === 0 && dumpCode === 0) return resolveDone()
-      reject(new Error(`the copy was rolled back: ${(dumpCode !== 0 ? `pg_dump: ${dumpErr}` : psqlErr).trim().split('\n').slice(-1)[0]}`))
+      const why = psqlErr.trim() !== '' ? psqlErr : `pg_dump: ${dumpErr}`
+      reject(new Error(`the copy was rolled back: ${why.trim().split('\n').slice(-1)[0]}`))
     })
   })
 }
