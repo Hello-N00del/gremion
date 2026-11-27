@@ -615,6 +615,14 @@
       "adoptedBy": "TASK-152",
       "since": "2026-11-26",
       "reason": "end-to-end proof of the calendar leaf on the real module lifecycle against a scratch Postgres: gremion_platform and the module server as the scratch superuser for enableModule and disableModule, a read of the fixture database and pg_stat_activity; the leaf itself reaches its tenant databases only through its store"
+    },
+    {
+      "path": "modules/calendar/test/move-to-lifecycle-db.integration.test.ts",
+      "calls": 2,
+      "imports": 1,
+      "adoptedBy": "TASK-152",
+      "since": "2026-11-26",
+      "reason": "scratch-server proof of the calendar operator script that moves calendar_<slug> into the lifecycle database: builds the earlier layout (catalogue database, per-customer databases), provisions fixture lifecycle databases and reads them back, on the scratch superuser; the script itself reaches Postgres only through docker exec, and the leaf reads the moved rows through its store"
     }
   ]
 }
