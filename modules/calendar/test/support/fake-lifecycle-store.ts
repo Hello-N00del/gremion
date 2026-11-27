@@ -126,7 +126,7 @@ export function fakePostgres(url: string): AnySql {
     if (/FROM tenant_catalog WHERE tenant_id = \$1 OR slug = \$2/i.test(text)) {
       return fake.catalog
         .filter((r) => r.tenant_id === params[0] || r.slug === params[1])
-        .map(({ tenant_id, slug }) => ({ tenant_id, slug }))
+        .map(({ tenant_id, slug, db_name }) => ({ tenant_id, slug, db_name }))
     }
     if (/INSERT INTO tenant_catalog/i.test(text)) {
       fake.writes.push(text.replace(/\s+/g, ' ').trim())

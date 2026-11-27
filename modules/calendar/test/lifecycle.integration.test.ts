@@ -40,6 +40,8 @@ import {
 import { createServer } from '../src/http/server.ts'
 import { buildApiRoutes } from '../src/http/routes.ts'
 import { storeFor, _resetTenantStoreForTests, type TenantRef } from '../src/tenant-store.ts'
+import { runRelayPass } from '../src/relay.ts'
+import { listPendingCaldavSync, recordCaldavSyncFailure, removeCaldavSyncEntry } from '../src/store/index.ts'
 import { requireEphemeralTestPgUrl, assertSafeTestEnv } from './support/pg-test-guard.ts'
 import { FIXTURE_DB_PATTERN, fixtureDb, fixtureId } from './support/scratch-pg.ts'
 
@@ -229,6 +231,28 @@ describe('calendar leaf on the real lifecycle', () => {
     const listed = await call(A, 'GET', '/api/v1/events')
     expect(listed.status).toBe(200)
     expect(JSON.stringify(listed.body)).toContain(EVENT.title)
+    // the rest of the leaf's write surface, as the module app role: update, event types, a second event and its
+    // delete (each also writes the CalDAV queue and the audit trail), the outbox relay, the CalDAV queue
+    const second = await call(A, 'POST', '/api/v1/events', { ...EVENT, title: 'Zweite Probe' })
+    expect(second.status).toBe(201)
+    const secondId = (second.body as { id: string }).id
+    expect((await call(A, 'PATCH', `/api/v1/events/${secondId}`, { title: 'Zweite Probe, geaendert' })).status).toBe(200)
+    expect((await call(A, 'POST', '/api/v1/event-types', { name: 'Probe-Typ', color: '#112233' })).status).toBe(201)
+    expect((await call(A, 'GET', '/api/v1/event-types')).status).toBe(200)
+    expect((await call(A, 'DELETE', `/api/v1/events/${secondId}`)).status).toBe(200)
+    const published: string[] = []
+    const relayed = await runRelayPass(await storeFor(A, OPTS), A.id, {
+      publish: async (subject: string) => {
+        published.push(subject)
+      },
+    } as never)
+    expect(relayed.failed).toBe(0)
+    expect(relayed.ok).toBeGreaterThan(0)
+    expect(published.length).toBe(relayed.ok)
+    const queue = await listPendingCaldavSync(await storeFor(A, OPTS))
+    expect(queue.length).toBeGreaterThan(0)
+    await recordCaldavSyncFailure(await storeFor(A, OPTS), queue[0]!.id, 'probe')
+    await removeCaldavSyncEntry(await storeFor(A, OPTS), queue[0]!.id)
     expect((await call(B, 'POST', '/api/v1/events', { ...EVENT, title: 'Probe-B' })).status).toBe(201)
     expect(JSON.stringify((await call(B, 'GET', '/api/v1/events')).body)).not.toContain(EVENT.title)
 
@@ -245,7 +269,7 @@ describe('calendar leaf on the real lifecycle', () => {
       }
     })()
     expect(aRows.events.map((e) => e.title)).toEqual([EVENT.title])
-    expect(aRows.outbox).toBe(1)
+    expect(aRows.outbox).toBeGreaterThan(0)
     const legacy = await admin<{ datname: string }[]>`SELECT datname FROM pg_database WHERE datname LIKE ${TEST_DB_PREFIX + 'life-%'}`
     expect(legacy).toEqual([])
 

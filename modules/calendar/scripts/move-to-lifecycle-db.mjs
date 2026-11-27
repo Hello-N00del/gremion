@@ -20,7 +20,10 @@
 //     transaction, the row count and a checksum of every table with the source's: any difference rolls the
 //     whole copy back;
 //   - then marks the source retired with a database comment the script itself reads on the next run, and
-//     records the lifecycle name in the catalogue row. It never drops, renames or empties a database.
+//     records the lifecycle name in the catalogue row LAST. The new leaf answers 503 move_pending for a
+//     customer whose catalogue row still names calendar_<slug>, so a release that starts before the script ran
+//     serves no customer and writes nothing into the empty lifecycle database. It never drops, renames or
+//     empties a database.
 // Dry run is the default: it reads, prints the plan, and changes nothing (no backup, no copy, no mark).
 //
 // Idempotent. A customer whose source carries the retired mark is skipped (the target has been in use since, so
@@ -316,8 +319,10 @@ export async function moveAll({ runner, prefix = 'calendar_', apply = false, bac
       refused++
     } else if (plan.action === 'retired' || plan.action === 'absent' || plan.action === 'same') {
       log(`${label}: nothing to do (${plan.reason})`)
-      if (apply && plan.action === 'retired') {
-        // a run that stopped after the mark and before the catalogue update: finish that one statement
+      if (apply && (plan.action === 'retired' || plan.action === 'absent')) {
+        // retired: a run that stopped after the mark and before the catalogue update; absent: a catalogue row
+        // whose source is gone (there is nothing to move). Either way the leaf refuses the customer (503
+        // move_pending) until the catalogue names the lifecycle database, so that one statement is finished here.
         recordInCatalogue(runner, controlDb, row.tenantId, plan.target)
       }
     } else if (!apply) {

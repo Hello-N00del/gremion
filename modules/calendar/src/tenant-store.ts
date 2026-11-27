@@ -176,13 +176,16 @@ export class TenantNotProvisionedError extends Error {
 
 /**
  * The customer's calendar database cannot be used right now: its schema is behind or diverged from this
- * release's migrations (the lifecycle migrates, the leaf never does), or the server could not be
- * reached. The HTTP layer answers 503 with Retry-After.
+ * release's migrations (the lifecycle migrates, the leaf never does), the server could not be reached, or
+ * the customer's data has not been moved out of calendar_<slug> yet (reason move_pending: the catalogue row
+ * still names that database; the operator script moves the data and then records the lifecycle name, so the
+ * leaf can never serve, or write into, an empty lifecycle database beside data that was not moved).
+ * The HTTP layer answers 503 with Retry-After.
  */
 export class TenantUnavailableError extends Error {
   readonly code = 'TENANT_UNAVAILABLE'
   constructor(
-    readonly reason: 'tenant_unavailable' | 'schema_not_current',
+    readonly reason: 'tenant_unavailable' | 'schema_not_current' | 'move_pending',
     readonly retryAfterSeconds: number,
   ) {
     super(`[tenant-store] the calendar database of this tenant cannot be used right now (${reason})`)
@@ -553,11 +556,12 @@ async function ensureControlDb(adminUrl: string, dbPrefix: string): Promise<Sql>
 
 /**
  * Refuse unless every catalog row naming this tenant's id OR its slug is
- * exactly (id, slug). Returns how many rows matched (0 or 1).
+ * exactly (id, slug). Returns the bound row's database name (null when the tenant is not yet
+ * in the catalogue).
  */
-async function assertCatalogBinding(ctrl: Sql, tenant: TenantRef): Promise<number> {
-  const rows = await ctrl.unsafe<{ tenant_id: string; slug: string }[]>(
-    `SELECT tenant_id::text AS tenant_id, slug FROM tenant_catalog WHERE tenant_id = $1 OR slug = $2`,
+async function assertCatalogBinding(ctrl: Sql, tenant: TenantRef): Promise<string | null> {
+  const rows = await ctrl.unsafe<{ tenant_id: string; slug: string; db_name: string }[]>(
+    `SELECT tenant_id::text AS tenant_id, slug, db_name FROM tenant_catalog WHERE tenant_id = $1 OR slug = $2`,
     [tenant.id, tenant.slug],
   )
   for (const row of rows) {
@@ -565,7 +569,7 @@ async function assertCatalogBinding(ctrl: Sql, tenant: TenantRef): Promise<numbe
       throw new TenantIdentityMismatchError(tenant, { id: row.tenant_id, slug: row.slug })
     }
   }
-  return rows.length
+  return rows[0]?.db_name ?? null
 }
 
 /**
@@ -578,14 +582,14 @@ async function assertCatalogBinding(ctrl: Sql, tenant: TenantRef): Promise<numbe
  *     proceeds is the one the catalog holds.
  */
 async function claimCatalog(ctrl: Sql, tenant: TenantRef, dbName: string): Promise<void> {
-  if ((await assertCatalogBinding(ctrl, tenant)) === 1) return
+  if ((await assertCatalogBinding(ctrl, tenant)) !== null) return
   await ctrl.unsafe(
     `INSERT INTO tenant_catalog (tenant_id, slug, db_name)
      VALUES ($1, $2, $3)
      ON CONFLICT DO NOTHING`,
     [tenant.id, tenant.slug, dbName],
   )
-  if ((await assertCatalogBinding(ctrl, tenant)) !== 1) {
+  if ((await assertCatalogBinding(ctrl, tenant)) === null) {
     throw new Error(`[tenant-store] catalog claim for (${tenant.id}, ${tenant.slug}) did not land - refusing`)
   }
 }
@@ -646,8 +650,14 @@ async function openFirstContact(tenant: TenantRef, pgUrl: string, dbPrefix: stri
   // 1. Ensure the control DB + tenant_catalog table (idempotent).
   const ctrl = await ensureControlDb(pgUrl, dbPrefix)
 
-  // 2. A pair the catalogue does not bind is refused before the customer database is touched.
-  await assertCatalogBinding(ctrl, tenant)
+  // 2. A pair the catalogue does not bind is refused before the customer database is touched. A
+  //    customer whose row still names calendar_<slug> has data that was not moved yet: refused too, so
+  //    a release that starts before the operator script ran serves nothing and writes nothing into the
+  //    empty lifecycle database (the script records the lifecycle name as its last step).
+  const bound = await assertCatalogBinding(ctrl, tenant)
+  if (bound !== null && bound !== tenantModuleDbName(tenant.id, MODULE_ID)) {
+    throw new TenantUnavailableError('move_pending', RETRY_AFTER_SECONDS)
+  }
 
   // 3. Open the customer's lifecycle database. A refusal leaves the catalogue untouched.
   const sql = await openLifecycleDb(dbs, tenant.id)

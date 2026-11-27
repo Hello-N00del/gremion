@@ -19,12 +19,28 @@ RUN npm install -g corepack && corepack enable pnpm
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 # @gremion/ports is the in-tree workspace package packages/ports; the in-image
 # path must match the repo path or `--frozen-lockfile` rejects the importer set.
+# The leaf also bundles @gremion/tenant-store (it opens the customer's lifecycle database through
+# it). The tenant store's own workspace dependencies (the kernel database package, module-catalogue,
+# generated-clients, storage, retention) arrive transitively, and `pnpm install --frozen-lockfile`
+# needs every one of them in the tree, so they are copied here like the board leaf's (same set).
 COPY packages/ports/package.json ./packages/ports/
+COPY packages/db/package.json ./packages/db/
+COPY packages/generated-clients/package.json ./packages/generated-clients/
+COPY packages/module-catalogue/package.json ./packages/module-catalogue/
+COPY packages/tenant-store/package.json ./packages/tenant-store/
+COPY packages/storage/package.json ./packages/storage/
+COPY packages/retention/package.json ./packages/retention/
 COPY modules/calendar/package.json ./modules/calendar/
 RUN pnpm install --frozen-lockfile
 
 # Copy workspace package sources + the service sources.
 COPY packages/ports ./packages/ports/
+COPY packages/db ./packages/db/
+COPY packages/generated-clients ./packages/generated-clients/
+COPY packages/module-catalogue ./packages/module-catalogue/
+COPY packages/tenant-store ./packages/tenant-store/
+COPY packages/storage ./packages/storage/
+COPY packages/retention ./packages/retention/
 COPY modules/calendar ./modules/calendar/
 
 # Compile TypeScript → modules/calendar/dist

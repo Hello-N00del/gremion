@@ -200,9 +200,14 @@ describe('move-to-lifecycle-db (operator script)', () => {
 
   it('the new leaf then serves the moved events from the lifecycle database', async () => {
     await world({ lifecycleFor: [T1], tenants: [{ ...T1, rows: 2 }] })
+    const opts = { pgUrl: TEST_PG_URL, dbPrefix: PREFIX, moduleUrl: TEST_PG_URL }
+    // before the move the leaf serves nothing for the customer and writes nothing into the empty lifecycle database
+    await expect(storeFor(T1, opts)).rejects.toMatchObject({ code: 'TENANT_UNAVAILABLE', reason: 'move_pending' })
+    expect((await fingerprint(fixtureDb(T1.id))).find((f) => f.table === 'calendar_events')!.count).toBe(0)
+    await _resetTenantStoreForTests()
     const r = run(['--apply', '--backup-dir', backups])
     expect(r.status, r.out).toBe(0)
-    const sql = await storeFor(T1, { pgUrl: TEST_PG_URL, dbPrefix: PREFIX, moduleUrl: TEST_PG_URL })
+    const sql = await storeFor(T1, opts)
     const events = await listEvents(sql)
     expect(events.map((e) => e.title).sort()).toEqual(['Sitzung mv-one 0', 'Sitzung mv-one 1'])
     expect(events.every((e) => e.description === 'Beschreibung mit Umlauten: äöü')).toBe(true)
@@ -245,6 +250,21 @@ describe('move-to-lifecycle-db (operator script)', () => {
     expect(readdirSync(second)).toEqual([])
     expect(await fingerprint(fixtureDb(T1.id))).toEqual(before)
     expect(await comment(src(T1))).toContain('gremion-retired')
+  }, 180_000)
+
+  it('a catalogue row whose source database is gone has nothing to move: --apply records the lifecycle name so the leaf serves it', async () => {
+    await world({ lifecycleFor: [T1], tenants: [{ ...T1, rows: 1 }] })
+    await admin.unsafe(`DROP DATABASE "${src(T1)}" WITH (FORCE)`)
+    const dry = run([])
+    expect(dry.status, dry.out).toBe(0)
+    expect(dry.out).toContain('nothing to do (there is no source database)')
+    const [before] = await onDb(PREFIX + 'control', (sql) => sql<{ db_name: string }[]>`SELECT db_name FROM tenant_catalog WHERE tenant_id = ${T1.id}`)
+    expect(before!.db_name).toBe(src(T1))
+    const r = run(['--apply', '--backup-dir', backups])
+    expect(r.status, r.out).toBe(0)
+    const [after] = await onDb(PREFIX + 'control', (sql) => sql<{ db_name: string }[]>`SELECT db_name FROM tenant_catalog WHERE tenant_id = ${T1.id}`)
+    expect(after!.db_name).toBe(fixtureDb(T1.id))
+    await expect(storeFor(T1, { pgUrl: TEST_PG_URL, dbPrefix: PREFIX, moduleUrl: TEST_PG_URL })).resolves.toBeDefined()
   }, 180_000)
 
   it('a customer without a lifecycle database is refused, nothing is created for it, the other customers are still moved', async () => {

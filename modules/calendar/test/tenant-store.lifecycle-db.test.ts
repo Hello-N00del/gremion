@@ -27,6 +27,7 @@ const {
   closeAllPools,
   TenantNotProvisionedError,
   TenantUnavailableError,
+  MIGRATIONS_DIR,
   _resetTenantStoreForTests,
 } = await import('../src/tenant-store.ts')
 const { tenantModuleDbName } = await import('@gremion/tenant-store')
@@ -168,6 +169,49 @@ describe('DDL: the leaf never creates or migrates a customer database', () => {
     h.probeError = null
     await expect(storeFor(B, OPTS)).resolves.toBeDefined()
     expect(h.catalog.map((r) => r.tenant_id)).toEqual([B.id])
+  })
+})
+
+describe('MOVE: a customer not yet moved out of calendar_<slug> is refused until the catalogue names the lifecycle database', () => {
+  const legacyRow = () => ({ tenant_id: A.id, slug: A.slug, db_name: PREFIX + A.slug })
+
+  it('a catalogue row that still names calendar_<slug> is a 503 move_pending: the customer database is not opened and nothing is written', async () => {
+    h.databases.add(CONTROL_DB)
+    h.catalog.push(legacyRow())
+    const err = await storeFor(A, OPTS).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(TenantUnavailableError)
+    expect(err).toMatchObject({ code: 'TENANT_UNAVAILABLE', reason: 'move_pending', retryAfterSeconds: 30 })
+    expect(h.storeOpens).toEqual([])
+    expect(h.writes).toEqual([])
+    expect(h.catalog).toEqual([legacyRow()])
+  })
+
+  it('it stays refused on every call, and is served the moment the catalogue names the lifecycle database', async () => {
+    h.databases.add(CONTROL_DB)
+    h.catalog.push(legacyRow())
+    await expect(storeFor(A, OPTS)).rejects.toMatchObject({ reason: 'move_pending' })
+    await expect(storeFor(A, OPTS)).rejects.toMatchObject({ reason: 'move_pending' })
+    h.catalog[0]!.db_name = DB_A
+    await expect(storeFor(A, OPTS)).resolves.toBeDefined()
+    expect(h.storeOpens).toEqual([[A.id, 'calendar']])
+  })
+
+  it('a customer with no catalogue row yet is a new customer: claimed under the lifecycle name, never refused', async () => {
+    await expect(storeFor(B, OPTS)).resolves.toBeDefined()
+    expect(h.catalog).toEqual([{ tenant_id: B.id, slug: B.slug, db_name: tenantModuleDbName(B.id, 'calendar') }])
+  })
+})
+
+describe('BUNDLE: the schema gate finds the migrations manifest from src/ and from the bundle', () => {
+  it('MIGRATIONS_DIR is <leaf>/migrations, resolved at src/ depth 1 (dist/index.js sits at the same depth), and holds manifest.json', async () => {
+    const { existsSync } = await import('node:fs')
+    const { basename, dirname, join, resolve } = await import('node:path')
+    const { fileURLToPath } = await import('node:url')
+    const leaf = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+    expect(resolve(MIGRATIONS_DIR)).toBe(join(leaf, 'migrations'))
+    expect(existsSync(join(MIGRATIONS_DIR, 'manifest.json'))).toBe(true)
+    // the file that resolves it stays directly under src/ (a deeper file would resolve to /migrations from the bundle)
+    expect(basename(dirname(fileURLToPath(new URL('../src/tenant-store.ts', import.meta.url))))).toBe('src')
   })
 })
 
