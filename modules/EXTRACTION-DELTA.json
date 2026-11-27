@@ -2457,7 +2457,7 @@
       "path": "modules/calendar/scripts/move-to-lifecycle-db.mjs",
       "reason": "added by fu7 calendar lifecycle database: the operator script that moves calendar_<slug> into t_<hex32>__calendar (dry run first, backup, one transaction, counts and checksums compared, retired mark)",
       "owner": "TASK-152",
-      "blob": "2308b62902195ccfdd0e5b1cf9b6643ce1f3c780"
+      "blob": "f83087ef3f77532142534a771ca3562bf0c387ea"
     },
     {
       "path": "modules/calendar/src/migrate-only.ts",
