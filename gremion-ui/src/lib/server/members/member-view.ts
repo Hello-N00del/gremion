@@ -158,8 +158,9 @@ async function redactHiddenMemberships(viewer: Viewer | null, members: Member[])
 }
 
 export interface PersonHit {
-  /** The opaque username handle, as in Member.id: never the Keycloak UUID. */
-  handle: string
+  /** The opaque username handle, as in Member.id: never the Keycloak UUID. Null in the basic view for an
+   *  account whose user name is an e-mail address: the handle would be that address. */
+  handle: string | null
   name: string
   /** Set for the admin view only. */
   email: string | null
@@ -179,7 +180,9 @@ const PEOPLE_FETCH_MAX = 50
  * the viewer may see (the rule redactHiddenMemberships applies to the directory), found by their DISPLAYED
  * NAME alone. Keycloak also matches the e-mail address and the user name, so the hits are narrowed to the
  * name here: matching on an address would let a typed address confirm that somebody holds it. No address
- * is returned. `words` are searchWords() output, already free of Keycloak's wildcard and quote characters.
+ * is returned, and an account whose user name is an e-mail address is shown by its first and last name only
+ * (no handle; without a name it is left out), so the address cannot come out through a label or a link.
+ * `words` are searchWords() output, already free of Keycloak's wildcard and quote characters.
  */
 export async function searchMembers(
   kc: KeycloakAdminClient,
@@ -194,13 +197,17 @@ export async function searchMembers(
   })
   const accounts = found
     .filter((u) => !u.username.startsWith('service-account-'))
-    .map((u) => ({ u, name: [u.firstName, u.lastName].filter(Boolean).join(' ').trim() || u.username }))
+    .map((u) => ({ u, fullName: [u.firstName, u.lastName].filter(Boolean).join(' ').trim() }))
 
   if (opts.adminView) {
-    return accounts.slice(0, opts.limit).map(({ u, name }) => ({ handle: u.username, name, email: u.email || null, units: [] }))
+    return accounts
+      .slice(0, opts.limit)
+      .map(({ u, fullName }) => ({ handle: u.username, name: fullName || u.username, email: u.email || null, units: [] }))
   }
 
-  const named = accounts.filter(({ name }) => opts.words.every((w) => foldedIncludes(name, w)))
+  const named = accounts
+    .map(({ u, fullName }) => ({ u, name: fullName || (u.username.includes('@') ? '' : u.username) }))
+    .filter(({ name }) => name !== '' && opts.words.every((w) => foldedIncludes(name, w)))
   const own = new Set(
     opts.viewer
       ? await getOrgUnitIdsForUser(opts.viewer.id).catch((err) => {
@@ -219,7 +226,7 @@ export async function searchMembers(
       const unit = unitCache.get(id)
       if (unit && canSeeOrgUnit(opts.viewer, unit, own.has(id))) units.push(unit.name)
     }
-    if (units.length > 0) hits.push({ handle: u.username, name, email: null, units })
+    if (units.length > 0) hits.push({ handle: u.username.includes('@') ? null : u.username, name, email: null, units })
   }
   return hits
 }

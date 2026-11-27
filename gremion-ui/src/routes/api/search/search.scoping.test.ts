@@ -53,7 +53,9 @@ function fakeSql(url: string) {
       h.queried.push(url)
       const text = strings.join('?')
       if (text.includes('FROM protocols p')) {
-        return data.protocols.map((p) => {
+        // The title match of the real statement: the pattern is the first parameter.
+        const needle = String(values[0]).replace(/^%|%$/g, '').toLowerCase()
+        return data.protocols.filter((p) => p.title.toLowerCase().includes(needle)).map((p) => {
           const u = data.units.find((x) => x.id === p.unit)!
           return { id: p.id, title: p.title, meetingDate: '2026-05-12', status: 'published', committeeId: u.id, committeeName: u.name, visibility: u.visibility }
         })
@@ -112,10 +114,10 @@ describe('palette search is scoped to the caller\'s customer', () => {
 
   it('a search for the other customer\'s item finds nothing for the caller', async () => {
     h.tenant = { id: 'tenant-a', dbUrl: 'postgres://a', dbMax: 1, dbPrepare: false }
-    // A's pool holds only A's rows; the fake runner returns them all, so the shape of the answer shows
-    // the id prefix: nothing of B's reaches A's caller.
+    // "Beta" is only in customer B's rows: A's caller finds nothing, and only A's pool was read.
     const found = await search('beta')
-    expect([...found.minutes, ...found.units].every((x) => x.id.startsWith('a-'))).toBe(true)
+    expect(found.minutes).toEqual([])
+    expect(found.units).toEqual([])
     expect(new Set(h.queried)).toEqual(new Set(['postgres://a']))
   })
 })

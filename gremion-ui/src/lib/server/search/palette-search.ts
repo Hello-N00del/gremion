@@ -125,11 +125,13 @@ async function findUnits(query: string, viewer: Viewer): Promise<SearchHit[]> {
 
 async function findPeople(query: string, viewer: Viewer, kc: KeycloakAdminClient, isAdmin: boolean): Promise<SearchHit[]> {
   const hits = await searchMembers(kc, { words: searchWords(query), adminView: isAdmin, viewer, limit: RESULT_CAP })
-  return hits.map((p) => ({
-    id: p.handle,
+  // A person without a handle (the basic view hides a user name that is an address) is keyed by position
+  // and linked to the directory itself.
+  return hits.map((p, i) => ({
+    id: p.handle ?? `person-${i}`,
     label: p.name,
     hint: isAdmin ? p.email : p.units.slice(0, 2).join(', ') || null,
-    href: `/members?member=${encodeURIComponent(p.handle)}`,
+    href: p.handle ? `/members?member=${encodeURIComponent(p.handle)}` : '/members',
   }))
 }
 
@@ -163,7 +165,9 @@ export async function searchForPalette(input: PaletteSearchInput): Promise<Searc
   const viewer: Viewer = { id: user.id, roles }
   // The kinds that link into /members/*: the same minimum role as that page (PAGE_ACCESS 'members').
   const members = canAccess(roles, 'members', pageAccess)
-  const calendar = calendarOn && canAccess(roles, 'calendar', pageAccess)
+  // A build without the calendar module has no 'calendar' page entry; canAccess throws for an unknown page
+  // in development, and a missing calendar must never fail the other kinds.
+  const calendar = calendarOn && pageAccess['calendar'] !== undefined && canAccess(roles, 'calendar', pageAccess)
   const isAdmin = hasRole(roles, Role.CouncilAdmin) || hasRole(roles, Role.ITAdmin)
 
   const [minutes, units, people, events] = await Promise.all([

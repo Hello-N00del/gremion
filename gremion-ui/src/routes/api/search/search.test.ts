@@ -94,6 +94,7 @@ import {
   _resetRuntimeRegistryForTests,
 } from '$lib/server/modules/runtime-registry'
 import { searchProtocols } from '$lib/server/governance/protocols-db'
+import { searchForPalette } from '$lib/server/search/palette-search'
 
 type FakeUser = { id: string; username: string; email: string; firstName: string; lastName: string; enabled: boolean }
 const user = (id: string, first: string, last: string, enabled = true): FakeUser => ({
@@ -321,6 +322,31 @@ describe('people', () => {
     expect(ids((await search('kernel', ADMIN)).people)).toEqual([])
   })
 
+  it('an account whose user name is an e-mail address never leaks it to a non-admin: not in the label, the id or the link', async () => {
+    REALMS['realm-a']!.push(
+      { id: 'a-mail', username: 'jan.beispiel@council-sample.example.org', email: 'jan.beispiel@council-sample.example.org', firstName: 'Jan', lastName: 'Beispiel', enabled: true },
+      { id: 'a-nameless', username: 'nameless.person@council-sample.example.org', email: 'nameless.person@council-sample.example.org', firstName: '', lastName: '', enabled: true },
+    )
+    MEMBERSHIPS['a-mail'] = ['u-fin']
+    MEMBERSHIPS['a-nameless'] = ['u-fin']
+    try {
+      const found = await search('beispiel')
+      expect(found.people).toHaveLength(1)
+      expect(found.people[0]!.label).toBe('Jan Beispiel')
+      expect(found.people[0]!.href).toBe('/members')
+      expect(JSON.stringify(found)).not.toContain('@')
+      // A person with no name at all cannot be shown without the address: not found.
+      expect((await search('nameless')).people).toEqual([])
+      expect(JSON.stringify(await search('nameless'))).not.toContain('@')
+      // An admin sees the directory as it is.
+      expect((await search('beispiel', ADMIN)).people[0]!.href).toContain('/members?member=')
+    } finally {
+      REALMS['realm-a']!.splice(-2)
+      delete MEMBERSHIPS['a-mail']
+      delete MEMBERSHIPS['a-nameless']
+    }
+  })
+
   it('a Guest finds no people: the member directory is a Member page', async () => {
     expect((await search('kowal', GUEST)).people).toEqual([])
     expect(adminUrls).toEqual([])
@@ -390,6 +416,23 @@ describe('events', () => {
 
   it('no calendar module (no provider) yields no events', async () => {
     expect((await search('plenum')).events).toEqual([])
+  })
+
+  it('a build without the calendar module (no calendar page entry) yields no events and the other kinds still answer', async () => {
+    // canAccess throws for an unknown page key in development; a missing calendar must not fail the search.
+    const provider = vi.fn(async () => rows(1))
+    registerDataProvider('calendar:search-events', provider)
+    const kc = { listUsers: async () => [] } as never
+    const found = await searchForPalette({
+      query: 'haushaltsplan',
+      user: STRANGER,
+      kc,
+      pageAccess: { members: Role.Member },
+      calendarOn: true,
+    })
+    expect(found.events).toEqual([])
+    expect(ids(found.minutes)).toEqual(['p1'])
+    expect(provider).not.toHaveBeenCalled()
   })
 
   it('a provider that throws degrades to no events and the other kinds still answer', async () => {
