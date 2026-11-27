@@ -1,4 +1,4 @@
-<!-- i18n-sync: source=README.md sha256=24228d9a0b0fdd5f0ceec0f27e047878b08a17b5820b2ba17c3f66f3cbe382ab -->
+<!-- i18n-sync: source=README.md sha256=091eaa545430ffd69c2c92d76e45aec4e657c53607cb431e68da0acee59a21ca -->
 [English](./README.md) | **Deutsch**
 
 # calendar
@@ -24,7 +24,7 @@ Status: **unterstützt** ([docs/modules.de.md](../../docs/modules.de.md)).
 | `app/` | Die In-Process-Hälfte, die über `gremion-ui/src/` gelegt wird: Seiten, API-Routen, Kalenderkomponenten, CalDAV-Client und -Sync, Benachrichtigungs-Scheduler, Audit-Consumer, Backend-Port, Manifest, Seeder. |
 | `src/` | Der Leaf-Service: `http/`, `store/`, `tenant-store.ts`, `caldav/`, `outbox.ts` und das NATS-Relay, `scheduler.ts`. |
 | `migrations/` | Leaf-Schema und das erzeugte `manifest.json`. |
-| `scripts/` | `build-migration-manifest.mjs` (läuft als `prebuild`) und `backfill.ts`, eine einmalige Kopie von Kalenderzeilen aus einer Mandantendatenbank des Kernels in die Leaf-Datenbank (ein reiner Verifizierungsmodus ist verfügbar). |
+| `scripts/` | `build-migration-manifest.mjs` (läuft als `prebuild`), `backfill.ts`, eine einmalige Kopie von Kalenderzeilen aus einer Mandantendatenbank des Kernels in die Lebenszyklus-Datenbank des Mandanten (ein reiner Verifizierungsmodus ist verfügbar), und `move-to-lifecycle-db.mjs`, das Betreiberskript, das eine frühere `calendar_<slug>`-Datenbank in die Lebenszyklus-Datenbank verschiebt. |
 | `test/` | Unit- und Integrationstests des Leaf. |
 
 ## Routen und API-Oberfläche
@@ -52,10 +52,19 @@ POST), `/api/v1/event-types/:id` (GET, DELETE), `/api/v1/committee-settings/:com
 
 ## Migrationen
 
-Je Mandant eine Datenbank (`calendar_<slug>`), dazu eine Kontrolldatenbank
-`calendar_control` mit dem Mandantenkatalog. Der Leaf führt `migrations/*.sql` beim ersten
-Kontakt mit einem Mandanten der Reihe nach aus und prüft den SHA-256 jeder Datei gegen
-`migrations/manifest.json`.
+Der Kalender eines Mandanten liegt in der Datenbank, die der Modul-Lebenszyklus besitzt,
+`t_<Mandanten-UUID als 32 Hex-Zeichen>__calendar`. `enableModule` legt sie an, führt
+`migrations/*.sql` der Reihe nach aus (der eine Runner von `@gremion/tenant-store`, der den SHA-256
+jeder Datei gegen `migrations/manifest.json` prüft) und gibt der App-Rolle des Moduls
+`m_calendar_app` die DML-Rechte. Der Leaf legt keine Mandantendatenbank an und migriert keine: er
+öffnet diese als `m_calendar_app` (`GREMION_CALENDAR_PG_URL`, der Datenbankname wird je Mandant
+ersetzt) hinter dem Schema-Tor. Eine fehlende oder gesperrte Datenbank (das Modul ist abgeschaltet)
+antwortet mit `404 tenant_not_provisioned`, eine Datenbank hinter den Migrationen mit
+`503 schema_not_current`. Die Kontrolldatenbank `calendar_control` (mit dem Admin-Zugang
+`CALENDAR_PG_URL` angelegt) enthält nur den Mandantenkatalog: sie bindet jede Mandanten-ID an genau
+einen Slug und listet die Mandanten, die der CalDAV-Abgleich und das Outbox-Relay durchlaufen.
+Frühere Versionen hielten jeden Mandanten in `calendar_<slug>`; `scripts/move-to-lifecycle-db.mjs`
+verschiebt eine solche Datenbank einmalig (zuerst ein Probelauf; siehe `docs/ops/pilot-services.md`).
 
 | Datei | Inhalt |
 |---|---|
@@ -73,7 +82,8 @@ Aufbewahrungsprofil `rp-cal-module-data` exportiert (`module.json`).
 | `CALENDAR_BACKEND` | Kernel-App | `inprocess` (Standard) oder `service`. |
 | `CALENDAR_SERVICE_URL` | Kernel-App | Basis-URL des Leaf, wenn das Backend `service` ist. |
 | `INTERNAL_CALENDAR_SECRET` | beide | Shared Secret in `x-internal-auth`. |
-| `CALENDAR_PG_URL` | Leaf | PostgreSQL-Server des Moduls; Pflicht, kein Standardwert. |
+| `CALENDAR_PG_URL` | Leaf | PostgreSQL-Server des Moduls als Admin, nur für die Katalogdatenbank `calendar_control`; Pflicht, kein Standardwert. |
+| `GREMION_CALENDAR_PG_URL` | Leaf | PostgreSQL-Server des Moduls als App-Rolle `m_calendar_app`; der Datenbankname wird je Mandant ersetzt (`t_<hex32>__calendar`). Pflicht, kein Standardwert. |
 | `NATS_URL` | beide | Aktiviert das Outbox-Relay; ist sie nicht gesetzt, bleibt das Relay aus, und das Boot-Log vermerkt das in einer Zeile. |
 | `KERNEL_BASE_URL` | Leaf | Basis-URL des Kernels; wird gelesen, ein Callback an den Kernel erfolgt derzeit aber nicht. |
 | `NEXTCLOUD_URL`, `NEXTCLOUD_ADMIN_USER`, `NEXTCLOUD_ADMIN_PASSWORD` | beide | CalDAV-Push-Ziel und Zugangsdaten. |
@@ -83,7 +93,7 @@ Aufbewahrungsprofil `rp-cal-module-data` exportiert (`module.json`).
 | `PORT`, `TRACE_EXPORTER` | Leaf, App | Listen-Port; Tracing-Exporter. |
 
 Der PostgreSQL-Server des Moduls ist `calendar-postgres` unter dem Compose-Profil `calendar`
-(`CALENDAR_PG_USER`, `CALENDAR_PG_PASSWORD`).
+(`CALENDAR_PG_USER`, `CALENDAR_PG_PASSWORD`; das Passwort der App-Rolle ist `CALENDAR_APP_PASSWORD`).
 
 ## Externe Dienste
 

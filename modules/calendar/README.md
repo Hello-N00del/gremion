@@ -22,7 +22,7 @@ transactional outbox. Status: **supported** ([docs/modules.md](../../docs/module
 | `app/` | The in-process half, overlaid onto `gremion-ui/src/`: pages, API routes, calendar components, CalDAV client and sync, notification scheduler, audit consumer, backend port, manifest, seeder. |
 | `src/` | The leaf service: `http/`, `store/`, `tenant-store.ts`, `caldav/`, `outbox.ts` and the NATS relay, `scheduler.ts`. |
 | `migrations/` | Leaf schema and the generated `manifest.json`. |
-| `scripts/` | `build-migration-manifest.mjs` (runs as `prebuild`) and `backfill.ts`, a one-shot copy of calendar rows from a kernel tenant database into the leaf database (verify-only mode available). |
+| `scripts/` | `build-migration-manifest.mjs` (runs as `prebuild`), `backfill.ts`, a one-shot copy of calendar rows from a kernel tenant database into the tenant's lifecycle database (verify-only mode available), and `move-to-lifecycle-db.mjs`, the operator script that moves an earlier `calendar_<slug>` database into the lifecycle database. |
 | `test/` | Leaf unit and integration tests. |
 
 ## Routes and API surface
@@ -50,9 +50,17 @@ POST), `/api/v1/event-types/:id` (GET, DELETE), `/api/v1/committee-settings/:com
 
 ## Migrations
 
-One database per tenant (`calendar_<slug>`), with a control database `calendar_control`
-holding the tenant catalogue. The leaf runs `migrations/*.sql` in order on first contact
-with a tenant and verifies each file's SHA-256 against `migrations/manifest.json`.
+A tenant's calendar is the database the module lifecycle owns, `t_<tenant uuid as 32 hex>__calendar`.
+`enableModule` creates it, runs `migrations/*.sql` in order (the one runner of `@gremion/tenant-store`,
+which verifies each file's SHA-256 against `migrations/manifest.json`) and grants the module's app role
+`m_calendar_app` its DML. The leaf never creates or migrates a tenant database: it opens this one as
+`m_calendar_app` (`GREMION_CALENDAR_PG_URL`, the database name replaced per tenant) behind the schema gate.
+A database that is missing or blocked (the module is switched off) answers `404 tenant_not_provisioned`; one
+that is behind the migrations answers `503 schema_not_current`. The control database `calendar_control`
+(created with the admin `CALENDAR_PG_URL`) holds only the tenant catalogue: it binds each tenant id to one
+slug and lists the tenants the CalDAV drain and the outbox relay walk. Earlier releases kept each tenant in
+`calendar_<slug>`; `scripts/move-to-lifecycle-db.mjs` moves such a database once (dry run first; see
+`docs/ops/pilot-services.md`).
 
 | File | Content |
 |---|---|
@@ -70,7 +78,8 @@ profile `rp-cal-module-data` (`module.json`).
 | `CALENDAR_BACKEND` | kernel app | `inprocess` (default) or `service`. |
 | `CALENDAR_SERVICE_URL` | kernel app | Base URL of the leaf when the backend is `service`. |
 | `INTERNAL_CALENDAR_SECRET` | both | Shared secret in `x-internal-auth`. |
-| `CALENDAR_PG_URL` | leaf | PostgreSQL server of the module; required, no default. |
+| `CALENDAR_PG_URL` | leaf | PostgreSQL server of the module as its admin, for the catalogue database `calendar_control` only; required, no default. |
+| `GREMION_CALENDAR_PG_URL` | leaf | PostgreSQL server of the module as the module's app role `m_calendar_app`; the database name is replaced per tenant (`t_<hex32>__calendar`). Required, no default. |
 | `NATS_URL` | both | Enables the outbox relay; unset leaves the relay off with one boot log line. |
 | `KERNEL_BASE_URL` | leaf | Kernel base URL; read, but no kernel callback is made today. |
 | `NEXTCLOUD_URL`, `NEXTCLOUD_ADMIN_USER`, `NEXTCLOUD_ADMIN_PASSWORD` | both | CalDAV push target and credentials. |
@@ -80,7 +89,7 @@ profile `rp-cal-module-data` (`module.json`).
 | `PORT`, `TRACE_EXPORTER` | leaf, app | Listen port; tracing exporter. |
 
 The module's PostgreSQL server is `calendar-postgres` under the compose profile `calendar`
-(`CALENDAR_PG_USER`, `CALENDAR_PG_PASSWORD`).
+(`CALENDAR_PG_USER`, `CALENDAR_PG_PASSWORD`; the app role's password is `CALENDAR_APP_PASSWORD`).
 
 ## External services
 

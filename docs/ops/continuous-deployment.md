@@ -618,7 +618,7 @@ day-30 job retires it when it drops the database.
 
 ## Leaf step
 
-The calendar, content and publishing leaf services keep their customers' data in databases of their
+The content and publishing leaf services keep their customers' data in databases of their
 own, which the module step does not reach. Before the new colour starts, the host runs one
 `node dist/index.js --migrate-only` container per leaf service of the target colour, with the
 label `gremion.cd=<release id>`, and only when every leaf database has a live dump of this release.
@@ -627,6 +627,15 @@ over customers and never sees a name), runs the leaf's own migration runner on e
 database, prints one JSON line of counts (`total`, `migrated`, `skipped`, `failed`) and exits. It
 starts no web server, no scheduler and no message client, creates no database and no control
 database, and takes no customer argument. The counts are in `status` and in the mails.
+
+**calendar-service is in the fixed list but has nothing to migrate.** A customer's calendar is a
+lifecycle database (`t_<hex32>__calendar`), which the module step creates, migrates and grants
+like a board database, and the leaf only opens it: it never creates or migrates a customer
+database. Its `--migrate-only` entry answers the counts contract with zero counts (exit 0) and
+opens no database, so a calendar migration file in a release is carried by the module step, not
+by this step. The earlier `calendar_<slug>` databases are moved once by the operator script
+(`docs/ops/pilot-services.md`, "Calendar: move to the lifecycle database"); until they are
+dropped by hand they stay in the server's dump set.
 
 **Exit codes of the entry.** 0 ok, 1 a migration file raised SQL or its hash differs from the
 manifest, 2 usage, a missing connection variable or a refused login, 3 a connection that was refused

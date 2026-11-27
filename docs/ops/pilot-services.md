@@ -20,12 +20,19 @@ the env templates, `gremion-init-secrets`, `gremion-render` and
 | `livekit` | state | `video` | `edge` | signalling at `/livekit-sfu` on the platform host; RTC ports below | `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` |
 | `element-call` | state | `video` | `state` | gremion-ui proxies `/element-call`; no router | none |
 | `messaging-postgres`, `matrix` | state | `messaging` (post-realm) | `matrix`: `edge`, `state` | `/_matrix` on the platform host | see Synapse below |
-| `calendar-service`, `content-service`, `newsletter-service` | app (per colour) | `calendar`, `content`, `newsletter` | `app`, `state` | `<leaf>-<colour>` alias only: no edge network, no port, no router | `INTERNAL_<ID>_SECRET`, `<ID>_PG_PASSWORD` |
+| `calendar-service`, `content-service`, `newsletter-service` | app (per colour) | `calendar`, `content`, `newsletter` | `app`, `state` | `<leaf>-<colour>` alias only: no edge network, no port, no router | `INTERNAL_<ID>_SECRET`, `<ID>_PG_PASSWORD`, and for calendar `CALENDAR_APP_PASSWORD` |
 
 The leaves' database servers are the state project's `calendar-postgres`,
 `content-postgres` and `newsletter-postgres`, which share their profile name
-with the leaf. A leaf connects as that server's admin and creates one database
-per customer itself.
+with the leaf. The content and newsletter leaves connect as that server's admin
+and create one database per customer themselves. The calendar leaf does not: a
+customer's calendar is the lifecycle database `t_<hex32>__calendar` (created,
+migrated, exported and blocked by the module lifecycle), which the leaf only opens,
+as the module's app role `m_calendar_app` (`GREMION_CALENDAR_PG_URL`, password
+`CALENDAR_APP_PASSWORD`, derived from the file the role is set from). The leaf keeps
+the server admin (`CALENDAR_PG_URL`) for one thing: its catalogue database
+`calendar_control`, which binds each customer id to its slug and lists the customers
+the CalDAV drain and the outbox relay walk. It holds no calendar data.
 
 Nextcloud, Collabora, Element Call and the leaves run as first-party images
 built from this repository (`ghcr.io/hello-n00del/gremion-*`, tagged
@@ -463,7 +470,7 @@ list. The create of the first customer never reads the list.
 | Module | What the customer gets | What stays shared or is not given |
 |---|---|---|
 | board (core) | its own board, in its own kernel or board database as its location flag says (`t_<hex32>__board` once the board lives in the board module's database) | nothing shared |
-| calendar (core) | its own calendar leaf database; the CalDAV mirror goes to the customer's own collection (`gremion-<slug>`) of the leaf's shared Nextcloud account, created by `wire` step 6b | the Nextcloud account that owns the collections is the one install-wide account |
+| calendar (core) | its own calendar database (`t_<hex32>__calendar`, the lifecycle's); the CalDAV mirror goes to the customer's own collection (`gremion-<slug>`) of the leaf's shared Nextcloud account, created by `wire` step 6b | the Nextcloud account that owns the collections is the one install-wide account |
 | files | one group folder per org unit on the shared Nextcloud, with its own group `ou-<unit id>`; a folder is adopted on a retry only when it carries that unit's own group (the mount point alone proves nothing on a shared instance); the editor URL is built on the request's own host, which Nextcloud trusts and Collabora names; the retained-records folder and its groups are named per tenant | one Nextcloud, one Collabora, one `richdocuments` configuration; the Nextcloud accounts are the open point named in the operating limits |
 | votes | polls on the shared Nextcloud Polls: every poll is created by the install's one Nextcloud admin account and bound to the customer by a leading marker `[gt:<tenant id>]` in its title; every list and by-id read checks it, and another customer's poll answers 404; the poll pages and routes read and vote with the acting member's own bearer when the request has one (Karenz and retained copies use the admin account) | the Polls app and its database are shared; the binding is the app's marker, not a Nextcloud group |
 | messaging | its own Matrix accounts `<slug>.<escaped username>`, its own unit rooms (alias `#stura.<slug>.<unit>`), archive aliases (`#stura-archiv.<slug>.<unit>-<time>`) and meeting rooms (`#meeting.<slug>.<event>`); every room carries a tenant marker state event written by the admin bot, and a room found behind an alias is adopted only when that marker names the customer; video calls: the call frame's config names the requesting host's own token service, and the participants' names drop the customer prefix | one Synapse and one LiveKit; the alias directory is global; see the switch-over below, the three switches it needs, and the operating limits |
@@ -666,18 +673,74 @@ between two members of each customer.
   the canary's modules; those need their own checks.
 
 
+## Calendar: move to the lifecycle database
+
+Before this release the calendar leaf kept each customer in `calendar_<slug>` on
+`calendar-postgres`, a database it created itself. The platform lifecycle (switch-off,
+export, Karenz block, purge) acts on `t_<hex32>__calendar`, which stayed empty, so a
+switch-off, an export or a purge acted on the wrong database. The leaf now opens the
+lifecycle database. A customer that already has data needs it copied once.
+
+**Order.** The leaf must not write to the old database while the data is copied, and the
+new leaf must not write to the new database before it. So:
+
+1. Add `CALENDAR_APP_PASSWORD` to both `app-<colour>.env` files (upgrade runbook,
+   step 2) and enable the calendar module for each customer that has calendar data
+   (the lifecycle then creates and migrates `t_<hex32>__calendar`; the script refuses
+   a customer without it and never creates a database).
+2. Stop `calendar-service` of the running colour.
+3. Dry run, from the release tree on the host (Node and the docker CLI are enough; the
+   script reaches the server by `docker exec`, as its admin, over the container's own
+   socket). Read what it plans:
+
+   ```bash
+   node modules/calendar/scripts/move-to-lifecycle-db.mjs --container "${STACK}-state-calendar-postgres-1"
+   ```
+
+4. `--apply`, with an empty or new backup directory:
+
+   ```bash
+   node modules/calendar/scripts/move-to-lifecycle-db.mjs --container "${STACK}-state-calendar-postgres-1" \
+     --apply --backup-dir /opt/gremion/backups/calendar-move-$(date +%Y%m%d)
+   ```
+
+   Per customer it takes a `pg_dump -Fc` of `calendar_<slug>` into the directory first and
+   checks that `pg_restore` reads it, copies every table in one transaction, compares the
+   row count and a checksum of every table with the source inside that transaction (any
+   difference rolls the whole copy back), then marks the source database retired (a
+   database comment it reads on the next run) and records the lifecycle name in the
+   catalogue. It never drops, renames or empties a database. It is idempotent: a second
+   run skips what is marked, and finishes a customer whose run stopped between the copy
+   and the mark. Exit 0 means every customer is moved or was already; 1 means at least
+   one was refused (nothing refused was changed); 2 is a usage error or an unreachable
+   server.
+5. Start the release that carries the new leaf. Its first request per customer binds the
+   customer in the catalogue and opens `t_<hex32>__calendar`; the schema gate answers 503
+   `schema_not_current` for a customer whose lifecycle database is not at this release's
+   migrations (the module step of the release applies them, the leaf never does).
+
+The retired `calendar_<slug>` databases and `calendar_control` stay on the server. The CD
+leaf step's dump set still names them (it dumps every database of the server that is not a
+lifecycle database), and `calendar-service --migrate-only` migrates nothing any more; drop
+the retired databases by hand after the retention you want, not before. Rolling back to the
+earlier leaf image works while they exist (it reads `calendar_<slug>` again, without what the
+new leaf wrote since).
+
 ## Named residuals
 
 - **Leaf events.** The kernel NATS admits only the keys tenant-create holds,
   so the three leaves run with `NATS_URL` unset (relay off): their outbox rows
   accumulate and no event from these leaves reaches the kernel in this install.
-- **Leaf databases.** A leaf creates its own `calendar_<slug>`-style database;
-  the module enable gate creates a different, empty `t_<hex>__<module>` one.
-  Do not disable calendar, content or publishing until the two are reconciled.
-  The council switch refuses a calendar switch-off while `CALENDAR_BACKEND` names the
-  leaf (a switch-off guard); content and publishing are not council-switchable at all.
-  The panel refuses `disable_module` for these three (`DISABLE_LOCKED`); only the
-  host break-glass request is not refused by code, so that stays an operator rule.
+- **Leaf databases.** The calendar leaf now uses the lifecycle database (see
+  "Calendar: move to the lifecycle database" below); an install that ran an earlier
+  release moves its customers once with the operator script. The content and
+  publishing leaves, and the finance leaf, still create their own
+  `<module>_<slug>` database while the module enable gate creates a different, empty
+  `t_<hex>__<module>` one: they have the same pattern calendar had, and the same
+  fix is owed. Do not disable content or publishing until the two are reconciled.
+  Content and publishing are not council-switchable at all. The panel refuses
+  `disable_module` for these (`DISABLE_LOCKED`); only the host break-glass request is
+  not refused by code, so that stays an operator rule.
 - **Isolation evidence.** The case table behind the enable gate covers the
   backends this install runs, at the app layer: votes, files and messaging
   against recording fakes of a shared Nextcloud and Synapse, board through the
@@ -712,6 +775,11 @@ between two members of each customer.
   that are not part of this install.
 
 ## Owed after deploy
+
+After the calendar move: on a customer with data, the events listed by the running app
+are those of the old `calendar_<slug>` (counts compared by the script), a switch-off of
+the calendar module exports `t_<hex32>__calendar` with them and the next calendar request
+answers 404 `tenant_not_provisioned`, and a switch-on within the 30 days brings them back.
 
 `docker compose ps` shows each pilot service healthy; `gremion-verify`; the JWT
 login flow listed and `/livekit-sfu` through the edge; one file opened in

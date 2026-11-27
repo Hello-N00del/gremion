@@ -452,7 +452,9 @@ test('the numbers the document states are the numbers in the code', () => {
   assert.ok(text.includes(`floor of ${floor} minutes`), `the document does not state "floor of ${floor} minutes" for the lock span`)
   // the leaf entry: how long one customer waits for the advisory lock, and the margin of the statement timeout
   const leafPhrases = new Set()
-  for (const leaf of ['calendar', 'content', 'publishing']) {
+  // calendar-service answers the counts contract with zero counts and holds no lock any more: its customers
+  // are lifecycle databases the module step migrates (modules/calendar/src/migrate-only.ts)
+  for (const leaf of ['content', 'publishing']) {
     const src = read(`modules/${leaf}/src/migrate-only.ts`)
     const lock = (/DEFAULT_LOCK_TIMEOUT_MS = ([\d_]+)/.exec(src) ?? [])[1]
     const margin = (/STATEMENT_TIMEOUT_MARGIN_MS = ([\d_]+)/.exec(src) ?? [])[1]
@@ -461,7 +463,7 @@ test('the numbers the document states are the numbers in the code', () => {
     leafPhrases.add(`a lock timeout of ${Number(lock.replaceAll('_', '')) / 1000} seconds and a statement timeout ${Number(margin.replaceAll('_', '')) / 1000} seconds larger`)
   }
   // the whole sentence, not two numbers: 'every 15 seconds' elsewhere must not satisfy this
-  assert.equal(leafPhrases.size, 1, 'the three leaves no longer share one lock wait and margin')
+  assert.equal(leafPhrases.size, 1, 'the content and publishing leaves no longer share one lock wait and margin')
   assert.ok(flat(section(text, 'Leaf step')).includes([...leafPhrases][0]), 'the leaf step does not state its lock timeout and the statement margin')
 
   // the access-record sentence that the reconcile verb writes
