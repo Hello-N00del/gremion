@@ -12,6 +12,7 @@
 // The password's single source (the file the module lifecycle sets the role from) is test/host/init-secrets.bats.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { randomBytes } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -19,8 +20,8 @@ import { readEnvFile, renderState } from './compose-edge.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const APP_ENV = 'test/host/fixtures/pooled-stack/app-blue.env'
-// a distinctive value, so a leak is a plain substring search (the fixture's own values are not unique)
-const PASSWORD = 'cal-pw-7d1f3b5a9c2e4680'
+// a distinctive value (fresh per run), so a leak is a plain substring search (the fixture's own values are not unique)
+const PASSWORD = `calpw${randomBytes(8).toString('hex')}`
 
 const render = (profiles, env = {}) =>
   renderState({ envFile: APP_ENV, env: { COMPOSE_PROFILES: profiles, CALENDAR_APP_PASSWORD: PASSWORD, ...env } })
