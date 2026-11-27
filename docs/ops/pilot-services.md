@@ -740,7 +740,11 @@ new leaf wrote since).
   fix is owed. Do not disable content or publishing until the two are reconciled.
   Content and publishing are not council-switchable at all. The panel refuses
   `disable_module` for these (`DISABLE_LOCKED`); only the host break-glass request is
-  not refused by code, so that stays an operator rule.
+  not refused by code, so that stays an operator rule. The council switch-off guard for a
+  leaf-backed calendar (`calendarLeafSwitchOffGuard`, the reason it states is now out of
+  date) and the panel's `DISABLE_LOCKED` for calendar stay in force on purpose: lift them
+  only after the check owed below (a switch-off exports the moved rows and the next request
+  answers 404) has been seen on the running install.
 - **Isolation evidence.** The case table behind the enable gate covers the
   backends this install runs, at the app layer: votes, files and messaging
   against recording fakes of a shared Nextcloud and Synapse, board through the
