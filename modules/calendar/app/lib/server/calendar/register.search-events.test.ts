@@ -1,5 +1,5 @@
 // The calendar's 'calendar:search-events' provider: what the kernel's command palette asks for.
-// Events whose title contains the query, the nearest to today first (what is coming up, then what just
+// Events whose title or day (DD.MM.YYYY, YYYY-MM-DD) contains the query, the nearest to today first (what is coming up, then what just
 // was), one row per series (its next occurrence), at most `limit`, read from a window around today.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DbEvent, DbRecurrence } from './backend/port'
@@ -91,6 +91,26 @@ describe("calendar 'calendar:search-events' provider", () => {
     expect((await provider()({ query: 'PLENUM', limit: 5 })).map((r) => r.id)).toEqual(['a'])
     h.listEvents.mockResolvedValueOnce([ev({ id: 'b', title: 'Fachschaftsrat Übergabe', startAt: new Date('2026-06-21T17:00:00Z') })])
     expect((await provider()({ query: 'ubergabe', limit: 5 })).map((r) => r.id)).toEqual(['b'])
+  })
+
+  it('finds an event by its day, typed as DD.MM.YYYY or YYYY-MM-DD, counted in Europe/Berlin', async () => {
+    const rows = () => [
+      ev({ id: 'a', title: 'Plenum', startAt: new Date('2026-06-20T17:00:00Z') }),
+      // 22:30 UTC is 00:30 the next day in Berlin (summer time)
+      ev({ id: 'late', title: 'Spaetsitzung', startAt: new Date('2026-06-20T22:30:00Z') }),
+      ev({ id: 'c', title: 'Sprechstunde', startAt: new Date('2026-07-02T09:00:00Z') }),
+    ]
+    for (const [query, expected] of [
+      ['20.06.2026', ['a']],
+      ['2026-06-20', ['a']],
+      ['21.06.2026', ['late']],
+      ['2026-06-21', ['late']],
+      ['02.07.2026', ['c']],
+      ['22.06.2026', []],
+    ] as const) {
+      h.listEvents.mockResolvedValueOnce(rows())
+      expect((await provider()({ query, limit: 5 })).map((r) => r.id), query).toEqual(expected)
+    }
   })
 
   it('lists what is coming up first (soonest first), then what has passed (most recent first)', async () => {

@@ -3,6 +3,7 @@
   import type { PageData } from './$types'
   import { lang, t } from '$lib/i18n'
   import { page } from '$app/state'
+  import { untrack } from 'svelte'
 
   let { data }: { data: PageData } = $props()
 
@@ -10,10 +11,11 @@
   let selected = $state<PageData['members'][number] | null>(null)
 
   // The command palette links a person as /members?member=<handle>: open that person's panel. A handle
-  // that is not in this caller's list (a person they may not see) opens nothing.
+  // that is not in this caller's list (a person they may not see) opens nothing. Only a navigation runs
+  // this; a refresh of the page data does not reopen a panel the person has closed.
   $effect(() => {
     const handle = page.url.searchParams.get('member')
-    if (handle) selected = data.members.find((m) => m.id === handle) ?? null
+    if (handle) selected = untrack(() => data.members).find((m) => m.id === handle) ?? null
   })
 
   // design roleHue (contracts.jsx): role-tag accent per friendly role.

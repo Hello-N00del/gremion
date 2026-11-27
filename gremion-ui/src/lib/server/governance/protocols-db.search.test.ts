@@ -1,8 +1,8 @@
 // @vitest-environment node
-// searchProtocols: the SQL is checked against a scratch Postgres by hand (wildcards typed into the query
-// match only themselves, markup is not searched, blanks collapse, the date matches as DD.MM.YYYY and as
-// YYYY-MM-DD). What a unit test can pin is the pattern the query is turned into and that every LIKE
-// carries the ESCAPE clause that pattern relies on.
+// searchProtocols: the SQL itself is proven against a real Postgres by protocols-db.search.integration.test.ts
+// (wildcards typed into the query match only themselves, markup is not searched, blanks collapse, the date
+// matches as DD.MM.YYYY and as YYYY-MM-DD). What this unit test pins is the pattern the query is turned
+// into and that every LIKE carries the ESCAPE clause that pattern relies on.
 import { describe, it, expect, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'

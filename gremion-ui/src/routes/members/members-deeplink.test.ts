@@ -1,7 +1,7 @@
 // The command palette links a person to /members?member=<handle>: the page opens that person's detail
 // panel. A handle that is not in the list (a person the caller may not see, a typo) opens nothing.
 import { describe, test, expect, vi } from 'vitest'
-import { render } from '@testing-library/svelte'
+import { render, fireEvent } from '@testing-library/svelte'
 
 const h = vi.hoisted(() => ({ search: '' }))
 vi.mock('$app/state', () => ({
@@ -19,9 +19,11 @@ function member(id: string, name: string) {
   return { id, name, email: `${id}@example.org`, enabled: true, roles: ['Mitglied'], scopes: [], memberships: [], placed: true }
 }
 
+const dataFor = () => ({ members: [member('mira', 'Mira Kowalski'), member('jo', 'Jo Beispiel')], isAdmin: false })
+
 function mount(search: string) {
   h.search = search
-  const data = { members: [member('mira', 'Mira Kowalski'), member('jo', 'Jo Beispiel')], isAdmin: false }
+  const data = dataFor()
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return render(Page, { props: { data } as any })
 }
@@ -42,5 +44,15 @@ describe('/members?member=<handle>', () => {
   test('without the parameter the page opens no panel', () => {
     const { queryByRole } = mount('')
     expect(queryByRole('complementary', { name: 'Mitglied-Detail' })).toBeNull()
+  })
+
+  test('a panel the person closed stays closed when the page data is refreshed', async () => {
+    const view = mount('?member=mira')
+    const panel = view.getByRole('complementary', { name: 'Mitglied-Detail' })
+    await fireEvent.click(panel.querySelector('button.close')!)
+    expect(view.queryByRole('complementary', { name: 'Mitglied-Detail' })).toBeNull()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await view.rerender({ data: dataFor() } as any)
+    expect(view.queryByRole('complementary', { name: 'Mitglied-Detail' })).toBeNull()
   })
 })

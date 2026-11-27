@@ -5,7 +5,8 @@
 // listOrgUnits and getOrgUnitIdsForUser run through the real getDb() and pool registry, down to the
 // pool of the current tenant. Two customers' pools are two fake SQL runners with different rows (the
 // "canary" rows belong to customer B). A request resolved for customer A must read A's pool only, and
-// the rows that come back must be A's.
+// the rows that come back must be A's. The calendar's event search is the REAL provider the calendar module
+// registers (register.server.ts), reading through the real calendar backend and the same pool registry.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { Role } from '$lib/auth/types'
 
@@ -27,18 +28,31 @@ vi.mock('$lib/server/keycloak-admin', async (importActual) => {
   }
 })
 
+vi.mock('$lib/server/calendar/notification-scheduler', () => ({ startNotificationScheduler: vi.fn() }))
+vi.mock('$lib/server/calendar/caldav-sync', () => ({ startCalDavSyncWorker: vi.fn() }))
+vi.mock('$lib/server/ports/tracer', () => ({ makeLogTracer: vi.fn(), noopTracer: {} }))
+vi.mock('$lib/server/env/platform-env', () => ({ platformEnv: vi.fn() }))
+vi.mock('$lib/server/events/calendar-audit-consumer', () => ({
+  startCalendarAuditConsumer: vi.fn(),
+  CALENDAR_AUDIT_WORKER: 'calendar-audit',
+}))
+vi.mock('$lib/server/events/consumer-state', () => ({ superviseWorker: vi.fn(), markWorkerOff: vi.fn() }))
+
 interface Data {
+  events: Array<{ id: string; title: string; startAt: Date }>
   units: Array<{ id: string; name: string; visibility: 'all_members' | 'committee_only' }>
   protocols: Array<{ id: string; title: string; unit: string }>
   memberships: Record<string, string[]>
 }
 const DATA: Record<string, Data> = {
   'postgres://a': {
+    events: [{ id: 'a-event', title: 'Plenum Alpha', startAt: new Date(Date.now() + 5 * 86_400_000) }],
     units: [{ id: 'a-unit', name: 'Finanzen Alpha', visibility: 'all_members' }],
     protocols: [{ id: 'a-proto', title: 'Haushalt Alpha', unit: 'a-unit' }],
     memberships: {},
   },
   'postgres://b': {
+    events: [{ id: 'b-event', title: 'Plenum Beta', startAt: new Date(Date.now() + 6 * 86_400_000) }],
     units: [{ id: 'b-unit', name: 'Finanzen Beta', visibility: 'all_members' }],
     protocols: [{ id: 'b-proto', title: 'Haushalt Beta', unit: 'b-unit' }],
     memberships: {},
@@ -60,6 +74,32 @@ function fakeSql(url: string) {
           return { id: p.id, title: p.title, meetingDate: '2026-05-12', status: 'published', committeeId: u.id, committeeName: u.name, visibility: u.visibility }
         })
       }
+      // The calendar's reads: the window fragment, the event rows, then one lookup per row.
+      if (text.includes('FROM event_recurrence r')) return []
+      if (text.includes('FROM calendar_events e')) {
+        return data.events.map((e) => ({
+          id: e.id,
+          title: e.title,
+          description: null,
+          location: null,
+          start_at: e.startAt,
+          end_at: new Date(e.startAt.getTime() + 3_600_000),
+          all_day: false,
+          event_type_id: null,
+          event_type_color: null,
+          event_type_name: null,
+          is_multi_committee: false,
+          created_by: 'u',
+          source: 'manual',
+          external_id: null,
+          caldav_uid: null,
+          caldav_synced_at: null,
+          created_at: new Date(0),
+          updated_at: new Date(0),
+        }))
+      }
+      if (text.includes('FROM event_committees WHERE event_id')) return []
+      if (text.includes('FROM event_recurrence WHERE event_id')) return []
       if (text.includes('FROM org_units ORDER BY name')) return data.units
       if (text.includes('FROM org_unit_members WHERE user_keycloak_id')) {
         return (data.memberships[String(values[0])] ?? []).map((id) => ({ org_unit_id: id }))
@@ -73,6 +113,8 @@ vi.mock('@gremion/db', () => ({ createDb: (profile: { url: string }) => fakeSql(
 
 import { GET } from './+server'
 import { _resetPoolRegistryForTests } from '$lib/server/db/pool-registry'
+// The calendar module's own registration of 'calendar:search-events' (a side effect of the import).
+await import('$lib/server/calendar/register.server')
 
 function event(q: string) {
   return {
@@ -87,7 +129,7 @@ function event(q: string) {
 async function search(q: string) {
   const res = await GET(event(q))
   expect(res.status).toBe(200)
-  return ((await res.json()) as { data: { minutes: Array<{ id: string }>; units: Array<{ id: string }> } }).data
+  return ((await res.json()) as { data: { minutes: Array<{ id: string }>; units: Array<{ id: string }>; events: Array<{ id: string }> } }).data
 }
 
 beforeEach(() => {
@@ -119,5 +161,19 @@ describe('palette search is scoped to the caller\'s customer', () => {
     expect(found.minutes).toEqual([])
     expect(found.units).toEqual([])
     expect(new Set(h.queried)).toEqual(new Set(['postgres://a']))
+  })
+
+  it("events: customer A finds A's event, customer B's event is never found, and only A's pool is read", async () => {
+    h.tenant = { id: 'tenant-a', dbUrl: 'postgres://a', dbMax: 1, dbPrepare: false }
+    expect((await search('plenum')).events.map((e) => e.id)).toEqual(['a-event'])
+    expect((await search('beta')).events).toEqual([])
+    expect(new Set(h.queried)).toEqual(new Set(['postgres://a']))
+  })
+
+  it("events: customer B finds B's event only", async () => {
+    h.tenant = { id: 'tenant-b', dbUrl: 'postgres://b', dbMax: 1, dbPrepare: false }
+    expect((await search('plenum')).events.map((e) => e.id)).toEqual(['b-event'])
+    expect((await search('alpha')).events).toEqual([])
+    expect(new Set(h.queried)).toEqual(new Set(['postgres://b']))
   })
 })

@@ -65,6 +65,20 @@
     calendarFilter.update((f) => ({ ...f, committeeId: id }))
   }
 
+  // A palette link followed while the calendar is already open only changes the URL (the component is
+  // kept), so the day is also applied when the `date` parameter changes. The first run is the page
+  // opening, which onMount handles before the first range loads.
+  let firstDateRun = true
+  $effect(() => {
+    const raw = page.url.searchParams.get('date')
+    if (firstDateRun) {
+      firstDateRun = false
+      return
+    }
+    const linkedDay = parseDateParam(raw)
+    if (linkedDay) calendarDate.set(linkedDay)
+  })
+
   let unsubRange: (() => void) | null = null
   let unsubFilter: (() => void) | null = null
   onMount(() => {

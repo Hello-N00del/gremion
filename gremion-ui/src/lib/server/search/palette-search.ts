@@ -27,7 +27,7 @@ import {
   type Viewer,
 } from '$lib/server/governance/visibility'
 import { searchMembers } from '$lib/server/members/member-view'
-import { searchWords } from '$lib/server/members/search-words'
+import { SEARCH_MAX_WORDS, searchWords } from '$lib/server/members/search-words'
 import { foldedIncludes } from './fold'
 
 /** Shorter queries answer empty without asking anybody. */
@@ -124,7 +124,10 @@ async function findUnits(query: string, viewer: Viewer): Promise<SearchHit[]> {
 }
 
 async function findPeople(query: string, viewer: Viewer, kc: KeycloakAdminClient, isAdmin: boolean): Promise<SearchHit[]> {
-  const hits = await searchMembers(kc, { words: searchWords(query), adminView: isAdmin, viewer, limit: RESULT_CAP })
+  const words = searchWords(query)
+  // The people list (/api/users) refuses more words than this; the palette answers no people for such a query.
+  if (words.length > SEARCH_MAX_WORDS) return []
+  const hits = await searchMembers(kc, { words, adminView: isAdmin, viewer, limit: RESULT_CAP })
   // A person without a handle (the basic view hides a user name that is an address) is keyed by position
   // and linked to the directory itself.
   return hits.map((p, i) => ({

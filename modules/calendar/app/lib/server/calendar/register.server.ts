@@ -114,7 +114,8 @@ registerDataProvider('calendar:upcoming-events', async (range) => {
   }
 })
 
-// The kernel command palette's event search. Events whose title contains the query, from a window of 90 days
+// The kernel command palette's event search. Events whose title or day (typed DD.MM.YYYY or YYYY-MM-DD, the
+// day counted in Europe/Berlin like the calendar page) contains the query, from a window of 90 days
 // back to 400 days ahead of today (listEvents has no title filter and the palette does not need history),
 // one row per series (its next occurrence), the nearest to today first: what is coming up soonest, then what
 // just was. The caller applied the calendar page's role gate and the customer's module switch. A failing
@@ -130,10 +131,19 @@ registerDataProvider('calendar:search-events', async ({ query, limit }) => {
   const upcoming = events.filter((e) => e.startAt.getTime() >= now.getTime()).sort((a, b) => a.startAt.getTime() - b.startAt.getTime())
   const past = events.filter((e) => e.startAt.getTime() < now.getTime()).sort((a, b) => b.startAt.getTime() - a.startAt.getTime())
   return [...upcoming, ...past]
-    .filter((e) => foldForSearch(e.title).includes(needle))
+    .filter((e) => foldForSearch(e.title).includes(needle) || berlinDayTexts(e.startAt).some((d) => d.includes(needle)))
     .slice(0, limit)
     .map((e) => ({ id: e.id, title: e.title, startAt: e.startAt, allDay: e.allDay }))
 })
+
+/** The day of an instant in Europe/Berlin, as YYYY-MM-DD and as DD.MM.YYYY: the two ways a person types a date. */
+const BERLIN_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit' })
+function berlinDayTexts(at: Date): string[] {
+  const parts = BERLIN_DAY.formatToParts(at)
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? ''
+  const [y, m, d] = [get('year'), get('month'), get('day')]
+  return [`${y}-${m}-${d}`, `${d}.${m}.${y}`]
+}
 
 /** Case- and diacritic-folded text, for comparing a typed query with a title. */
 function foldForSearch(s: string): string {

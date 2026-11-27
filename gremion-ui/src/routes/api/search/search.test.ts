@@ -294,6 +294,14 @@ describe('people', () => {
     expect((await search('a-mira')).people).toEqual([])
   })
 
+  it('a query of more words than the people list allows asks Keycloak for nobody; eight words still do', async () => {
+    const nine = 'a1 b2 c3 d4 e5 f6 g7 h8 i9'
+    expect((await search(nine, ADMIN)).people).toEqual([])
+    expect(adminUrls.filter((u) => u.includes('/users?'))).toEqual([])
+    expect((await search(nine.split(' ').slice(0, 8).join(' '), ADMIN)).people).toEqual([])
+    expect(adminUrls.filter((u) => u.includes('/users?'))).toHaveLength(1)
+  })
+
   it('several words must all be part of the name, in any order', async () => {
     expect(ids((await search('kowalski mira')).people)).toEqual(['a-mira'])
     expect((await search('mira geheim')).people).toEqual([])
